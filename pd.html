@@ -1280,9 +1280,9 @@ function buildVG(uid, mes){
       data:{
         labels:comp12Labels,
         datasets:[
-          {label:'Realizado atual',data:comp12Real,backgroundColor:'rgba(5,122,85,.65)',borderRadius:2,stack:'a'},
-          {label:'Projetado',data:ult12Hist.map((m,i)=>m===mes?proj-comp12Real[i]:0),backgroundColor:'rgba(26,86,219,.4)',borderRadius:2,stack:'a'},
-          {label:'Mesmo mês ano ant.',data:comp12AnoAnt,backgroundColor:'rgba(180,180,180,.6)',borderRadius:2,stack:'b'},
+          {label:'Mesmo mês ano ant.',data:comp12AnoAnt,backgroundColor:'rgba(180,180,180,.6)',borderRadius:2,stack:'a'},
+          {label:'Realizado atual',data:comp12Real,backgroundColor:'rgba(5,122,85,.65)',borderRadius:2,stack:'b'},
+          {label:'Projetado',data:ult12Hist.map((m,i)=>m===mes?proj-comp12Real[i]:0),backgroundColor:'rgba(26,86,219,.4)',borderRadius:2,stack:'b'},
         ]
       },
       plugins:[{
@@ -1291,41 +1291,42 @@ function buildVG(uid, mes){
           const ctx2=chart.ctx;
           const yScale=chart.scales['y'];
           if(!yScale) return;
-          const dsMeta0=chart.getDatasetMeta(0); // stack a — Realizado atual
-          const dsMeta1=chart.getDatasetMeta(1); // stack a — Projetado
-          const dsMeta2=chart.getDatasetMeta(2); // stack b — Ano ant
+          const dsMeta0=chart.getDatasetMeta(0); // stack a — Ano ant
+          const dsMeta1=chart.getDatasetMeta(1); // stack b — Realizado atual
+          const dsMeta2=chart.getDatasetMeta(2); // stack b — Projetado
           if(!dsMeta0||!dsMeta2) return;
           ctx2.save();
           ctx2.font='bold 8.5px IBM Plex Sans,sans-serif';
           ctx2.textAlign='center';
           const yPos=yScale.bottom+11;
           ult12Hist.forEach((_,i)=>{
-            // % diff em TODAS as posições: compara stack 'a' vs ano anterior
-            const bar0=dsMeta0.data[i];
-            const bar2=dsMeta2.data[i];
-            if(bar0){
-              ctx2.fillStyle=i===idxMesAt12?'#1a56db':'#057a55';
-              ctx2.fillText(comp12LabelsAtual[i], bar0.x, yPos);
-            }
-            if(bar2){
+            // dsMeta0=Ano ant (stack a), dsMeta1=Realizado atual (stack b), dsMeta2=Projetado (stack b)
+            const barAnt=dsMeta0.data[i];
+            const barAt=dsMeta1.data[i];
+            const barProj=dsMeta2.data[i];
+            if(barAnt){
               ctx2.fillStyle='#888';
-              ctx2.fillText(comp12AnoAntLabels[i], bar2.x, yPos);
+              ctx2.fillText(comp12AnoAntLabels[i], barAnt.x, yPos);
             }
-            // % diff: projetado/realizado atual vs mesmo mês ano anterior
-            if(dsMeta1){
+            if(barAt){
+              ctx2.fillStyle=i===idxMesAt12?'#1a56db':'#057a55';
+              ctx2.fillText(comp12LabelsAtual[i], barAt.x, yPos);
+            }
+            // % diff: realizado atual vs mesmo mês ano anterior
+            {
               const antVal=comp12AnoAnt[i];
               const realAtual=comp12Real[i]||0;
               const projParcial=(ult12Hist[i]===mes?(proj-comp12Real[idxMesAt12]):0)||0;
               const atualTotal= i===idxMesAt12 ? realAtual+projParcial : realAtual;
-              if(antVal>0 && atualTotal>0 && bar0){
+              if(antVal>0 && atualTotal>0 && barAt){
                 const diffPct=((atualTotal-antVal)/antVal*100);
                 const sign=diffPct>=0?'+':'';
                 const label=`${sign}${diffPct.toFixed(1)}%`;
                 ctx2.font='bold 8.5px IBM Plex Sans,sans-serif';
                 ctx2.fillStyle='#000';
                 // Topo da barra: se mês atual usa topo do projetado, senão topo do realizado
-                const topBar= i===idxMesAt12 ? dsMeta1.data[i] : dsMeta0.data[i];
-                if(topBar) ctx2.fillText(label, bar0.x, topBar.y-4);
+                const topBar= i===idxMesAt12 ? barProj : barAt;
+                if(topBar) ctx2.fillText(label, barAt.x, (topBar||barAt).y-4);
               }
             }
           });
@@ -1366,7 +1367,7 @@ function buildVG(uid, mes){
               label:ctx=>{
                 const val='R$\u00a0'+Math.round(ctx.parsed.y||0).toLocaleString('pt-BR');
                 if(ctx.dataset.label==='Mesmo mês ano ant.'){
-                  return `${ctx.dataset.label}: ${val}  (${comp12LabelsAtual[ctx.dataIndex]} → ${comp12AnoAntLabels[ctx.dataIndex]})`;
+                  return `${ctx.dataset.label}: ${val}  (${comp12AnoAntLabels[ctx.dataIndex]})`;
                 }
                 if(ctx.dataset.label==='Projetado' && ctx.dataIndex===idxMesAt12){
                   const total='R$\u00a0'+Math.round((comp12Real[idxMesAt12]||0)+(ctx.parsed.y||0)).toLocaleString('pt-BR');
@@ -1446,7 +1447,6 @@ function buildCl(uid,mes){
     {h:'Frete',           fn:r=>r.frt},
     {h:'Viagens',         fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
-    {h:'Prod.(T) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${D1(r.prodProj)}</span>`, n:true},
     {h:'Fat.(R$) Real.',  fn:r=>R(r.f),          n:true},
     {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
     {h:'TM',              fn:r=>D2(r.tm),       n:true},
@@ -1545,7 +1545,6 @@ function buildFr(uid,mes){
     {h:'Tipo',               fn:r=>`<span class="bdg ${r.tp==='Propria'?'bg':'ba'}">${r.tp}</span>`},
     {h:'Viagens',            fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',     fn:r=>D1(r.p),        n:true},
-    {h:'Prod.(T) Proj.',     fn:r=>`<span style="color:var(--ac);font-weight:500">${D1(r.prodProj)}</span>`, n:true},
     {h:'Fat.(R$) Real.',     fn:r=>R(r.f),          n:true},
     {h:'Fat.(R$) Proj.',     fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
     {h:'Atingimento Meta',   fn:r=>atingHtml(r),   n:true},
@@ -1646,7 +1645,6 @@ function buildCc(uid,mes){
     {h:'Frete',             fn:r=>`<span class="bdg ${r.frt==='CIF'?'bg':'ba'}">${r.frt}</span>`},
     {h:'Viagens',           fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',    fn:r=>D1(r.p),        n:true},
-    {h:'Prod.(T) Proj.',    fn:r=>`<span style="color:var(--ac);font-weight:500">${D1(r.prodProj)}</span>`, n:true},
     {h:'Fat.(R$) Real.',    fn:r=>R(r.f),          n:true},
     {h:'Fat.(R$) Proj.',    fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
     {h:'TM',                fn:r=>D2(r.tm),       n:true},
@@ -2463,12 +2461,12 @@ function triggerAI() {
 </script>
 
 <script>
-/* Oculta a barra superior (.hdr) quando dentro do iframe Atlas */
+/* COMIX Atlas — oculta a barra .hdr quando carregado dentro do iframe do Atlas */
 (function() {
   if (window.self !== window.top) {
-    var style = document.createElement('style');
-    style.textContent = '.hdr { display: none !important; }';
-    document.head.appendChild(style);
+    var s = document.createElement('style');
+    s.textContent = '.hdr { display: none !important; }';
+    document.head.appendChild(s);
   }
 })();
 </script>
