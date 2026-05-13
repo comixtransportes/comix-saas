@@ -9109,13 +9109,56 @@ function cfgPhoneMask(el) {
 window.goHomeAtlas = function(){ showScreen("scr_home"); };
 window.openComprasAtlas = function(){ 
   showScreen("scr_compras_atlas"); 
-  // Activate the purchasing view inside the compras module
-  if (typeof openPurchasing === 'function') { 
-    openPurchasing(); 
-  }
+  if (typeof openPurchasing === 'function') { openPurchasing(); }
 };
 window.openFichaOperacionalAtlas = function(){ showScreen("scr_form"); };
+window.openPainelAtlas = function(){ showScreen("scr_panel"); };
+window.openAdminAtlas = function(){ 
+  showScreen("scr_config_admin"); 
+  if (typeof openAdminSection === 'function') { openAdminSection('usuarios'); }
+};
 window.modulePlaceholderAtlas = function(name){ showToast('Módulo "' + name + '" reservado para próxima etapa.'); };
+
+/* ═══ MODO IFRAME — oculta headers internos quando dentro do Atlas ═══ */
+(function() {
+  var inAtlas = (window.self !== window.top);
+  if (!inAtlas) return;
+
+  /* Injeta CSS para ocultar headers/botões do gestão quando em iframe */
+  var style = document.createElement('style');
+  style.textContent = [
+    /* Ficha operacional — oculta header azul com botões Início/Painel/Sair */
+    '#scr_form .app-hdr { display: none !important; }',
+    /* Config admin — oculta topbar com Início/Sair */
+    '#scr_config_admin .atlas-topbar { display: none !important; }',
+    /* Home screen — nunca mostrar no Atlas */
+    '#scr_home { display: none !important; }',
+    /* Compras — oculta topbar com Início */
+    '#scr_compras_atlas .topbar { display: none !important; }',
+    /* Painel de ocorrências — oculta header (Início/Sair ficam no Atlas) */
+    '#scr_panel .app-hdr { display: none !important; }',
+    /* Tela de módulos — nunca mostrar no Atlas */
+    '#scr_modules { display: none !important; }',
+  ].join('\n');
+  document.head.appendChild(style);
+
+  /* Lê parâmetro ?m= da URL para navegar direto ao módulo */
+  function navigateFromParam() {
+    var m = new URLSearchParams(window.location.search).get('m');
+    if (!m) return;
+    if      (m === 'ficha')   { window.openFichaOperacionalAtlas && window.openFichaOperacionalAtlas(); }
+    else if (m === 'compras') { window.openComprasAtlas && window.openComprasAtlas(); }
+    else if (m === 'config')  { window.openAdminAtlas && window.openAdminAtlas(); }
+    else if (m === 'painel')  { window.openPainelAtlas && window.openPainelAtlas(); }
+  }
+
+  /* Dispara após _appReady (usuário autenticado) */
+  var _origAppReady = window._appReady;
+  window._appReady = async function(user, perfil) {
+    if (_origAppReady) await _origAppReady.call(this, user, perfil);
+    navigateFromParam();
+  };
+})();
 
 /* ═══ UTILS ═══ */
 function showScreen(id){document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));document.getElementById(id).classList.add("active");window.scrollTo(0,0);}
