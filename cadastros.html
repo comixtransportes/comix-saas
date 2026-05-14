@@ -1331,6 +1331,1380 @@ window._appReady = async function(user, perfil) {
 /* ════════════════════════════════════════════════════
    CONFIGURAÇÕES ADMIN — navegação, CRUD e máscaras
 ════════════════════════════════════════════════════ */
+
+/* ── Funções operacionais compartilhadas ── */
+const operationalCache = { veiculos: [], motoristas: [], filiais: [] };
+
+function upperText(value) {
+  return String(value || "").trim().toLocaleUpperCase("pt-BR");
+}
+function normalizeTipoVeiculo(tipo) {
+  const t = String(tipo || "Cavalo").trim();
+  if (/^carro\s+de\s+apoio$/i.test(t)) return "Carro de apoio";
+  if (/^carreta$/i.test(t)) return "Carreta";
+  return "Cavalo";
+}
+function sortByField(a, b, field) {
+  return String(a[field] || "").localeCompare(String(b[field] || ""), "pt-BR", { sensitivity: "base" });
+}
+function normalizeOperationalVehicle(v) {
+  const placa = upperText(v.placa || v.id);
+  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial) };
+}
+function normalizeOperationalDriver(m) {
+  return { ...m, nome: upperText(m.nome || m.id), filial: upperText(m.filial) };
+}
+function normalizeOperationalUnidade(f) {
+  return { ...f, nome: upperText(f.nome || f.id), sigla: upperText(f.sigla), cidade: upperText(f.cidade), estado: upperText(f.estado) };
+}
+function rebuildVehicleMaps() {
+  FROTAS = {};
+  CARRETAS = {};
+  CARROS_APOIO = {};
+  operationalCache.veiculos.forEach(v => {
+    if (!v.placa) return;
+    if (v.tipo === "Carreta") CARRETAS[v.placa] = v.frota || "";
+    else if (v.tipo === "Carro de apoio") CARROS_APOIO[v.placa] = v.frota || "";
+    else FROTAS[v.placa] = v.frota || "";
+  });
+}
+async function loadOperationalCadastros() {
+  try {
+    if (!window._FB || typeof window._FB.listarCadastros !== "function") throw new Error("Leitura de cadastros indisponível");
+    const [veiculos, motoristas, filiais] = await Promise.all([
+      window._FB.listarCadastros("veiculos"),
+      window._FB.listarCadastros("motoristas"),
+      window._FB.listarCadastros("filiais")
+    ]);
+    operationalCache.veiculos = (veiculos || []).map(normalizeOperationalVehicle).sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"));
+    operationalCache.motoristas = (motoristas || []).map(normalizeOperationalDriver).sort((a,b)=>sortByField(a,b,"nome"));
+    operationalCache.filiais = (filiais || []).map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
+    rebuildVehicleMaps();
+  } catch (err) {
+    operationalCache.veiculos = [];
+    operationalCache.motoristas = [];
+    operationalCache.filiais = [];
+    rebuildVehicleMaps();
+    console.error("Erro ao carregar cadastros operacionais", err);
+    if (typeof showToast === "function") showToast("Não foi possível carregar cadastros operacionais do Firebase.", "error");
+  }
+}
+function vehicleLabel(v) {
+  const left = v.frota || "SEM FROTA";
+  return `${left} — ${v.placa}`;
+}
+function resetSelectOptions(select, firstLabel) {
+  if (!select) return "";
+  const cur = select.value;
+  select.innerHTML = `<option value="">${firstLabel}</option>`;
+  return cur;
+}
+function populateMotoristasSelect() {
+  const select = document.getElementById("f_motorista");
+  const cur = resetSelectOptions(select, "Selecione...");
+  if (!select) return;
+  operationalCache.motoristas.forEach(m => {
+    if (m.nome) select.appendChild(new Option(m.nome, m.nome));
+  });
+  select.value = operationalCache.motoristas.some(m => m.nome === cur) ? cur : "";
+}
+function populateFiliaisSelect() {
+  const select = document.getElementById("f_filial");
+  const cur = resetSelectOptions(select, "Selecione...");
+  if (!select) return;
+  operationalCache.filiais.forEach(f => {
+    const value = f.sigla || f.nome || f.id;
+    const label = f.sigla ? `${f.sigla} — ${f.nome || f.id}` : (f.nome || f.id);
+    select.appendChild(new Option(label, value));
+  });
+  select.value = operationalCache.filiais.some(f => (f.sigla || f.nome || f.id) === cur) ? cur : "";
+}
+function populateSiglaUnidadeSelect(id) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  const cur = resetSelectOptions(select, "Selecione...");
+  // usa cache do Firebase se disponível
+  if (operationalCache.filiais && operationalCache.filiais.length) {
+    operationalCache.filiais.forEach(f => {
+      const sigla = f.sigla || "";
+      if (!sigla) return;
+      const label = f.nome ? `${sigla} — ${f.nome}` : sigla;
+      select.appendChild(new Option(label, sigla));
+    });
+  } else {
+    // fallback: lê filiais direto do Firebase em tempo real
+    if (window._FB && typeof window._FB.listarCadastros === "function") {
+      window._FB.listarCadastros("filiais").then(filiais => {
+        if (filiais && filiais.length) {
+          operationalCache.filiais = filiais.map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
+          operationalCache.filiais.forEach(f => {
+            const sigla = f.sigla || "";
+            if (!sigla) return;
+            const label = f.nome ? `${sigla} — ${f.nome}` : sigla;
+            select.appendChild(new Option(label, sigla));
+          });
+          select.value = operationalCache.filiais.some(f => f.sigla === cur) ? cur : "";
+        }
+      }).catch(() => {});
+    }
+    return;
+  }
+  select.value = operationalCache.filiais.some(f => f.sigla === cur) ? cur : "";
+}
+function populateEntregasUnidadeSelects() {
+  for (let i = 0; i < entCount; i++) populateSiglaUnidadeSelect("e" + i + "_sigla");
+}
+
+window.autoFillUnidade = function(idx) {
+  const siglaEl = document.getElementById("e"+idx+"_sigla");
+  const filialEl = document.getElementById("e"+idx+"_filial");
+  if (!siglaEl || !filialEl) return;
+  const sigla = siglaEl.value;
+  if (!sigla) return;
+  // busca nome da filial no cache
+  const filial = operationalCache.filiais.find(f => f.sigla === sigla);
+  if (filial && !filialEl.value) {
+    filialEl.value = filial.nome || filial.cidade || sigla;
+  }
+};
+
+/* ═══ POPULATE SELECTS ═══ */
+function populatePlacas() {
+  rebuildVehicleMaps();
+  const cav = document.getElementById("f_placa_cv");
+  const curCav = resetSelectOptions(cav, "Selecione...");
+  if (cav) {
+    operationalCache.veiculos
+      .filter(v => v.tipo === "Cavalo")
+      .sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"))
+      .forEach(v => cav.appendChild(new Option(vehicleLabel(v), v.placa)));
+    cav.value = operationalCache.veiculos.some(v => v.tipo === "Cavalo" && v.placa === curCav) ? curCav : "";
+  }
+  ["f_ct1","f_ct2"].forEach(id=>{
+    const s=document.getElementById(id);
+    const cur = resetSelectOptions(s, id === "f_ct2" ? "Nenhuma" : "Selecione...");
+    if (!s) return;
+    operationalCache.veiculos
+      .filter(v => v.tipo === "Carreta")
+      .sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"))
+      .forEach(v => s.appendChild(new Option(vehicleLabel(v), v.placa)));
+    s.value = operationalCache.veiculos.some(v => v.tipo === "Carreta" && v.placa === cur) ? cur : "";
+  });
+  populateMotoristasSelect();
+  populateFiliaisSelect();
+  populateEntregasUnidadeSelects();
+  if (typeof autoFrota === "function") autoFrota();
+}
+
+window.autoFrota = function() {
+  const v=document.getElementById("f_placa_cv").value;
+  const fi=document.getElementById("f_frota");
+  fi.value=FROTAS[v]||"";
+  fi.style.color=FROTAS[v]?"var(--green)":"";
+  if(v) setOk("f_placa_cv"); else clearF("f_placa_cv");
+};
+
+window.validateCarretas = function() {
+  const c1=document.getElementById("f_ct1").value;
+  const c2=document.getElementById("f_ct2").value;
+  if(c1&&c2&&c1===c2){setErr("f_ct1","Carretas iguais");setErr("f_ct2","Carretas não podem ser iguais");}
+  else{if(c1)setOk("f_ct1");else clearF("f_ct1");if(c2)setOk("f_ct2");else clearF("f_ct2");}
+};
+
+/* ═══ MODULE TOGGLE ═══ */
+window.toggleMod = function(id) {
+  const idx=selectedMods.indexOf(id);
+  const btn=document.getElementById("mod_"+id);
+  const chk=document.getElementById("chk_"+id);
+  if(idx===-1){
+    selectedMods.push(id);btn.classList.add("selected");
+    chk.innerHTML=`<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>`;
+    chk.style.cssText="background:var(--green-m);border-color:var(--green-m)";
+  } else {
+    selectedMods.splice(idx,1);btn.classList.remove("selected");chk.innerHTML="";chk.style.cssText="";
+  }
+  document.getElementById("err_mods").style.display="none";
+};
+
+/* ════════════════════════════════════════════════════
+   VALIDATION ENGINE
+════════════════════════════════════════════════════ */
+function setErr(id, msg) {
+  const el=document.getElementById(id); if(!el)return;
+  el.classList.add("err");el.classList.remove("ok");
+  const em=document.getElementById("err_"+id.replace("f_",""));
+  if(em){em.textContent=msg;em.classList.add("show");}
+}
+function setOk(id) {
+  const el=document.getElementById(id); if(!el)return;
+  el.classList.remove("err");el.classList.add("ok");
+  const em=document.getElementById("err_"+id.replace("f_",""));
+  if(em) em.classList.remove("show");
+}
+function clearF(id) {
+  const el=document.getElementById(id); if(!el)return;
+  el.classList.remove("err","ok");
+  const em=document.getElementById("err_"+id.replace("f_",""));
+  if(em) em.classList.remove("show");
+}
+function isNum(v){const n=parseFloat(v);return !isNaN(n)&&n>=0;}
+function isFuture(d,days=1){if(!d)return false;const dt=new Date(d),lim=new Date();lim.setDate(lim.getDate()+days);return dt>lim;}
+function scrollTo1st(){const el=document.querySelector(".err");if(el)el.scrollIntoView({behavior:"smooth",block:"center"});}
+
+function validateVeiculo() {
+  let ok=true,errors=[];
+  if(!g("f_placa_cv")){setErr("f_placa_cv","Selecione a placa do cavalo");errors.push("Placa do cavalo obrigatória");ok=false;}else setOk("f_placa_cv");
+  if(!g("f_ct1")){setErr("f_ct1","Selecione a Carreta 1");errors.push("Carreta 1 obrigatória");ok=false;}
+  const c1=g("f_ct1"),c2=g("f_ct2");
+  if(c1&&c2&&c1===c2){setErr("f_ct1","Carretas iguais");setErr("f_ct2","Carretas iguais");errors.push("Carreta 1 e Carreta 2 são iguais");ok=false;}
+  if(!g("f_motorista").trim()){setErr("f_motorista","Nome obrigatório");errors.push("Nome do motorista obrigatório");ok=false;}else setOk("f_motorista");
+  if(!g("f_filial")){setErr("f_filial","Selecione a unidade");errors.push("Unidade obrigatória");ok=false;}else setOk("f_filial");
+  const d=g("f_data");
+  if(!d){setErr("f_data","Data obrigatória");errors.push("Data obrigatória");ok=false;}
+  else if(isFuture(d,1)){setErr("f_data","Data não pode ser futura");errors.push("Data não pode ser futura");ok=false;}
+  else setOk("f_data");
+  if(selectedMods.length===0){document.getElementById("err_mods").style.display="block";errors.push("Selecione ao menos um módulo");ok=false;}
+  return{ok,errors};
+}
+
+function validateViagens() {
+  if(!selectedMods.includes("viagens"))return{ok:true,errors:[]};
+  let ok=true,errors=[];
+  const ini=parseFloat(g("f_km_ini"))||0, fin=parseFloat(g("f_km_fin"))||0;
+  if(!g("f_km_ini")){setErr("f_km_ini","KM inicial obrigatório");errors.push("KM inicial obrigatório");ok=false;}
+  else if(!isNum(g("f_km_ini"))){setErr("f_km_ini","KM inválido");errors.push("KM inicial inválido");ok=false;}
+  else setOk("f_km_ini");
+  if(!g("f_km_fin")){setErr("f_km_fin","KM final obrigatório");errors.push("KM final obrigatório");ok=false;}
+  else if(ini>0&&fin<=ini){setErr("f_km_fin","KM final deve ser maior que o inicial");errors.push("KM final deve ser maior que o inicial");ok=false;}
+  else setOk("f_km_fin");
+  const ch=g("f_chegada"),dt=g("f_data");
+  if(ch&&dt&&ch<dt){setErr("f_chegada","Data de chegada não pode ser anterior à saída");errors.push("Data de chegada anterior à saída");ok=false;}
+  else if(ch&&isFuture(ch,30)){setErr("f_chegada","Data muito distante no futuro");errors.push("Data de chegada inválida");ok=false;}
+  else if(ch) setOk("f_chegada");
+  const fr=g("f_frete");
+  if(fr&&parseFloat(fr)<0){setErr("f_frete","Valor não pode ser negativo");errors.push("Frete negativo");ok=false;}
+  else if(fr) setOk("f_frete");
+  return{ok,errors};
+}
+
+function validateDiesel() {
+  if(!selectedMods.includes("diesel"))return{ok:true,errors:[]};
+  let ok=true,errors=[];
+  function checkAb(pref,label){
+    const l=g("f_"+pref+"_l"),p=g("f_"+pref+"_p"),rs=g("f_"+pref+"_rs"),km=g("f_"+pref+"_km");
+    if(!l&&!p)return;
+    if(!rs){setErr("f_"+pref+"_rs","Razão social obrigatória");errors.push(label+": razão social obrigatória");ok=false;}else setOk("f_"+pref+"_rs");
+    if(!km){setErr("f_"+pref+"_km","KM do abastecimento obrigatório");errors.push(label+": KM obrigatório");ok=false;}else if(!isNum(km)){setErr("f_"+pref+"_km","KM inválido");errors.push(label+": KM inválido");ok=false;}else setOk("f_"+pref+"_km");
+    if(l&&parseFloat(l)<0){setErr("f_"+pref+"_l","Volume inválido");errors.push(label+": volume negativo");ok=false;}
+    if(p&&parseFloat(p)<0){setErr("f_"+pref+"_p","Preço negativo");errors.push(label+": preço negativo");ok=false;}
+  }
+  checkAb("dsl","Diesel");checkAb("arla","Arla 32");
+  return{ok,errors};
+}
+
+function validateEntregas() {
+  if(!selectedMods.includes("entregas"))return{ok:true,errors:[]};
+  let ok=true,errors=[];
+  const seen=new Set();
+  for(let i=0;i<entCount;i++){
+    if(!document.getElementById("ent_"+i))continue;
+    const s=document.getElementById("e"+i+"_sigla");
+    const c=document.getElementById("e"+i+"_ctrc");
+    const f=document.getElementById("e"+i+"_filial");
+    const d=document.getElementById("e"+i+"_data");
+    const r=document.getElementById("e"+i+"_rec");
+    if(s&&!s.value){s.classList.add("err");errors.push(`Entrega ${i+1}: sigla obrigatória`);ok=false;}else if(s)s.classList.remove("err");
+    const ctrc=(c?.value||"").trim();
+    if(!ctrc){if(c)c.classList.add("err");errors.push(`Entrega ${i+1}: CTRC obrigatório`);ok=false;}
+    else if(seen.has(ctrc)){if(c)c.classList.add("err");errors.push(`CTRC duplicado: ${ctrc}`);ok=false;}
+    else{seen.add(ctrc);if(c)c.classList.remove("err");}
+    if(f&&!f.value.trim()){f.classList.add("err");errors.push(`Entrega ${i+1}: unidade obrigatória`);ok=false;}else if(f)f.classList.remove("err");
+    if(!d?.value){if(d)d.classList.add("err");errors.push(`Entrega ${i+1}: data obrigatória`);ok=false;}
+    else if(isFuture(d.value,7)){d.classList.add("err");errors.push(`Entrega ${i+1}: data inválida`);ok=false;}
+    else if(d)d.classList.remove("err");
+    if(!r?.value.trim()){if(r)r.classList.add("err");errors.push(`Entrega ${i+1}: recebedor obrigatório`);ok=false;}else if(r)r.classList.remove("err");
+  }
+  return{ok,errors};
+}
+
+function validateManutencao() {
+  if(!selectedMods.includes("manut"))return{ok:true,errors:[]};
+  let ok=true,errors=[];
+  const mp=document.getElementById("f_manut_placa");
+  if(mp&&!mp.value){mp.classList.add("err");errors.push("Placa do veículo reparado obrigatória");ok=false;}else if(mp)mp.classList.remove("err");
+  for(let i=0;i<svcCount;i++){
+    if(!document.getElementById("svc_"+i))continue;
+    const t=document.getElementById("svc"+i+"_tipo");
+    const v=document.getElementById("svc"+i+"_val");
+    if(t&&!t.value){t.classList.add("err");errors.push(`Serviço ${i+1}: selecione o tipo`);ok=false;}else if(t)t.classList.remove("err");
+    if(!v?.value){if(v)v.classList.add("err");errors.push(`Serviço ${i+1}: informe o valor`);ok=false;}
+    else if(parseFloat(v.value)<0){v.classList.add("err");errors.push(`Serviço ${i+1}: valor negativo`);ok=false;}
+    else if(v)v.classList.remove("err");
+  }
+  return{ok,errors};
+}
+
+function validateAll() {
+  const results=[validateViagens(),validateDiesel(),validateEntregas(),validateManutencao()];
+  const allErrors=results.flatMap(r=>r.errors);
+  const allOk=results.every(r=>r.ok);
+  const banner=document.getElementById("global_err_banner");
+  const list=document.getElementById("global_err_list");
+  if(allErrors.length){list.innerHTML=allErrors.map(e=>`<li>${e}</li>`).join("");banner.classList.add("show");scrollTo1st();}
+  else banner.classList.remove("show");
+  return allOk;
+}
+
+/* ═══ NAVIGATION ═══ */
+window.goToModules = function() {
+  const {ok}=validateVeiculo(); if(!ok){scrollTo1st();return;}
+  if(selectedMods.length===0){document.getElementById("err_mods").style.display="block";return;}
+  document.getElementById("vs_placa").textContent=g("f_placa_cv");
+  document.getElementById("vs_frota").textContent=g("f_frota")||FROTAS[g("f_placa_cv")]||"—";
+  document.getElementById("vs_driver").textContent=g("f_motorista");
+  buildModules(); showScreen("scr_modules"); setActiveMod(0);
+};
+window.backToForm = function(){showScreen("scr_form");};
+
+function buildModules() {
+  svcCount=0;entCount=0;veiculoParado=false;canvases={};
+  const tabs=document.getElementById("module_tabs"),pages=document.getElementById("module_pages");
+  tabs.innerHTML="";
+  const banner=document.getElementById("global_err_banner");
+  pages.innerHTML="";pages.appendChild(banner);
+  const DEFS={
+    viagens:{label:"🗺️ Viagem",build:buildViagens},
+    diesel:{label:"🛢️ Diesel",build:buildDiesel},
+    entregas:{label:"📦 Entregas",build:buildEntregas},
+    manut:{label:"🔧 Manut.",build:buildManut},
+  };
+  selectedMods.forEach((id,i)=>{
+    const tab=document.createElement("div");
+    tab.className="mtab";tab.id="tab_"+i;tab.textContent=DEFS[id].label;tab.onclick=()=>setActiveMod(i);
+    tabs.appendChild(tab);
+    const page=document.createElement("div");page.id="page_"+i;page.style.display="none";
+    page.innerHTML=DEFS[id].build();pages.appendChild(page);
+  });
+  if(selectedMods.includes("entregas"))setTimeout(()=>addEntrega(),60);
+  if(selectedMods.includes("manut"))setTimeout(()=>addSvc(),60);
+}
+
+function setActiveMod(i) {
+  activeMod=i;
+  selectedMods.forEach((_,j)=>{
+    document.getElementById("tab_"+j)?.classList.toggle("active",j===i);
+    const p=document.getElementById("page_"+j);if(p)p.style.display=j===i?"block":"none";
+  });
+  const isLast=i===selectedMods.length-1;
+  const btn=document.getElementById("btn_mod_nav");
+  btn.textContent=isLast?"Concluir ✓":"Próximo →";
+  btn.className="bb "+(isLast?"bb-grn":"bb-blk");
+  document.getElementById("module_pages").scrollTop=0;
+}
+
+window.moduleNext = function() {
+  if(activeMod<selectedMods.length-1){setActiveMod(activeMod+1);}
+  else{if(!validateAll()){showToast("Corrija os erros antes de concluir","error");return;}buildAndSave();}
+};
+
+/* ═══ MODULE BUILDERS ═══ */
+function buildViagens(){return`
+  <div class="card"><div class="card-hdr"><div class="card-ico" style="background:var(--blue-l)">📍</div><h2>Hodômetro</h2></div>
+  <div class="card-body">
+    <div class="fr">
+      <div class="f"><label>KM Inicial <span class="req">*</span></label><input type="number" id="f_km_ini" placeholder="000000" inputmode="numeric" oninput="calcKm()"><span class="err-msg" id="err_km_ini"></span></div>
+      <div class="f"><label>KM Final <span class="req">*</span></label><input type="number" id="f_km_fin" placeholder="000000" inputmode="numeric" oninput="calcKm()"><span class="err-msg" id="err_km_fin"></span></div>
+    </div>
+    <div class="km-result" id="km_result"><div class="num" id="km_num">—</div><div class="lbl">KM RODADO</div></div>
+  </div></div>
+  <div class="card"><div class="card-hdr"><div class="card-ico" style="background:var(--blue-l)">🗺️</div><h2>Rota & Carga</h2></div>
+  <div class="card-body">
+    <div class="fr"><div class="f w2"><label>Origem</label><input type="text" id="f_origem" placeholder="Cidade / unidade de saída"></div></div>
+    <div class="fr"><div class="f w2"><label>Destino</label><input type="text" id="f_destino" placeholder="Cidade / unidade de chegada"></div></div>
+    <div class="fr">
+      <div class="f"><label>Data Chegada</label><input type="date" id="f_chegada"><span class="err-msg" id="err_chegada"></span></div>
+      <div class="f"><label>Peso (T)</label><input type="number" id="f_peso" placeholder="0,0" step="0.1" inputmode="decimal"></div>
+    </div>
+    <div class="fr"><div class="f w2"><label>Nome do Cliente</label><input type="text" id="f_cliente" placeholder="Razão social do cliente"></div></div>
+    <div class="fr">
+      <div class="f"><label>Frete R$</label><input type="number" id="f_frete" placeholder="0,00" step="0.01" inputmode="decimal"><span class="err-msg" id="err_frete"></span></div>
+      <div class="f"><label>CTRC</label><input type="text" id="f_ctrc" placeholder="Nº documento"></div>
+    </div>
+  </div></div>`;}
+
+function buildDiesel(){return`
+  <div class="card"><div class="card-hdr"><div class="card-ico" style="background:var(--amber)">⛽</div><h2>Abastecimento — Diesel</h2></div>
+  <div class="card-body">
+    <div class="fr"><div class="f w2"><label>Razão Social</label><input type="text" id="f_dsl_rs" placeholder="Nome do posto / fornecedor"><span class="err-msg" id="err_dsl_rs"></span></div></div>
+    <div class="fr">
+      <div class="f"><label>Volume (L)</label><input type="number" id="f_dsl_l" placeholder="0" step="0.1" inputmode="decimal" oninput="calcDiesel('dsl')"></div>
+      <div class="f"><label>R$ / Litro</label><input type="number" id="f_dsl_p" placeholder="0,00" step="0.01" inputmode="decimal" oninput="calcDiesel('dsl')"></div>
+    </div>
+    <div class="fr">
+      <div class="f"><label>Total R$ (auto)</label><input type="text" id="f_dsl_tot" class="auto" readonly placeholder="—"></div>
+      <div class="f"><label>KM abastec.</label><input type="number" id="f_dsl_km" placeholder="000000" inputmode="numeric"><span class="err-msg" id="err_dsl_km"></span></div>
+    </div>
+    <div class="diesel-calc" id="dc_dsl">
+      <div class="dc-row"><span>Volume</span><span id="dc_dsl_vol">—</span></div>
+      <div class="dc-row"><span>R$/Litro</span><span id="dc_dsl_p2">—</span></div>
+      <div class="dc-row"><span>Total</span><strong id="dc_dsl_tot2">—</strong></div>
+    </div>
+  </div></div>
+  <div class="card"><div class="card-hdr"><div class="card-ico" style="background:var(--blue-l)">💧</div><h2>Abastecimento — Arla 32</h2></div>
+  <div class="card-body">
+    <div class="fr"><div class="f w2"><label>Razão Social</label><input type="text" id="f_arla_rs" placeholder="Nome do posto / fornecedor"><span class="err-msg" id="err_arla_rs"></span></div></div>
+    <div class="fr">
+      <div class="f"><label>Volume (L)</label><input type="number" id="f_arla_l" placeholder="0" step="0.1" inputmode="decimal" oninput="calcDiesel('arla')"></div>
+      <div class="f"><label>R$ / Litro</label><input type="number" id="f_arla_p" placeholder="0,00" step="0.01" inputmode="decimal" oninput="calcDiesel('arla')"></div>
+    </div>
+    <div class="fr">
+      <div class="f"><label>Total R$ (auto)</label><input type="text" id="f_arla_tot" class="auto" readonly placeholder="—"></div>
+      <div class="f"><label>KM abastec.</label><input type="number" id="f_arla_km" placeholder="000000" inputmode="numeric"><span class="err-msg" id="err_arla_km"></span></div>
+    </div>
+    <div class="diesel-calc" id="dc_arla">
+      <div class="dc-row"><span>Volume</span><span id="dc_arla_vol">—</span></div>
+      <div class="dc-row"><span>R$/Litro</span><span id="dc_arla_p2">—</span></div>
+      <div class="dc-row"><span>Total</span><strong id="dc_arla_tot2">—</strong></div>
+    </div>
+  </div></div>
+  <div class="card"><div class="card-hdr"><div class="card-ico" style="background:var(--amber)">🛢️</div><h2>Lubrificantes & Filtros</h2></div>
+  <div class="card-body">
+    <div class="fr"><div class="f w2"><label>Razão Social</label><input type="text" id="f_lub_rs" placeholder="Nome do fornecedor"></div></div>
+    <div class="fr"><div class="f w2"><label>Hodômetro na troca (km)</label><input type="number" id="f_lub_km" placeholder="000000" inputmode="numeric" oninput="updateCbKm()"></div></div>
+    <div class="div"></div>
+    <div class="cb-list">
+      ${['ÓLEO MOTOR','ÓLEO DIFERENCIAL','ÓLEO CÂMBIO','ÓLEO FREIO','FILTRO ÓLEO MOTOR','FILTRO DE AR','FILTRO COMBUSTÍVEL','FILTRO SEP. ÁGUA'].map((n,i)=>`
+      <div class="cb-item">
+        <div class="cb-box" id="cb_${i}" onclick="toggleCb(${i})"></div>
+        <span class="cb-label">${n}</span>
+        <span class="cb-km" id="cbkm_${i}" style="display:none">—</span>
+      </div>`).join('')}
+    </div>
+    <div class="div"></div>
+    <div class="f"><label>Observações</label><textarea id="f_lub_obs" placeholder="Anotações sobre os lubrificantes..."></textarea></div>
+  </div></div>`;}
+
+function buildEntregas(){return`<div id="entregas_body"></div><button class="add-ent-btn" onclick="addEntrega()">+ Adicionar descarga</button>`;}
+
+function buildManut(){
+  const placas=[g("f_placa_cv"),g("f_ct1"),g("f_ct2")].filter(Boolean);
+  const all={...FROTAS,...CARRETAS};
+  const opts=placas.map(p=>`<option value="${p}">${p} — ${all[p]||""}</option>`).join("");
+  return`
+  <div class="card"><div class="card-hdr"><div class="card-ico" style="background:var(--red-l)">🚛</div><h2>Identificação do serviço</h2></div>
+  <div class="card-body">
+    <div class="fr"><div class="f w2">
+      <label>Placa do veículo reparado <span class="req">*</span></label>
+      <select id="f_manut_placa"><option value="">Selecione...</option>${opts}</select>
+    </div></div>
+    <div class="fr" style="align-items:center">
+      <div class="f"><label>Veículo ficou parado?</label>
+        <div class="parado-wrap">
+          <div class="parado-opt sim" id="parado_sim" onclick="setParado(true)">SIM</div>
+          <div class="parado-opt nao" id="parado_nao" onclick="setParado(false)">NÃO</div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <div id="svcs_body"></div>
+  <button class="add-svc-btn" onclick="addSvc()"><div class="add-svc-icon">+</div><span>Adicionar serviço</span></button>
+  <div class="svc-total" id="svc_total" style="display:none"><span>TOTAL MANUTENÇÃO</span><strong id="svc_total_val">R$ 0,00</strong></div>
+  <div class="card"><div class="card-hdr"><div class="card-ico" style="background:var(--gray-bg)">📝</div><h2>Observações gerais</h2></div>
+  <div class="card-body"><textarea id="f_obs" placeholder="Qualquer ocorrência relevante..."></textarea></div></div>`;}
+
+/* ═══ CALCS ═══ */
+window.calcKm = function() {
+  const ini=parseFloat(g("f_km_ini"))||0,fin=parseFloat(g("f_km_fin"))||0;
+  const res=document.getElementById("km_result");
+  if(ini>0&&fin>ini){document.getElementById("km_num").textContent=(fin-ini).toLocaleString("pt-BR")+" km";res.classList.add("show");setOk("f_km_ini");setOk("f_km_fin");}
+  else{res.classList.remove("show");if(fin>0&&ini>0&&fin<=ini)setErr("f_km_fin","KM final deve ser maior que o inicial");}
+};
+
+window.calcDiesel = function(pref) {
+  const l=parseFloat(g("f_"+pref+"_l"))||0,p=parseFloat(g("f_"+pref+"_p"))||0;
+  const calc=document.getElementById("dc_"+pref);
+  if(l>0&&p>0){
+    const tot=(l*p).toFixed(2);
+    document.getElementById("f_"+pref+"_tot").value="R$ "+tot.replace(".",",");
+    const v=document.getElementById("dc_"+pref+"_vol");if(v)v.textContent=l+" L";
+    const p2=document.getElementById("dc_"+pref+"_p2");if(p2)p2.textContent="R$ "+p.toFixed(2).replace(".",",");
+    const t2=document.getElementById("dc_"+pref+"_tot2");if(t2)t2.textContent="R$ "+tot.replace(".",",");
+    if(calc)calc.classList.add("show");
+  } else {document.getElementById("f_"+pref+"_tot").value="";if(calc)calc.classList.remove("show");}
+};
+
+window.toggleCb = function(i) {
+  const box=document.getElementById("cb_"+i),km_el=document.getElementById("cbkm_"+i);
+  const checked=!box.classList.contains("checked");
+  if(checked){box.classList.add("checked");box.innerHTML=`<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>`;km_el.textContent=(g("f_lub_km")||"—")+" km";km_el.style.display="flex";}
+  else{box.classList.remove("checked");box.innerHTML="";km_el.style.display="none";}
+};
+window.updateCbKm = function() {
+  const km=g("f_lub_km");
+  for(let i=0;i<8;i++){const b=document.getElementById("cb_"+i);const k=document.getElementById("cbkm_"+i);if(b&&b.classList.contains("checked")&&k)k.textContent=km?km+" km":"—";}
+};
+window.setParado = function(v) {
+  veiculoParado=v;
+  document.getElementById("parado_sim")?.classList.toggle("active",v);
+  document.getElementById("parado_nao")?.classList.toggle("active",!v);
+};
+
+window.addSvc = function() {
+  const body=document.getElementById("svcs_body");if(!body)return;
+  const idx=svcCount++;
+  const div=document.createElement("div");div.className="svc-item";div.id="svc_"+idx;
+  div.innerHTML=`
+    <div class="svc-num">Serviço ${idx+1}</div>
+    <button class="svc-remove" onclick="removeSvc(${idx})">×</button>
+    <div class="fr"><div class="f w2"><label>Tipo <span class="req">*</span></label>
+      <select id="svc${idx}_tipo"><option value="">Selecione...</option>
+        <option>Peças / Acessórios</option><option>Pneus / Recapagem</option>
+        <option>Mão de obra</option><option>Elétrica</option>
+        <option>Funilaria / Pintura</option><option>Preventiva</option><option>Outro</option>
+      </select></div></div>
+    <div class="fr"><div class="f w2"><label>Fornecedor</label><input type="text" id="svc${idx}_fornecedor" placeholder="Nome do fornecedor / oficina"></div></div>
+    <div class="fr">
+      <div class="f"><label>Nº NF</label><input type="text" id="svc${idx}_nf" placeholder="Nota fiscal"></div>
+      <div class="f"><label>Valor R$ <span class="req">*</span></label><input type="number" id="svc${idx}_val" placeholder="0,00" step="0.01" inputmode="decimal" oninput="calcSvcTotal()"></div>
+    </div>
+    <div class="fr"><div class="f w2"><label>Descrição</label><textarea id="svc${idx}_desc" placeholder="Descreva o serviço..."></textarea></div></div>`;
+  body.appendChild(div);calcSvcTotal();
+};
+window.removeSvc = function(idx){document.getElementById("svc_"+idx)?.remove();calcSvcTotal();};
+window.calcSvcTotal = function() {
+  let t=0;for(let i=0;i<svcCount;i++){const el=document.getElementById("svc"+i+"_val");if(el)t+=parseFloat(el.value)||0;}
+  const tot=document.getElementById("svc_total"),val=document.getElementById("svc_total_val");
+  if(tot&&val){val.textContent="R$ "+t.toFixed(2).replace(".",",");tot.style.display=svcCount>0?"flex":"none";}
+};
+
+// ── entregaFotos: { idx: { file: File, dataUrl: string, fileName: string, type: string } }
+const entregaFotos = {};
+
+window.addEntrega = function() {
+  const body=document.getElementById("entregas_body");if(!body)return;
+  const idx=entCount++;
+  const div=document.createElement("div");div.className="ent-item";div.id="ent_"+idx;
+  div.innerHTML=`
+    <div class="ent-num">Entrega ${idx+1}</div>
+    <button class="ent-remove" onclick="removeEntrega(${idx})">×</button>
+    <div class="fr">
+      <div class="f"><label>Sigla Unidade <span class="req">*</span></label>
+        <select id="e${idx}_sigla" onchange="autoFillUnidade(${idx})"><option value="">Selecione...</option></select>
+      </div>
+      <div class="f w2"><label>Nº CTRC <span class="req">*</span></label>
+        <input type="text" id="e${idx}_ctrc" placeholder="000000">
+      </div>
+    </div>
+    <div class="fr"><div class="f w2"><label>Unidade Recebedora <span class="req">*</span></label>
+      <input type="text" id="e${idx}_filial" placeholder="Ex: São Paulo, Curitiba...">
+    </div></div>
+    <div class="fr">
+      <div class="f"><label>Data <span class="req">*</span></label><input type="date" id="e${idx}_data"></div>
+      <div class="f w2"><label>Recebedor <span class="req">*</span></label>
+        <input type="text" id="e${idx}_rec" placeholder="Nome completo">
+      </div>
+    </div>
+    <div style="margin-top:10px">
+      <span class="foto-label">Foto do canhoto <span class="req">*</span></span>
+      <div class="foto-zone" id="foto_zone_${idx}">
+        <div class="foto-empty" id="foto_empty_${idx}">
+          <span class="foto-empty-ico">🧾</span>
+          <span class="foto-empty-lbl">Foto do comprovante de entrega (canhoto)</span>
+          <div class="foto-btns">
+            <button class="foto-btn foto-btn-cam" onclick="abrirFoto(${idx},'camera')">📷 Câmera</button>
+            <button class="foto-btn foto-btn-gal" onclick="abrirFoto(${idx},'gallery')">🖼️ Galeria</button>
+          </div>
+          <input type="file" id="foto_input_${idx}" accept="image/jpeg,image/jpg,image/png"
+            style="display:none" onchange="anexarFotoCanhoto(${idx},this)">
+        </div>
+        <div class="foto-filled" id="foto_filled_${idx}" style="display:none">
+          <img class="foto-preview" id="foto_img_${idx}" src="" alt="Canhoto">
+          <div class="foto-ok-badge">✓ Anexada</div>
+          <button class="foto-remove-btn" onclick="removerFoto(${idx})">✕ Trocar</button>
+        </div>
+      </div>
+      <div class="foto-obrig" id="foto_obrig_${idx}" style="display:none">⚠ Foto obrigatória para concluir</div>
+    </div>`;
+  body.appendChild(div);
+  populateSiglaUnidadeSelect("e" + idx + "_sigla");
+};
+
+window.removeEntrega = function(idx) {
+  document.getElementById("ent_"+idx)?.remove();
+  delete entregaFotos[idx];
+};
+
+/* ── Abre seletor de arquivo com modo câmera ou galeria */
+window.abrirFoto = function(idx, modo) {
+  const input = document.getElementById("foto_input_"+idx);
+  if (!input) return;
+  if (modo === 'camera') {
+    input.setAttribute('capture','environment');
+  } else {
+    input.removeAttribute('capture');
+  }
+  input.click();
+};
+
+/* ── anexarFotoCanhoto: armazena File + preview base64 (upload ocorre no buildAndSave) */
+window.anexarFotoCanhoto = function(idx, input) {
+  const file = input.files[0];
+  if (!file) return;
+  const allowed = ['image/jpeg','image/jpg','image/png'];
+  if (!allowed.includes(file.type)) {
+    showToast("Use JPG ou PNG","error"); return;
+  }
+  if (file.size > 8 * 1024 * 1024) {
+    showToast("Imagem muito grande (máx 8MB)","error"); return;
+  }
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const dataUrl = e.target.result;
+    // Guarda o File real (para upload) + dataUrl (para preview local)
+    entregaFotos[idx] = { file, dataUrl, fileName: file.name, type: file.type };
+    const img = document.getElementById("foto_img_"+idx);
+    if (img) img.src = dataUrl;
+    document.getElementById("foto_empty_"+idx).style.display = "none";
+    document.getElementById("foto_filled_"+idx).style.display = "block";
+    document.getElementById("foto_zone_"+idx).classList.add("filled");
+    document.getElementById("foto_obrig_"+idx).style.display = "none";
+    document.getElementById("foto_zone_"+idx).classList.remove("error");
+    showToast("Foto selecionada — será enviada ao salvar","success");
+  };
+  reader.readAsDataURL(file);
+};
+
+/* ── removerFoto: limpa foto e volta para estado vazio */
+window.removerFoto = function(idx) {
+  delete entregaFotos[idx];
+  document.getElementById("foto_empty_"+idx).style.display = "block";
+  document.getElementById("foto_filled_"+idx).style.display = "none";
+  document.getElementById("foto_zone_"+idx).classList.remove("filled");
+  const input = document.getElementById("foto_input_"+idx);
+  if (input) input.value = "";
+};
+
+/* ── validarEntregaComFoto: checa se todas entregas ativas têm foto */
+function validarEntregaComFoto() {
+  let ok = true;
+  for (let i = 0; i < entCount; i++) {
+    if (!document.getElementById("ent_"+i)) continue;
+    if (!entregaFotos[i]) {
+      document.getElementById("foto_zone_"+i)?.classList.add("error");
+      document.getElementById("foto_obrig_"+i).style.display = "block";
+      ok = false;
+    }
+  }
+  return ok;
+}
+
+/* ── visualizarCanhoto: abre modal com foto(s) de um relatório */
+window.visualizarCanhoto = function(reportId) {
+  const r = panelDocs.find(x => x.id === reportId);
+  if (!r) return;
+  const ents = (r.entregas || []).filter(e => e.canhoto_url || e.canhoto_filename);
+  if (!ents.length) {
+    showToast("Nenhum canhoto armazenado neste relatório","error");
+    return;
+  }
+  // Monta conteúdo do modal
+  let slides = ents.map((e, i) => `
+    <div class="modal-slide" id="slide_${i}" style="${i>0?'display:none':''}">
+      <div style="padding:10px 16px 6px;background:var(--gray-bg);border-bottom:1px solid var(--gray-ll);font-size:11px;font-weight:700;color:var(--gray)">
+        Entrega ${i+1} · CTRC ${e.ctrc||"—"} · ${e.sigla||""} → ${e.filial||""}
+      </div>
+      ${e.canhoto_url
+        ? `<img src="${e.canhoto_url}" alt="Canhoto ${i+1}"
+             crossorigin="anonymous"
+             style="width:100%;max-height:340px;object-fit:contain;display:block;background:var(--gray-bg)"
+             onerror="this.style.display='none';this.nextElementSibling.style.display='block'"
+           ><div style="display:none" class="modal-img-placeholder"><span>⚠️</span><p>Erro ao carregar imagem.<br>Tente abrir em nova aba.</p></div>`
+        : `<div class="modal-img-placeholder"><span>🧾</span><p>${e.canhoto_filename ? e.canhoto_filename+"<br><small style='color:#aaa'>Foto não migrada para Storage</small>" : "Canhoto sem URL — relatório antigo"}</p></div>`
+      }
+    </div>`).join('');
+
+  let nav = ents.length > 1 ? `
+    <div style="display:flex;gap:6px;align-items:center;justify-content:center;padding:8px 0 0">
+      ${ents.map((_,i)=>`<button onclick="slideModal(${i})" id="slide_dot_${i}"
+        style="width:8px;height:8px;border-radius:50%;border:none;cursor:pointer;background:${i===0?'var(--black)':'var(--gray-l)'}"></button>`).join('')}
+    </div>` : '';
+
+  document.getElementById("modal_title").textContent =
+    `🧾 Canhoto${ents.length>1?' ('+ents.length+' entregas)':''} — Ocorrência #${r.numero_ocorrencia||"—"}`;
+  document.getElementById("modal_content").innerHTML = slides + nav;
+  document.getElementById("modal_current_idx").value = "0";
+  document.getElementById("canhoto_modal").classList.add("show");
+};
+
+window.slideModal = function(i) {
+  document.querySelectorAll(".modal-slide").forEach((s,j) => s.style.display = j===i?"block":"none");
+  document.querySelectorAll("[id^='slide_dot_']").forEach((d,j) => d.style.background = j===i?"var(--black)":"var(--gray-l)");
+  document.getElementById("modal_current_idx").value = String(i);
+};
+
+window.fecharModal = function() {
+  document.getElementById("canhoto_modal").classList.remove("show");
+};
+
+window.salvarImagemModal = async function() {
+  const slides = document.querySelectorAll(".modal-slide");
+  const idx = parseInt(document.getElementById("modal_current_idx").value||"0");
+  const img = slides[idx]?.querySelector("img");
+  if (!img || !img.src || img.src === window.location.href) {
+    showToast("Sem imagem para salvar","error"); return;
+  }
+  const url = img.src;
+  try {
+    // Para URLs do Firebase Storage: busca como blob para forçar download
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error("HTTP "+resp.status);
+    const blob = await resp.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = "canhoto_"+Date.now()+".jpg";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(blobUrl); document.body.removeChild(a); }, 1000);
+    showToast("Download iniciado!","success");
+  } catch(e) {
+    // Fallback: abre em nova aba
+    window.open(url, "_blank");
+    showToast("Abrindo imagem em nova aba","success");
+  }
+};
+
+/* ═══ COLLECT ═══ */
+function g(id){return(document.getElementById(id)||{}).value||"";}
+function collectAll() {
+  const ini=parseFloat(g("f_km_ini"))||0,fin=parseFloat(g("f_km_fin"))||0;
+  const dslL=parseFloat(g("f_dsl_l"))||0,dslP=parseFloat(g("f_dsl_p"))||0;
+  const arlaL=parseFloat(g("f_arla_l"))||0,arlaP=parseFloat(g("f_arla_p"))||0;
+  const lubNames=["ÓLEO MOTOR","ÓLEO DIFERENCIAL","ÓLEO CÂMBIO","ÓLEO FREIO","FILTRO ÓLEO MOTOR","FILTRO DE AR","FILTRO COMBUSTÍVEL","FILTRO SEP. ÁGUA"];
+  const lubs=[];
+  for(let i=0;i<8;i++){const b=document.getElementById("cb_"+i);if(b&&b.classList.contains("checked"))lubs.push({item:lubNames[i],km:g("f_lub_km")});}
+  const svcs=[];let svcTot=0;
+  for(let i=0;i<svcCount;i++){if(!document.getElementById("svc_"+i))continue;const v=parseFloat(g("svc"+i+"_val"))||0;svcTot+=v;svcs.push({tipo:g("svc"+i+"_tipo"),fornecedor:g("svc"+i+"_fornecedor"),nf:g("svc"+i+"_nf"),val:v,desc:g("svc"+i+"_desc")});}
+  const ents=[];
+  for(let i=0;i<entCount;i++){
+    if(!document.getElementById("ent_"+i))continue;
+    const foto=entregaFotos[i]||{};
+    ents.push({
+      sigla:g("e"+i+"_sigla"),ctrc:g("e"+i+"_ctrc"),
+      filial:g("e"+i+"_filial"),data:g("e"+i+"_data"),rec:g("e"+i+"_rec"),
+      // canhoto_url e filename são preenchidos em buildAndSave após upload
+      canhoto_url:      "",
+      canhoto_filename: foto.fileName||"",
+      tem_canhoto:      false,
+      _localFotoIdx:    foto.file ? i : -1, // índice para lookup no upload
+    });
+  }
+  return{emissao:emissaoTimestamp,data:g("f_data"),filial:g("f_filial"),motorista:g("f_motorista"),placa_cv:g("f_placa_cv"),frota:g("f_frota"),placa_ct1:g("f_ct1"),placa_ct2:g("f_ct2"),km_ini:ini,km_fin:fin,km_rod:fin>ini?fin-ini:0,origem:g("f_origem"),destino:g("f_destino"),chegada:g("f_chegada"),peso:g("f_peso"),cliente:g("f_cliente"),frete:g("f_frete"),ctrc_v:g("f_ctrc"),dsl_rs:g("f_dsl_rs"),dsl_l:dslL,dsl_p:dslP,dsl_tot:dslL&&dslP?(dslL*dslP).toFixed(2):"",dsl_km:g("f_dsl_km"),arla_rs:g("f_arla_rs"),arla_l:arlaL,arla_p:arlaP,arla_tot:arlaL&&arlaP?(arlaL*arlaP).toFixed(2):"",arla_km:g("f_arla_km"),lub_rs:g("f_lub_rs"),lub_km:g("f_lub_km"),lubrificantes:lubs,lub_obs:g("f_lub_obs"),manut_placa:g("f_manut_placa"),parado:veiculoParado,servicos:svcs,svc_total:svcTot,obs:g("f_obs"),modulos:selectedMods.join(", "),entregas:ents};
+}
+
+/* ═══ SAVE ═══ */
+async function buildAndSave() {
+  const btn=document.getElementById("btn_mod_nav");
+  btn.disabled=true; btn.textContent="Salvando...";
+  try {
+    const dados = collectAll();
+    const numOc = await window._FB.gerarNumeroSequencial();
+    dados.numero_ocorrencia = numOc;
+
+    // ── Upload de fotos para Storage ANTES de salvar no Firestore
+    if (dados.entregas && dados.entregas.length) {
+      for (let i = 0; i < dados.entregas.length; i++) {
+        const ent = dados.entregas[i];
+        const fotoIdx = ent._localFotoIdx;
+        if (fotoIdx >= 0 && entregaFotos[fotoIdx] && entregaFotos[fotoIdx].file) {
+          btn.textContent = `Enviando foto ${i+1}/${dados.entregas.length}...`;
+          // Upload obrigatório — se falhar, interrompe e não salva no Firestore
+          const { url, filename } = await window._FB.uploadCanhoto(
+            entregaFotos[fotoIdx].file,
+            numOc,
+            fotoIdx  // usa o índice real da entrega, não o índice do array
+          );
+          ent.canhoto_url      = url;
+          ent.canhoto_filename = filename;
+          ent.tem_canhoto      = true;
+        }
+        // Remove campo auxiliar antes de salvar
+        delete ent._localFotoIdx;
+      }
+    }
+
+    btn.textContent = "Salvando dados...";
+    await window._FB.salvarRelatorio(dados);
+    document.getElementById("occ_num_display").textContent = numOc;
+    document.getElementById("occ_meta_display").textContent =
+      `${dados.data}  ·  ${dados.motorista}  ·  ${dados.placa_cv}`;
+    showScreen("scr_success");
+  } catch(e) {
+    showToast("Erro ao salvar: "+e.message, "error");
+    console.error("buildAndSave error:", e);
+  } finally {
+    btn.disabled=false; btn.textContent="Concluir ✓";
+  }
+}
+
+/* ════════════════════════════════════════════════════
+   PAINEL
+════════════════════════════════════════════════════ */
+async function openPanel() {
+  showScreen("scr_panel");
+  document.getElementById("occ_list").innerHTML='<div class="loading-state">Carregando relatórios...</div>';
+  await renderPanel();
+}
+window.openPanel=openPanel;
+window.closePanel=function(){showScreen("scr_form");};
+
+window.toggleFiltCanhoto = function(wrap) {
+  const hidden = document.getElementById("filt_canhoto");
+  const lbl    = document.getElementById("filt_canhoto_lbl");
+  if (!hidden) return;
+  const on = hidden.value !== "1";
+  hidden.value = on ? "1" : "";
+  if (lbl) {
+    lbl.style.color = on ? "var(--green)" : "var(--gray)";
+    wrap.style.background = on ? "var(--green-l)" : "";
+    wrap.style.borderRadius = on ? "var(--r-sm)" : "";
+    wrap.style.padding = on ? "4px 8px" : "";
+  }
+  renderPanel();
+};
+
+window.renderPanel = async function() {
+  try {
+    const f={
+      placa:document.getElementById("filt_placa")?.value||"",
+      motorista:document.getElementById("filt_mot")?.value||"",
+      filial:document.getElementById("filt_fil")?.value||"",
+      ctrc:(document.getElementById("filt_ctrc")?.value||"").trim().toUpperCase(),
+      canhoto: document.getElementById("filt_canhoto")?.value === "1",
+      de:document.getElementById("filt_de")?.value||"",
+      ate:document.getElementById("filt_ate")?.value||"",
+    };
+    panelDocs=await window._FB.buscarRelatorios(f);
+    const totKm=panelDocs.reduce((a,r)=>a+(r.km_rod||0),0);
+    const totDsl=panelDocs.reduce((a,r)=>a+(r.dsl_l||0),0);
+    const totEnt=panelDocs.reduce((a,r)=>a+(r.entregas?.length||0),0);
+    document.getElementById("d_relat").textContent=panelDocs.length;
+    document.getElementById("d_km").textContent=totKm.toLocaleString("pt-BR");
+    document.getElementById("d_diesel").textContent=totDsl.toFixed(0)+" L";
+    document.getElementById("d_ent").textContent=totEnt;
+    // Populate filter selects
+    const placas=[...new Set(panelDocs.map(r=>r.placa_cv).filter(Boolean))];
+    const mots=[...new Set(panelDocs.map(r=>r.motorista).filter(Boolean))];
+    const sP=document.getElementById("filt_placa"),cP=sP.value;
+    const sM=document.getElementById("filt_mot"),cM=sM.value;
+    sP.innerHTML=`<option value="">Todas placas</option>`+placas.map(p=>`<option${p===cP?" selected":""}>${p}</option>`).join("");
+    sM.innerHTML=`<option value="">Todos</option>`+mots.map(m=>`<option${m===cM?" selected":""}>${m}</option>`).join("");
+    const list=document.getElementById("occ_list");
+    if(!panelDocs.length){list.innerHTML=`<div class="empty-state"><div class="ei">📋</div><p>Nenhum relatório encontrado</p></div>`;return;}
+    const canDel=window._FB.getCurrentPerfil()==="admin";
+    list.innerHTML=panelDocs.map(r=>{
+      const mods=(r.modulos||"").split(",").map(m=>m.trim());
+      const tags=mods.map(m=>{
+        if(m==="viagens")return'<div class="tag tv">🗺️ Viagem</div>';
+        if(m==="diesel")return'<div class="tag td">🛢️ Diesel</div>';
+        if(m==="entregas")return'<div class="tag te">📦 Entregas</div>';
+        if(m==="manut")return'<div class="tag tm">🔧 Manut.</div>';return"";
+      }).join("");
+      const metrics=[];
+      if(r.km_rod)metrics.push(`📍 <strong>${Number(r.km_rod).toLocaleString("pt-BR")} km</strong>`);
+      if(r.dsl_l)metrics.push(`⛽ <strong>${r.dsl_l} L</strong>`);
+      if(r.entregas?.length){
+        const comFoto=(r.entregas||[]).filter(e=>e.tem_canhoto).length;
+        metrics.push(`📦 <strong>${r.entregas.length}</strong>${comFoto>0?' <span style="font-size:9px;color:var(--green)">🧾×'+comFoto+'</span>':''}`);
+      }
+      if(r.svc_total)metrics.push(`🔧 <strong>R$ ${Number(r.svc_total).toFixed(2)}</strong>`);
+      return`<div class="occ-card">
+        <div class="occ-badge"># ${r.numero_ocorrencia||"—"}</div>
+        <div class="occ-user">👤 ${r.email||"—"} · ${r.perfil||"usuario"}</div>
+        <div class="occ-driver">${r.motorista||"—"}</div>
+        <div class="occ-plate">${r.placa_cv||"—"} · ${r.frota||"—"} · ${r.filial||"—"} · ${r.emissao||r.data||"—"}</div>
+        ${(()=>{const ctrcList=[...(r.ctrc_v?[r.ctrc_v]:[]),...(r.entregas||[]).map(e=>e.ctrc).filter(Boolean)];return ctrcList.length?`<div style="font-size:10px;color:var(--blue);font-weight:700;margin-top:3px">📄 CTRC: ${ctrcList.join(' · ')}</div>`:'';})()}
+        ${(r.entregas||[]).some(e=>e.tem_canhoto)?'<div style="display:inline-block;background:var(--green-l);color:var(--green);font-size:9px;font-weight:800;padding:1px 7px;border-radius:3px;margin-top:3px">🧾 Com canhoto</div>':''}
+        <div class="occ-tags">${tags}</div>
+        <div class="occ-metrics">${metrics.map(m=>`<div class="om">${m}</div>`).join("")}</div>
+        <div class="occ-actions">
+          <button class="oa oa-c" onclick="copyReport('${r.id}')">📋 Copiar</button>
+          <button class="oa oa-foto" onclick="visualizarCanhoto('${r.id}')" ${!(r.entregas&&r.entregas.length)?'style="opacity:.35;cursor:not-allowed" title="Sem entregas neste relatório"':''}>🧾 Canhoto</button>
+          ${canDel?`<button class="oa oa-d" onclick="deleteReport('${r.id}')">🗑 Excluir</button>`:""}
+        </div>
+      </div>`;
+    }).join("");
+  } catch(e){document.getElementById("occ_list").innerHTML=`<div class="empty-state"><div class="ei">⚠️</div><p>Erro: ${e.message}</p></div>`;}
+};
+
+window.copyReport = function(id) {
+  const r=panelDocs.find(x=>x.id===id);if(!r)return;
+  const has=m=>(r.modulos||"").includes(m);
+  let msg=`🚛 *COMIX — OCORRÊNCIA #${r.numero_ocorrencia||"—"}*\n━━━━━━━━━━━━\n📅 ${r.emissao||r.data} | ${r.filial}\n👤 ${r.motorista}\n🚛 ${r.placa_cv} · ${r.frota}\n🔗 ${r.placa_ct1}${r.placa_ct2?" | "+r.placa_ct2:""}`;
+  if(has("viagens"))msg+=`\n\n📍 VIAGEM\n• ${r.origem} → ${r.destino} | ${r.km_rod||0} km\n• Cliente: ${r.cliente||"—"} | Frete: R$ ${r.frete||"—"}`;
+  if(has("diesel")&&r.dsl_l)msg+=`\n\n⛽ DIESEL — ${r.dsl_rs||"—"} | ${r.dsl_l}L | R$${r.dsl_tot||"—"}`;
+  if(has("entregas")&&r.entregas?.length)msg+=`\n\n📦 ENTREGAS (${r.entregas.length})\n`+r.entregas.map((e,i)=>`  ${i+1}. ${e.ctrc} | ${e.sigla}→${e.filial} | ${e.rec}`).join("\n");
+  if(has("manut")&&r.servicos?.length)msg+=`\n\n🔧 MANUTENÇÃO — R$${r.svc_total||0}\n`+r.servicos.map((s,i)=>`  ${i+1}. ${s.tipo} | ${s.fornecedor||"—"} | R$${s.val}`).join("\n");
+  if(navigator.clipboard)navigator.clipboard.writeText(msg).then(()=>showToast("Copiado!","success"));
+};
+
+window.deleteReport = async function(id) {
+  if(!confirm("Excluir permanentemente?"))return;
+  try{await window._FB.excluirRelatorio(id);showToast("Excluído","success");await window.renderPanel();}
+  catch(e){showToast("Erro: "+e.message,"error");}
+};
+
+/* ════════════════════════════════════════════════════
+   EXCEL PROFISSIONAL — SheetJS
+════════════════════════════════════════════════════ */
+
+// ── Paleta corporativa pastel
+const XL={
+  TITLE_BG:"1A1A1A",TITLE_FG:"FFFFFF",
+  SUB_BG:"2C2C2A",SUB_FG:"FFFFFF",
+  HDR_BG:"F2F2F2",HDR_FG:"1A1A1A",
+  ID_BG:"F2F2F2",ID_FG:"1A1A1A",
+  VEI_BG:"E8E7E3",VEI_FG:"1A1A1A",
+  VIA_BG:"DFF5E1",VIA_FG:"0A4A25",
+  DSL_BG:"FFE8CC",DSL_FG:"5A3000",
+  ARL_BG:"DCEBFF",ARL_FG:"0A2E5A",
+  LUB_BG:"FFF3CC",LUB_FG:"4A3500",
+  MAN_BG:"FFE0E0",MAN_FG:"5A0A0A",
+  ENT_BG:"E0F0FF",ENT_FG:"0A2A4A",
+  TOT_BG:"E8F5E9",TOT_FG:"0A4A25",
+  ALT_BG:"FAFAF8",DATA_BG:"FFFFFF",DATA_FG:"1A1A1A",
+  BORDER:"CCCCCC",
+};
+
+function xs(bg,fg,bold=false,sz=9,align="center",wrap=false,numFmt=null,italic=false){
+  return{
+    font:{name:"Arial",sz,bold,italic,color:{rgb:fg||"1A1A1A"}},
+    fill:{fgColor:{rgb:bg||"FFFFFF"},patternType:"solid"},
+    alignment:{horizontal:align,vertical:"center",wrapText:wrap},
+    border:{top:{style:"thin",color:{rgb:XL.BORDER}},bottom:{style:"thin",color:{rgb:XL.BORDER}},left:{style:"thin",color:{rgb:XL.BORDER}},right:{style:"thin",color:{rgb:XL.BORDER}}},
+    ...(numFmt?{z:numFmt}:{})
+  };
+}
+
+function col2ltr(n){let s="";while(n>=0){s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26)-1;}return s;}
+
+function setCell(ws,row,col,value,style){
+  const ref=col2ltr(col)+row;
+  const t=(value===null||value===undefined||value==="")?  "s":typeof value==="number"?"n":typeof value==="boolean"?"b":"s";
+  ws[ref]={v:value??"",t,s:style};
+}
+
+function merge(ws,r1,c1,r2,c2){(ws["!merges"]=ws["!merges"]||[]).push({s:{r:r1-1,c:c1},e:{r:r2-1,c:c2}});}
+
+function fmtBRL(v){const n=parseFloat(v);return isNaN(n)||!n?"":"R$ "+n.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});}
+function fmtKm(v){const n=parseFloat(v);return !n?"":n.toLocaleString("pt-BR");}
+function fmtDt(v){if(!v)return"";if(v.includes("/"))return v;const[y,m,d]=v.split("-");return`${d}/${m}/${y}`;}
+
+function exportarRelatorioExcel(docs, filename) {
+  if(!docs||!docs.length){showToast("Nenhum relatório para exportar","error");return;}
+  if(typeof XLSX==="undefined"){showToast("Aguarde — carregando Excel...","");setTimeout(()=>exportarRelatorioExcel(docs,filename),1500);return;}
+
+  const wb=XLSX.utils.book_new();
+  const hoje=new Date().toLocaleDateString("pt-BR");
+  const sub=`Exportado em: ${hoje}  ·  ${docs.length} ocorrência(s)  ·  Agente Autônomo de Frotas`;
+
+  const totKm=docs.reduce((a,r)=>a+(parseFloat(r.km_rod)||0),0);
+  const totDslL=docs.reduce((a,r)=>a+(parseFloat(r.dsl_l)||0),0);
+  const totDslR=docs.reduce((a,r)=>a+(parseFloat(r.dsl_tot)||0),0);
+  const totArlL=docs.reduce((a,r)=>a+(parseFloat(r.arla_l)||0),0);
+  const totArlR=docs.reduce((a,r)=>a+(parseFloat(r.arla_tot)||0),0);
+  const totManR=docs.reduce((a,r)=>a+(parseFloat(r.svc_total)||0),0);
+  const totFr=docs.reduce((a,r)=>a+(parseFloat(r.frete)||0),0);
+
+  /* ── helper: cria aba segmentada com cabeçalho padrão ── */
+  function makeSheet(titulo,colunas,linhas,totais){
+    const ws={};
+    const TC=colunas.length;
+    for(let c=0;c<TC;c++) setCell(ws,1,c,c===0?"COMIX TRANSPORTES – "+titulo:"",xs(XL.TITLE_BG,XL.TITLE_FG,true,12,"center"));
+    merge(ws,1,0,1,TC-1);
+    for(let c=0;c<TC;c++) setCell(ws,2,c,c===0?sub:"",xs("F8F8F8","555555",false,9,"center",false,null,true));
+    merge(ws,2,0,2,TC-1);
+    for(let c=0;c<TC;c++) setCell(ws,3,c,"",xs(XL.TITLE_BG,"000000",false,3));
+    merge(ws,3,0,3,TC-1);
+    colunas.forEach((cd,i)=>setCell(ws,4,i,cd.h,xs(cd.secBg||XL.HDR_BG,cd.secFg||XL.HDR_FG,true,9,"center",true)));
+    const DS=5;
+    linhas.forEach((row,ri)=>{
+      const rn=DS+ri;
+      const alt=ri%2===0?XL.DATA_BG:XL.ALT_BG;
+      colunas.forEach((cd,ci)=>{
+        let val="";try{val=cd.get(row);}catch(e){}
+        let bg=alt,fg=XL.DATA_FG,bold=cd.bold||false,lnk=cd.link?cd.link(row):null;
+        if(cd.hilight&&val){bg=cd.hilight.bg;fg=cd.hilight.fg;bold=true;}
+        if(lnk&&val){
+          const ref=col2ltr(ci)+rn;
+          ws[ref]={v:val,t:"s",l:{Target:lnk,Tooltip:"Abrir canhoto"},s:xs(bg,"185FA5",bold,9,"center")};
+        } else {
+          setCell(ws,rn,ci,val,xs(bg,fg,bold,9,"center",false,cd.numFmt||null));
+        }
+      });
+    });
+    if(totais&&totais.length){
+      const TR=DS+linhas.length;
+      for(let c=0;c<TC;c++) setCell(ws,TR,c,"",xs(XL.TOT_BG,XL.TOT_FG,true,9));
+      setCell(ws,TR,0,"TOTAIS",xs(XL.TOT_BG,XL.TOT_FG,true,9,"left"));
+      totais.forEach(t=>setCell(ws,TR,t.col,t.val,xs(t.bg||XL.TOT_BG,t.fg||XL.TOT_FG,true,9,"center")));
+      ws["!ref"]=`A1:${col2ltr(TC-1)}${TR}`;
+      ws["!rows"]=[{hpt:24},{hpt:14},{hpt:4},{hpt:32},...linhas.map(()=>({hpt:18})),{hpt:20}];
+    } else {
+      ws["!ref"]=`A1:${col2ltr(TC-1)}${DS+linhas.length-1}`;
+      ws["!rows"]=[{hpt:24},{hpt:14},{hpt:4},{hpt:32},...linhas.map(()=>({hpt:18}))];
+    }
+    ws["!cols"]=colunas.map(c=>({wch:c.w||12}));
+    return ws;
+  }
+
+  /* ── ABA 1: Resumo Executivo ── */
+  const wsRes={};
+  const r2=[
+    ["COMIX TRANSPORTES – RESUMO EXECUTIVO","","",""],
+    [sub,"","",""],
+    ["","","",""],
+    ["INDICADOR","VALOR","",""],
+    ["Total de ocorrências",docs.length,"",""],
+    ["KM total rodado",fmtKm(totKm)+" km","",""],
+    ["Diesel consumido (L)",totDslL.toFixed(1)+" L","",""],
+    ["Custo total Diesel",fmtBRL(totDslR),"",""],
+    ["Arla 32 consumido (L)",totArlL.toFixed(1)+" L","",""],
+    ["Custo total Arla 32",fmtBRL(totArlR),"",""],
+    ["Custo manutenção",fmtBRL(totManR),"",""],
+    ["Total fretes",fmtBRL(totFr),"",""],
+    ["Total de entregas",docs.reduce((a,r)=>a+(r.entregas?.length||0),0),"",""],
+    ["","","",""],
+    ["CUSTO TOTAL OPERACIONAL",fmtBRL(totDslR+totArlR+totManR),"",""],
+  ];
+  r2.forEach((row,ri)=>{
+    const rn=ri+1;
+    row.forEach((v,ci)=>{
+      let s;
+      if(rn===1) s=xs(XL.TITLE_BG,XL.TITLE_FG,true,13,"center");
+      else if(rn===2) s=xs("F8F8F8","555555",false,9,"center",false,null,true);
+      else if(rn===4) s=xs(XL.HDR_BG,XL.HDR_FG,true,10,"left");
+      else if(rn===15) s=xs(XL.TOT_BG,XL.TOT_FG,true,11,"left");
+      else s=xs(ri%2===0?XL.DATA_BG:XL.ALT_BG,XL.DATA_FG,false,10,"left");
+      setCell(wsRes,rn,ci,v??"",s);
+    });
+    if([1,2,15].includes(rn)) merge(wsRes,rn,0,rn,3);
+  });
+  wsRes["!cols"]=[{wch:36},{wch:24},{wch:12},{wch:12}];
+  wsRes["!rows"]=[{hpt:26},{hpt:16},{hpt:6},{hpt:20},...r2.slice(4).map(()=>({hpt:18}))];
+  wsRes["!ref"]=`A1:D${r2.length}`;
+  XLSX.utils.book_append_sheet(wb,wsRes,"Resumo Executivo");
+
+  /* ── ABA 2: Identificação & Veículo — 1 linha por OC ── */
+  const colsId=[
+    {h:"Nº OC.",w:10,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.numero_ocorrencia||"—"},
+    {h:"EMISSÃO",w:20,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.emissao||""},
+    {h:"DATA",w:12,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>fmtDt(r.data)},
+    {h:"UNIDADE",w:14,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.filial||""},
+    {h:"E-MAIL",w:28,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.email||""},
+    {h:"PERFIL",w:10,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.perfil||""},
+    {h:"MOTORISTA",w:24,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.motorista||""},
+    {h:"PLACA CV",w:13,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.placa_cv||""},
+    {h:"Nº FROTA",w:10,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.frota||""},
+    {h:"CARRETA 1",w:13,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.placa_ct1||""},
+    {h:"CARRETA 2",w:13,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.placa_ct2||""},
+  ];
+  XLSX.utils.book_append_sheet(wb,makeSheet("IDENTIFICAÇÃO & VEÍCULO",colsId,docs,[]),"Identificação");
+
+  /* ── ABA 3: Viagem & KM — 1 linha por OC ── */
+  const colsVia=[
+    {h:"Nº OC.",w:10,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.numero_ocorrencia||"—"},
+    {h:"MOTORISTA",w:22,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.motorista||""},
+    {h:"PLACA CV",w:12,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.placa_cv||""},
+    {h:"ORIGEM",w:18,secBg:XL.VIA_BG,secFg:XL.VIA_FG,get:r=>r.origem||""},
+    {h:"DESTINO",w:18,secBg:XL.VIA_BG,secFg:XL.VIA_FG,get:r=>r.destino||""},
+    {h:"DT CHEGADA",w:13,secBg:XL.VIA_BG,secFg:XL.VIA_FG,get:r=>fmtDt(r.chegada)},
+    {h:"KM INICIAL",w:12,secBg:XL.VIA_BG,secFg:XL.VIA_FG,get:r=>fmtKm(r.km_ini)},
+    {h:"KM FINAL",w:12,secBg:XL.VIA_BG,secFg:XL.VIA_FG,get:r=>fmtKm(r.km_fin)},
+    {h:"KM RODADO",w:13,secBg:XL.VIA_BG,secFg:XL.VIA_FG,bold:true,hilight:{bg:XL.VIA_BG,fg:XL.VIA_FG},get:r=>fmtKm(r.km_rod)},
+    {h:"PESO (T)",w:10,secBg:XL.VIA_BG,secFg:XL.VIA_FG,get:r=>r.peso||""},
+    {h:"CLIENTE",w:26,secBg:XL.VIA_BG,secFg:XL.VIA_FG,get:r=>r.cliente||""},
+    {h:"FRETE R$",w:14,secBg:XL.VIA_BG,secFg:XL.VIA_FG,bold:true,get:r=>fmtBRL(r.frete)},
+    {h:"CTRC",w:14,secBg:XL.VIA_BG,secFg:XL.VIA_FG,get:r=>r.ctrc_v||""},
+  ];
+  const totVia=[
+    {col:8,val:fmtKm(totKm)+" km",bg:XL.VIA_BG,fg:XL.VIA_FG},
+    {col:11,val:fmtBRL(totFr),bg:XL.VIA_BG,fg:XL.VIA_FG},
+  ];
+  XLSX.utils.book_append_sheet(wb,makeSheet("VIAGEM & KM",colsVia,docs,totVia),"Viagem & KM");
+
+  /* ── ABA 4: Diesel & Arla 32 — 1 linha por OC ── */
+  const colsDsl=[
+    {h:"Nº OC.",w:10,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.numero_ocorrencia||"—"},
+    {h:"MOTORISTA",w:22,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.motorista||""},
+    {h:"PLACA CV",w:12,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.placa_cv||""},
+    {h:"DSL FORNECEDOR",w:26,secBg:XL.DSL_BG,secFg:XL.DSL_FG,get:r=>r.dsl_rs||""},
+    {h:"DSL VOL.(L)",w:12,secBg:XL.DSL_BG,secFg:XL.DSL_FG,get:r=>r.dsl_l||""},
+    {h:"DSL R$/LITRO",w:12,secBg:XL.DSL_BG,secFg:XL.DSL_FG,get:r=>fmtBRL(r.dsl_p)},
+    {h:"DSL TOTAL R$",w:14,secBg:XL.DSL_BG,secFg:XL.DSL_FG,bold:true,get:r=>fmtBRL(r.dsl_tot)},
+    {h:"DSL KM ABAST.",w:13,secBg:XL.DSL_BG,secFg:XL.DSL_FG,get:r=>fmtKm(r.dsl_km)},
+    {h:"ARL FORNECEDOR",w:26,secBg:XL.ARL_BG,secFg:XL.ARL_FG,get:r=>r.arla_rs||""},
+    {h:"ARL VOL.(L)",w:12,secBg:XL.ARL_BG,secFg:XL.ARL_FG,get:r=>r.arla_l||""},
+    {h:"ARL R$/LITRO",w:12,secBg:XL.ARL_BG,secFg:XL.ARL_FG,get:r=>fmtBRL(r.arla_p)},
+    {h:"ARL TOTAL R$",w:14,secBg:XL.ARL_BG,secFg:XL.ARL_FG,bold:true,get:r=>fmtBRL(r.arla_tot)},
+    {h:"ARL KM ABAST.",w:13,secBg:XL.ARL_BG,secFg:XL.ARL_FG,get:r=>fmtKm(r.arla_km)},
+  ];
+  const totDsl=[
+    {col:4,val:totDslL.toFixed(1)+" L",bg:XL.DSL_BG,fg:XL.DSL_FG},
+    {col:6,val:fmtBRL(totDslR),bg:XL.DSL_BG,fg:XL.DSL_FG},
+    {col:9,val:totArlL.toFixed(1)+" L",bg:XL.ARL_BG,fg:XL.ARL_FG},
+    {col:11,val:fmtBRL(totArlR),bg:XL.ARL_BG,fg:XL.ARL_FG},
+  ];
+  XLSX.utils.book_append_sheet(wb,makeSheet("DIESEL & ARLA 32",colsDsl,docs,totDsl),"Diesel & Arla 32");
+
+  /* ── ABA 5: Lubrificantes & Filtros — 1 linha por OC ── */
+  const lubItems=["ÓLEO MOTOR","ÓLEO DIFERENCIAL","ÓLEO CÂMBIO","ÓLEO FREIO","FILTRO ÓLEO MOTOR","FILTRO DE AR","FILTRO COMBUSTÍVEL","FILTRO SEP. ÁGUA"];
+  const colsLub=[
+    {h:"Nº OC.",w:10,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.numero_ocorrencia||"—"},
+    {h:"MOTORISTA",w:22,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.motorista||""},
+    {h:"PLACA CV",w:12,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.placa_cv||""},
+    {h:"FORNECEDOR",w:22,secBg:XL.LUB_BG,secFg:XL.LUB_FG,get:r=>r.lub_rs||""},
+    {h:"KM HODÔM.",w:14,secBg:XL.LUB_BG,secFg:XL.LUB_FG,get:r=>fmtKm(r.lub_km)},
+    ...lubItems.map(n=>({
+      h:n.replace("FILTRO ","F.").replace("ÓLEO ","Ó."),w:13,
+      secBg:XL.LUB_BG,secFg:XL.LUB_FG,
+      get:r=>{const l=(r.lubrificantes||[]).find(x=>x.item===n);return l?"SIM":"";}
+    })),
+    {h:"OBSERVAÇÕES",w:28,secBg:XL.LUB_BG,secFg:XL.LUB_FG,get:r=>r.lub_obs||""},
+  ];
+  XLSX.utils.book_append_sheet(wb,makeSheet("LUBRIFICANTES & FILTROS",colsLub,docs,[]),"Lubrificantes");
+
+  /* ── ABA 6: Manutenção — 1 linha por SERVIÇO ── */
+  const linhasMnt=[];
+  docs.forEach(r=>{
+    const svcs=r.servicos||[];
+    if(!svcs.length){
+      linhasMnt.push({oc:r.numero_ocorrencia||"—",mot:r.motorista||"",plc:r.placa_cv||"",plm:r.manut_placa||"",par:r.parado?"SIM":"NÃO",tipo:"",forn:"",nf:"",val:"",desc:"",tot:fmtBRL(r.svc_total)});
+    } else {
+      svcs.forEach((s,i)=>{
+        linhasMnt.push({oc:r.numero_ocorrencia||"—",mot:r.motorista||"",plc:r.placa_cv||"",plm:r.manut_placa||"",par:r.parado?"SIM":"NÃO",tipo:s.tipo||"",forn:s.fornecedor||"",nf:s.nf||"",val:fmtBRL(s.val),desc:s.desc||"",tot:i===0?fmtBRL(r.svc_total):""});
+      });
+    }
+  });
+  const colsMnt=[
+    {h:"Nº OC.",w:10,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.oc},
+    {h:"MOTORISTA",w:22,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.mot},
+    {h:"PLACA CV",w:12,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.plc},
+    {h:"PLACA MANUT.",w:13,secBg:XL.MAN_BG,secFg:XL.MAN_FG,get:r=>r.plm},
+    {h:"PARADO?",w:10,secBg:XL.MAN_BG,secFg:XL.MAN_FG,get:r=>r.par},
+    {h:"TIPO SERVIÇO",w:20,secBg:XL.MAN_BG,secFg:XL.MAN_FG,get:r=>r.tipo},
+    {h:"FORNECEDOR",w:24,secBg:XL.MAN_BG,secFg:XL.MAN_FG,get:r=>r.forn},
+    {h:"NF",w:12,secBg:XL.MAN_BG,secFg:XL.MAN_FG,get:r=>r.nf},
+    {h:"VALOR R$",w:14,secBg:XL.MAN_BG,secFg:XL.MAN_FG,bold:true,get:r=>r.val},
+    {h:"DESCRIÇÃO",w:28,secBg:XL.MAN_BG,secFg:XL.MAN_FG,get:r=>r.desc},
+    {h:"TOTAL OC. R$",w:14,secBg:XL.TOT_BG,secFg:XL.TOT_FG,bold:true,get:r=>r.tot},
+  ];
+  const totMnt=[{col:10,val:fmtBRL(totManR),bg:XL.TOT_BG,fg:XL.TOT_FG}];
+  XLSX.utils.book_append_sheet(wb,makeSheet("MANUTENÇÃO",colsMnt,linhasMnt,totMnt),"Manutenção");
+
+  /* ── ABA 7: Entregas — 1 linha por ENTREGA com link do canhoto ── */
+  const linhasEnt=[];
+  docs.forEach(r=>{
+    const ents=r.entregas||[];
+    if(!ents.length){
+      linhasEnt.push({oc:r.numero_ocorrencia||"—",mot:r.motorista||"",plc:r.placa_cv||"",data:r.data||"",idx:"—",sig:"",ctrc:"",fil:"",edt:"",rec:"",cnh:"",cnhUrl:""});
+    } else {
+      ents.forEach((e,i)=>{
+        linhasEnt.push({oc:r.numero_ocorrencia||"—",mot:r.motorista||"",plc:r.placa_cv||"",data:r.data||"",idx:`E${i+1}`,sig:e.sigla||"",ctrc:e.ctrc||"",fil:e.filial||"",edt:fmtDt(e.data),rec:e.rec||"",cnh:e.canhoto_url?"Ver canhoto":"—",cnhUrl:e.canhoto_url||""});
+      });
+    }
+  });
+  const colsEnt=[
+    {h:"Nº OC.",w:10,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>r.oc},
+    {h:"MOTORISTA",w:22,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.mot},
+    {h:"PLACA CV",w:12,secBg:XL.VEI_BG,secFg:XL.VEI_FG,get:r=>r.plc},
+    {h:"DATA OC.",w:12,secBg:XL.ID_BG,secFg:XL.ID_FG,get:r=>fmtDt(r.data)},
+    {h:"Nº ENTREGA",w:11,secBg:XL.ENT_BG,secFg:XL.ENT_FG,get:r=>r.idx},
+    {h:"SIGLA",w:10,secBg:XL.ENT_BG,secFg:XL.ENT_FG,get:r=>r.sig},
+    {h:"CTRC",w:14,secBg:XL.ENT_BG,secFg:XL.ENT_FG,get:r=>r.ctrc},
+    {h:"UNIDADE DEST.",w:18,secBg:XL.ENT_BG,secFg:XL.ENT_FG,get:r=>r.fil},
+    {h:"DATA ENTREGA",w:13,secBg:XL.ENT_BG,secFg:XL.ENT_FG,get:r=>r.edt},
+    {h:"RECEBEDOR",w:20,secBg:XL.ENT_BG,secFg:XL.ENT_FG,get:r=>r.rec},
+    {h:"CANHOTO",w:16,secBg:XL.ENT_BG,secFg:XL.ENT_FG,get:r=>r.cnh,link:r=>r.cnhUrl||null},
+  ];
+  XLSX.utils.book_append_sheet(wb,makeSheet("ENTREGAS & CANHOTOS",colsEnt,linhasEnt,[]),"Entregas");
+
+  XLSX.writeFile(wb,filename+".xlsx");
+  showToast(`Excel exportado — ${docs.length} ocorrência(s)`,"success");
+}
+
+window.exportExcel = function() {
+  if(!panelDocs.length){showToast("Nenhum relatório para exportar","error");return;}
+  exportarRelatorioExcel(panelDocs,"COMIX_Relatorios_"+new Date().toISOString().slice(0,10));
+};
+window.exportSingle = function(id) {
+  const r=panelDocs.find(x=>x.id===id);if(!r){showToast("Não encontrado","error");return;}
+  exportarRelatorioExcel([r],"COMIX_"+r.placa_cv+"_"+(r.data||"").replace(/\//g,"-"));
+};
+
+/* ════════════════════════════════════════════════════
+   PDF — jsPDF via CDN, segmentado por categoria
+════════════════════════════════════════════════════ */
+window.exportPDF = async function() {
+  if(!panelDocs.length){showToast("Nenhum relatório para exportar","error");return;}
+  showToast("Gerando PDF...","");
+  if(!window.jspdf){
+    await new Promise((res,rej)=>{
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+      s.onload=res;s.onerror=rej;document.head.appendChild(s);
+    });
+    await new Promise((res,rej)=>{
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js";
+      s.onload=res;s.onerror=rej;document.head.appendChild(s);
+    });
+  }
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({orientation:"landscape",unit:"mm",format:"a4"});
+  const docs=panelDocs;
+  const hoje=new Date().toLocaleDateString("pt-BR");
+  const PRIMARY=[15,59,104],ACCENT=[242,140,40],WHITE=[255,255,255],LIGHT=[248,250,252],BORDER=[219,228,239];
+
+  function addHeader(titulo){
+    doc.setFillColor(...PRIMARY);doc.rect(0,0,297,18,"F");
+    doc.setFont("helvetica","bold");doc.setFontSize(11);doc.setTextColor(...WHITE);
+    doc.text("COMIX TRANSPORTES — "+titulo,10,7.5);
+    doc.setFontSize(7);doc.setFont("helvetica","normal");doc.setTextColor(200,220,240);
+    doc.text(`Exportado em: ${hoje}  ·  ${docs.length} ocorrência(s)  ·  Agente Autônomo de Frotas`,10,13.5);
+    doc.setFillColor(...ACCENT);doc.rect(0,18,297,1.5,"F");
+  }
+
+  function kpiRow(items,y){
+    const w=297/items.length;
+    items.forEach((k,i)=>{
+      doc.setFillColor(i%2===0?248:241,i%2===0?250:244,i%2===0?252:248);
+      doc.rect(i*w,y,w,14,"F");
+      doc.setDrawColor(...BORDER);doc.rect(i*w,y,w,14,"S");
+      doc.setFont("helvetica","bold");doc.setFontSize(13);doc.setTextColor(...PRIMARY);
+      doc.text(String(k.v),i*w+w/2,y+8,{align:"center"});
+      doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(100,116,139);
+      doc.text(k.l,i*w+w/2,y+12,{align:"center"});
+    });
+    return y+14;
+  }
+
+  const totKm=docs.reduce((a,r)=>a+(parseFloat(r.km_rod)||0),0);
+  const totDslL=docs.reduce((a,r)=>a+(parseFloat(r.dsl_l)||0),0);
+  const totManR=docs.reduce((a,r)=>a+(parseFloat(r.svc_total)||0),0);
+  const totEnt=docs.reduce((a,r)=>a+(r.entregas?.length||0),0);
+
+  const autoT=(head,body,startY,theme)=>doc.autoTable({
+    head,body,startY,margin:{left:5,right:5},
+    styles:{fontSize:7,cellPadding:2,lineColor:BORDER,lineWidth:0.3,textColor:[16,32,51]},
+    headStyles:{fillColor:theme||PRIMARY,textColor:WHITE,fontStyle:"bold",halign:"center"},
+    alternateRowStyles:{fillColor:LIGHT},
+    theme:"grid",
+    didDrawPage:()=>addHeader(doc.internal.getCurrentPageInfo().pageNumber>1?"(continuação)":"RELATÓRIO DE FROTA"),
+  });
+
+  // Página 1 — Resumo + Identificação
+  addHeader("RELATÓRIO EXECUTIVO DE FROTA");
+  let y=kpiRow([
+    {v:docs.length,l:"Relatórios"},{v:fmtKm(totKm)+" km",l:"Km rodados"},
+    {v:totDslL.toFixed(0)+" L",l:"Diesel total"},{v:totEnt,l:"Entregas"},
+    {v:fmtBRL(totManR),l:"Manutenção"},
+  ],20);
+  y+=4;
+  doc.setFont("helvetica","bold");doc.setFontSize(8);doc.setTextColor(...PRIMARY);
+  doc.text("IDENTIFICAÇÃO & VEÍCULO",5,y+4);y+=6;
+  autoT(
+    [["Nº OC.","Emissão","Data","Unidade","Motorista","E-mail","Placa CV","Frota","Carreta 1","Carreta 2"]],
+    docs.map(r=>[r.numero_ocorrencia||"—",r.emissao||"",fmtDt(r.data),r.filial||"",r.motorista||"",r.email||"",r.placa_cv||"",r.frota||"",r.placa_ct1||"",r.placa_ct2||""]),
+    y
+  );
+
+  // Página 2 — Viagem & KM
+  doc.addPage();addHeader("VIAGEM & KM");
+  autoT(
+    [["Nº OC.","Motorista","Placa CV","Origem","Destino","Chegada","KM Ini","KM Fin","KM Rod.","Peso(t)","Cliente","Frete R$","CTRC"]],
+    docs.map(r=>[r.numero_ocorrencia||"—",r.motorista||"",r.placa_cv||"",r.origem||"",r.destino||"",fmtDt(r.chegada),fmtKm(r.km_ini),fmtKm(r.km_fin),fmtKm(r.km_rod)||"—",r.peso||"",r.cliente||"",fmtBRL(r.frete),r.ctrc_v||""]),
+    24,[21,80,100]
+  );
+
+  // Página 3 — Diesel & Arla 32
+  doc.addPage();addHeader("DIESEL & ARLA 32");
+  autoT(
+    [["Nº OC.","Motorista","Placa","DSL Fornecedor","DSL Vol.(L)","DSL R$/L","DSL Total","DSL KM","ARL Fornecedor","ARL Vol.(L)","ARL Total"]],
+    docs.map(r=>[r.numero_ocorrencia||"—",r.motorista||"",r.placa_cv||"",r.dsl_rs||"",r.dsl_l||"",fmtBRL(r.dsl_p),fmtBRL(r.dsl_tot),fmtKm(r.dsl_km),r.arla_rs||"",r.arla_l||"",fmtBRL(r.arla_tot)]),
+    24
+  );
+
+  // Página 4 — Lubrificantes
+  doc.addPage();addHeader("LUBRIFICANTES & FILTROS");
+  const lubItems=["ÓLEO MOTOR","ÓLEO DIFERENCIAL","ÓLEO CÂMBIO","ÓLEO FREIO","FILTRO ÓLEO MOTOR","FILTRO DE AR","FILTRO COMBUSTÍVEL","FILTRO SEP. ÁGUA"];
+  autoT(
+    [["Nº OC.","Motorista","Placa","Fornecedor","KM Hodôm.","Ó.Motor","Ó.Dif.","Ó.Câmbio","Ó.Freio","F.Óleo","F.Ar","F.Comb.","F.Sep.Água","Obs."]],
+    docs.map(r=>[r.numero_ocorrencia||"—",r.motorista||"",r.placa_cv||"",r.lub_rs||"",fmtKm(r.lub_km),...lubItems.map(n=>{const l=(r.lubrificantes||[]).find(x=>x.item===n);return l?"SIM":"";}),r.lub_obs||""]),
+    24
+  );
+
+  // Página 5 — Manutenção (1 linha por serviço)
+  doc.addPage();addHeader("MANUTENÇÃO");
+  const lmnt=[];
+  docs.forEach(r=>{
+    const sv=r.servicos||[];
+    if(!sv.length){lmnt.push([r.numero_ocorrencia||"—",r.motorista||"",r.placa_cv||"",r.manut_placa||"",r.parado?"SIM":"NÃO","","","","",fmtBRL(r.svc_total)]);}
+    else sv.forEach((s,i)=>lmnt.push([r.numero_ocorrencia||"—",r.motorista||"",r.placa_cv||"",r.manut_placa||"",r.parado?"SIM":"NÃO",s.tipo||"",s.fornecedor||"",s.nf||"",fmtBRL(s.val),i===0?fmtBRL(r.svc_total):""]));
+  });
+  autoT([["Nº OC.","Motorista","Placa CV","Placa Manut.","Parado?","Tipo Serviço","Fornecedor","NF","Valor R$","Total OC."]],lmnt,24,[180,40,100]);
+
+  // Página 6 — Entregas (1 linha por entrega com link)
+  doc.addPage();addHeader("ENTREGAS & CANHOTOS");
+  const lent=[];
+  docs.forEach(r=>{
+    const ents=r.entregas||[];
+    if(!ents.length){lent.push([r.numero_ocorrencia||"—",r.motorista||"",r.placa_cv||"",fmtDt(r.data),"—","","","","","","—"]);}
+    else ents.forEach((e,i)=>lent.push([r.numero_ocorrencia||"—",r.motorista||"",r.placa_cv||"",fmtDt(r.data),`E${i+1}`,e.sigla||"",e.ctrc||"",e.filial||"",fmtDt(e.data),e.rec||"",e.canhoto_url?"Ver →":"—"]));
+  });
+  doc.autoTable({
+    head:[["Nº OC.","Motorista","Placa CV","Data OC.","Nº Ent.","Sigla","CTRC","Unidade Dest.","Data Ent.","Recebedor","Canhoto"]],
+    body:lent,startY:24,margin:{left:5,right:5},
+    styles:{fontSize:7,cellPadding:2,lineColor:BORDER,lineWidth:0.3,textColor:[16,32,51]},
+    headStyles:{fillColor:[14,95,165],textColor:WHITE,fontStyle:"bold",halign:"center"},
+    alternateRowStyles:{fillColor:LIGHT},
+    theme:"grid",
+    didParseCell:(data)=>{
+      if(data.section==="body"&&data.column.index===10&&data.cell.raw==="Ver →"){
+        data.cell.styles.textColor=[21,85,143];data.cell.styles.fontStyle="bold";
+      }
+    },
+    didDrawCell:(data)=>{
+      if(data.section==="body"&&data.column.index===10&&data.cell.raw==="Ver →"){
+        const rowIdx=data.row.index;
+        const ent=lent[rowIdx];
+        const realEnt=(()=>{let idx=0;for(const r of docs){for(const e of(r.entregas||[])){if(idx===rowIdx)return e;idx++;}}return null;})();
+        if(realEnt?.canhoto_url){
+          doc.link(data.cell.x,data.cell.y,data.cell.width,data.cell.height,{url:realEnt.canhoto_url});
+        }
+      }
+    },
+  });
+
+  // Rodapé em todas as páginas
+  const total=doc.internal.getNumberOfPages();
+  for(let i=1;i<=total;i++){
+    doc.setPage(i);
+    doc.setFillColor(...LIGHT);doc.rect(0,200,297,10,"F");
+    doc.setDrawColor(...BORDER);doc.line(0,200,297,200);
+    doc.setFont("helvetica","normal");doc.setFontSize(7);doc.setTextColor(148,163,184);
+    doc.text("COMIX Transportes · Agente Autônomo de Frotas",5,206);
+    doc.text(`${hoje}  ·  Página ${i} de ${total}`,292,206,{align:"right"});
+  }
+
+  doc.save("COMIX_Relatorio_"+new Date().toISOString().slice(0,10)+".pdf");
+  showToast("PDF exportado com sucesso","success");
+};
+
+
+
+
+
 let cfgCurrentSection = "usuarios";
 let cfgPaisInicializado = false;
 const cfgCache = { usuarios: [], veiculos: [], motoristas: [], filiais: [] };
@@ -1397,7 +2771,9 @@ function cfgDigits(value) {
   return String(value || "").replace(/\D/g, "");
 }
 function cfgUpper(value) {
-  return String(value || "").trim().toLocaleUpperCase("pt-BR");
+  // Sem trim() aqui para não bloquear espaços durante digitação
+  // O trim é aplicado ao salvar
+  return String(value || "").toLocaleUpperCase("pt-BR");
 }
 function cfgUppercaseInput(el) {
   if (!el) return;
