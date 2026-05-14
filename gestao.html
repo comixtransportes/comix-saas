@@ -9162,8 +9162,24 @@ window.modulePlaceholderAtlas = function(name){ showToast('Módulo "' + name + '
   /* Dispara após _appReady (usuário autenticado) */
   var _origAppReady = window._appReady;
   window._appReady = async function(user, perfil) {
-    if (_origAppReady) await _origAppReady.call(this, user, perfil);
-    navigateFromParam();
+    var navDone = false;
+    function doNav() {
+      if (navDone) return;
+      navDone = true;
+      navigateFromParam();
+    }
+    /* Ficha e Painel não dependem de sync — navega imediatamente */
+    var m = new URLSearchParams(window.location.search).get('m');
+    if (m === 'ficha' || m === 'painel') {
+      doNav();
+    } else {
+      /* Para compras/config: aguarda até 1s ou conclusão dos awaits */
+      setTimeout(doNav, 1000);
+    }
+    try {
+      if (_origAppReady) await _origAppReady.call(this, user, perfil);
+    } catch(e) {}
+    doNav();
   };
 })();
 
