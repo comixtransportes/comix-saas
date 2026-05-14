@@ -3582,16 +3582,6 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
   </script>
 
 
-<script>
-// Atlas integration patch — makes compras "Início" button go back to Atlas home
-(function() {
-  var _origGoHome = window.goHome;
-  window.goHome = function() {
-    if (typeof goHomeAtlas === 'function') { goHomeAtlas(); }
-    else if (_origGoHome) { _origGoHome(); }
-  };
-})();
-</script>
 </div>
 
 <!-- ══ FORMULÁRIO ══ -->
@@ -9124,62 +9114,85 @@ window.openAdminAtlas = function(){
 };
 window.modulePlaceholderAtlas = function(name){ showToast('Módulo "' + name + '" reservado para próxima etapa.'); };
 
-/* ═══ MODO IFRAME — oculta headers internos quando dentro do Atlas ═══ */
+/* ═══ MODO IFRAME — integração com Atlas ═══ */
 (function() {
   var inAtlas = (window.self !== window.top);
   if (!inAtlas) return;
 
-  /* Injeta CSS para ocultar headers/botões do gestão quando em iframe */
+  var m = new URLSearchParams(window.location.search).get('m');
+
+  /* ── Mapa de módulo → id da screen ── */
+  var SCREEN_MAP = {
+    'ficha'   : 'scr_form',
+    'compras' : 'scr_compras_atlas',
+    'painel'  : 'scr_panel',
+    'config'  : 'scr_config_admin',
+  };
+
+  /* ── CSS: suprime telas que nunca devem aparecer no iframe ── */
   var style = document.createElement('style');
   style.textContent = [
-    /* Ficha operacional — oculta header azul com botões Início/Painel/Sair */
-    '#scr_form .app-hdr { display: none !important; }',
-    /* Config admin — oculta topbar com Início/Sair */
-    '#scr_config_admin .atlas-topbar { display: none !important; }',
-    /* Home screen — nunca mostrar no Atlas */
-    '#scr_home { display: none !important; }',
-    /* Compras — oculta topbar com Início */
-    '#scr_compras_atlas .topbar { display: none !important; }',
-    /* Painel de ocorrências — oculta header (Início/Sair ficam no Atlas) */
-    '#scr_panel .app-hdr { display: none !important; }',
-    /* Tela de módulos — nunca mostrar no Atlas */
+    '#scr_home    { display: none !important; }',
+    '#scr_login   { display: none !important; }',
     '#scr_modules { display: none !important; }',
-    /* Login — nunca mostrar no Atlas (auth já feita pelo index) */
-    '#scr_login { display: none !important; }',
+    '#scr_form .app-hdr                 { display: none !important; }',
+    '#scr_config_admin .atlas-topbar    { display: none !important; }',
+    '#scr_compras_atlas .topbar         { display: none !important; }',
+    '#scr_panel .app-hdr                { display: none !important; }',
   ].join('\n');
   document.head.appendChild(style);
 
-  /* Lê parâmetro ?m= da URL para navegar direto ao módulo */
-  function navigateFromParam() {
-    var m = new URLSearchParams(window.location.search).get('m');
-    if (!m) return;
-    if      (m === 'ficha')   { window.openFichaOperacionalAtlas && window.openFichaOperacionalAtlas(); }
-    else if (m === 'compras') { window.openComprasAtlas && window.openComprasAtlas(); }
-    else if (m === 'config')  { window.openAdminAtlas && window.openAdminAtlas(); }
-    else if (m === 'painel')  { window.openPainelAtlas && window.openPainelAtlas(); }
+  /* ── Mostra o módulo alvo IMEDIATAMENTE, sem esperar auth ──
+     Assim não há tela branca. O auth completa em background e
+     popula os dados (Firebase, selects, etc.) quando chegar.   */
+  function showTargetNow() {
+    var targetId = SCREEN_MAP[m];
+    if (!targetId) return;
+    /* Remove active de todas as screens */
+    document.querySelectorAll('.screen').forEach(function(s) {
+      s.classList.remove('active');
+    });
+    /* Ativa a screen alvo */
+    var target = document.getElementById(targetId);
+    if (target) target.classList.add('active');
+    /* Scroll para o topo */
+    window.scrollTo(0, 0);
   }
 
-  /* Dispara após _appReady (usuário autenticado) */
+  /* Dispara assim que o DOM estiver pronto */
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', showTargetNow);
+  } else {
+    showTargetNow();
+  }
+
+  /* ── Após auth: re-navega para garantir dados carregados ── */
   var _origAppReady = window._appReady;
   window._appReady = async function(user, perfil) {
+    /* Compras precisa do sync antes de aparecer funcional */
+    /* Ficha/Painel/Config já estão visíveis — só rodar o original */
     var navDone = false;
     function doNav() {
       if (navDone) return;
       navDone = true;
-      navigateFromParam();
+      if      (m === 'ficha')   { window.openFichaOperacionalAtlas && window.openFichaOperacionalAtlas(); }
+      else if (m === 'compras') { window.openComprasAtlas && window.openComprasAtlas(); }
+      else if (m === 'config')  { window.openAdminAtlas && window.openAdminAtlas(); }
+      else if (m === 'painel')  { window.openPainelAtlas && window.openPainelAtlas(); }
     }
-    /* Ficha e Painel não dependem de sync — navega imediatamente */
-    var m = new URLSearchParams(window.location.search).get('m');
-    if (m === 'ficha' || m === 'painel') {
-      doNav();
-    } else {
-      /* Para compras/config: aguarda até 1s ou conclusão dos awaits */
-      setTimeout(doNav, 1000);
-    }
+    /* Fallback máximo de 2s */
+    setTimeout(doNav, 2000);
     try {
       if (_origAppReady) await _origAppReady.call(this, user, perfil);
     } catch(e) {}
     doNav();
+  };
+
+  /* ── Intercepta goHome para não sair do módulo ── */
+  var _origGoHome = window.goHome;
+  window.goHome = function() {
+    if (typeof goHomeAtlas === 'function') goHomeAtlas();
+    else if (_origGoHome) _origGoHome();
   };
 })();
 
