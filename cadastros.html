@@ -1252,101 +1252,20 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
 
 <script>
-/* ── Funções operacionais necessárias para o módulo de cadastros ── */
+/* ── Funções operacionais necessárias para Cadastros ── */
+/* ── State ── */
 const operationalCache = { veiculos: [], motoristas: [], filiais: [] };
 
+/* ── upperText ── */
 function upperText(value) {
   return String(value || "").trim().toLocaleUpperCase("pt-BR");
 }
 
-function sortByField(a, b, field) {
-  return String(a[field] || "").localeCompare(String(b[field] || ""), "pt-BR", { sensitivity: "base" });
-}
-
-function normalizeOperationalVehicle(v) {
-  const placa = upperText(v.placa || v.id);
-  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial) };
-}
-
-function normalizeOperationalDriver(m) {
-  return { ...m, nome: upperText(m.nome || m.id), filial: upperText(m.filial) };
-}
-
-function normalizeOperationalUnidade(f) {
-  return { ...f, nome: upperText(f.nome || f.id), sigla: upperText(f.sigla), cidade: upperText(f.cidade), estado: upperText(f.estado) };
-}
-
-function rebuildVehicleMaps() {
-  FROTAS = {};
-  CARRETAS = {};
-  CARROS_APOIO = {};
-  operationalCache.veiculos.forEach(v => {
-    if (!v.placa) return;
-    if (v.tipo === "Carreta") CARRETAS[v.placa] = v.frota || "";
-    else if (v.tipo === "Carro de apoio") CARROS_APOIO[v.placa] = v.frota || "";
-    else FROTAS[v.placa] = v.frota || "";
-  });
-}
-
-async function loadOperationalCadastros() {
-  try {
-    if (!window._FB || typeof window._FB.listarCadastros !== "function") throw new Error("Leitura de cadastros indisponível");
-    const [veiculos, motoristas, filiais] = await Promise.all([
-      window._FB.listarCadastros("veiculos"),
-      window._FB.listarCadastros("motoristas"),
-      window._FB.listarCadastros("filiais")
-    ]);
-    operationalCache.veiculos = (veiculos || []).map(normalizeOperationalVehicle).sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"));
-    operationalCache.motoristas = (motoristas || []).map(normalizeOperationalDriver).sort((a,b)=>sortByField(a,b,"nome"));
-    operationalCache.filiais = (filiais || []).map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
-    rebuildVehicleMaps();
-  } catch (err) {
-    operationalCache.veiculos = [];
-    operationalCache.motoristas = [];
-    operationalCache.filiais = [];
-    rebuildVehicleMaps();
-    console.error("Erro ao carregar cadastros operacionais", err);
-    if (typeof showToast === "function") showToast("Não foi possível carregar cadastros operacionais do Firebase.", "error");
-  }
-}
-
-function syncOperationalFromCfg(collectionName) {
-  if (collectionName === "veiculos") {
-    operationalCache.veiculos = cfgCache.veiculos.map(normalizeOperationalVehicle).sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"));
-    rebuildVehicleMaps();
-    populatePlacas();
-  }
-  if (collectionName === "motoristas") {
-    operationalCache.motoristas = cfgCache.motoristas.map(normalizeOperationalDriver).sort((a,b)=>sortByField(a,b,"nome"));
-    populateMotoristasSelect();
-  }
-  if (collectionName === "filiais") {
-    operationalCache.filiais = cfgCache.filiais.map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
-    populateFiliaisSelect();
-    populateEntregasUnidadeSelects();
-  }
-}
-
-function populateMotoristasSelect() {
-  const select = document.getElementById("f_motorista");
-  const cur = resetSelectOptions(select, "Selecione...");
-  if (!select) return;
-  operationalCache.motoristas.forEach(m => {
-    if (m.nome) select.appendChild(new Option(m.nome, m.nome));
-  });
-  select.value = operationalCache.motoristas.some(m => m.nome === cur) ? cur : "";
-}
-
-function populateFiliaisSelect() {
-  const select = document.getElementById("f_filial");
-  const cur = resetSelectOptions(select, "Selecione...");
-  if (!select) return;
-  operationalCache.filiais.forEach(f => {
-    const value = f.sigla || f.nome || f.id;
-    const label = f.sigla ? `${f.sigla} — ${f.nome || f.id}` : (f.nome || f.id);
-    select.appendChild(new Option(label, value));
-  });
-  select.value = operationalCache.filiais.some(f => (f.sigla || f.nome || f.id) === cur) ? cur : "";
+function resetSelectOptions(select, firstLabel) {
+  if (!select) return "";
+  const cur = select.value;
+  select.innerHTML = `<option value="">${firstLabel}</option>`;
+  return cur;
 }
 
 function populatePlacas() {
@@ -1376,9 +1295,81 @@ function populatePlacas() {
   if (typeof autoFrota === "function") autoFrota();
 }
 
-function populateEntregasUnidadeSelects() {
-  // no-op no módulo de cadastros (não há formulário de entregas aqui)
+function populateFiliaisSelect() {
+  const select = document.getElementById("f_filial");
+  const cur = resetSelectOptions(select, "Selecione...");
+  if (!select) return;
+  operationalCache.filiais.forEach(f => {
+    const value = f.sigla || f.nome || f.id;
+    const label = f.sigla ? `${f.sigla} — ${f.nome || f.id}` : (f.nome || f.id);
+    select.appendChild(new Option(label, value));
+  });
+  select.value = operationalCache.filiais.some(f => (f.sigla || f.nome || f.id) === cur) ? cur : "";
 }
+
+function populateMotoristasSelect() {
+  const select = document.getElementById("f_motorista");
+  const cur = resetSelectOptions(select, "Selecione...");
+  if (!select) return;
+  operationalCache.motoristas.forEach(m => {
+    if (m.nome) select.appendChild(new Option(m.nome, m.nome));
+  });
+  select.value = operationalCache.motoristas.some(m => m.nome === cur) ? cur : "";
+}
+
+function normalizeOperationalUnidade(f) {
+  return { ...f, nome: upperText(f.nome || f.id), sigla: upperText(f.sigla), cidade: upperText(f.cidade), estado: upperText(f.estado) };
+}
+
+function normalizeOperationalDriver(m) {
+  return { ...m, nome: upperText(m.nome || m.id), filial: upperText(m.filial) };
+}
+
+function normalizeOperationalVehicle(v) {
+  const placa = upperText(v.placa || v.id);
+  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial) };
+}
+
+function rebuildVehicleMaps() {
+  FROTAS = {};
+  CARRETAS = {};
+  CARROS_APOIO = {};
+  operationalCache.veiculos.forEach(v => {
+    if (!v.placa) return;
+    if (v.tipo === "Carreta") CARRETAS[v.placa] = v.frota || "";
+    else if (v.tipo === "Carro de apoio") CARROS_APOIO[v.placa] = v.frota || "";
+    else FROTAS[v.placa] = v.frota || "";
+  });
+}
+
+function sortByField(a, b, field) {
+  return String(a[field] || "").localeCompare(String(b[field] || ""), "pt-BR", { sensitivity: "base" });
+}
+
+async function loadOperationalCadastros() {
+  try {
+    if (!window._FB || typeof window._FB.listarCadastros !== "function") throw new Error("Leitura de cadastros indisponível");
+    const [veiculos, motoristas, filiais] = await Promise.all([
+      window._FB.listarCadastros("veiculos"),
+      window._FB.listarCadastros("motoristas"),
+      window._FB.listarCadastros("filiais")
+    ]);
+    operationalCache.veiculos = (veiculos || []).map(normalizeOperationalVehicle).sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"));
+    operationalCache.motoristas = (motoristas || []).map(normalizeOperationalDriver).sort((a,b)=>sortByField(a,b,"nome"));
+    operationalCache.filiais = (filiais || []).map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
+    rebuildVehicleMaps();
+  } catch (err) {
+    operationalCache.veiculos = [];
+    operationalCache.motoristas = [];
+    operationalCache.filiais = [];
+    rebuildVehicleMaps();
+    console.error("Erro ao carregar cadastros operacionais", err);
+    if (typeof showToast === "function") showToast("Não foi possível carregar cadastros operacionais do Firebase.", "error");
+  }
+}
+
+/* No-op para cadastros — não há formulário de entregas neste módulo */
+function populateEntregasUnidadeSelects() {}
 
 </script>
 
