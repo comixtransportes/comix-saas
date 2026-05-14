@@ -1252,8 +1252,8 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
 
 <script>
-/* ── Funções operacionais mínimas necessárias para o módulo de cadastros ── */
-const operationalCache = { veiculos: [], motoristas: [], filiais: [] }
+/* ── Funções operacionais necessárias para o módulo de cadastros ── */
+const operationalCache = { veiculos: [], motoristas: [], filiais: [] };
 
 function upperText(value) {
   return String(value || "").trim().toLocaleUpperCase("pt-BR");
@@ -1261,6 +1261,11 @@ function upperText(value) {
 
 function sortByField(a, b, field) {
   return String(a[field] || "").localeCompare(String(b[field] || ""), "pt-BR", { sensitivity: "base" });
+}
+
+function normalizeOperationalVehicle(v) {
+  const placa = upperText(v.placa || v.id);
+  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial) };
 }
 
 function normalizeOperationalDriver(m) {
@@ -1322,10 +1327,62 @@ function syncOperationalFromCfg(collectionName) {
   }
 }
 
+function populateMotoristasSelect() {
+  const select = document.getElementById("f_motorista");
+  const cur = resetSelectOptions(select, "Selecione...");
+  if (!select) return;
+  operationalCache.motoristas.forEach(m => {
+    if (m.nome) select.appendChild(new Option(m.nome, m.nome));
+  });
+  select.value = operationalCache.motoristas.some(m => m.nome === cur) ? cur : "";
+}
+
+function populateFiliaisSelect() {
+  const select = document.getElementById("f_filial");
+  const cur = resetSelectOptions(select, "Selecione...");
+  if (!select) return;
+  operationalCache.filiais.forEach(f => {
+    const value = f.sigla || f.nome || f.id;
+    const label = f.sigla ? `${f.sigla} — ${f.nome || f.id}` : (f.nome || f.id);
+    select.appendChild(new Option(label, value));
+  });
+  select.value = operationalCache.filiais.some(f => (f.sigla || f.nome || f.id) === cur) ? cur : "";
+}
+
+function populatePlacas() {
+  rebuildVehicleMaps();
+  const cav = document.getElementById("f_placa_cv");
+  const curCav = resetSelectOptions(cav, "Selecione...");
+  if (cav) {
+    operationalCache.veiculos
+      .filter(v => v.tipo === "Cavalo")
+      .sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"))
+      .forEach(v => cav.appendChild(new Option(vehicleLabel(v), v.placa)));
+    cav.value = operationalCache.veiculos.some(v => v.tipo === "Cavalo" && v.placa === curCav) ? curCav : "";
+  }
+  ["f_ct1","f_ct2"].forEach(id=>{
+    const s=document.getElementById(id);
+    const cur = resetSelectOptions(s, id === "f_ct2" ? "Nenhuma" : "Selecione...");
+    if (!s) return;
+    operationalCache.veiculos
+      .filter(v => v.tipo === "Carreta")
+      .sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"))
+      .forEach(v => s.appendChild(new Option(vehicleLabel(v), v.placa)));
+    s.value = operationalCache.veiculos.some(v => v.tipo === "Carreta" && v.placa === cur) ? cur : "";
+  });
+  populateMotoristasSelect();
+  populateFiliaisSelect();
+  populateEntregasUnidadeSelects();
+  if (typeof autoFrota === "function") autoFrota();
+}
+
+function populateEntregasUnidadeSelects() {
+  // no-op no módulo de cadastros (não há formulário de entregas aqui)
+}
+
 </script>
 
 <script>
-// showScreen e showToast base
 function showScreen(id) {
   document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
   const el = document.getElementById(id);
@@ -1490,7 +1547,7 @@ function cfgDigits(value) {
   return String(value || "").replace(/\D/g, "");
 }
 function cfgUpper(value) {
-  return String(value || "").toLocaleUpperCase("pt-BR"); // trim removido para permitir espaços
+  return String(value || "").toLocaleUpperCase("pt-BR");
 }
 function cfgUppercaseInput(el) {
   if (!el) return;
