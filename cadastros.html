@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-<!-- COMIX Atlas — Cadastros Admin -->
 <html lang="pt-BR">
 <head>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,7 +11,7 @@
 </style>
 <script>
 if (window.self === window.top) {
-  var s = document.getElementById('atlas-iframe-head');
+  var s = document.getElementById("atlas-iframe-head");
   if (s) s.parentNode.removeChild(s);
 }
 </script>
@@ -464,7 +463,6 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
 </head>
 <body>
-
 <!-- ══ LOGIN ══ -->
 <div class="screen" id="scr_login">
   <div class="login-card">
@@ -486,7 +484,6 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     <div class="forgot-success" id="li_forgot_ok"></div>
   </div>
 </div>
-
 <!-- ══ CONFIGURAÇÕES ADMIN ══ -->
 <div class="screen cfg-admin-screen" id="scr_config_admin">
   <main class="atlas-main">
@@ -653,9 +650,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
 
 
-
 <div class="toast" id="toast"></div>
-
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
@@ -1250,15 +1245,74 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 </script>
 
 
-
 <script>
-/* ── Funções operacionais necessárias para Cadastros ── */
-/* ── State ── */
-const operationalCache = { veiculos: [], motoristas: [], filiais: [] };
+const operationalCache={veiculos:[],motoristas:[],filiais:[]};
 
-/* ── upperText ── */
 function upperText(value) {
   return String(value || "").trim().toLocaleUpperCase("pt-BR");
+}
+
+function normalizeTipoVeiculo(tipo) {
+  const t = String(tipo || "Cavalo").trim();
+  if (/^carro\s+de\s+apoio$/i.test(t)) return "Carro de apoio";
+  if (/^carreta$/i.test(t)) return "Carreta";
+  return "Cavalo";
+}
+
+function sortByField(a, b, field) {
+  return String(a[field] || "").localeCompare(String(b[field] || ""), "pt-BR", { sensitivity: "base" });
+}
+
+function normalizeOperationalVehicle(v) {
+  const placa = upperText(v.placa || v.id);
+  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial) };
+}
+
+function normalizeOperationalDriver(m) {
+  return { ...m, nome: upperText(m.nome || m.id), filial: upperText(m.filial) };
+}
+
+function normalizeOperationalUnidade(f) {
+  return { ...f, nome: upperText(f.nome || f.id), sigla: upperText(f.sigla), cidade: upperText(f.cidade), estado: upperText(f.estado) };
+}
+
+function rebuildVehicleMaps() {
+  FROTAS = {};
+  CARRETAS = {};
+  CARROS_APOIO = {};
+  operationalCache.veiculos.forEach(v => {
+    if (!v.placa) return;
+    if (v.tipo === "Carreta") CARRETAS[v.placa] = v.frota || "";
+    else if (v.tipo === "Carro de apoio") CARROS_APOIO[v.placa] = v.frota || "";
+    else FROTAS[v.placa] = v.frota || "";
+  });
+}
+
+async function loadOperationalCadastros() {
+  try {
+    if (!window._FB || typeof window._FB.listarCadastros !== "function") throw new Error("Leitura de cadastros indisponível");
+    const [veiculos, motoristas, filiais] = await Promise.all([
+      window._FB.listarCadastros("veiculos"),
+      window._FB.listarCadastros("motoristas"),
+      window._FB.listarCadastros("filiais")
+    ]);
+    operationalCache.veiculos = (veiculos || []).map(normalizeOperationalVehicle).sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"));
+    operationalCache.motoristas = (motoristas || []).map(normalizeOperationalDriver).sort((a,b)=>sortByField(a,b,"nome"));
+    operationalCache.filiais = (filiais || []).map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
+    rebuildVehicleMaps();
+  } catch (err) {
+    operationalCache.veiculos = [];
+    operationalCache.motoristas = [];
+    operationalCache.filiais = [];
+    rebuildVehicleMaps();
+    console.error("Erro ao carregar cadastros operacionais", err);
+    if (typeof showToast === "function") showToast("Não foi possível carregar cadastros operacionais do Firebase.", "error");
+  }
+}
+
+function vehicleLabel(v) {
+  const left = v.frota || "SEM FROTA";
+  return `${left} — ${v.placa}`;
 }
 
 function resetSelectOptions(select, firstLabel) {
@@ -1266,6 +1320,61 @@ function resetSelectOptions(select, firstLabel) {
   const cur = select.value;
   select.innerHTML = `<option value="">${firstLabel}</option>`;
   return cur;
+}
+
+function populateMotoristasSelect() {
+  const select = document.getElementById("f_motorista");
+  const cur = resetSelectOptions(select, "Selecione...");
+  if (!select) return;
+  operationalCache.motoristas.forEach(m => {
+    if (m.nome) select.appendChild(new Option(m.nome, m.nome));
+  });
+  select.value = operationalCache.motoristas.some(m => m.nome === cur) ? cur : "";
+}
+
+function populateFiliaisSelect() {
+  const select = document.getElementById("f_filial");
+  const cur = resetSelectOptions(select, "Selecione...");
+  if (!select) return;
+  operationalCache.filiais.forEach(f => {
+    const value = f.sigla || f.nome || f.id;
+    const label = f.sigla ? `${f.sigla} — ${f.nome || f.id}` : (f.nome || f.id);
+    select.appendChild(new Option(label, value));
+  });
+  select.value = operationalCache.filiais.some(f => (f.sigla || f.nome || f.id) === cur) ? cur : "";
+}
+
+function populateSiglaUnidadeSelect(id) {
+  const select = document.getElementById(id);
+  if (!select) return;
+  const cur = resetSelectOptions(select, "Selecione...");
+  // usa cache do Firebase se disponível
+  if (operationalCache.filiais && operationalCache.filiais.length) {
+    operationalCache.filiais.forEach(f => {
+      const sigla = f.sigla || "";
+      if (!sigla) return;
+      const label = f.nome ? `${sigla} — ${f.nome}` : sigla;
+      select.appendChild(new Option(label, sigla));
+    });
+  } else {
+    // fallback: lê filiais direto do Firebase em tempo real
+    if (window._FB && typeof window._FB.listarCadastros === "function") {
+      window._FB.listarCadastros("filiais").then(filiais => {
+        if (filiais && filiais.length) {
+          operationalCache.filiais = filiais.map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
+          operationalCache.filiais.forEach(f => {
+            const sigla = f.sigla || "";
+            if (!sigla) return;
+            const label = f.nome ? `${sigla} — ${f.nome}` : sigla;
+            select.appendChild(new Option(label, sigla));
+          });
+          select.value = operationalCache.filiais.some(f => f.sigla === cur) ? cur : "";
+        }
+      }).catch(() => {});
+    }
+    return;
+  }
+  select.value = operationalCache.filiais.some(f => f.sigla === cur) ? cur : "";
 }
 
 function populatePlacas() {
@@ -1295,103 +1404,13 @@ function populatePlacas() {
   if (typeof autoFrota === "function") autoFrota();
 }
 
-function populateFiliaisSelect() {
-  const select = document.getElementById("f_filial");
-  const cur = resetSelectOptions(select, "Selecione...");
-  if (!select) return;
-  operationalCache.filiais.forEach(f => {
-    const value = f.sigla || f.nome || f.id;
-    const label = f.sigla ? `${f.sigla} — ${f.nome || f.id}` : (f.nome || f.id);
-    select.appendChild(new Option(label, value));
-  });
-  select.value = operationalCache.filiais.some(f => (f.sigla || f.nome || f.id) === cur) ? cur : "";
-}
-
-function populateMotoristasSelect() {
-  const select = document.getElementById("f_motorista");
-  const cur = resetSelectOptions(select, "Selecione...");
-  if (!select) return;
-  operationalCache.motoristas.forEach(m => {
-    if (m.nome) select.appendChild(new Option(m.nome, m.nome));
-  });
-  select.value = operationalCache.motoristas.some(m => m.nome === cur) ? cur : "";
-}
-
-function normalizeOperationalUnidade(f) {
-  return { ...f, nome: upperText(f.nome || f.id), sigla: upperText(f.sigla), cidade: upperText(f.cidade), estado: upperText(f.estado) };
-}
-
-function normalizeOperationalDriver(m) {
-  return { ...m, nome: upperText(m.nome || m.id), filial: upperText(m.filial) };
-}
-
-function normalizeOperationalVehicle(v) {
-  const placa = upperText(v.placa || v.id);
-  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial) };
-}
-
-function rebuildVehicleMaps() {
-  FROTAS = {};
-  CARRETAS = {};
-  CARROS_APOIO = {};
-  operationalCache.veiculos.forEach(v => {
-    if (!v.placa) return;
-    if (v.tipo === "Carreta") CARRETAS[v.placa] = v.frota || "";
-    else if (v.tipo === "Carro de apoio") CARROS_APOIO[v.placa] = v.frota || "";
-    else FROTAS[v.placa] = v.frota || "";
-  });
-}
-
-function sortByField(a, b, field) {
-  return String(a[field] || "").localeCompare(String(b[field] || ""), "pt-BR", { sensitivity: "base" });
-}
-
-async function loadOperationalCadastros() {
-  try {
-    if (!window._FB || typeof window._FB.listarCadastros !== "function") throw new Error("Leitura de cadastros indisponível");
-    const [veiculos, motoristas, filiais] = await Promise.all([
-      window._FB.listarCadastros("veiculos"),
-      window._FB.listarCadastros("motoristas"),
-      window._FB.listarCadastros("filiais")
-    ]);
-    operationalCache.veiculos = (veiculos || []).map(normalizeOperationalVehicle).sort((a,b)=>sortByField(a,b,"frota") || sortByField(a,b,"placa"));
-    operationalCache.motoristas = (motoristas || []).map(normalizeOperationalDriver).sort((a,b)=>sortByField(a,b,"nome"));
-    operationalCache.filiais = (filiais || []).map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
-    rebuildVehicleMaps();
-  } catch (err) {
-    operationalCache.veiculos = [];
-    operationalCache.motoristas = [];
-    operationalCache.filiais = [];
-    rebuildVehicleMaps();
-    console.error("Erro ao carregar cadastros operacionais", err);
-    if (typeof showToast === "function") showToast("Não foi possível carregar cadastros operacionais do Firebase.", "error");
-  }
-}
-
-/* No-op para cadastros — não há formulário de entregas neste módulo */
-function populateEntregasUnidadeSelects() {}
-
+function populateEntregasUnidadeSelects(){}
 </script>
-
 <script>
-function showScreen(id) {
-  document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
-  const el = document.getElementById(id);
-  if (el) el.classList.add("active");
-  window.scrollTo(0, 0);
-}
-function showToast(msg, type) {
-  const t = document.getElementById("toast");
-  if (!t) return;
-  t.textContent = msg;
-  t.className = "toast show" + (type === "error" ? " error" : type === "success" ? " success" : "");
-  clearTimeout(window._toast_to);
-  window._toast_to = setTimeout(() => t.classList.remove("show"), 3500);
-}
-window.showScreen = showScreen;
-window.showToast  = showToast;
+function showScreen(id){document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));const el=document.getElementById(id);if(el)el.classList.add("active");window.scrollTo(0,0);}
+function showToast(msg,type){const t=document.getElementById("toast");if(!t)return;t.textContent=msg;t.className="toast show"+(type==="error"?" error":type==="success"?" success":"");clearTimeout(window._toast_to);window._toast_to=setTimeout(()=>t.classList.remove("show"),3500);}
+window.showScreen=showScreen;window.showToast=showToast;
 </script>
-
 <script>
 
 // Login functions
@@ -1467,7 +1486,6 @@ window._appReady = async function(user, perfil) {
 };
 
 </script>
-
 <script>
 /* ════════════════════════════════════════════════════
    CONFIGURAÇÕES ADMIN — navegação, CRUD e máscaras
@@ -4697,5 +4715,4 @@ function cfgPhoneMask(el) {
 
 /* ═══ NAVEGAÇÃO ATLAS ═══ */
 </script>
-
 </body></html>
