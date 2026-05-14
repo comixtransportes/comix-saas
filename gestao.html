@@ -9166,26 +9166,17 @@ window.modulePlaceholderAtlas = function(name){ showToast('Módulo "' + name + '
     showTargetNow();
   }
 
-  /* ── Após auth: re-navega para garantir dados carregados ── */
+  /* ── Após auth: completa dados em background, re-aplica módulo por segurança ── */
   var _origAppReady = window._appReady;
   window._appReady = async function(user, perfil) {
-    /* Compras precisa do sync antes de aparecer funcional */
-    /* Ficha/Painel/Config já estão visíveis — só rodar o original */
-    var navDone = false;
-    function doNav() {
-      if (navDone) return;
-      navDone = true;
-      if      (m === 'ficha')   { window.openFichaOperacionalAtlas && window.openFichaOperacionalAtlas(); }
-      else if (m === 'compras') { window.openComprasAtlas && window.openComprasAtlas(); }
-      else if (m === 'config')  { window.openAdminAtlas && window.openAdminAtlas(); }
-      else if (m === 'painel')  { window.openPainelAtlas && window.openPainelAtlas(); }
-    }
-    /* Fallback máximo de 2s */
-    setTimeout(doNav, 2000);
     try {
       if (_origAppReady) await _origAppReady.call(this, user, perfil);
     } catch(e) {}
-    doNav();
+    /* Re-aplica o módulo alvo após o _appReady (que pode ter mudado a tela) */
+    if      (m === 'ficha')   { window.openFichaOperacionalAtlas && window.openFichaOperacionalAtlas(); }
+    else if (m === 'compras') { window.openComprasAtlas && window.openComprasAtlas(); }
+    else if (m === 'config')  { window.openAdminAtlas && window.openAdminAtlas(); }
+    else if (m === 'painel')  { window.openPainelAtlas && window.openPainelAtlas(); }
   };
 
   /* ── Intercepta goHome para não sair do módulo ── */
@@ -9200,6 +9191,19 @@ window.modulePlaceholderAtlas = function(name){ showToast('Módulo "' + name + '
 function showScreen(id){document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));document.getElementById(id).classList.add("active");window.scrollTo(0,0);}
 function showToast(msg,type=""){const t=document.getElementById("toast");t.textContent=msg;t.className="toast"+(type?" "+type:"");t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2500);}
 window.showScreen=showScreen;window.showToast=showToast;
+
+/* ═══ IFRAME: bloqueia showScreen para telas suprimidas ═══
+   Deve rodar APÓS a definição de showScreen acima.
+   Impede que _appReady(showScreen("scr_home")) derrube o módulo ativo. */
+(function() {
+  if (window.self === window.top) return;
+  var BLOCKED = { scr_home:1, scr_login:1, scr_modules:1 };
+  var _orig = window.showScreen;
+  window.showScreen = function(id) {
+    if (BLOCKED[id]) return; /* ignora silenciosamente */
+    _orig(id);
+  };
+})();
 
 /* ════════════════════════════════════════════════════
    PLACA PREFERENCES — persiste por usuário no Firestore
