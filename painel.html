@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- COMIX Atlas — Painel Operacional (módulo autônomo) -->
+<!-- COMIX Atlas — Painel Operacional -->
 <html lang="pt-BR">
 <head>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -8,7 +8,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>COMIX — Painel Operacional</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<!-- ATLAS IFRAME: suprime login imediatamente quando em iframe -->
 <style id="atlas-iframe-head">
 #scr_login { display: none !important; }
 </style>
@@ -465,7 +464,6 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
 
 </head>
-
 <body>
 
 <!-- ══ LOGIN ══ -->
@@ -546,7 +544,6 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 <!-- ══ FIREBASE MODULE ══ -->
 <!-- ══ FIREBASE CDN (compat — sem type=module, sem race condition) ══ -->
 
-<!-- ══ FIREBASE MODULE ══ -->
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
@@ -1142,8 +1139,6 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
 
 
-<!-- ══ APP SCRIPT (painel) ══ -->
-<script>
 <script>
 /* ════════════════════════════════════════════════════
    DADOS DE FROTA
@@ -2643,14 +2638,7 @@ window.exportPDF = async function() {
   showToast("PDF exportado com sucesso","success");
 };
 
-
-
-
-</script>
-
-<!-- ══ UTILS ══ -->
-<script>
-tion(){ showScreen("scr_home"); };
+window.goHomeAtlas = function(){ showScreen("scr_home"); };
 window.openComprasAtlas = function(){ 
   showScreen("scr_compras_atlas"); 
   if (typeof openPurchasing === 'function') { openPurchasing(); }
@@ -2739,6 +2727,7 @@ window.modulePlaceholderAtlas = function(name){ showToast('Módulo "' + name + '
 })();
 
 /* ═══ UTILS ═══ */
+
 function showScreen(id){document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));document.getElementById(id).classList.add("active");window.scrollTo(0,0);}
 function showToast(msg,type=""){const t=document.getElementById("toast");t.textContent=msg;t.className="toast"+(type?" "+type:"");t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2500);}
 window.showScreen=showScreen;window.showToast=showToast;
@@ -2825,12 +2814,290 @@ function _savePlacaPrefs() {
    SEARCHABLE SELECT — combobox de placa com dropdown filtrado
    Filtra opções em tempo real enquanto o usuário digita
 ════════════════════════════════════════════════════ */
+(function() {
+  /* Injeta CSS do dropdown customizado uma única vez */
+  const style = document.createElement("style");
+  style.textContent = `
+    .plate-combo-wrap { position:relative; display:block; }
+    .plate-combo-wrap input.plate-inp {
+      width:100%; padding:10px 12px; font-size:14px; font-family:inherit;
+      border:1.5px solid var(--gray-l); border-radius:var(--r-sm);
+      background:var(--white); color:var(--black); outline:none;
+      -webkit-appearance:none; appearance:none; transition:border-color .15s,background .15s;
+      box-sizing:border-box;
+    }
+    .plate-combo-wrap input.plate-inp:focus { border-color:var(--black); }
+    .plate-combo-wrap input.plate-inp.ok  { border-color:var(--green-m)!important; }
+    .plate-combo-wrap input.plate-inp.err { border-color:var(--red)!important; background:var(--red-l)!important; }
+    .plate-combo-wrap input.plate-inp.auto { background:var(--blue-l); border-color:var(--blue-b); color:var(--blue); font-weight:700; }
+    .plate-dropdown {
+      position:fixed; z-index:99999;
+      background:var(--white); border:1.5px solid var(--black); border-radius:var(--r-sm);
+      max-height:220px; overflow-y:auto; box-shadow:0 8px 24px rgba(0,0,0,.15);
+      display:none;
+    }
+    .plate-dropdown.open { display:block; }
+    .plate-dropdown::-webkit-scrollbar { width:4px; }
+    .plate-dropdown::-webkit-scrollbar-thumb { background:#ccc; border-radius:2px; }
+    .plate-dd-item {
+      padding:8px 12px; font-size:13px; cursor:pointer; border-bottom:1px solid var(--gray-ll);
+      transition:background .1s;
+    }
+    .plate-dd-item:last-child { border-bottom:none; }
+    .plate-dd-item:hover, .plate-dd-item.active { background:var(--blue-l); color:var(--blue); }
+    .plate-dd-item em { font-style:normal; background:var(--amber-b); border-radius:2px; padding:0 2px; }
+    .plate-dd-empty { padding:10px 12px; font-size:12px; color:var(--gray); text-align:center; }
+  `;
+  document.head.appendChild(style);
 
+  function _makeSearchableSelect(selectId) {
+    const sel = document.getElementById(selectId);
+    if (!sel || sel.dataset.searchable) return;
+    sel.dataset.searchable = "1";
 
-// Callback chamado após _appReady para iniciar carregamento do painel
-window._panelReady = async function() {
-  if (typeof openPanel === 'function') await openPanel();
+    /* Wrap + input */
+    const wrap = document.createElement("div");
+    wrap.className = "plate-combo-wrap";
+    sel.parentNode.insertBefore(wrap, sel);
+    wrap.appendChild(sel);
+    sel.style.display = "none";
+
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.className = "plate-inp";
+    inp.id = selectId + "_inp";
+    inp.autocomplete = "off";
+    inp.placeholder = sel.options[0]?.text || "Buscar placa...";
+    if (sel.required) inp.required = true;
+    wrap.appendChild(inp);
+
+    const dd = document.createElement("div");
+    dd.className = "plate-dropdown";
+    // Append to body so it's never clipped by overflow:hidden ancestors
+    document.body.appendChild(dd);
+
+    let activeIdx = -1;
+    let allOptions = [];
+
+    function buildOptions() {
+      allOptions = [...sel.options]
+        .filter(o => o.value)
+        .map(o => ({ value: o.value, text: o.text }));
+    }
+
+    function highlight(text, query) {
+      if (!query) return text;
+      const re = new RegExp("(" + query.replace(/[.*+?^{}()|\[\]\\]/g,"\$&") + ")", "gi");
+      return text.replace(re, "<em>$1</em>");
+    }
+
+    function renderDropdown(query) {
+      const q = query.trim().toUpperCase();
+      const filtered = q
+        ? allOptions.filter(o =>
+            o.value.toUpperCase().includes(q) || o.text.toUpperCase().includes(q))
+        : allOptions;
+
+      activeIdx = -1;
+      if (!filtered.length) {
+        dd.innerHTML = `<div class="plate-dd-empty">Nenhuma placa encontrada</div>`;
+      } else {
+        dd.innerHTML = filtered.map((o, i) =>
+          `<div class="plate-dd-item" data-value="${o.value}" data-idx="${i}">${highlight(o.text, q)}</div>`
+        ).join("");
+        dd.querySelectorAll(".plate-dd-item").forEach(function(item) {
+          item.addEventListener("mousedown", function(e) {
+            e.preventDefault();
+            selectOption(item.dataset.value);
+          });
+        });
+      }
+    }
+
+    function selectOption(value) {
+      const opt = allOptions.find(o => o.value === value);
+      if (opt) {
+        sel.value = value;
+        inp.value = opt.text;
+        inp.classList.remove("err");
+        inp.classList.add("ok");
+        closeDropdown();
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+
+    function positionDropdown() {
+      const rect = inp.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const dropH = Math.min(220, dd.scrollHeight || 220);
+      dd.style.width = rect.width + "px";
+      dd.style.left  = rect.left + window.scrollX + "px";
+      if (spaceBelow >= dropH || spaceBelow >= 120) {
+        // Open downward
+        dd.style.top    = (rect.bottom + window.scrollY + 3) + "px";
+        dd.style.bottom = "";
+      } else {
+        // Open upward
+        dd.style.top    = "";
+        dd.style.bottom = (window.innerHeight - rect.top + window.scrollY + 3) + "px";
+      }
+    }
+
+    function openDropdown() {
+      buildOptions();
+      renderDropdown(inp.value);
+      dd.classList.add("open");
+      positionDropdown();
+    }
+
+    function closeDropdown() {
+      dd.classList.remove("open");
+      activeIdx = -1;
+    }
+
+    function validateInput() {
+      const typed = inp.value.trim().toUpperCase();
+      if (!typed) {
+        sel.value = "";
+        inp.classList.remove("err","ok");
+        return;
+      }
+      // Aceita match exato por placa (value) ou por texto completo
+      const exact = allOptions.find(o =>
+        o.value.toUpperCase() === typed || o.text.toUpperCase() === typed
+      );
+      if (exact) {
+        sel.value = exact.value;
+        inp.value = exact.text;
+        inp.classList.remove("err"); inp.classList.add("ok");
+      } else {
+        sel.value = "";
+        inp.classList.add("err"); inp.classList.remove("ok");
+      }
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    inp.addEventListener("focus", function() { openDropdown(); });
+    inp.addEventListener("input", function() { renderDropdown(inp.value); dd.classList.add("open"); positionDropdown(); });
+
+    // Keep dropdown anchored during scroll or resize
+    window.addEventListener("scroll", function() { if (dd.classList.contains("open")) positionDropdown(); }, true);
+    window.addEventListener("resize", function() { if (dd.classList.contains("open")) positionDropdown(); });
+    inp.addEventListener("blur", function() { setTimeout(closeDropdown, 150); validateInput(); });
+
+    inp.addEventListener("keydown", function(e) {
+      const items = dd.querySelectorAll(".plate-dd-item");
+      if (!items.length) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        activeIdx = Math.min(activeIdx + 1, items.length - 1);
+        items.forEach(function(it, i) { it.classList.toggle("active", i === activeIdx); });
+        items[activeIdx]?.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        activeIdx = Math.max(activeIdx - 1, 0);
+        items.forEach(function(it, i) { it.classList.toggle("active", i === activeIdx); });
+        items[activeIdx]?.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (activeIdx >= 0 && items[activeIdx]) {
+          selectOption(items[activeIdx].dataset.value);
+        }
+      } else if (e.key === "Escape") {
+        closeDropdown();
+      }
+    });
+
+    // Observar mudanças no select (ex: populatePlacas rebuild)
+    const obs = new MutationObserver(function() {
+      buildOptions();
+      if (sel.value) {
+        const cur = allOptions.find(o => o.value === sel.value);
+        if (cur) { inp.value = cur.text; inp.classList.remove("err"); inp.classList.add("ok"); }
+      }
+    });
+    obs.observe(sel, { childList: true });
+
+    // Inicializar
+    buildOptions();
+    if (sel.value) {
+      const cur = allOptions.find(o => o.value === sel.value);
+      if (cur) { inp.value = cur.text; inp.classList.add("ok"); }
+    }
+  }
+
+  window._makeSearchableSelect = _makeSearchableSelect;
+
+  window.addEventListener("load", function() {
+    setTimeout(function() {
+      _makeSearchableSelect("f_placa_cv");
+      _makeSearchableSelect("f_ct1");
+      _makeSearchableSelect("f_ct2");
+    }, 600);
+  });
+})();
+
+window.resetAll = function() {
+  selectedMods=[];activeMod=0;svcCount=0;entCount=0;veiculoParado=false;canvases={};
+  Object.keys(entregaFotos||{}).forEach(k=>delete entregaFotos[k]);
+  Object.keys(entregaFotos).forEach(k=>delete entregaFotos[k]);
+  ["mod_viagens","mod_diesel","mod_entregas","mod_manut"].forEach(id=>{
+    document.getElementById(id)?.classList.remove("selected");
+    const c=document.getElementById("chk_"+id.replace("mod_",""));if(c){c.innerHTML="";c.style.cssText="";}
+  });
+  document.querySelectorAll("#scr_form input,#scr_form select,#scr_form textarea").forEach(el=>{
+    if(el.type==="date")el.valueAsDate=new Date();
+    else if(!el.readOnly)el.value="";
+    el.classList.remove("err","ok");
+  });
+  document.getElementById("f_frota").value="";
+  document.getElementById("f_frota").style.color="";
+  document.getElementById("err_mods").style.display="none";
+  emissaoTimestamp=new Date().toLocaleString("pt-BR");
+  document.getElementById("emissao_badge").textContent=emissaoTimestamp;
+  // Limpar inputs dos comboboxes de placa
+  ["f_placa_cv_inp","f_ct1_inp","f_ct2_inp"].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){el.value="";el.classList.remove("err","ok");}
+  });
+  showScreen("scr_form");
 };
+</script>
+
+<script>
+
+// ── Override final do _appReady para Painel Operacional
+window._appReady = async function(user, perfil) {
+  const badge = document.getElementById("user_badge");
+  if (badge) { badge.textContent = "👤 " + user.email + "  ·  Perfil: " + perfil; badge.style.display = "block"; }
+
+  const perfilOk = ["admin","gestor","usuario"].includes((perfil||"").toLowerCase());
+  if (!perfilOk) { await window._FB.doLogout(); return; }
+
+  await loadOperationalCadastros();
+  populatePlacas();
+  showScreen("scr_panel");
+  // Usa openPanel interno (sem redirect)
+  if (typeof openPanelInternal === "function") await openPanelInternal();
+};
+
+// openPanelInternal = versão original sem redirect
+window.openPanelInternal = async function() {
+  showScreen("scr_panel");
+  const list = document.getElementById("occ_list");
+  if (list) list.innerHTML = '<div class="loading-state">Carregando relatórios...</div>';
+  if (typeof renderPanel === "function") await renderPanel();
+};
+
+window.openPanel = window.openPanelInternal;
+window.closePanel = function() {
+  if (window.self === window.top) { history.back(); } else { showScreen("scr_login"); }
+};
+window.goHomeAtlas = function() {
+  if (window.self === window.top) { window.location.href = "index.html"; return; }
+  showScreen("scr_home");
+};
+
 </script>
 
 </body></html>
