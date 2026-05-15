@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=1280, initial-scale=0.25">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>COMIX Atlas</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
@@ -477,7 +477,7 @@ firebase.initializeApp({
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-let curUser = null, curPerfil = 'usuario', sbCol = false;
+let curUser = null, curPerfil = 'motorista', sbCol = false;
 const frFlags = {};  // 'loading' | 'done'
 const pollers = {};
 
@@ -488,7 +488,7 @@ const VIEWS = {
   'ficha':         {label:'Ficha Operacional',   chip:'MOBILE',     cls:'am', src:'ficha.html',                nav:null,       perfil:null},
   'compras':       {label:'Compras',             chip:'COMPRAS',    cls:'am', src:'compras.html',              nav:null,       perfil:['admin','gestor','comprador']},
   'manutencao':    {label:'Manutenção',          chip:'DEV',        cls:'am', src:null,                        nav:null,       perfil:null},
-  'painel':        {label:'Painel Operacional',  chip:'PAINEL',     cls:'',   src:'painel.html',               nav:null,       perfil:['admin','gestor','usuario']},
+  'painel':        {label:'Painel Operacional',  chip:'PAINEL',     cls:'',   src:'painel.html',               nav:null,       perfil:['admin','gestor','motorista']},
   'cpk':           {label:'CPK',                 chip:'NOVO',       cls:'gn', src:null,                        nav:null,       perfil:null},
   'config':        {label:'Cadastros',            chip:'ADMIN',      cls:'',   src:'cadastros.html',            nav:null,       perfil:['admin']},
   'download-base': {label:'Download Base',       chip:'DADOS',      cls:'pu', src:null,                        nav:null,       perfil:['admin','gestor']},
@@ -506,8 +506,8 @@ auth.onAuthStateChanged(async user => {
         if (!q.empty) doc = q.docs[0].data();
       }
       if (doc && (doc.bloqueado || doc.status==='bloqueado')) { await auth.signOut(); loginErr('Conta bloqueada.'); return; }
-      curPerfil = doc ? (doc.perfil || doc.tipo || 'usuario') : 'usuario';
-    } catch(e) { curPerfil = 'usuario'; }
+      curPerfil = doc ? (doc.perfil || doc.tipo || 'motorista') : 'motorista';
+    } catch(e) { curPerfil = 'motorista'; }
     showApp();
   } else {
     curUser = null; curPerfil = 'usuario'; showLogin();
@@ -522,6 +522,7 @@ function showApp() {
   document.getElementById('sb-email').textContent = e;
   document.getElementById('sb-role').textContent  = curPerfil;
   applyPerfil();
+  loadPermissions();
   /* Abre PD Diário como padrão */
   go('pd-diario');
 }
@@ -662,9 +663,12 @@ async function dbProc(file,id){
     const rows=raw.map(r=>{const o={};for(const k of Object.keys(r))o[k.trim()]=r[k];return o;});
     dbPct(id,100);
     window.ATLAS_DATA[id]={rows,file:file.name,ts:new Date().toISOString(),count:rows.length};
+    /* ── BROADCAST PARA TODOS OS IFRAMES: atualização automática ── */
+    const broadcastMsg = {type:'ATLAS_DATA_READY', table:id, count:rows.length};
     document.querySelectorAll('.fr-wrap iframe').forEach(fr=>{
-      try{fr.contentWindow.postMessage({type:'ATLAS_DATA_READY',table:id,count:rows.length},'*');}catch(_){}
+      try{fr.contentWindow.postMessage(broadcastMsg,'*');}catch(_){}
     });
+    /* Também salva no objeto global para acesso direto pelos iframes via parent */
     const sec=((Date.now()-t0)/1000).toFixed(1);
     dbSt(id,'ok',dbFmt(rows.length)+' reg.');
     document.getElementById('dbc-'+id).className='db-card loaded';
@@ -713,6 +717,47 @@ function toast(msg,tp=''){
   t.textContent=msg;t.className='toast on'+(tp?' '+tp:'');
   clearTimeout(_tt);_tt=setTimeout(()=>t.classList.remove('on'),3500);
 }
+
+/* ── PERMISSÕES DINÂMICAS ── */
+let ATLAS_PERMS = {}; // Carregado do Firestore após login
+
+async function loadPermissions() {
+  try {
+    const snap = await db.collection('permissoes').doc(curPerfil).get();
+    if (snap.exists) {
+      ATLAS_PERMS = snap.data().permissoes || {};
+      applyDynamicPermissions();
+    }
+  } catch(e) { /* usa padrão se falhar */ }
+}
+
+function applyDynamicPermissions() {
+  const telas = ATLAS_PERMS.telas || {};
+  const telaMap = {
+    'pd_diario':'pd-diario', 'financeiro':'financeiro', 'ficha':'ficha',
+    'compras':'compras', 'manutencao':'manutencao', 'painel':'painel',
+    'cpk':'cpk', 'cadastros':'config', 'download_base':'download-base',
+    'permissoes':'config'
+  };
+  Object.entries(telaMap).forEach(([permKey, viewId]) => {
+    const btn = document.querySelector(`[data-v="${viewId}"]`);
+    if (!btn) return;
+    // Se permissões carregadas, aplicar; senão manter controle padrão por perfil
+    if (Object.keys(telas).length > 0 && !telas[permKey] && curPerfil !== 'admin') {
+      btn.style.display = 'none';
+    }
+  });
+}
+
+/* ── MENSAGENS ENTRE MÓDULOS ── */
+window.addEventListener('message', function(ev) {
+  if (!ev.data || typeof ev.data !== 'object') return;
+  // Quando permissões são atualizadas, recarregar
+  if (ev.data.type === 'PERM_UPDATED') {
+    if (ev.data.tipo === curPerfil) loadPermissions();
+    toast(`Permissões atualizadas para perfil "${ev.data.tipo}".`, 'gn');
+  }
+});
 </script>
 </body>
 </html>
