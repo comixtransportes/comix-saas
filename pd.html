@@ -232,6 +232,59 @@ table.dt td.nm{max-width:140px;overflow:hidden;text-overflow:ellipsis;}
 ::-webkit-scrollbar{width:4px;height:4px;}
 ::-webkit-scrollbar-track{background:transparent;}
 ::-webkit-scrollbar-thumb{background:var(--bd);border-radius:3px;}
+
+/* ── COLUNAS DIA ── */
+/* Cabeçalho DIA: cursor pointer e ícone */
+th.col-dia{cursor:pointer!important;user-select:none;white-space:nowrap;}
+th.col-dia:hover{background:#1e3255!important;}
+th.col-dia .cal-ico{display:inline-block;margin-left:4px;opacity:.7;font-size:9px;vertical-align:middle;}
+/* Fundo diferenciado das células DIA */
+table.dt td.dia-cell{
+  background:rgba(220,228,242,0.55)!important;
+  position:relative;
+}
+table.dt tr:nth-child(even) td.dia-cell{background:rgba(210,220,238,0.65)!important;}
+table.dt tr:hover td.dia-cell{background:#dce8fc!important;}
+/* Marca d'água azul nas células DIA */
+table.dt td.dia-cell::after{
+  content:'';
+  position:absolute;
+  bottom:1px;right:4px;
+  width:18px;height:14px;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='2' y='4' width='20' height='18' rx='2' fill='none' stroke='%231a56db' stroke-width='1.5' opacity='.18'/%3E%3Crect x='2' y='4' width='20' height='6' rx='2' fill='%231a56db' opacity='.12'/%3E%3Cline x1='8' y1='2' x2='8' y2='7' stroke='%231a56db' stroke-width='1.5' opacity='.18'/%3E%3Cline x1='16' y1='2' x2='16' y2='7' stroke='%231a56db' stroke-width='1.5' opacity='.18'/%3E%3C/svg%3E") center/contain no-repeat;
+  pointer-events:none;
+  opacity:.55;
+}
+
+/* ── CALENDÁRIO DROPDOWN ── */
+#dia-cal-drop{
+  display:none;
+  position:fixed;
+  z-index:9000;
+  background:var(--wh);
+  border:1px solid var(--bd);
+  border-radius:5px;
+  box-shadow:0 6px 24px rgba(0,0,0,.18);
+  padding:10px;
+  min-width:210px;
+  font-family:var(--f);
+}
+#dia-cal-drop.open{display:block;}
+.dc-nav{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.dc-nav-btn{background:none;border:none;cursor:pointer;font-size:14px;color:var(--mu);padding:2px 6px;border-radius:3px;}
+.dc-nav-btn:hover{background:var(--sf);color:var(--tx);}
+.dc-month-lbl{font-size:11px;font-weight:700;color:var(--tx);text-transform:uppercase;letter-spacing:.5px;}
+.dc-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;}
+.dc-dow{font-size:8.5px;font-weight:700;color:var(--mu);text-align:center;padding:2px 0;text-transform:uppercase;}
+.dc-day{font-size:10px;font-family:var(--m);text-align:center;padding:3px 2px;border-radius:3px;cursor:pointer;color:var(--tx);}
+.dc-day:hover{background:var(--ht);color:var(--ac);}
+.dc-day.selected{background:var(--ac);color:#fff;font-weight:700;}
+.dc-day.today{border:1px solid var(--ac);color:var(--ac);}
+.dc-day.other-month{color:var(--bd);cursor:default;}
+.dc-day.other-month:hover{background:none;color:var(--bd);}
+.dc-day.has-data{font-weight:700;}
+.dc-sel-label{font-size:9.5px;color:var(--mu);text-align:center;margin-top:7px;padding-top:6px;border-top:1px solid var(--bd2);}
+.dc-sel-label span{color:var(--ac);font-weight:600;}
 </style>
 </head>
 <body>
@@ -502,6 +555,17 @@ table.dt td.nm{max-width:140px;overflow:hidden;text-overflow:ellipsis;}
       </div>
     </div>
   </div>
+</div>
+
+<!-- CALENDÁRIO DROPDOWN DIA -->
+<div id="dia-cal-drop">
+  <div class="dc-nav">
+    <button class="dc-nav-btn" id="dc-prev">&#8249;</button>
+    <span class="dc-month-lbl" id="dc-month-lbl">—</span>
+    <button class="dc-nav-btn" id="dc-next">&#8250;</button>
+  </div>
+  <div class="dc-grid" id="dc-grid"></div>
+  <div class="dc-sel-label">Selecionado: <span id="dc-sel-txt">—</span></div>
 </div>
 
 <!-- MODAL PARÂMETROS -->
@@ -1708,17 +1772,49 @@ function buildFr(uid,mes){
 // ═══════════════════════════════════════════════════════
 let _ccUID='', _ccMes='';
 
-function buildCc(uid,mes){
+// ── Dia selecionado para as colunas DIA (estado global da aba CC) ──
+let _ccDiaSel = '';   // 'YYYY-MM-DD'
+
+// Determina o dia anterior de produção (último dia com dados antes de hoje)
+function getDefaultDiaCC(uid, mes) {
+  const hoje = new Date();
+  const hojeISO = hoje.toISOString().slice(0,10);
+  const todasDatas = [...new Set(filterByOp(uid).filter(r=>r.mes===mes).map(r=>r.data))]
+    .filter(Boolean).sort();
+  const antes = todasDatas.filter(d=>d<hojeISO);
+  return antes[antes.length-1] || todasDatas[todasDatas.length-1] || '';
+}
+
+function buildCc(uid, mes) {
   _ccUID=uid; _ccMes=mes;
+
+  // Definir dia padrão se ainda não foi selecionado ou se mudou de mês/unidade
+  const defaultDia = getDefaultDiaCC(uid, mes);
+  if (!_ccDiaSel || !_ccDiaSel.startsWith(mes.slice(0,7))) {
+    _ccDiaSel = defaultDia;
+  }
+
+  _buildCcTable(uid, mes, _ccDiaSel);
+}
+
+function _buildCcTable(uid, mes, diaSel) {
   const d=filterByOp(uid).filter(r=>r.mes===mes);
 
-  // Agrupamento: Remetente + Frete (igual ao original, diferenciando CIF e FOB)
+  // Agrupamento: Remetente + Frete
   const g=grp(d,r=>r.r_nome+'§'+r.frete);
+
+  // Dados do dia selecionado por remetente+frete
+  const dDia = diaSel ? filterByOp(uid).filter(r=>r.data===diaSel) : [];
+  const gDia = grp(dDia, r=>r.r_nome+'§'+r.frete);
+
   const rows=Object.entries(g).map(([k,arr])=>{
     const[rem,frt]=k.split('§');
     const s=agg(arr);
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
-    return{rem,frt,...s,fatProj,prodProj};
+    // Dados do dia selecionado para este grupo
+    const arrDia = gDia[k] || [];
+    const sDia = arrDia.length ? agg(arrDia) : {p:0,f:0};
+    return{rem,frt,...s,fatProj,prodProj, prodDia:sDia.p, fatDia:sDia.f};
   }).sort((a,b)=>b.f-a.f);
 
   document.getElementById('cnt-cc').textContent=' — '+rows.length+' grupos';
@@ -1727,7 +1823,7 @@ function buildCc(uid,mes){
     [{data:t10cc.map(r=>r.f),backgroundColor:t10cc.map(r=>r.frt==='CIF'?'rgba(26,86,219,.65)':'rgba(234,88,12,.65)'),borderRadius:2}],
     {ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0}});
 
-  // ── Pareto: barras + linha % acumulado (Top 10 por remetente) ──
+  // ── Pareto ──
   const gRem=grp(d,r=>r.r_nome);
   const remRows=Object.entries(gRem).map(([rem,arr])=>({rem,f:arr.reduce((a,r)=>a+r.fat,0)}))
     .sort((a,b)=>b.f-a.f).slice(0,10);
@@ -1785,21 +1881,188 @@ function buildCc(uid,mes){
     });
   }
 
+  // Label do dia selecionado para o cabeçalho
+  const diaLbl = diaSel ? (() => {
+    const [a,m,dd] = diaSel.split('-');
+    return `${dd}/${m}`;
+  })() : '—';
+
   const ft=rows.reduce((a,r)=>a+r.f,0);
-  bldT('tbl-cc',rows,[
-    {h:'Remetente',         fn:r=>`<span class="nm">${r.rem}</span>`},
-    {h:'Frete',             fn:r=>`<span class="bdg ${r.frt==='CIF'?'bg':'ba'}">${r.frt}</span>`},
-    {h:'Viagens',           fn:r=>N(r.v),        n:true},
-    {h:'Prod.(T) Real.',    fn:r=>D1(r.p),        n:true},
-    {h:'Fat.(R$) Real.',    fn:r=>R(r.f),          n:true},
-    {h:'Fat.(R$) Proj.',    fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
-    {h:'TM',                fn:r=>D2(r.tm),       n:true},
-    {h:'CPK',               fn:r=>D2(r.cpk),      n:true},
-    {h:'VPK',               fn:r=>D2(r.vpk),      n:true},
-    {h:'Markup',            fn:r=>bdg(r.mkp,50),  n:true},
-    {h:'% Fat',             fn:r=>Pct(ft?r.f/ft*100:0),n:true},
-  ]);
+
+  // Colunas DIA usam bldTcc (versão especial que marca as células dia)
+  bldTcc('tbl-cc', rows, diaSel, diaLbl, ft);
 }
+
+// Table builder especial para CC (inclui colunas DIA com classe específica)
+function bldTcc(id, data, diaSel, diaLbl, ft) {
+  const t = document.getElementById(id); if(!t) return;
+
+  const colsDia = ['PROD (T) DIA', 'FAT (R$) DIA'];
+
+  const cols = [
+    {h:'Remetente',        fn:r=>`<span class="nm">${r.rem}</span>`, n:false, dia:false},
+    {h:'Frete',            fn:r=>`<span class="bdg ${r.frt==='CIF'?'bg':'ba'}">${r.frt}</span>`, n:false, dia:false},
+    {h:'Viagens',          fn:r=>N(r.v),        n:true,  dia:false},
+    {h:'Prod.(T) Real.',   fn:r=>D1(r.p),        n:true,  dia:false},
+    {h:'Fat.(R$) Real.',   fn:r=>R(r.f),          n:true,  dia:false},
+    {h:'Fat.(R$) Proj.',   fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`, n:true, dia:false},
+    // ── NOVAS COLUNAS DIA ──
+    {h:'PROD (T) DIA',     fn:r=>r.prodDia>0?`<span style="color:var(--tx)">${D1(r.prodDia)}</span>`:`<span style="color:var(--bd)">—</span>`, n:true, dia:true},
+    {h:'FAT (R$) DIA',     fn:r=>r.fatDia>0?R(r.fatDia):`<span style="color:var(--bd)">—</span>`, n:true, dia:true},
+    // ──────────────────────
+    {h:'TM',               fn:r=>D2(r.tm),       n:true,  dia:false},
+    {h:'CPK',              fn:r=>D2(r.cpk),      n:true,  dia:false},
+    {h:'VPK',              fn:r=>D2(r.vpk),      n:true,  dia:false},
+    {h:'Markup',           fn:r=>bdg(r.mkp,50),  n:true,  dia:false},
+    {h:'% Fat',            fn:r=>Pct(ft?r.f/ft*100:0), n:true, dia:false},
+  ];
+
+  // Guardar para sort
+  t._d = data; t._c = cols; t._diaSel = diaSel; t._diaLbl = diaLbl; t._ft = ft;
+
+  const thHtml = cols.map((c,i) => {
+    if(c.dia){
+      const label = c.h === 'PROD (T) DIA'
+        ? `PROD (T)<br><span style="font-size:8px;font-weight:400;opacity:.75">${diaLbl||'—'}</span>`
+        : `FAT (R$)<br><span style="font-size:8px;font-weight:400;opacity:.75">${diaLbl||'—'}</span>`;
+      return `<th class="col-dia" onclick="openDiaCal(event,${i})" title="Clique para selecionar o dia">${label} <span class="cal-ico">📅</span></th>`;
+    }
+    return `<th onclick="srtCc(${i})">${c.h}</th>`;
+  }).join('');
+
+  const tbodyHtml = data.map(r =>
+    `<tr>${cols.map(c=>`<td class="${c.n?'n':'nm'}${c.dia?' dia-cell':''}">${c.fn(r)}</td>`).join('')}</tr>`
+  ).join('');
+
+  t.innerHTML = `<thead><tr>${thHtml}</tr></thead><tbody>${tbodyHtml}</tbody>`;
+}
+
+// Sort para a tabela CC (usa bldTcc em vez de bldT)
+const SS_CC = {};
+function srtCc(ci) {
+  const t = document.getElementById('tbl-cc'); if(!t||!t._d) return;
+  const k = 'cc_'+ci; SS_CC[k] = SS_CC[k]==='asc'?'desc':'asc'; const asc = SS_CC[k]==='asc';
+  const ft = t._ft;
+  const sd = [...t._d].sort((a,b)=>{
+    const va=t._c[ci].fn(a).replace(/<[^>]*>/g,'').replace(/[R$\u00a0\s%.,—]/g,'');
+    const vb=t._c[ci].fn(b).replace(/<[^>]*>/g,'').replace(/[R$\u00a0\s%.,—]/g,'');
+    const na=parseFloat(va.replace(',','.')), nb=parseFloat(vb.replace(',','.'));
+    if(!isNaN(na)&&!isNaN(nb)) return asc?na-nb:nb-na;
+    return asc?va.localeCompare(vb,'pt'):vb.localeCompare(va,'pt');
+  });
+  t.querySelectorAll('th').forEach((th,i)=>{ th.className = i===ci?(asc?'asc col-dia':'desc col-dia'):(t._c[i].dia?'col-dia':''); });
+  t.querySelector('tbody').outerHTML = `<tbody>${sd.map(r=>`<tr>${t._c.map(c=>`<td class="${c.n?'n':'nm'}${c.dia?' dia-cell':''}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+}
+
+// ── CALENDÁRIO DROPDOWN ──
+let _calOpen = false;
+let _calViewDate = new Date();   // mês sendo exibido no calendário
+let _calDatasDisp = new Set();   // datas com dados disponíveis (para destaque)
+
+function openDiaCal(event, colIdx) {
+  event.stopPropagation();
+  const drop = document.getElementById('dia-cal-drop');
+
+  // Fechar se já estava aberto pelo mesmo th
+  if(_calOpen){ closeDiaCal(); return; }
+
+  // Posicionar abaixo do th clicado
+  const rect = event.currentTarget.getBoundingClientRect();
+  drop.style.top  = (rect.bottom + 4) + 'px';
+  drop.style.left = Math.min(rect.left, window.innerWidth - 230) + 'px';
+
+  // Descobrir datas disponíveis no mês atual
+  const mesData = filterByOp(_ccUID).filter(r=>r.mes===_ccMes);
+  _calDatasDisp = new Set(mesData.map(r=>r.data).filter(Boolean));
+
+  // Posicionar calendário no mês do dia selecionado ou mês atual da aba
+  if(_ccDiaSel){
+    const [a,m] = _ccDiaSel.split('-').map(Number);
+    _calViewDate = new Date(a, m-1, 1);
+  } else {
+    const [a,m] = _ccMes.split('-').map(Number);
+    _calViewDate = new Date(a, m-1, 1);
+  }
+
+  _calOpen = true;
+  drop.classList.add('open');
+  renderCalDrop();
+}
+
+function closeDiaCal(){
+  document.getElementById('dia-cal-drop').classList.remove('open');
+  _calOpen = false;
+}
+
+function renderCalDrop(){
+  const lbl = _calViewDate.toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+  document.getElementById('dc-month-lbl').textContent = lbl.charAt(0).toUpperCase()+lbl.slice(1);
+
+  const grid = document.getElementById('dc-grid');
+  const dows = ['D','S','T','Q','Q','S','S'];
+  let html = dows.map(d=>`<div class="dc-dow">${d}</div>`).join('');
+
+  const ano = _calViewDate.getFullYear();
+  const mes = _calViewDate.getMonth(); // 0-based
+  const primeiro = new Date(ano, mes, 1);
+  const dowPrim = primeiro.getDay(); // 0=dom
+  const ultimoDia = new Date(ano, mes+1, 0).getDate();
+
+  // Dias do mês anterior para completar a semana
+  for(let i=0;i<dowPrim;i++) html += `<div class="dc-day other-month"></div>`;
+
+  const hoje = new Date().toISOString().slice(0,10);
+
+  for(let d=1;d<=ultimoDia;d++){
+    const iso = `${ano}-${String(mes+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isSelected = iso === _ccDiaSel;
+    const isToday    = iso === hoje;
+    const hasData    = _calDatasDisp.has(iso);
+    let cls = 'dc-day';
+    if(isSelected) cls += ' selected';
+    if(isToday && !isSelected) cls += ' today';
+    if(hasData) cls += ' has-data';
+    const title = hasData ? 'Com dados' : '';
+    html += `<div class="${cls}" title="${title}" onclick="selectDiaCal('${iso}')">${d}</div>`;
+  }
+
+  grid.innerHTML = html;
+
+  // Label do dia selecionado
+  if(_ccDiaSel){
+    const [a,m,dd] = _ccDiaSel.split('-');
+    const dt = new Date(parseInt(a),parseInt(m)-1,parseInt(dd));
+    const fmt = dt.toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit',year:'numeric'});
+    document.getElementById('dc-sel-txt').textContent = fmt;
+  } else {
+    document.getElementById('dc-sel-txt').textContent = '—';
+  }
+}
+
+function selectDiaCal(iso){
+  _ccDiaSel = iso;
+  _buildCcTable(_ccUID, _ccMes, _ccDiaSel);
+  closeDiaCal();
+}
+
+// Navegação do calendário
+document.getElementById('dc-prev').addEventListener('click', e=>{
+  e.stopPropagation();
+  _calViewDate = new Date(_calViewDate.getFullYear(), _calViewDate.getMonth()-1, 1);
+  renderCalDrop();
+});
+document.getElementById('dc-next').addEventListener('click', e=>{
+  e.stopPropagation();
+  _calViewDate = new Date(_calViewDate.getFullYear(), _calViewDate.getMonth()+1, 1);
+  renderCalDrop();
+});
+
+// Fechar ao clicar fora
+document.addEventListener('click', e=>{
+  if(_calOpen && !document.getElementById('dia-cal-drop').contains(e.target)){
+    closeDiaCal();
+  }
+});
 
 // ═══════════════════════════════════════════════════════
 // HISTÓRICO
