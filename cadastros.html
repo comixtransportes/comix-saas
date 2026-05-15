@@ -4,7 +4,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-<meta name="viewport" content="width=1280, initial-scale=0.25">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>COMIX — Cadastros</title>
 <style id="atlas-iframe-head">
 #scr_login { display: none !important; }
@@ -490,10 +490,11 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
 
     <div class="cfg-tabs">
-      <button class="cfg-tab" id="cfg_tab_usuarios" type="button" onclick="openAdminSection(&#39;usuarios&#39;)">Usuários</button>
-      <button class="cfg-tab" id="cfg_tab_veiculos" type="button" onclick="openAdminSection(&#39;veiculos&#39;)">Veículos</button>
-      <button class="cfg-tab" id="cfg_tab_motoristas" type="button" onclick="openAdminSection(&#39;motoristas&#39;)">Motoristas</button>
-      <button class="cfg-tab" id="cfg_tab_filiais" type="button" onclick="openAdminSection(&#39;filiais&#39;)">Filiais</button>
+      <button class="cfg-tab" id="cfg_tab_usuarios" type="button" onclick="openAdminSection('usuarios')">Usuários</button>
+      <button class="cfg-tab" id="cfg_tab_veiculos" type="button" onclick="openAdminSection('veiculos')">Veículos</button>
+      <button class="cfg-tab" id="cfg_tab_motoristas" type="button" onclick="openAdminSection('motoristas')">Motoristas</button>
+      <button class="cfg-tab" id="cfg_tab_filiais" type="button" onclick="openAdminSection('filiais')">Filiais</button>
+      <button class="cfg-tab" id="cfg_tab_permissoes" type="button" onclick="openAdminSection('permissoes')" style="background:linear-gradient(135deg,#1e2d45,#2B5DA8);color:#fff;border-color:#1e2d45">🔒 Permissões</button>
     </div>
 
     <section class="cfg-section" id="cfg_sec_usuarios">
@@ -509,7 +510,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
             </div>
             <div class="fr">
               <div class="f"><label>UID Firebase Auth <span class="req">*</span></label><input id="cfg_user_uid" placeholder="Cole o UID do Firebase Authentication" required style="border-color:var(--blue-b)"><span class="err-msg show" style="color:var(--blue);font-size:10px">Acesse Firebase → Authentication → copie o UID do usuário</span></div>
-              <div class="f"><label>Tipo de usuário</label><select id="cfg_user_perfil"><option value="admin">admin</option><option value="gestor">gestor</option><option value="comprador">comprador</option><option value="usuario" selected="">usuario</option></select></div>
+              <div class="f"><label>Tipo de usuário</label><select id="cfg_user_perfil"><option value="admin">admin</option><option value="gestor">gestor</option><option value="comprador">comprador</option><option value="motorista" selected="">motorista</option><option value="lu">lu</option><option value="lr">lr</option><option value="lm">lm</option><option value="consulta">consulta</option></select></div>
               <div class="f"><label>Status</label><select id="cfg_user_bloqueado"><option value="false">Ativo</option><option value="true">Bloqueado</option></select></div>
             </div>
             <div class="fr">
@@ -645,6 +646,20 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         <div class="card-body"><div class="cfg-list" id="cfg_fil_list"><div class="loading-state">Carregando filiais...</div></div></div>
       </div>
     </section>
+
+    <section class="cfg-section" id="cfg_sec_permissoes">
+      <div class="card" style="overflow:hidden;padding:0;border:none;background:transparent">
+        <div style="width:100%;height:calc(100vh - 120px);border-radius:16px;overflow:hidden;box-shadow:0 8px 32px rgba(15,59,104,.12)">
+          <iframe
+            id="iframe_permissoes"
+            src="permissoes.html"
+            style="width:100%;height:100%;border:none;display:block"
+            title="Controle de Permissões"
+            onload="onPermissoesLoaded()">
+          </iframe>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -676,7 +691,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
   const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   let currentUser   = null;
-  let currentPerfil = "usuario";
+  let currentPerfil = "motorista";
 
 
   function normalizeAdminEmail(email) {
@@ -750,7 +765,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       userId: currentUser.uid || "",
       email: currentUser.email || "",
       uid: currentUser.uid || "",
-      perfil: currentPerfil || "usuario",
+      perfil: currentPerfil || "motorista",
       modulo: "compras",
       __comprasEstado: true,
       updatedAt: serverNow,
@@ -880,7 +895,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       createdAt: now,
       updatedByUid: currentUser.uid || "",
       updatedByEmail: currentUser.email || "",
-      perfil: currentPerfil || "usuario",
+      perfil: currentPerfil || "motorista",
       modulo: "compras",
       __comprasEstado: true
     };
@@ -1005,7 +1020,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         .get();
       let docs = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.id !== "__compras_estado__" && !r.__comprasEstado);
       /* Perfil 'usuario' só vê os próprios relatórios */
-      if (currentPerfil === "usuario" && currentUser) {
+      if (currentPerfil === "motorista" && currentUser) {
         docs = docs.filter(r => r.userId === currentUser.uid || r.uid === currentUser.uid || r.email === currentUser.email);
       }
       if (filtros.placa)     docs = docs.filter(r => r.placa_cv  === filtros.placa);
@@ -1192,7 +1207,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
         if (perfilDoc && (perfilDoc.bloqueado === true || perfilDoc.status === "bloqueado")) {
           currentUser = null;
-          currentPerfil = "usuario";
+          currentPerfil = "motorista";
           await auth.signOut();
           setTimeout(function(){
             const errEl = document.getElementById("li_err");
@@ -1205,9 +1220,9 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
           return;
         }
 
-        currentPerfil = perfilDoc ? (perfilDoc.perfil || perfilDoc.tipo || "usuario") : "usuario";
+        currentPerfil = perfilDoc ? (perfilDoc.perfil || perfilDoc.tipo || "motorista") : "usuario";
       } catch(e) {
-        currentPerfil = "usuario";
+        currentPerfil = "motorista";
       }
       // Retry até _appReady estar disponível (app-script pode ainda estar parseando)
       var tries = 0;
@@ -1222,7 +1237,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       })();
     } else {
       currentUser = null;
-      currentPerfil = "usuario";
+      currentPerfil = "motorista";
       const cfgWrap = document.getElementById("cfg_wrap");
       const cfgMenu = document.getElementById("cfg_menu");
       const btn = document.getElementById("li_btn");
@@ -1535,10 +1550,52 @@ async function cfgLoadSection(section) {
       await cfgRefreshMotoristas();
     }
     if (section === "filiais") await cfgRefreshFiliais();
+    if (section === "permissoes") cfgLoadPermissoes();
   } catch (err) {
     showToast(err.message || "Erro ao carregar configurações.", "error");
   }
 }
+
+/* ── PERMISSÕES: carregar iframe ── */
+function cfgLoadPermissoes() {
+  const fr = document.getElementById("iframe_permissoes");
+  if (!fr) return;
+  // iframe já foi inserido no HTML; apenas garante que está visível
+  // A recarga forçada só acontece se solicitado explicitamente
+}
+
+function onPermissoesLoaded() {
+  // Called when the permissoes iframe finishes loading
+  const fr = document.getElementById("iframe_permissoes");
+  if (!fr) return;
+  try {
+    // Pass Firebase instance reference to iframe if same origin
+    if (fr.contentWindow && window.firebase) {
+      fr.contentWindow.postMessage({ type: 'FIREBASE_READY' }, '*');
+    }
+  } catch(e) {}
+}
+
+/* ── ATUALIZAÇÃO AUTOMÁTICA APÓS NOVO ARQUIVO (Download Base) ── */
+window.addEventListener('message', function(event) {
+  if (!event.data || typeof event.data !== 'object') return;
+
+  // Quando um novo arquivo é carregado na tela Download Base:
+  if (event.data.type === 'ATLAS_DATA_READY') {
+    const table   = event.data.table;
+    const count   = event.data.count;
+    // Propaga o evento para todos os iframes filhos dentro de cadastros
+    document.querySelectorAll('iframe').forEach(fr => {
+      try { fr.contentWindow.postMessage(event.data, '*'); } catch(_) {}
+    });
+    showToast(`Base ${table?.toUpperCase()} atualizada (${count} registros). Dados recarregados.`, 'success');
+  }
+
+  // Quando permissões são salvas, notifica outros módulos
+  if (event.data.type === 'PERM_UPDATED') {
+    showToast(`Permissões de "${event.data.tipo}" atualizadas com sucesso.`, 'success');
+  }
+});
 function cfgEscape(value) {
   return String(value ?? "").replace(/[&<>"']/g, s => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#039;" }[s]));
 }
@@ -1639,7 +1696,7 @@ function cfgRenderUsuarios() {
   }
   list.innerHTML = cfgCache.usuarios.map(u => {
     const bloqueado = u.bloqueado === true || u.status === "bloqueado";
-    const perfil = u.perfil || u.tipo || "usuario";
+    const perfil = u.perfil || u.tipo || "motorista";
     return `<div class="cfg-list-item">
       <div class="cfg-item-top">
         <div>
@@ -1661,7 +1718,7 @@ function cfgResetUsuario() {
   document.getElementById("cfg_user_form")?.reset();
   cfgSet("cfg_user_doc_id", "");
   cfgSet("cfg_user_bloqueado", "false");
-  cfgSet("cfg_user_perfil", "usuario");
+  cfgSet("cfg_user_perfil", "motorista");
 }
 async function cfgSaveUsuario(event) {
   event.preventDefault();
@@ -1684,8 +1741,8 @@ async function cfgSaveUsuario(event) {
     nome: cfgUpper(cfgVal("cfg_user_nome")),
     email,
     uid,
-    perfil: cfgVal("cfg_user_perfil") || "usuario",
-    tipo: cfgVal("cfg_user_perfil") || "usuario",
+    perfil: cfgVal("cfg_user_perfil") || "motorista",
+    tipo: cfgVal("cfg_user_perfil") || "motorista",
     bloqueado: cfgVal("cfg_user_bloqueado") === "true",
     status: cfgVal("cfg_user_bloqueado") === "true" ? "bloqueado" : "ativo",
     observacoes: cfgVal("cfg_user_obs")
@@ -1708,7 +1765,7 @@ function cfgEditUsuario(id) {
   cfgSet("cfg_user_nome", u.nome || "");
   cfgSet("cfg_user_email", u.email || "");
   cfgSet("cfg_user_uid", u.uid || "");
-  cfgSet("cfg_user_perfil", u.perfil || u.tipo || "usuario");
+  cfgSet("cfg_user_perfil", u.perfil || u.tipo || "motorista");
   cfgSet("cfg_user_bloqueado", (u.bloqueado === true || u.status === "bloqueado") ? "true" : "false");
   cfgSet("cfg_user_obs", u.observacoes || "");
   document.getElementById("cfg_user_form")?.scrollIntoView({ behavior:"smooth", block:"start" });
