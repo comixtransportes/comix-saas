@@ -95,13 +95,13 @@ select.sel{border:1px solid var(--bd);border-radius:3px;padding:3px 6px;font-siz
 .dr:last-child{border-bottom:none;}
 .dl3{font-size:10px;color:var(--mu);}
 .dv2{font-family:var(--m);font-size:11.5px;font-weight:500;}
-.vg-charts{display:grid;grid-template-columns:1fr 1fr;gap:7px;flex-shrink:0;align-items:start;}
-.cw{background:var(--wh);border:1px solid var(--bd);border-radius:4px;padding:6px 10px;}
+.vg-charts{display:grid;grid-template-columns:1fr 1fr;gap:7px;flex-shrink:0;align-items:start;min-width:0;}
+.cw{background:var(--wh);border:1px solid var(--bd);border-radius:4px;padding:6px 10px;box-sizing:border-box;min-width:0;overflow:hidden;}
 .ct{font-size:9px;font-weight:700;color:var(--mu);letter-spacing:.7px;text-transform:uppercase;margin-bottom:4px;display:flex;align-items:center;gap:8px;}
 .ct-legend{display:flex;gap:10px;margin-left:auto;}
 .ct-leg-item{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--mu);}
 .ct-leg-dot{width:8px;height:8px;border-radius:2px;}
-.vg-bot{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;flex-shrink:0;margin:0 -6px;}
+.vg-bot{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;flex-shrink:0;}
 .pc{background:var(--wh);border:1px solid var(--bd);border-radius:4px;padding:9px 13px;}
 .pc-icon{display:flex;align-items:center;gap:10px;}
 .pc-ic{flex-shrink:0;display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:50%;background:var(--sf);}
@@ -468,11 +468,11 @@ table.dt td.dia-cell::after{
         </div>
         <div class="cw">
           <div class="ct">Top 10 — Faturamento por Cliente</div>
-          <div id="ct10-h" style="height:190px"><canvas id="c-t10"></canvas></div>
+          <div id="ct10-h" style="height:190px;width:100%;overflow:hidden;position:relative;"><canvas id="c-t10"></canvas></div>
         </div>
       </div>
       <!-- COMPARATIVO HISTÓRICO 12 MESES -->
-      <div class="cw" style="flex:1;min-height:0;display:flex;flex-direction:column;margin-bottom:0;margin-left:6px;margin-right:6px;">
+      <div class="cw" style="flex:1;min-height:0;display:flex;flex-direction:column;margin-bottom:0;">
         <div class="ct">
           Comparativo Histórico — Faturamento (Projetado vs Realizado Ano Anterior)
           <div class="ct-legend">
@@ -1419,7 +1419,6 @@ function buildVG(uid, mes){
           if(!meta||!xScale) return;
           ctx2.save();
           ctx2.font='500 9px IBM Plex Mono,monospace';
-          ctx2.fillStyle='#192135';
           ctx2.textBaseline='middle';
           ctx2.textAlign='left';
           const chartRight=chart.chartArea.right;
@@ -1429,11 +1428,17 @@ function buildVG(uid, mes){
             const label=fmtT10(val);
             const textW=ctx2.measureText(label).width;
             const GAP=5;
-            let x=bar.x+GAP;
-            if(x+textW>chartRight-2){
-              x=chartRight-textW-4;
+            const xAfter=bar.x+GAP;
+            if(xAfter+textW<=chartRight){
+              // fits to the right of the bar — dark text
+              ctx2.fillStyle='#192135';
+              ctx2.fillText(label, xAfter, bar.y);
+            } else {
+              // draw inside the bar — white text
+              const xInside=Math.max(bar.x-textW-GAP, chart.chartArea.left+2);
+              ctx2.fillStyle='#ffffff';
+              ctx2.fillText(label, xInside, bar.y);
             }
-            ctx2.fillText(label, x, bar.y);
           });
           ctx2.restore();
         }
@@ -1441,7 +1446,7 @@ function buildVG(uid, mes){
       options:{
         indexAxis:'y',
         responsive:true,maintainAspectRatio:false,
-        layout:{padding:{right:4,left:0}},
+        layout:{padding:{right:96,left:4,top:2,bottom:2}},
         plugins:{
           legend:{display:false},
           tooltip:{...TTP,callbacks:{label:ctx=>'R$\u00a0'+N(ctx.parsed.x)}},
@@ -1450,7 +1455,7 @@ function buildVG(uid, mes){
         scales:{
           x:{ticks:{display:false},grid:{color:CG,lineWidth:.5},beginAtZero:true},
           y:{ticks:{color:CT,font:{size:9},maxRotation:0},grid:{display:false},
-            afterFit(axis){ axis.width = Math.round(axis.width * 1.38); }}
+            afterFit(axis){ axis.width = Math.min(Math.round(axis.width * 1.15), 120); }}
         }
       }
     });
@@ -2878,6 +2883,35 @@ function triggerAI() {
     document.head.appendChild(s);
   }
 })();
+
+/* ══ ATLAS: receptor de dados do Download Base ══
+   Quando o index.html faz broadcast de ATLAS_DATA_READY para a tabela 'szb',
+   este módulo injeta os dados diretamente e ativa o dashboard sem upload manual. */
+window.addEventListener('message', function(event) {
+  if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
+  if (event.data.table !== 'szb') return;
+
+  try {
+    var parentData = window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
+    if (!parentData || !parentData.rows || !parentData.rows.length) return;
+
+    RAW = parentData.rows;
+    DATA = [];
+
+    var dzH = document.getElementById('dz-h');
+    if (dzH) dzH.textContent = '✓ Download Base — ' + RAW.length + ' registros';
+    var dz = document.getElementById('dz');
+    if (dz) dz.classList.add('ok');
+    var btnGo = document.getElementById('btn-go');
+    if (btnGo) btnGo.disabled = false;
+
+    buildDash();
+    setTimeout(triggerAI, 800);
+
+  } catch(e) {
+    console.warn('[PD Diário] Erro ao receber dados do Download Base:', e);
+  }
+});
 </script>
 </body>
 </html>
