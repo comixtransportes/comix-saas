@@ -652,6 +652,49 @@ document.addEventListener('keydown',e=>{
 
 /* ══ DOWNLOAD BASE ══ */
 window.ATLAS_DATA={};
+
+const ATLAS_DB_NAME='COMIX_ATLAS_BASES';
+const ATLAS_DB_STORE='bases';
+function atlasOpenDB(){
+  return new Promise((resolve,reject)=>{
+    if(!('indexedDB' in window)) return reject(new Error('IndexedDB indisponível'));
+    const req=indexedDB.open(ATLAS_DB_NAME,1);
+    req.onupgradeneeded=()=>{const d=req.result;if(!d.objectStoreNames.contains(ATLAS_DB_STORE))d.createObjectStore(ATLAS_DB_STORE,{keyPath:'id'});};
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error||new Error('Erro IndexedDB'));
+  });
+}
+async function atlasSaveBase(id,payload){
+  try{
+    const d=await atlasOpenDB();
+    await new Promise((resolve,reject)=>{
+      const tx=d.transaction(ATLAS_DB_STORE,'readwrite');
+      tx.objectStore(ATLAS_DB_STORE).put({id,payload,savedAt:new Date().toISOString()});
+      tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);
+    });
+  }catch(e){dbLog(`⚠ ${id.toUpperCase()} não foi persistido no IndexedDB: ${e.message}`,'info');}
+}
+async function atlasLoadBase(id){
+  const d=await atlasOpenDB();
+  return await new Promise((resolve,reject)=>{
+    const tx=d.transaction(ATLAS_DB_STORE,'readonly');
+    const rq=tx.objectStore(ATLAS_DB_STORE).get(id);
+    rq.onsuccess=()=>resolve(rq.result&&rq.result.payload?rq.result.payload:null);
+    rq.onerror=()=>reject(rq.error);
+  });
+}
+function atlasBroadcast(id,payload){
+  const msg={type:'ATLAS_DATA_READY',table:id,count:payload.count,ts:payload.ts};
+  document.querySelectorAll('.fr-wrap iframe').forEach(fr=>{try{fr.contentWindow.postMessage(msg,'*');}catch(_){};});
+}
+window.addEventListener('message',async ev=>{
+  const d=ev.data||{};
+  if(d.type!=='ATLAS_REQUEST_DATA'||!d.table) return;
+  const id=String(d.table).toLowerCase();
+  let payload=window.ATLAS_DATA&&window.ATLAS_DATA[id];
+  if(!payload){try{payload=await atlasLoadBase(id);if(payload)window.ATLAS_DATA[id]=payload;}catch(_){}}
+  if(payload&&ev.source){try{ev.source.postMessage({type:'ATLAS_DATA_RESPONSE',table:id,payload},'*');}catch(_){}}
+});
 const DB_TABLES=['se1','se2','se4','se5','szb','sa1'];
 function dbDrag(e,id){e.preventDefault();document.getElementById('dbdrop-'+id).classList.add('drag');}
 function dbOff(id){document.getElementById('dbdrop-'+id).classList.remove('drag');}
@@ -810,8 +853,8 @@ async function dbProc(file,id){
     const tsNow=new Date().toISOString();
     const usuarioAtual=(window._atlasUser||document.getElementById('user-name')?.textContent||'—').trim();
     window.ATLAS_DATA[id]={rows,file:file.name,ts:tsNow,count:rows.length,user:usuarioAtual};
-    const broadcastMsg={type:'ATLAS_DATA_READY',table:id,count:rows.length,ts:tsNow};
-    document.querySelectorAll('.fr-wrap iframe').forEach(fr=>{try{fr.contentWindow.postMessage(broadcastMsg,'*');}catch(_){}});
+    await atlasSaveBase(id, window.ATLAS_DATA[id]);
+    atlasBroadcast(id, window.ATLAS_DATA[id]);
     const sec=((Date.now()-t0)/1000).toFixed(1);
     dbSt(id,'ok',dbFmt(rows.length)+' reg.');
     document.getElementById('dbc-'+id).className='db-card loaded';
