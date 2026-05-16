@@ -753,9 +753,12 @@ function dbColIndex(ref){
 }
 async function dbXmlFallbackRows(buf,id){
   if(typeof JSZip==='undefined') throw new Error('Leitor compatível não disponível: JSZip não carregou.');
-  dbLog(`⚠ ${id.toUpperCase()} retornou 0 linhas no SheetJS. Acionando leitor XML compatível...`,'info');
+  dbLog(`⚠ ${id.toUpperCase()} retornou 0 linhas no SheetJS. Acionando leitor XML compatível por streaming...`,'info');
   dbPct(id,82);
+
   const zip=await JSZip.loadAsync(buf);
+
+  // sharedStrings é pequeno nos arquivos Protheus; a planilha XML é enorme e deve ser lida por stream.
   const ssFile=zip.file('xl/sharedStrings.xml');
   let shared=[];
   if(ssFile){
@@ -772,26 +775,40 @@ async function dbXmlFallbackRows(buf,id){
     }
   }
   dbPct(id,86);
+
   const sheetNames=Object.keys(zip.files).filter(n=>/^xl\/worksheets\/sheet\d+\.xml$/i.test(n)).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
   if(!sheetNames.length) return [];
+
+  // Escolhe a aba com maior dimensão sem manter o XML inteiro em memória.
   let chosen=sheetNames[0], best=-1;
   for(const n of sheetNames){
     const f=zip.file(n); if(!f) continue;
-    const txt=await f.async('string');
-    const dim=(txt.match(/<dimension[^>]*ref="([^"]+)"/i)||[])[1]||'';
+    let head='';
+    try{
+      const helper=f.internalStream('string');
+      await new Promise((resolve,reject)=>{
+        helper.on('data',chunk=>{ if(head.length<5000) head+=chunk; if(head.includes('<sheetData')) { try{helper.pause();}catch(_){ } resolve(); } });
+        helper.on('error',reject); helper.on('end',resolve); helper.resume();
+      });
+    }catch(_){ head=''; }
+    const dim=(head.match(/<dimension[^>]*ref="([^"]+)"/i)||[])[1]||'';
     let rows=0;
     const mr=dim.match(/:(?:[A-Z]+)(\d+)/i) || dim.match(/(?:[A-Z]+)(\d+)/i);
     if(mr) rows=parseInt(mr[1],10)||0;
     if(rows>best){best=rows;chosen=n;}
   }
-  const xml=await zip.file(chosen).async('string');
-  dbPct(id,90);
+
+  const sheetFile=zip.file(chosen);
+  if(!sheetFile) return [];
+  dbPct(id,88);
+
   const rows=[];
-  const rowRe=/<row\b[^>]*>([\s\S]*?)<\/row>/g;
-  let rm, header=null, seen=0;
-  while((rm=rowRe.exec(xml))){
+  let header=null;
+  let carry='';
+  let processed=0;
+
+  function parseRow(rowXml){
     const cells=[];
-    const rowXml=rm[1];
     const cRe=/<c\b([^>]*)>([\s\S]*?)<\/c>/g;
     let cm;
     while((cm=cRe.exec(rowXml))){
@@ -805,20 +822,45 @@ async function dbXmlFallbackRows(buf,id){
         val=dbXmlDecode(t);
       }else{
         const v=(body.match(/<v[^>]*>([\s\S]*?)<\/v>/i)||[])[1];
-        if(v!=null){
-          val=(typ==='s') ? (shared[Number(v)]??'') : dbXmlDecode(v);
-        }
+        if(v!=null) val=(typ==='s') ? (shared[Number(v)]??'') : dbXmlDecode(v);
       }
       cells[idx]=val;
     }
-    if(!cells.some(v=>v!==''&&v!=null)) continue;
-    if(!header){ header=cells.map(dbCleanHeader); continue; }
+    if(!cells.some(v=>v!==''&&v!=null)) return;
+    if(!header){ header=cells.map(dbCleanHeader); return; }
     const o={};
     for(let i=0;i<header.length;i++) if(header[i]) o[header[i]]=cells[i]??'';
     if(Object.values(o).some(v=>v!==''&&v!=null)) rows.push(o);
-    seen++;
-    if(seen%25000===0){ dbPct(id, Math.min(98,90+Math.floor(seen/25000))); await new Promise(r=>setTimeout(r,0)); }
+    processed++;
+    if(processed%10000===0) dbPct(id, Math.min(98,88+Math.floor(processed/20000)));
   }
+
+  const helper=sheetFile.internalStream('string');
+  await new Promise((resolve,reject)=>{
+    helper.on('data',chunk=>{
+      carry+=chunk;
+      let last=carry.lastIndexOf('</row>');
+      if(last<0){
+        // Mantém apenas o pedaço incompleto para evitar estouro de memória.
+        if(carry.length>2000000) carry=carry.slice(-2000000);
+        return;
+      }
+      const work=carry.slice(0,last+6);
+      carry=carry.slice(last+6);
+      const rowRe=/<row\b[^>]*>([\s\S]*?)<\/row>/g;
+      let rm;
+      while((rm=rowRe.exec(work))) parseRow(rm[1]);
+    });
+    helper.on('error',reject);
+    helper.on('end',()=>{
+      const rowRe=/<row\b[^>]*>([\s\S]*?)<\/row>/g;
+      let rm;
+      while((rm=rowRe.exec(carry))) parseRow(rm[1]);
+      resolve();
+    });
+    helper.resume();
+  });
+  dbPct(id,99);
   return rows;
 }
 async function dbReadRows(file,id,buf){
