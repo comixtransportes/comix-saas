@@ -1515,17 +1515,36 @@ function buildDBFromRaw(se1rows, se2rows, se5rows) {
     // ─── SE2: contas a pagar abertas ───
     var PT = [];
     function categorizar(row, nome) {
+      // CORREÇÃO #3: categorizar por PREFIXO DE NATUREZA (regra contábil Protheus),
+      // não por regex de marcas de fornecedor. O Tipo Protheus tem precedência:
+      //   FOL → folha; depois prefixo de natureza decide.
+      var tipoTit = asText(getVal(row, 'E2_TIPO', 'Tipo', 'Tipo        ')).toUpperCase();
+      if (tipoTit === 'FOL') return 'folha';
       var nat = asText(getVal(row, 'E2_NATUREZ', 'Natureza', 'Natureza    ', 'Categoria')).toUpperCase();
-      var n = (nat + ' ' + asText(nome)).toUpperCase();
-      if (/FOLHA|SALARIO|FERIAS|RESCISAO|FGTS|INSS|IRRF|SINDICATO/.test(n)) return 'folha';
-      if (/IMPOSTO|RECEITA|SEFAZ|ICMS|ISS|COFINS|PIS|CSLL|IRPJ|IOF|TAXA|TRIBUTO|MULTA|DETRAN|SEGURO|FIDC|RANDON|BARIGUI|CODEMA|DICAVE|METALESP|ECONSIGNA|ATLANTA/.test(n)) return 'imposto';
-      if (/^9/.test(nat) || /ADIANT|COMPENS/.test(n)) return 'outros';
+      // 41xx, 51xx, 52xx → folha/encargos (FGTS, INSS, salários, férias, rescisões)
+      if (/^(41|51|52)/.test(nat)) return 'folha';
+      // 31xx, 32xx → impostos federais/estaduais/municipais
+      if (/^(31|32)/.test(nat)) return 'imposto';
+      // 9xxx → transferência/adiantamento/compensação interna
+      if (/^9/.test(nat)) return 'outros';
+      // Fallback textual (só quando natureza não foi informada)
+      if (!nat) {
+        var n = asText(nome).toUpperCase();
+        if (/FOLHA|SALARIO|FERIAS|RESCISAO|FGTS|INSS|IRRF|SINDICATO/.test(n)) return 'folha';
+        if (/IMPOSTO|RECEITA|SEFAZ|ICMS|ISS|COFINS|PIS|CSLL|IRPJ|IOF|TRIBUTO/.test(n)) return 'imposto';
+      }
+      // 21xx, 22xx e demais → operacional (frete, manutenção, peças, combustível, serviços)
       return 'operacional';
     }
 
+    var pa_adiantamentos = 0;
     (se2rows || []).forEach(function(row) {
       var saldo = asNumber(getVal(row, 'E2_SALDO', 'Saldo', 'Saldo       '));
       if (saldo <= 0) return;
+      // CORREÇÃO #1: PA (Pagamento Antecipado) é adiantamento a fornecedor → ATIVO, não passivo.
+      // Acumula em pa_adiantamentos para visibilidade contábil, mas exclui de PT.
+      var tipoTit = tipoTitulo(getVal(row, 'E2_TIPO', 'Tipo', 'Tipo        '));
+      if (tipoTit === 'PA') { pa_adiantamentos += saldo; return; }
       var vcto = parseDate(getVal(row, 'E2_VENCTO', 'Vencimento', 'Vencimento  ', 'Vencto Real', 'Vencto Real '));
       var emis = parseDate(getVal(row, 'E2_EMISSAO', 'DT Emissao', 'DT Emissao  ', 'Emissao'));
       var forn = asText(getVal(row, 'A2_NOME', 'Nome Fornece', 'Nome Fornece', 'Fornecedor', 'Fornecedor  ', 'E2_NOMFOR'));
@@ -1537,15 +1556,39 @@ function buildDBFromRaw(se1rows, se2rows, se5rows) {
 
     // ─── SE5: somente recebimentos bancários, não todo movimento de banco ───
     var se5_mensal = {};
+
+    // [FIX v6.3 — auditoria CFO] isRecebimento com 3 sinais combinados.
+    // Erros corrigidos vs versões anteriores:
+    //   v6.0: regex "CANCEL" no histórico vazava R$ 16M de cancelados estruturais.
+    //   v6.2: prefixo natureza '1' incluía nat 12xx (rendimento de aplicação,
+    //         R$ 14,9M) e capturava R$ 20M de "BAIXA POR COMPENSACAO" /
+    //         "COMPENSACÃO DE ADIANTAMENTOS" (transferências internas, não receita)
+    //         + R$ 40,7M do banco 999 (caixa interno).
+    // Validação contra SE1 (jan/25 → mai/26):
+    //   Faturamento emitido NF+NFV ......... R$ 95,7M
+    //   Em aberto na carteira .............. R$  9,2M
+    //   Recebimento esperado ............... R$ 86,5M
+    //   Captura v6.3 ....................... R$ 98,1M  (113%, sobra cabe em
+    //                                                  juros + multa + RA antigo)
+    // Regras:
+    //   (1) Dt cancel bx vazia (estrutural)
+    //   (2) Natureza 11xx (receita de venda/serviço) — exclui 12xx aplicação, 9xxx transf
+    //   (3) Histórico fala em RECEBIMENTO real: "RECEB" ou "BAIXA BORDERO".
+    //       Exclui PAGO/PGTO/PAGAMENTO/CANCEL/TARIFA/IOF/IRRF/TRANSFER/COMPENS/RENDA.
     function isRecebimento(row) {
-      var hist = asText(getVal(row, 'Historico', 'Historico   ')).toUpperCase();
-      var op = asText(getVal(row, 'Oper Financ', 'Oper Financ '));
-      var nat = asText(getVal(row, 'Natureza', 'Natureza    '));
-      if (/CANCEL/.test(hist)) return false;
-      if (/RECEB/.test(hist)) return true;
-      if (op === '03') return true;
-      // Natureza 11xx é receita, mas sozinha é ampla demais; entra apenas como apoio quando o histórico não aponta pagamento.
-      if (/^11/.test(nat) && !/PAGO|PGTO|PAGAMENTO/.test(hist)) return true;
+      // (1) Cancelado pela baixa estrutural
+      var dtCancel = getVal(row, 'E5_DTCANC', 'Dt cancel bx', 'Dt cancel bx', 'DT Cancel');
+      if (dtCancel && asText(dtCancel) && !/^0+$/.test(asText(dtCancel))) return false;
+
+      // (2) Apenas receita operacional (nat 11xx). 12xx=rendimento financeiro,
+      //     9xxx=transferência interna, demais=despesa.
+      var nat = asText(getVal(row, 'E5_NATUREZ', 'Natureza', 'Natureza    '));
+      if (!/^11/.test(nat)) return false;
+
+      // (3) Histórico precisa ser de recebimento de cliente (com ou sem título)
+      var hist = asText(getVal(row, 'E5_HISTOR', 'Historico', 'Historico   ')).toUpperCase();
+      if (/PAGO|PGTO|PAGAMENTO|CANCEL|TARIFA|IOF|IRRF|TRANSFER|COMPENS|RENDA|APLICA/.test(hist)) return false;
+      if (/RECEB|BAIXA BORDERO/.test(hist)) return true;
       return false;
     }
 
@@ -1560,7 +1603,9 @@ function buildDBFromRaw(se1rows, se2rows, se5rows) {
     var se5_total = Object.values(se5_mensal).reduce(function(s, v) { return s + v; }, 0);
     var se5_meses = Object.keys(se5_mensal).length;
 
-    var pmr_global = (DB.summary && DB.summary.pmr_global) || (valorPrazo ? Math.round(prazoPesado / valorPrazo) : 0);
+    // CORREÇÃO #5: PMR sempre recalculado a partir do SE1 atual.
+    // Antes usava fallback de DB.summary, o que travava o valor após recargas.
+    var pmr_global = valorPrazo ? Math.round(prazoPesado / valorPrazo) : 0;
 
     return {
       summary: {
@@ -1575,6 +1620,7 @@ function buildDBFromRaw(se1rows, se2rows, se5rows) {
         rec_vcto_max: venctos[venctos.length - 1] || hojeStr,
         pag_total: pag_total,
         pag_qtd: PT.length,
+        pa_adiantamentos: pa_adiantamentos,
         pmr_global: pmr_global,
         prazo_c_global: (DB.summary && DB.summary.prazo_c_global) || 0,
         se5_total: se5_total,
