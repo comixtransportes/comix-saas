@@ -2227,11 +2227,16 @@ function addFeriado(){
 // INICIALIZAÇÃO — carrega parâmetros da nuvem ao abrir
 // ═══════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', ()=>{
-  // Carregar parâmetros e dados em background sem bloquear a UI
+  // Carregar parâmetros em background sem bloquear a UI.
   loadParamsFromCloud().catch(()=>{});
-  // Tentar carregar dados salvos após pequeno delay
+
+  // No Atlas integrado, a fonte correta é o Download Base (window.parent.ATLAS_DATA).
+  // A carga antiga via Cloudflare fica apenas como fallback quando a tela é aberta isoladamente.
   setTimeout(async ()=>{
     try {
+      if (typeof tryAtlasSZB === 'function' && tryAtlasSZB()) return;
+      if (window.self !== window.top) return;
+
       const hasData = await loadDataFromCloud();
       if (hasData) {
         const drop = document.getElementById('scr-drop');
@@ -2242,7 +2247,6 @@ window.addEventListener('DOMContentLoaded', ()=>{
         setTimeout(triggerAI, 1000);
       }
     } catch(e) {
-      // Sem dados na nuvem — mostrar tela de upload normalmente
       const el = document.getElementById('h-sync');
       if (el) { el.textContent = 'Sem dados salvos'; el.className = 'hm-sync'; }
     }
@@ -2884,21 +2888,49 @@ function triggerAI() {
   }
 })();
 
-/* ══ ATLAS: receptor de dados do Download Base ══ */
+/* ══ ATLAS: receptor de dados do Download Base ══
+   Padrão do index.html: window.parent.ATLAS_DATA.szb = { rows, file, ts, count, user }
+   e broadcast via postMessage({ type:'ATLAS_DATA_READY', table:'szb' }).
+   Este bloco só injeta RAW e aciona o rebuild já existente. Não altera métricas,
+   filtros, fórmulas, regras de análise nem renderizações do PD. */
+var __ATLAS_PD_CARREGADO = false;
+
+function atlasParentSZB() {
+  try {
+    if (!window.parent || window.parent === window) return null;
+    var parentData = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
+    if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return null;
+    return parentData;
+  } catch(e) {
+    console.warn('[PD Diário] sem acesso ao ATLAS_DATA do parent:', e);
+    return null;
+  }
+}
+
 function tryAtlasSZB() {
   try {
-    var parentData = window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
-    if (!parentData || !parentData.rows || !parentData.rows.length) return false;
+    var parentData = atlasParentSZB();
+    if (!parentData) return false;
 
     RAW = parentData.rows;
     DATA = [];
+    AI_CACHE = null;
+    __ATLAS_PD_CARREGADO = true;
 
     var dzH = document.getElementById('dz-h');
-    if (dzH) dzH.textContent = '✓ Download Base — ' + RAW.length + ' registros';
+    if (dzH) dzH.textContent = '✓ Download Base — ' + RAW.length.toLocaleString('pt-BR') + ' registros';
     var dz = document.getElementById('dz');
     if (dz) dz.classList.add('ok');
     var btnGo = document.getElementById('btn-go');
     if (btnGo) btnGo.disabled = false;
+    var sync = document.getElementById('h-sync');
+    if (sync) {
+      var ts = parentData.ts ? new Date(parentData.ts) : null;
+      sync.textContent = ts && !isNaN(ts.getTime())
+        ? '✓ Download Base — ' + ts.toLocaleDateString('pt-BR') + ' ' + ts.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})
+        : '✓ Dados carregados do Download Base';
+      sync.className = 'hm-sync ok';
+    }
 
     buildDash();
     setTimeout(triggerAI, 800);
@@ -2909,10 +2941,13 @@ function tryAtlasSZB() {
   }
 }
 
-/* Ao carregar: se o parent já tem SZB (iframe aberto depois do upload) */
-(function() { setTimeout(function() { tryAtlasSZB(); }, 200); })();
+/* Ao carregar: se o parent já tem SZB (iframe aberto depois do upload), usar imediatamente. */
+(function() {
+  setTimeout(function() { tryAtlasSZB(); }, 200);
+  setTimeout(function() { if (!__ATLAS_PD_CARREGADO) tryAtlasSZB(); }, 800);
+})();
 
-/* Broadcast: acionado quando o usuário carrega SZB no Download Base */
+/* Broadcast: acionado quando o usuário carrega SZB no Download Base. */
 window.addEventListener('message', function(event) {
   if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
   if (event.data.table !== 'szb') return;
