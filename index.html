@@ -211,6 +211,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 .db-meta-us:empty{display:none}
 .db-res.ok{display:block;background:var(--gn-bg);color:var(--gn);border:1px solid var(--gn-bd)}
 .db-res.err{display:block;background:var(--rd-bg);color:var(--rd);border:1px solid var(--rd-bd)}
+.db-res.info{display:block;background:var(--ac-bg);color:var(--ac);border:1px solid var(--ac-bg)}
 .db-footer{display:flex;gap:8px;align-items:center;flex-shrink:0}
 .db-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 16px;background:var(--hd);color:var(--ht);border:none;border-radius:var(--rs);font-size:12px;font-weight:600;font-family:var(--f);cursor:pointer;transition:background .15s;flex:1}
 .db-btn:hover{background:#152236}
@@ -529,6 +530,7 @@ function showApp() {
   document.getElementById('sb-role').textContent  = curPerfil;
   applyPerfil();
   loadPermissions();
+  atlasLoadLogsCloud(); // popula timestamps/usuários dos últimos uploads (cross-device)
   /* Abre PD Diário como padrão */
   go('pd-diario');
 }
@@ -673,6 +675,54 @@ async function atlasSaveBase(id,payload){
       tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);
     });
   }catch(e){dbLog(`⚠ ${id.toUpperCase()} não foi persistido no IndexedDB: ${e.message}`,'info');}
+}
+/* ── LOG DE CARREGAMENTO NO FIRESTORE (compartilhado entre máquinas) ── */
+async function atlasSaveLogCloud(id, payload){
+  try{
+    if(!db || !curUser) return;
+    await db.collection('bases_logs').doc(id).set({
+      id,
+      file: payload.file || '',
+      count: payload.count || 0,
+      ts: payload.ts || new Date().toISOString(),
+      user: payload.user || curUser.email || '—',
+      email: curUser.email || '',
+      uid: curUser.uid || '',
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  }catch(e){
+    dbLog(`⚠ ${id.toUpperCase()} log na nuvem falhou: ${e.message}`,'info');
+  }
+}
+async function atlasLoadLogsCloud(){
+  try{
+    if(!db) return;
+    const snap = await db.collection('bases_logs').get();
+    snap.forEach(d=>{
+      const data = d.data() || {};
+      const id = data.id || d.id;
+      if(!DB_TABLES.includes(id)) return;
+      const tsEl = document.getElementById('dbts-'+id);
+      const usEl = document.getElementById('dbus-'+id);
+      const resEl = document.getElementById('dbres-'+id);
+      const cardEl = document.getElementById('dbc-'+id);
+      if(data.ts && tsEl){
+        try{ tsEl.textContent = new Date(data.ts).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch(_){}
+      }
+      if(data.user && usEl) usEl.textContent = data.user;
+      // Se ainda não há dados locais (outra máquina), mostra apenas o badge informativo
+      if(!window.ATLAS_DATA[id] && resEl && data.count){
+        resEl.className = 'db-res info';
+        resEl.textContent = `↻ Último upload na nuvem: ${dbFmt(data.count)} registros — reenvie o arquivo para usar`;
+      }
+      if(!window.ATLAS_DATA[id] && cardEl){
+        // marca visualmente como "já houve um carregamento conhecido", sem fingir que está localmente disponível
+        cardEl.classList.add('cloud-known');
+      }
+    });
+  }catch(e){
+    dbLog(`⚠ Não consegui ler logs da nuvem: ${e.message}`,'info');
+  }
 }
 async function atlasLoadBase(id){
   const d=await atlasOpenDB();
@@ -893,6 +943,7 @@ async function dbProc(file,id){
     const usuarioAtual=(window._atlasUser||document.getElementById('user-name')?.textContent||'—').trim();
     window.ATLAS_DATA[id]={rows,file:file.name,ts:tsNow,count:rows.length,user:usuarioAtual};
     await atlasSaveBase(id, window.ATLAS_DATA[id]);
+    atlasSaveLogCloud(id, window.ATLAS_DATA[id]); // grava log na nuvem (não bloqueante)
     atlasBroadcast(id, window.ATLAS_DATA[id]);
     const sec=((Date.now()-t0)/1000).toFixed(1);
     dbSt(id,'ok',dbFmt(rows.length)+' reg.');
