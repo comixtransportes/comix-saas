@@ -1257,11 +1257,19 @@ renderAll();
    Este bloco NÃO altera fórmulas nem regras de negócio: apenas entrega as linhas
    carregadas no Download Base para o pipeline buildDBFromRaw já existente. */
 var __ATLAS_FINANCEIRO_CARREGADO = false;
+var __ATLAS_FINANCEIRO_FALLBACK = {};
 
 function atlasParentData() {
   try {
     if (!window.parent || window.parent === window) return null;
-    return window.parent.ATLAS_DATA || null;
+    var direct = window.parent.ATLAS_DATA || {};
+    if (__ATLAS_FINANCEIRO_FALLBACK && Object.keys(__ATLAS_FINANCEIRO_FALLBACK).length) {
+      var merged = {};
+      Object.keys(direct || {}).forEach(function(k){ merged[k] = direct[k]; });
+      Object.keys(__ATLAS_FINANCEIRO_FALLBACK).forEach(function(k){ merged[k] = __ATLAS_FINANCEIRO_FALLBACK[k]; });
+      return merged;
+    }
+    return direct;
   } catch(e) {
     console.warn('[Financeiro] sem acesso ao ATLAS_DATA do parent:', e);
     return null;
@@ -1270,6 +1278,16 @@ function atlasParentData() {
 
 function atlasRows(ad, id) {
   return (ad && ad[id] && Array.isArray(ad[id].rows) && ad[id].rows.length) ? ad[id].rows : null;
+}
+
+
+function atlasRequestFinanceiroData() {
+  try {
+    if (!window.parent || window.parent === window) return;
+    ['se1','se2','se5'].forEach(function(id){
+      window.parent.postMessage({ type:'ATLAS_REQUEST_DATA', table:id }, '*');
+    });
+  } catch(e) {}
 }
 
 function atlasUpdateHeader(ad) {
@@ -1328,15 +1346,26 @@ function tryAtlasData() {
 
 /* Ao carregar: se o parent já tem dados (iframe aberto depois do upload), usar imediatamente. */
 (function() {
-  setTimeout(function() { tryAtlasData(); }, 200);
-  setTimeout(function() { if (!__ATLAS_FINANCEIRO_CARREGADO) tryAtlasData(); }, 800);
+  setTimeout(function() { atlasRequestFinanceiroData(); tryAtlasData(); }, 200);
+  setTimeout(function() { if (!__ATLAS_FINANCEIRO_CARREGADO) { atlasRequestFinanceiroData(); tryAtlasData(); } }, 900);
+  setTimeout(function() { if (!__ATLAS_FINANCEIRO_CARREGADO) { atlasRequestFinanceiroData(); tryAtlasData(); } }, 1800);
 })();
 
 /* Receptor de broadcast: acionado quando o usuário carrega arquivo no Download Base. */
 window.addEventListener('message', function(event) {
-  if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
-  var tbl = event.data.table;
+  var data = event.data || {};
+  if (data.type === 'ATLAS_DATA_RESPONSE') {
+    var t = data.table;
+    if ((t === 'se1' || t === 'se2' || t === 'se5') && data.payload && Array.isArray(data.payload.rows)) {
+      __ATLAS_FINANCEIRO_FALLBACK[t] = data.payload;
+      setTimeout(tryAtlasData, 50);
+    }
+    return;
+  }
+  if (data.type !== 'ATLAS_DATA_READY') return;
+  var tbl = data.table;
   if (tbl !== 'se1' && tbl !== 'se2' && tbl !== 'se5') return;
+  atlasRequestFinanceiroData();
   setTimeout(tryAtlasData, 150);
 });
 
