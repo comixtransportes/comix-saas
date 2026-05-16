@@ -1249,113 +1249,77 @@ renderAll();
 })();
 
 /* ══ ATLAS: receptor de dados do Download Base ══
-   Recebe SE1, SE2 e/ou SE5 via postMessage e reconstrói o DB sem alterar nenhuma
-   regra de negócio existente — filtros RA, saldo>0, PMR ponderado, fuzzy SE5 etc. */
-/* ── ATLAS: integração com Download Base do projeto atual ──
-   Padrão do index.html: window.parent.ATLAS_DATA[id] = { rows, file, ts, count, user }
-   e broadcast via postMessage({ type:'ATLAS_DATA_READY', table:id }).
-   Este bloco NÃO altera fórmulas nem regras de negócio: apenas entrega as linhas
-   carregadas no Download Base para o pipeline buildDBFromRaw já existente. */
+   Correção restrita ao carregamento: o Financeiro passa a consumir as mesmas bases
+   distribuídas pelo Download Base, inclusive via postMessage, sem alterar layout,
+   fórmulas, indicadores ou regras analíticas existentes. */
 var __ATLAS_FINANCEIRO_CARREGADO = false;
 var __ATLAS_FINANCEIRO_FALLBACK = {};
 
-function atlasParentData() {
+function atlasGetPayload(id) {
+  id = String(id || '').toLowerCase();
   try {
-    if (!window.parent || window.parent === window) return null;
-    var direct = window.parent.ATLAS_DATA || {};
-    if (__ATLAS_FINANCEIRO_FALLBACK && Object.keys(__ATLAS_FINANCEIRO_FALLBACK).length) {
-      var merged = {};
-      Object.keys(direct || {}).forEach(function(k){ merged[k] = direct[k]; });
-      Object.keys(__ATLAS_FINANCEIRO_FALLBACK).forEach(function(k){ merged[k] = __ATLAS_FINANCEIRO_FALLBACK[k]; });
-      return merged;
-    }
-    return direct;
-  } catch(e) {
-    console.warn('[Financeiro] sem acesso ao ATLAS_DATA do parent:', e);
-    return null;
+    var ad = window.parent && window.parent.ATLAS_DATA;
+    if (ad && ad[id] && Array.isArray(ad[id].rows) && ad[id].rows.length) return ad[id];
+  } catch(e) {}
+  if (__ATLAS_FINANCEIRO_FALLBACK[id] && Array.isArray(__ATLAS_FINANCEIRO_FALLBACK[id].rows) && __ATLAS_FINANCEIRO_FALLBACK[id].rows.length) {
+    return __ATLAS_FINANCEIRO_FALLBACK[id];
   }
+  return null;
 }
-
-function atlasRows(ad, id) {
-  return (ad && ad[id] && Array.isArray(ad[id].rows) && ad[id].rows.length) ? ad[id].rows : null;
-}
-
 
 function atlasRequestFinanceiroData() {
   try {
-    if (!window.parent || window.parent === window) return;
-    ['se1','se2','se5'].forEach(function(id){
-      window.parent.postMessage({ type:'ATLAS_REQUEST_DATA', table:id }, '*');
-    });
-  } catch(e) {}
-}
-
-function atlasUpdateHeader(ad) {
-  try {
-    var refs = ['se1','se2','se5'].map(function(id){ return ad && ad[id] && ad[id].ts; }).filter(Boolean).sort();
-    var ref = DB.summary && DB.summary.hoje ? DB.summary.hoje.split('-').reverse().join('/') : '—';
-    if (refs.length) {
-      var d = new Date(refs[refs.length - 1]);
-      if (!isNaN(d.getTime())) ref = d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+    if (window.parent && window.parent !== window) {
+      ['se1','se2','se5'].forEach(function(id){
+        window.parent.postMessage({ type:'ATLAS_REQUEST_DATA', table:id }, '*');
+      });
     }
-    var hdrRef = document.getElementById('hdr-ref');
-    if (hdrRef) hdrRef.textContent = ref;
-    var hdrCnt = document.getElementById('hdr-cnt');
-    if (hdrCnt) hdrCnt.textContent = ((DB.RT || []).length + (DB.PT || []).length).toLocaleString('pt-BR');
   } catch(e) {}
 }
 
+/* ── tryAtlasData: tenta ler ATLAS_DATA do parent e reconstruir DB ── */
 function tryAtlasData() {
   try {
-    var ad = atlasParentData();
-    if (!ad) return false;
-
-    var se1rows = atlasRows(ad, 'se1');
-    var se2rows = atlasRows(ad, 'se2');
-    var se5rows = atlasRows(ad, 'se5');
-
-    // O financeiro depende principalmente de SE1/SE2. SE5 é complementar.
-    // Se ainda não houver base financeira no Download Base, mantém o DB estático atual.
+    var se1p = atlasGetPayload('se1');
+    var se2p = atlasGetPayload('se2');
+    var se5p = atlasGetPayload('se5');
+    var se1rows = se1p ? se1p.rows : null;
+    var se2rows = se2p ? se2p.rows : null;
+    var se5rows = se5p ? se5p.rows : null;
     if (!se1rows && !se2rows && !se5rows) return false;
 
-    showDl();
-    setDl(20, 'Lendo bases do Download Base...');
     var newDB = buildDBFromRaw(se1rows, se2rows, se5rows);
-    if (!newDB) { hideDl(); return false; }
-
-    setDl(70, 'Integrando dados ao Financeiro...');
+    if (!newDB) return false;
     Object.keys(newDB).forEach(function(k){ DB[k] = newDB[k]; });
+    var novaHoje = new Date(DB.summary.hoje + 'T00:00:00');
+    if (!isNaN(novaHoje.getTime())) HOJE.setTime(novaHoje.getTime());
 
-    if (DB.summary && DB.summary.hoje) {
-      var novaHoje = new Date(DB.summary.hoje + 'T00:00:00');
-      if (!isNaN(novaHoje.getTime())) HOJE.setTime(novaHoje.getTime());
-    }
+    var hdrRef = document.getElementById('hdr-ref');
+    var hdrCnt = document.getElementById('hdr-cnt');
+    if (hdrRef) hdrRef.textContent = DB.summary.hoje.split('-').reverse().join('/');
+    if (hdrCnt) hdrCnt.textContent = ((DB.RT || []).length + (DB.PT || []).length).toLocaleString('pt-BR');
 
-    atlasUpdateHeader(ad);
     renderAll();
-    setDl(100, 'Dados carregados do Download Base ✓');
-    hideDl();
     __ATLAS_FINANCEIRO_CARREGADO = true;
     return true;
   } catch(e) {
     console.warn('[Financeiro] tryAtlasData erro:', e);
-    hideDl();
     return false;
   }
 }
 
-/* Ao carregar: se o parent já tem dados (iframe aberto depois do upload), usar imediatamente. */
+/* Ao carregar: se o parent já tem dados, usa; se não, solicita as bases ao Atlas. */
 (function() {
   setTimeout(function() { atlasRequestFinanceiroData(); tryAtlasData(); }, 200);
   setTimeout(function() { if (!__ATLAS_FINANCEIRO_CARREGADO) { atlasRequestFinanceiroData(); tryAtlasData(); } }, 900);
   setTimeout(function() { if (!__ATLAS_FINANCEIRO_CARREGADO) { atlasRequestFinanceiroData(); tryAtlasData(); } }, 1800);
 })();
 
-/* Receptor de broadcast: acionado quando o usuário carrega arquivo no Download Base. */
+/* Receptor de broadcast/response: acionado pelo Download Base */
 window.addEventListener('message', function(event) {
   var data = event.data || {};
   if (data.type === 'ATLAS_DATA_RESPONSE') {
-    var t = data.table;
+    var t = String(data.table || '').toLowerCase();
     if ((t === 'se1' || t === 'se2' || t === 'se5') && data.payload && Array.isArray(data.payload.rows)) {
       __ATLAS_FINANCEIRO_FALLBACK[t] = data.payload;
       setTimeout(tryAtlasData, 50);
@@ -1363,7 +1327,7 @@ window.addEventListener('message', function(event) {
     return;
   }
   if (data.type !== 'ATLAS_DATA_READY') return;
-  var tbl = data.table;
+  var tbl = String(data.table || '').toLowerCase();
   if (tbl !== 'se1' && tbl !== 'se2' && tbl !== 'se5') return;
   atlasRequestFinanceiroData();
   setTimeout(tryAtlasData, 150);
@@ -1392,8 +1356,18 @@ function buildDBFromRaw(se1rows, se2rows, se5rows) {
     function colNum(row, ...keys) {
       for (var k of keys) {
         var v = row[k];
-        if (v != null) {
-          var n = parseFloat(String(v).replace(/\./g,'').replace(',','.'));
+        if (v != null && v !== '') {
+          // Integração Download Base: quando o XLSM vem pelo Atlas, números podem chegar
+          // como Number. Nesse caso, não aplicar parsing pt-BR para não multiplicar valores.
+          if (typeof v === 'number') return isFinite(v) ? v : 0;
+          var s = String(v).trim();
+          if (!s) continue;
+          var n;
+          if (s.indexOf(',') >= 0) {
+            n = parseFloat(s.replace(/\./g,'').replace(',','.'));
+          } else {
+            n = parseFloat(s.replace(/[^0-9.\-]/g,''));
+          }
           if (!isNaN(n)) return n;
         }
       }
@@ -1401,9 +1375,16 @@ function buildDBFromRaw(se1rows, se2rows, se5rows) {
     }
     function parseDate(v) {
       if (!v) return null;
+      if (typeof v === 'number' && isFinite(v) && v > 40000 && v < 60000) {
+        var dn = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
+        return dn.toISOString().slice(0, 10);
+      }
       var s = String(v).trim();
       // ISO: YYYY-MM-DD ou YYYY-MM-DDTHH...
       if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+      // Protheus: YYYYMMDD
+      var ymd = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+      if (ymd) return ymd[1] + '-' + ymd[2] + '-' + ymd[3];
       // DD/MM/YYYY
       var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
       if (m) return m[3] + '-' + m[2] + '-' + m[1];
@@ -1435,7 +1416,7 @@ function buildDBFromRaw(se1rows, se2rows, se5rows) {
     if (se1rows) {
       se1rows.forEach(function(row) {
         var baixa = colStr(row, 'E1_BAIXA', 'DT Baixa', 'Baixa');
-        if (baixa && baixa.replace(/\D/g,'').length >= 6) return; // título baixado
+        if (baixa && (baixa.replace(/\D/g,'').length >= 6 || parseDate(baixa))) return; // título baixado
 
         var tipo = colStr(row, 'E1_TIPO', 'Tipo', 'Situacao', 'tipo');
         var vcto = parseDate(colStr(row, 'E1_VENCTO', 'Vencimento', 'Vcto', 'vcto'));
