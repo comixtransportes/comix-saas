@@ -2227,16 +2227,27 @@ function addFeriado(){
 // INICIALIZAÇÃO — carrega parâmetros da nuvem ao abrir
 // ═══════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', ()=>{
-  // Carregar parâmetros em background sem bloquear a UI.
+  // Carregar parâmetros em background sem bloquear a UI
   loadParamsFromCloud().catch(()=>{});
 
-  // No Atlas integrado, a fonte correta é o Download Base (window.parent.ATLAS_DATA).
-  // A carga antiga via Cloudflare fica apenas como fallback quando a tela é aberta isoladamente.
+  // Dentro do COMIX Atlas, a origem correta é a Download Base.
+  // Não chama loadDataFromCloud aqui para evitar sobrescrever/competir com o SZB do Atlas.
+  if (window.self !== window.top) {
+    setTimeout(()=>{
+      if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
+      if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
+      if (typeof tryAtlasSZBFromIndexedDB === 'function') tryAtlasSZBFromIndexedDB();
+    }, 150);
+    setTimeout(()=>{
+      if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
+      if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
+    }, 900);
+    return;
+  }
+
+  // Uso isolado do PD: mantém o comportamento antigo.
   setTimeout(async ()=>{
     try {
-      if (typeof tryAtlasSZB === 'function' && tryAtlasSZB()) return;
-      if (window.self !== window.top) return;
-
       const hasData = await loadDataFromCloud();
       if (hasData) {
         const drop = document.getElementById('scr-drop');
@@ -2888,49 +2899,21 @@ function triggerAI() {
   }
 })();
 
-/* ══ ATLAS: receptor de dados do Download Base ══
-   Padrão do index.html: window.parent.ATLAS_DATA.szb = { rows, file, ts, count, user }
-   e broadcast via postMessage({ type:'ATLAS_DATA_READY', table:'szb' }).
-   Este bloco só injeta RAW e aciona o rebuild já existente. Não altera métricas,
-   filtros, fórmulas, regras de análise nem renderizações do PD. */
-var __ATLAS_PD_CARREGADO = false;
-
-function atlasParentSZB() {
-  try {
-    if (!window.parent || window.parent === window) return null;
-    var parentData = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
-    if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return null;
-    return parentData;
-  } catch(e) {
-    console.warn('[PD Diário] sem acesso ao ATLAS_DATA do parent:', e);
-    return null;
-  }
-}
-
+/* ══ ATLAS: receptor de dados do Download Base ══ */
 function tryAtlasSZB() {
   try {
-    var parentData = atlasParentSZB();
-    if (!parentData) return false;
+    var parentData = window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
+    if (!parentData || !parentData.rows || !parentData.rows.length) return false;
 
     RAW = parentData.rows;
     DATA = [];
-    AI_CACHE = null;
-    __ATLAS_PD_CARREGADO = true;
 
     var dzH = document.getElementById('dz-h');
-    if (dzH) dzH.textContent = '✓ Download Base — ' + RAW.length.toLocaleString('pt-BR') + ' registros';
+    if (dzH) dzH.textContent = '✓ Download Base — ' + RAW.length + ' registros';
     var dz = document.getElementById('dz');
     if (dz) dz.classList.add('ok');
     var btnGo = document.getElementById('btn-go');
     if (btnGo) btnGo.disabled = false;
-    var sync = document.getElementById('h-sync');
-    if (sync) {
-      var ts = parentData.ts ? new Date(parentData.ts) : null;
-      sync.textContent = ts && !isNaN(ts.getTime())
-        ? '✓ Download Base — ' + ts.toLocaleDateString('pt-BR') + ' ' + ts.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})
-        : '✓ Dados carregados do Download Base';
-      sync.className = 'hm-sync ok';
-    }
 
     buildDash();
     setTimeout(triggerAI, 800);
@@ -2941,18 +2924,201 @@ function tryAtlasSZB() {
   }
 }
 
-/* Ao carregar: se o parent já tem SZB (iframe aberto depois do upload), usar imediatamente. */
-(function() {
-  setTimeout(function() { tryAtlasSZB(); }, 200);
-  setTimeout(function() { if (!__ATLAS_PD_CARREGADO) tryAtlasSZB(); }, 800);
-})();
+/* Ao carregar: se o parent já tem SZB (iframe aberto depois do upload) */
+(function() { setTimeout(function() { tryAtlasSZB(); }, 200); })();
 
-/* Broadcast: acionado quando o usuário carrega SZB no Download Base. */
+/* Broadcast: acionado quando o usuário carrega SZB no Download Base */
 window.addEventListener('message', function(event) {
   if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
   if (event.data.table !== 'szb') return;
   setTimeout(tryAtlasSZB, 150);
 });
 </script>
+
+<script>
+/* COMIX Atlas — Integração PD Diário x Download Base
+   Este bloco replica o caminho efetivo do botão "Trocar arquivo": recebe as linhas do SZB,
+   normaliza somente tipos/data e chama fullRebuild() nos mesmos arrays RAW/DATA já usados pelo PD.
+   Não altera fórmulas, cálculos, regras de análise nem renderizações. */
+(function() {
+  if (window.self !== window.top) {
+    var st = document.createElement('style');
+    st.textContent = '.hdr { display: none !important; }';
+    document.head.appendChild(st);
+  }
+})();
+
+var __ATLAS_PD_CARREGADO = false;
+var __ATLAS_PD_ORIGEM = '';
+
+function atlasExcelDateToISO(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+  if (typeof v === 'number' && isFinite(v)) {
+    var d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
+    return d.toISOString().slice(0, 10);
+  }
+  var s = String(v).trim();
+  if (!s) return '';
+  var iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[0];
+  var br = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (br) {
+    var ano = br[3].length === 2 ? '20' + br[3] : br[3];
+    return ano + '-' + String(br[2]).padStart(2, '0') + '-' + String(br[1]).padStart(2, '0');
+  }
+  return s.slice(0, 10);
+}
+
+function normalizeAtlasSZBRows(rows) {
+  var dateCols = new Set(['Dt. Emissao', 'Dt Cancel']);
+  return (rows || []).map(function(row) {
+    var out = {};
+    Object.keys(row || {}).forEach(function(k) {
+      var key = String(k).replace(/\s+/g, ' ').trim();
+      if (!key) return;
+      var v = row[k];
+      if (dateCols.has(key)) out[key] = atlasExcelDateToISO(v);
+      else if (v === null || v === undefined) out[key] = '';
+      else out[key] = String(v);
+    });
+    return out;
+  }).filter(function(r) {
+    return Object.values(r).some(function(v) { return v !== '' && v !== null && v !== undefined; });
+  });
+}
+
+function atlasParentSZB() {
+  try {
+    if (!window.parent || window.parent === window) return null;
+    var d = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
+    if (d && Array.isArray(d.rows) && d.rows.length) return d;
+  } catch(e) {}
+  return null;
+}
+
+function setAtlasSyncMsg(txt, ok) {
+  var sync = document.getElementById('h-sync');
+  if (sync) { sync.textContent = txt; sync.className = ok ? 'hm-sync ok' : 'hm-sync'; }
+}
+
+function applyAtlasSZB(parentData, origem) {
+  if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
+  var rows = normalizeAtlasSZBRows(parentData.rows);
+  if (!rows.length) return false;
+
+  // Mesmo contrato usado após parseXLSM(file): RAW recebe registros; DATA é recriado por fullRebuild/enrich.
+  RAW = rows;
+  DATA = [];
+  AI_CACHE = null;
+  __ATLAS_PD_CARREGADO = true;
+  __ATLAS_PD_ORIGEM = origem || 'Download Base';
+
+  var dzH = document.getElementById('dz-h');
+  if (dzH) dzH.textContent = '✓ ' + __ATLAS_PD_ORIGEM + ' — ' + RAW.length.toLocaleString('pt-BR') + ' registros';
+  var dz = document.getElementById('dz');
+  if (dz) dz.classList.add('ok');
+  var btnGo = document.getElementById('btn-go');
+  if (btnGo) btnGo.disabled = false;
+
+  var drop = document.getElementById('scr-drop');
+  var main = document.getElementById('scr-main');
+  if (drop) drop.style.display = 'none';
+  if (main) main.style.display = 'flex';
+
+  var ts = parentData.ts ? new Date(parentData.ts) : null;
+  setAtlasSyncMsg(ts && !isNaN(ts.getTime())
+    ? '✓ Download Base — ' + ts.toLocaleDateString('pt-BR') + ' ' + ts.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})
+    : '✓ Dados carregados do Download Base', true);
+
+  fullRebuild();
+  setTimeout(triggerAI, 800);
+  return true;
+}
+
+function tryAtlasSZB() {
+  try { return applyAtlasSZB(atlasParentSZB(), 'Download Base'); }
+  catch(e) { console.warn('[PD Diário] tryAtlasSZB erro:', e); return false; }
+}
+
+function requestAtlasSZB() {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szb'}, '*');
+      setAtlasSyncMsg('Aguardando SZB da Download Base…', false);
+    }
+  } catch(e) {}
+}
+
+function atlasOpenDB() {
+  return new Promise(function(resolve, reject) {
+    if (!('indexedDB' in window)) return reject(new Error('IndexedDB indisponível'));
+    var req = indexedDB.open('COMIX_ATLAS_BASES', 1);
+    req.onupgradeneeded = function() {
+      var db = req.result;
+      if (!db.objectStoreNames.contains('bases')) db.createObjectStore('bases', {keyPath:'id'});
+    };
+    req.onsuccess = function() { resolve(req.result); };
+    req.onerror = function() { reject(req.error || new Error('Erro IndexedDB')); };
+  });
+}
+
+async function atlasLoadBase(id) {
+  var db = await atlasOpenDB();
+  return await new Promise(function(resolve, reject) {
+    var tx = db.transaction('bases', 'readonly');
+    var st = tx.objectStore('bases');
+    var rq = st.get(id);
+    rq.onsuccess = function() { resolve(rq.result && rq.result.payload ? rq.result.payload : null); };
+    rq.onerror = function() { reject(rq.error); };
+  });
+}
+
+async function tryAtlasSZBFromIndexedDB() {
+  if (__ATLAS_PD_CARREGADO) return true;
+  try {
+    var payload = await atlasLoadBase('szb');
+    if (payload && Array.isArray(payload.rows) && payload.rows.length) {
+      return applyAtlasSZB(payload, 'Download Base local');
+    }
+  } catch(e) {}
+  return false;
+}
+
+window.addEventListener('message', function(event) {
+  var d = event.data || {};
+  if (d.table && d.table !== 'szb') return;
+  if (d.type === 'ATLAS_DATA_RESPONSE' && d.payload) {
+    applyAtlasSZB(d.payload, 'Download Base');
+    return;
+  }
+  if (d.type === 'ATLAS_DATA_READY') {
+    setTimeout(function() {
+      if (!tryAtlasSZB()) {
+        requestAtlasSZB();
+        tryAtlasSZBFromIndexedDB();
+      }
+    }, 80);
+  }
+});
+
+(function bootAtlasSZB() {
+  setTimeout(function() {
+    if (!tryAtlasSZB()) {
+      requestAtlasSZB();
+      tryAtlasSZBFromIndexedDB();
+    }
+  }, 100);
+  setTimeout(function() {
+    if (!__ATLAS_PD_CARREGADO) {
+      if (!tryAtlasSZB()) {
+        requestAtlasSZB();
+        tryAtlasSZBFromIndexedDB();
+      }
+    }
+  }, 900);
+})();
+</script>
+
 </body>
 </html>
