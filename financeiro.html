@@ -219,8 +219,9 @@ table.dt td.nm{max-width:200px;overflow:hidden;text-overflow:ellipsis;}
   <div class="dl-text" id="dl-text">Carregando...</div>
 </div>
 
-<!-- BARRA DE PARÂMETROS (estilo PD diário) -->
+<!-- BARRA DE PARÂMETROS -->
 <div class="params-bar">
+  <div class="params-spacer"></div>
   <button class="btn-param" onclick="togglePar()">⚙ Parâmetros</button>
   <select class="sel-param" id="par-periodo">
     <option value="todos">Todos os períodos</option>
@@ -232,8 +233,6 @@ table.dt td.nm{max-width:200px;overflow:hidden;text-overflow:ellipsis;}
   <select class="sel-param" id="par-fil">
     <option value="">Todas</option>
   </select>
-  <div class="params-spacer"></div>
-  <button class="btn-param primary" onclick="simulaReload()">↻ Recarregar</button>
 </div>
 
 <!-- TABS -->
@@ -1252,40 +1251,42 @@ renderAll();
 /* ══ ATLAS: receptor de dados do Download Base ══
    Recebe SE1, SE2 e/ou SE5 via postMessage e reconstrói o DB sem alterar nenhuma
    regra de negócio existente — filtros RA, saldo>0, PMR ponderado, fuzzy SE5 etc. */
+/* ── tryAtlasData: tenta ler ATLAS_DATA do parent e reconstruir DB ── */
+function tryAtlasData() {
+  try {
+    var ad = window.parent && window.parent.ATLAS_DATA;
+    if (!ad) return false;
+    var se1rows = (ad.se1 && ad.se1.rows && ad.se1.rows.length) ? ad.se1.rows : null;
+    var se2rows = (ad.se2 && ad.se2.rows && ad.se2.rows.length) ? ad.se2.rows : null;
+    var se5rows = (ad.se5 && ad.se5.rows && ad.se5.rows.length) ? ad.se5.rows : null;
+    if (!se1rows && !se2rows) return false;
+    var newDB = buildDBFromRaw(se1rows, se2rows, se5rows);
+    if (!newDB) return false;
+    Object.keys(newDB).forEach(function(k){ DB[k] = newDB[k]; });
+    var novaHoje = new Date(DB.summary.hoje + 'T00:00:00');
+    HOJE.setTime(novaHoje.getTime());
+    document.getElementById('hdr-ref').textContent = DB.summary.hoje.split('-').reverse().join('/');
+    document.getElementById('hdr-cnt').textContent = (DB.RT.length + DB.PT.length).toLocaleString('pt-BR');
+    renderAll();
+    return true;
+  } catch(e) {
+    console.warn('[Financeiro] tryAtlasData erro:', e);
+    return false;
+  }
+}
+
+/* Ao carregar: se o parent já tem dados (iframe aberto depois do upload), usar imediatamente */
+(function() {
+  setTimeout(function() { tryAtlasData(); }, 200);
+})();
+
+/* Receptor de broadcast: acionado quando o usuário carrega arquivo no Download Base */
 window.addEventListener('message', function(event) {
   if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
   var tbl = event.data.table;
   if (tbl !== 'se1' && tbl !== 'se2' && tbl !== 'se5') return;
-
-  // Aguardar brevemente para garantir que o parent terminou de gravar todos dados
-  setTimeout(function() {
-    try {
-      var ad = window.parent && window.parent.ATLAS_DATA;
-      if (!ad) return;
-
-      // Só reprocessa se tiver ao menos SE1 ou SE2 carregado
-      var se1rows = (ad.se1 && ad.se1.rows) ? ad.se1.rows : null;
-      var se2rows = (ad.se2 && ad.se2.rows) ? ad.se2.rows : null;
-      var se5rows = (ad.se5 && ad.se5.rows) ? ad.se5.rows : null;
-
-      if (!se1rows && !se2rows) return; // nada suficiente ainda
-
-      var newDB = buildDBFromRaw(se1rows, se2rows, se5rows);
-      if (!newDB) return;
-
-      // Substituir DB global e re-renderizar
-      Object.keys(newDB).forEach(function(k){ DB[k] = newDB[k]; });
-      // Atualizar constante HOJE
-      var novaHoje = new Date(DB.summary.hoje + 'T00:00:00');
-      HOJE.setTime(novaHoje.getTime());
-      // Atualizar header
-      document.getElementById('hdr-ref').textContent = DB.summary.hoje.split('-').reverse().join('/');
-      document.getElementById('hdr-cnt').textContent = (DB.RT.length + DB.PT.length).toLocaleString('pt-BR');
-      renderAll();
-    } catch(e) {
-      console.warn('[Financeiro] Erro ao processar dados do Download Base:', e);
-    }
-  }, 100);
+  // Aguarda 150ms para garantir que o parent gravou o objeto ATLAS_DATA
+  setTimeout(tryAtlasData, 150);
 });
 
 /* ── Pipeline de processamento: raw rows → estrutura DB ──
