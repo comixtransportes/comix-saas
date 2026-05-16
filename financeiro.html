@@ -1345,247 +1345,253 @@ function buildDBFromRaw(se1rows, se2rows, se5rows) {
     var hoje = new Date();
     var hojeStr = hoje.toISOString().slice(0, 10);
 
-    // ─── Helpers ───────────────────────────────────────────────
-    function colStr(row, ...keys) {
-      for (var k of keys) {
-        var v = row[k];
-        if (v != null && String(v).trim() !== '') return String(v).trim();
+    // ─── Helpers de leitura: somente tradução dos dados das planilhas ───
+    function normKey(k) {
+      return String(k == null ? '' : k)
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]/g, '')
+        .toUpperCase();
+    }
+    function getVal(row) {
+      if (!row) return '';
+      var keys = Array.prototype.slice.call(arguments, 1);
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (Object.prototype.hasOwnProperty.call(row, k) && row[k] != null && String(row[k]).trim() !== '') return row[k];
+      }
+      if (!row.__atlasKeyMap) {
+        Object.defineProperty(row, '__atlasKeyMap', {
+          value: Object.keys(row).reduce(function(acc, k) { acc[normKey(k)] = k; return acc; }, {}),
+          enumerable: false
+        });
+      }
+      for (var j = 0; j < keys.length; j++) {
+        var nk = normKey(keys[j]);
+        var real = row.__atlasKeyMap[nk];
+        if (real && row[real] != null && String(row[real]).trim() !== '') return row[real];
       }
       return '';
     }
-    function colNum(row, ...keys) {
-      for (var k of keys) {
-        var v = row[k];
-        if (v != null && v !== '') {
-          // Integração Download Base: quando o XLSM vem pelo Atlas, números podem chegar
-          // como Number. Nesse caso, não aplicar parsing pt-BR para não multiplicar valores.
-          if (typeof v === 'number') return isFinite(v) ? v : 0;
-          var s = String(v).trim();
-          if (!s) continue;
-          var n;
-          if (s.indexOf(',') >= 0) {
-            n = parseFloat(s.replace(/\./g,'').replace(',','.'));
-          } else {
-            n = parseFloat(s.replace(/[^0-9.\-]/g,''));
-          }
-          if (!isNaN(n)) return n;
-        }
-      }
-      return 0;
+    function asText(v) {
+      return String(v == null ? '' : v).trim();
+    }
+    function asNumber(v) {
+      if (v == null || v === '') return 0;
+      if (typeof v === 'number') return isFinite(v) ? v : 0;
+      var s = String(v).trim();
+      if (!s) return 0;
+      s = s.replace(/R\$|\s/g, '');
+      var hasComma = s.indexOf(',') >= 0;
+      var hasDot = s.indexOf('.') >= 0;
+      var n;
+      if (hasComma && hasDot) n = parseFloat(s.replace(/\./g, '').replace(',', '.'));
+      else if (hasComma) n = parseFloat(s.replace(',', '.'));
+      else n = parseFloat(s.replace(/[^0-9.\-]/g, ''));
+      return isNaN(n) ? 0 : n;
     }
     function parseDate(v) {
       if (!v) return null;
-      if (typeof v === 'number' && isFinite(v) && v > 40000 && v < 60000) {
+      if (v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0, 10);
+      if (typeof v === 'number' && isFinite(v) && v > 25000 && v < 80000) {
         var dn = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 86400000);
         return dn.toISOString().slice(0, 10);
       }
       var s = String(v).trim();
-      // ISO: YYYY-MM-DD ou YYYY-MM-DDTHH...
+      if (!s || /^0+$/.test(s)) return null;
       if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-      // Protheus: YYYYMMDD
       var ymd = s.match(/^(\d{4})(\d{2})(\d{2})$/);
       if (ymd) return ymd[1] + '-' + ymd[2] + '-' + ymd[3];
-      // DD/MM/YYYY
-      var m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-      if (m) return m[3] + '-' + m[2] + '-' + m[1];
-      // Excel serial
+      var br = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (br) return br[3] + '-' + br[2].padStart(2, '0') + '-' + br[1].padStart(2, '0');
       var n = parseFloat(s);
-      if (!isNaN(n) && n > 40000 && n < 60000) {
+      if (!isNaN(n) && n > 25000 && n < 80000) {
         var d = new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000);
         return d.toISOString().slice(0, 10);
       }
       return null;
     }
     function diffDays(a, b) {
-      // dias de a até b (b - a)
-      return Math.round((new Date(b) - new Date(a)) / 86400000);
+      return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
     }
-    function filStr(row) {
-      var f = colStr(row, 'E1_FILIAL', 'FILIAL', 'Filial', 'filial', 'E2_FILIAL');
-      if (f === '17' || f === '17 ') return 'SC';
-      if (f === '18' || f === '18 ') return 'PR';
-      if (f === '3'  || f === '03' || f === '3 ') return 'SP';
+    function filialCodigo(row, prefix) {
+      var f = asText(getVal(row, (prefix || '') + '_FILIAL', 'Filial', 'FILIAL', 'filial'));
+      return f.padStart(2, '0');
+    }
+    function filialNomeFromCod(f) {
+      f = asText(f).padStart(2, '0');
+      if (f === '17') return 'SC';
+      if (f === '18') return 'PR';
+      if (f === '03') return 'SP';
       return f || '—';
     }
-
-    // ─── SE1 → RT + clientes ──────────────────────────────────
-    var RT = [];
-    var cliMap = {}; // cod → objeto cliente
-    var raCredits = {}; // codcli → soma RA
-
-    if (se1rows) {
-      se1rows.forEach(function(row) {
-        var baixa = colStr(row, 'E1_BAIXA', 'DT Baixa', 'Baixa');
-        if (baixa && (baixa.replace(/\D/g,'').length >= 6 || parseDate(baixa))) return; // título baixado
-
-        var tipo = colStr(row, 'E1_TIPO', 'Tipo', 'Situacao', 'tipo');
-        var vcto = parseDate(colStr(row, 'E1_VENCTO', 'Vencimento', 'Vcto', 'vcto'));
-        var emis = parseDate(colStr(row, 'E1_EMISSAO', 'DT Emissao', 'Emissao'));
-        var valor = colNum(row, 'E1_VALOR', 'Vlr.Titulo', 'Valor');
-        var cod = colStr(row, 'E1_CLIENTE', 'Cliente', 'Cod.Cliente').replace(/\s/g,'');
-        var nome = colStr(row, 'A1_NOME', 'Nome', 'Cliente Nome');
-        var fant = colStr(row, 'A1_NREDUZ', 'Nome Fantasia', 'Fantasia');
-        var fil = filStr(row);
-        var cond = colStr(row, 'E1_COND', 'Cond.Pagto', 'condicao');
-
-        if (!vcto || !valor) return;
-
-        // RA → crédito, não entra no RT
-        if (tipo === 'RA') {
-          if (cod) raCredits[cod] = (raCredits[cod] || 0) + valor;
-          return;
-        }
-
-        // Apenas NF / NFV / (vazio = tratar como NF)
-        if (tipo && tipo !== 'NF' && tipo !== 'NFV') return;
-
-        RT.push([vcto, emis || hojeStr, valor, fil, cod]);
-
-        // Acumular por cliente
-        if (!cliMap[cod]) {
-          cliMap[cod] = {
-            cod: cod, n: nome || cod, fant: fant || nome || cod,
-            f: fil, fil: fil, qtd: 0, v: 0, venc: 0, cred: 0,
-            cond_cod: cond, cond_desc: cond, prazo_c: 0, pmr: 0,
-            atraso_medio: 0, desvio: 0, tem_desvio: false, pct_venc: 0,
-            qtd_baixas_6m: 0, valor_baixado_6m: 0, tipo: '', risco_cad: 'Risco A',
-            _vencidas: 0, _vctos: []
-          };
-        }
-        var cli = cliMap[cod];
-        if (!nome && nome !== '') { /* skip update */ } else { cli.n = cli.n || nome; }
-        cli.qtd++;
-        cli.v += valor;
-        var d = diffDays(hojeStr, vcto);
-        if (d < 0) cli._vencidas += valor;
-        cli._vctos.push(vcto);
-      });
+    function temBaixa(v) {
+      var s = asText(v);
+      if (!s || /^0+$/.test(s)) return false;
+      return !!parseDate(s) || s.replace(/\D/g, '').length >= 6;
+    }
+    function tipoTitulo(v) {
+      return asText(v).toUpperCase();
+    }
+    function nomeNormalizado(s) {
+      return asText(s).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9]/g, '');
     }
 
-    // Aplicar créditos RA
+    // ─── SE1: carteira aberta de contas a receber ───
+    var RT = [];
+    var cliMap = {};
+    var raCredits = {};
+    var prazoPesado = 0;
+    var valorPrazo = 0;
+
+    (se1rows || []).forEach(function(row) {
+      var baixa = getVal(row, 'E1_BAIXA', 'DT Baixa', 'DT Baixa    ', 'Baixa');
+      if (temBaixa(baixa)) return;
+
+      var tipo = tipoTitulo(getVal(row, 'E1_TIPO', 'Tipo', 'Tipo        ', 'Situacao'));
+      var vcto = parseDate(getVal(row, 'E1_VENCTO', 'Vencimento', 'Vencimento  ', 'Vencto real', 'Vencto real '));
+      var emis = parseDate(getVal(row, 'E1_EMISSAO', 'DT Emissao', 'DT Emissao  ', 'Emissao'));
+      var valor = asNumber(getVal(row, 'E1_VALOR', 'Vlr.Titulo', 'Vlr.Titulo  ', 'Valor', 'Vlr R$', 'Vlr R$      '));
+      var cod = asText(getVal(row, 'E1_CLIENTE', 'Cliente', 'Cliente     ', 'Cod.Cliente')).replace(/\s/g, '');
+      var nome = asText(getVal(row, 'A1_NOME', 'Nome Cliente', 'Nome Cliente', 'Nome', 'Cliente Nome')) || cod;
+      var fant = asText(getVal(row, 'A1_NREDUZ', 'Nome Fantasia', 'Fantasia')) || nome;
+      var filCod = filialCodigo(row, 'E1');
+      var fil = filialNomeFromCod(filCod);
+      var cond = asText(getVal(row, 'E1_COND', 'Cond.Pagto', 'Cond. Pagto', 'Cond Pagto'));
+
+      if (!vcto || !valor) return;
+
+      if (tipo === 'RA') {
+        if (cod) raCredits[cod] = (raCredits[cod] || 0) + valor;
+        return;
+      }
+      if (tipo && tipo !== 'NF' && tipo !== 'NFV') return;
+
+      RT.push([vcto, emis || hojeStr, valor, fil, cod]);
+      if (emis) {
+        var prazo = Math.max(0, diffDays(emis, vcto));
+        prazoPesado += prazo * valor;
+        valorPrazo += valor;
+      }
+
+      if (!cliMap[cod]) {
+        cliMap[cod] = {
+          cod: cod, n: nome, fant: fant, f: fil, fil: filCod || fil, qtd: 0, v: 0, venc: 0, cred: 0,
+          cond_cod: cond, cond_desc: cond, prazo_c: 0, pmr: 0, atraso_medio: 0, desvio: 0, tem_desvio: false,
+          pct_venc: 0, qtd_baixas_6m: 0, valor_baixado_6m: 0, tipo: '', risco_cad: 'Risco A',
+          _vencidas: 0, _diasVenc: 0, _diasQtd: 0, _nomeKey: nomeNormalizado(nome)
+        };
+      }
+      var cli = cliMap[cod];
+      if ((!cli.n || cli.n === cod) && nome) cli.n = nome;
+      if ((!cli.fant || cli.fant === cod) && fant) cli.fant = fant;
+      cli.qtd++;
+      cli.v += valor;
+      var dias = diffDays(hojeStr, vcto);
+      if (dias < 0) {
+        cli._vencidas += valor;
+        cli._diasVenc += Math.abs(dias);
+        cli._diasQtd++;
+      }
+    });
+
     Object.keys(raCredits).forEach(function(cod) {
       if (cliMap[cod]) cliMap[cod].cred = raCredits[cod];
     });
 
-    // Calcular pct_venc por cliente
     Object.values(cliMap).forEach(function(c) {
       c.venc = c._vencidas;
       c.pct_venc = c.v > 0 ? Math.round(c._vencidas / c.v * 1000) / 10 : 0;
-      delete c._vencidas; delete c._vctos;
+      c.atraso_medio = c._diasQtd ? Math.round(c._diasVenc / c._diasQtd) : 0;
+      delete c._vencidas; delete c._diasVenc; delete c._diasQtd;
     });
 
     var clientes = Object.values(cliMap);
     var rec_total = RT.reduce(function(s, r) { return s + r[2]; }, 0);
     var rec_credito = Object.values(raCredits).reduce(function(s, v) { return s + v; }, 0);
     var rec_liquido = rec_total - rec_credito;
+    var emissoes = RT.map(function(r){ return r[1]; }).filter(Boolean).sort();
+    var venctos = RT.map(function(r){ return r[0]; }).filter(Boolean).sort();
 
-    // PMR global ponderado pelo valor_baixado_6m (aproximado com dados disponíveis)
-    // Sem SE5, usamos 0 pois PMR real depende de SE5 para histórico de baixas
-    var pmr_global = 0;
-
-    // Datas mín/máx
-    var emissoes = RT.map(function(r){return r[1];}).filter(Boolean).sort();
-    var venctos = RT.map(function(r){return r[0];}).filter(Boolean).sort();
-
-    // ─── SE2 → PT ─────────────────────────────────────────────
+    // ─── SE2: contas a pagar abertas ───
     var PT = [];
-    // Mapeamento de fornecedor → categoria (por palavra-chave no nome)
-    var CATEGORIA_KEYWORDS = {
-      folha: ['FOLHA','SALARIO','FERIAS','13','RESCISAO','INSS','FGTS','IRRF','SINDICATO'],
-      imposto: ['IMPOSTO','RECEITA','SEFAZ','ICMS','ISS','COFINS','PIS','CSLL','IRPJ','IOF',
-                'TAXA','TRIBUTO','DPVAT','MULTA','DETRAN','DENATRAN','SEGURO','FIDC',
-                'RANDON','BARIGUI','CODEMA','DICAVE','METALESP','ECONSIGNA','ATLANTA',
-                'VIP CAR','GREEN MIX','AKAD','SURA','SEGUROS']
-    };
-    function categorizarForn(nome) {
-      var n = (nome || '').toUpperCase();
-      for (var k of CATEGORIA_KEYWORDS.folha) { if (n.includes(k)) return 'folha'; }
-      for (var k of CATEGORIA_KEYWORDS.imposto) { if (n.includes(k)) return 'imposto'; }
+    function categorizar(row, nome) {
+      var nat = asText(getVal(row, 'E2_NATUREZ', 'Natureza', 'Natureza    ', 'Categoria')).toUpperCase();
+      var n = (nat + ' ' + asText(nome)).toUpperCase();
+      if (/FOLHA|SALARIO|FERIAS|RESCISAO|FGTS|INSS|IRRF|SINDICATO/.test(n)) return 'folha';
+      if (/IMPOSTO|RECEITA|SEFAZ|ICMS|ISS|COFINS|PIS|CSLL|IRPJ|IOF|TAXA|TRIBUTO|MULTA|DETRAN|SEGURO|FIDC|RANDON|BARIGUI|CODEMA|DICAVE|METALESP|ECONSIGNA|ATLANTA/.test(n)) return 'imposto';
+      if (/^9/.test(nat) || /ADIANT|COMPENS/.test(n)) return 'outros';
       return 'operacional';
     }
 
-    if (se2rows) {
-      se2rows.forEach(function(row) {
-        // Filtro: saldo > 0
-        var saldo = colNum(row, 'E2_SALDO', 'Saldo', 'E2_VALOR', 'Vlr.Titulo');
-        if (saldo <= 0) return;
-
-        var vcto = parseDate(colStr(row, 'E2_VENCTO', 'Vencimento', 'Vcto'));
-        var emis = parseDate(colStr(row, 'E2_EMISSAO', 'DT Emissao', 'Emissao'));
-        var forn = colStr(row, 'A2_NOME', 'Fornecedor', 'Nome Fornecedor', 'E2_NOMFOR');
-        var fil = filStr(row);
-
-        if (!vcto) return;
-
-        // Categoria
-        var catRaw = colStr(row, 'E2_NATUREZ', 'Natureza', 'Categoria');
-        var cat = categorizarForn(catRaw || forn);
-
-        PT.push([vcto, emis || hojeStr, saldo, fil, cat, forn]);
-      });
-    }
-
+    (se2rows || []).forEach(function(row) {
+      var saldo = asNumber(getVal(row, 'E2_SALDO', 'Saldo', 'Saldo       '));
+      if (saldo <= 0) return;
+      var vcto = parseDate(getVal(row, 'E2_VENCTO', 'Vencimento', 'Vencimento  ', 'Vencto Real', 'Vencto Real '));
+      var emis = parseDate(getVal(row, 'E2_EMISSAO', 'DT Emissao', 'DT Emissao  ', 'Emissao'));
+      var forn = asText(getVal(row, 'A2_NOME', 'Nome Fornece', 'Nome Fornece', 'Fornecedor', 'Fornecedor  ', 'E2_NOMFOR'));
+      var fil = filialNomeFromCod(filialCodigo(row, 'E2'));
+      if (!vcto) return;
+      PT.push([vcto, emis || hojeStr, saldo, fil, categorizar(row, forn), forn]);
+    });
     var pag_total = PT.reduce(function(s, p) { return s + p[2]; }, 0);
 
-    // ─── SE5 → se5_mensal ─────────────────────────────────────
+    // ─── SE5: somente recebimentos bancários, não todo movimento de banco ───
     var se5_mensal = {};
-    var se5_total = 0;
-    var se5_meses = 0;
-
-    if (se5rows) {
-      se5rows.forEach(function(row) {
-        var dt = parseDate(colStr(row, 'E5_DATA', 'DT Movimen', 'Data', 'dt'));
-        var val = colNum(row, 'E5_VALOR', 'Vlr.Movim.', 'Valor');
-        if (!dt || val <= 0) return;
-        var mes = dt.slice(0, 7);
-        se5_mensal[mes] = (se5_mensal[mes] || 0) + val;
-      });
-      se5_total = Object.values(se5_mensal).reduce(function(s, v) { return s + v; }, 0);
-      se5_meses = Object.keys(se5_mensal).length;
-    } else {
-      // Preservar se5_mensal existente do DB estático
-      se5_mensal = DB.summary.se5_mensal;
-      se5_total = DB.summary.se5_total;
-      se5_meses = DB.summary.se5_meses;
+    function isRecebimento(row) {
+      var hist = asText(getVal(row, 'Historico', 'Historico   ')).toUpperCase();
+      var op = asText(getVal(row, 'Oper Financ', 'Oper Financ '));
+      var nat = asText(getVal(row, 'Natureza', 'Natureza    '));
+      if (/CANCEL/.test(hist)) return false;
+      if (/RECEB/.test(hist)) return true;
+      if (op === '03') return true;
+      // Natureza 11xx é receita, mas sozinha é ampla demais; entra apenas como apoio quando o histórico não aponta pagamento.
+      if (/^11/.test(nat) && !/PAGO|PGTO|PAGAMENTO/.test(hist)) return true;
+      return false;
     }
 
-    // PMR global via se5 + se1: prazo médio ponderado pelo volume recebido
-    // (simplificado: média dos prazos dos clientes com baixas)
-    // Mantém 0 se não há informação suficiente — não distorce dados
-    if (se5rows && se5rows.length) {
-      // PMR simples: dias entre emissão e data pagamento (via SE5 não correlacionável diretamente)
-      // Usamos a aproximação do DB original: 32 dias fixo como fallback
-      pmr_global = DB.summary.pmr_global || 32;
-    }
+    (se5rows || []).forEach(function(row) {
+      var dt = parseDate(getVal(row, 'E5_DATA', 'DT Movimen', 'DT Movimen  ', 'Data', 'dt'));
+      var val = asNumber(getVal(row, 'E5_VALOR', 'Vlr.Movim.', 'Vlr.Movim.  ', 'Valor'));
+      if (!dt || val <= 0 || !isRecebimento(row)) return;
+      var mes = dt.slice(0, 7);
+      se5_mensal[mes] = (se5_mensal[mes] || 0) + val;
+    });
+    if (!Object.keys(se5_mensal).length) se5_mensal = DB.summary.se5_mensal || {};
+    var se5_total = Object.values(se5_mensal).reduce(function(s, v) { return s + v; }, 0);
+    var se5_meses = Object.keys(se5_mensal).length;
 
-    // ─── Summary ───────────────────────────────────────────────
-    var summary = {
-      hoje: hojeStr,
-      rec_total: rec_total,
-      rec_qtd: RT.length,
-      rec_credito: rec_credito,
-      rec_liquido: rec_liquido,
-      rec_emit_min: emissoes[0] || hojeStr,
-      rec_emit_max: emissoes[emissoes.length - 1] || hojeStr,
-      rec_vcto_min: venctos[0] || hojeStr,
-      rec_vcto_max: venctos[venctos.length - 1] || hojeStr,
-      pag_total: pag_total,
-      pag_qtd: PT.length,
-      pmr_global: pmr_global,
-      prazo_c_global: DB.summary.prazo_c_global || 0,
-      se5_total: se5_total,
-      se5_meses: se5_meses,
-      se5_mensal: se5_mensal,
-      cli_qtd: clientes.length
+    var pmr_global = (DB.summary && DB.summary.pmr_global) || (valorPrazo ? Math.round(prazoPesado / valorPrazo) : 0);
+
+    return {
+      summary: {
+        hoje: hojeStr,
+        rec_total: rec_total,
+        rec_qtd: RT.length,
+        rec_credito: rec_credito,
+        rec_liquido: rec_liquido,
+        rec_emit_min: emissoes[0] || hojeStr,
+        rec_emit_max: emissoes[emissoes.length - 1] || hojeStr,
+        rec_vcto_min: venctos[0] || hojeStr,
+        rec_vcto_max: venctos[venctos.length - 1] || hojeStr,
+        pag_total: pag_total,
+        pag_qtd: PT.length,
+        pmr_global: pmr_global,
+        prazo_c_global: (DB.summary && DB.summary.prazo_c_global) || 0,
+        se5_total: se5_total,
+        se5_meses: se5_meses,
+        se5_mensal: se5_mensal,
+        cli_qtd: clientes.length
+      },
+      clientes: clientes,
+      RT: RT,
+      PT: PT
     };
-
-    return { summary: summary, clientes: clientes, RT: RT, PT: PT };
-
   } catch(e) {
     console.error('[Financeiro] buildDBFromRaw falhou:', e);
     return null;
   }
 }
+
 </script>
 </body>
 </html>
