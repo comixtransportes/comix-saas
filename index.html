@@ -676,6 +676,135 @@ async function atlasSaveBase(id,payload){
     });
   }catch(e){dbLog(`⚠ ${id.toUpperCase()} não foi persistido no IndexedDB: ${e.message}`,'info');}
 }
+
+/* ── BASES NO FIRESTORE (compartilhadas entre máquinas) ──
+   Mantém o comportamento cross-device sem alterar layout nem regras dos módulos.
+   As bases são comprimidas e divididas em chunks para respeitar o limite por documento do Firestore. */
+const ATLAS_CLOUD_CHUNK_SIZE = 700000;
+const ATLAS_CLOUD_LOADS = {};
+
+function atlasB64FromBytes(bytes){
+  let bin='';
+  const step=0x8000;
+  for(let i=0;i<bytes.length;i+=step){
+    bin += String.fromCharCode.apply(null, bytes.subarray(i,i+step));
+  }
+  return btoa(bin);
+}
+function atlasBytesFromB64(b64){
+  const bin=atob(b64);
+  const bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return bytes;
+}
+async function atlasGzipBytes(bytes){
+  if(typeof CompressionStream==='undefined') return {encoding:'json-base64', bytes};
+  const cs=new CompressionStream('gzip');
+  const w=cs.writable.getWriter();
+  await w.write(bytes);
+  await w.close();
+  const ab=await new Response(cs.readable).arrayBuffer();
+  return {encoding:'gzip-base64', bytes:new Uint8Array(ab)};
+}
+async function atlasGunzipBytes(bytes, encoding){
+  if(encoding==='gzip-base64'){
+    if(typeof DecompressionStream==='undefined') throw new Error('Navegador sem suporte a descompressão gzip.');
+    const ds=new DecompressionStream('gzip');
+    const w=ds.writable.getWriter();
+    await w.write(bytes);
+    await w.close();
+    return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+  }
+  return bytes;
+}
+async function atlasEncodePayloadForCloud(payload){
+  const json=JSON.stringify(payload);
+  const encoded=new TextEncoder().encode(json);
+  const packed=await atlasGzipBytes(encoded);
+  const b64=atlasB64FromBytes(packed.bytes);
+  const chunks=[];
+  for(let i=0;i<b64.length;i+=ATLAS_CLOUD_CHUNK_SIZE) chunks.push(b64.slice(i,i+ATLAS_CLOUD_CHUNK_SIZE));
+  return {encoding:packed.encoding, chunks, rawBytes:encoded.length, storedChars:b64.length};
+}
+async function atlasDecodePayloadFromCloud(manifest,chunks){
+  const joined=chunks.join('');
+  const packed=atlasBytesFromB64(joined);
+  const raw=await atlasGunzipBytes(packed, manifest.encoding || 'json-base64');
+  return JSON.parse(new TextDecoder().decode(raw));
+}
+async function atlasSaveBaseCloudData(id,payload){
+  try{
+    if(!db || !curUser || !payload || !Array.isArray(payload.rows)) return;
+    dbLog(`☁ ${id.toUpperCase()} salvando base no Firestore para acesso em outras máquinas...`,'info');
+    const packed=await atlasEncodePayloadForCloud(payload);
+    const ref=db.collection('bases_logs').doc(id);
+    const oldSnap=await ref.get().catch(()=>null);
+    const old=(oldSnap && oldSnap.exists) ? (oldSnap.data()||{}) : {};
+    const oldCount=Number(old.cloudChunks||0);
+
+    const meta={
+      id,
+      file:payload.file||'',
+      count:payload.count||0,
+      ts:payload.ts||new Date().toISOString(),
+      user:payload.user||curUser.email||'—',
+      email:curUser.email||'',
+      uid:curUser.uid||'',
+      hasPayload:true,
+      encoding:packed.encoding,
+      cloudChunks:packed.chunks.length,
+      rawBytes:packed.rawBytes,
+      storedChars:packed.storedChars,
+      savedAt:new Date().toISOString(),
+      updatedAt:firebase.firestore.FieldValue.serverTimestamp()
+    };
+
+    for(let i=0;i<packed.chunks.length;i++){
+      await ref.collection('chunks').doc(String(i).padStart(5,'0')).set({i,data:packed.chunks[i]});
+    }
+    if(oldCount>packed.chunks.length){
+      for(let i=packed.chunks.length;i<oldCount;i++){
+        await ref.collection('chunks').doc(String(i).padStart(5,'0')).delete().catch(()=>{});
+      }
+    }
+    await ref.set(meta,{merge:true});
+    dbLog(`✓ ${id.toUpperCase()} base salva no Firestore (${packed.chunks.length} partes)`,'ok');
+  }catch(e){
+    dbLog(`⚠ ${id.toUpperCase()} base não foi salva no Firestore: ${e.message}`,'err');
+  }
+}
+async function atlasLoadBaseCloudData(id){
+  id=String(id||'').toLowerCase();
+  if(ATLAS_CLOUD_LOADS[id]) return ATLAS_CLOUD_LOADS[id];
+  ATLAS_CLOUD_LOADS[id]=(async()=>{
+    if(!db) return null;
+    const ref=db.collection('bases_logs').doc(id);
+    const snap=await ref.get();
+    if(!snap.exists) return null;
+    const meta=snap.data()||{};
+    const n=Number(meta.cloudChunks||0);
+    if(!meta.hasPayload || !n) return null;
+    dbLog(`☁ ${id.toUpperCase()} carregando base do Firestore (${dbFmt(meta.count||0)} registros)...`,'info');
+    const chunks=[];
+    for(let i=0;i<n;i++){
+      const cs=await ref.collection('chunks').doc(String(i).padStart(5,'0')).get();
+      if(!cs.exists) throw new Error(`chunk ${i+1}/${n} ausente no Firestore`);
+      chunks.push((cs.data()||{}).data||'');
+    }
+    const payload=await atlasDecodePayloadFromCloud(meta,chunks);
+    if(payload && Array.isArray(payload.rows) && payload.rows.length){
+      payload.file=payload.file||meta.file||'';
+      payload.ts=payload.ts||meta.ts||new Date().toISOString();
+      payload.count=payload.count||payload.rows.length;
+      payload.user=payload.user||meta.user||'—';
+      await atlasSaveBase(id,payload).catch(()=>{});
+      dbLog(`✓ ${id.toUpperCase()} base carregada do Firestore`,'ok');
+      return payload;
+    }
+    return null;
+  })().finally(()=>{delete ATLAS_CLOUD_LOADS[id];});
+  return ATLAS_CLOUD_LOADS[id];
+}
 /* ── LOG DE CARREGAMENTO NO FIRESTORE (compartilhado entre máquinas) ── */
 async function atlasSaveLogCloud(id, payload){
   try{
@@ -710,13 +839,14 @@ async function atlasLoadLogsCloud(){
         try{ tsEl.textContent = new Date(data.ts).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }catch(_){}
       }
       if(data.user && usEl) usEl.textContent = data.user;
-      // Se ainda não há dados locais (outra máquina), mostra apenas o badge informativo
+      // Se ainda não há dados locais (outra máquina), informa que existe base disponível na nuvem.
       if(!window.ATLAS_DATA[id] && resEl && data.count){
         resEl.className = 'db-res info';
-        resEl.textContent = `↻ Último upload na nuvem: ${dbFmt(data.count)} registros — reenvie o arquivo para usar`;
+        resEl.textContent = data.hasPayload
+          ? `☁ Disponível na nuvem: ${dbFmt(data.count)} registros`
+          : `↻ Último upload na nuvem: ${dbFmt(data.count)} registros`;
       }
       if(!window.ATLAS_DATA[id] && cardEl){
-        // marca visualmente como "já houve um carregamento conhecido", sem fingir que está localmente disponível
         cardEl.classList.add('cloud-known');
       }
     });
@@ -725,13 +855,21 @@ async function atlasLoadLogsCloud(){
   }
 }
 async function atlasLoadBase(id){
-  const d=await atlasOpenDB();
-  return await new Promise((resolve,reject)=>{
-    const tx=d.transaction(ATLAS_DB_STORE,'readonly');
-    const rq=tx.objectStore(ATLAS_DB_STORE).get(id);
-    rq.onsuccess=()=>resolve(rq.result&&rq.result.payload?rq.result.payload:null);
-    rq.onerror=()=>reject(rq.error);
-  });
+  id=String(id||'').toLowerCase();
+  let local=null;
+  try{
+    const d=await atlasOpenDB();
+    local=await new Promise((resolve,reject)=>{
+      const tx=d.transaction(ATLAS_DB_STORE,'readonly');
+      const rq=tx.objectStore(ATLAS_DB_STORE).get(id);
+      rq.onsuccess=()=>resolve(rq.result&&rq.result.payload?rq.result.payload:null);
+      rq.onerror=()=>reject(rq.error);
+    });
+  }catch(e){
+    dbLog(`⚠ ${id.toUpperCase()} não foi lido do IndexedDB: ${e.message}`,'info');
+  }
+  if(local && Array.isArray(local.rows) && local.rows.length) return local;
+  return await atlasLoadBaseCloudData(id);
 }
 function atlasBroadcast(id,payload){
   const msg={type:'ATLAS_DATA_READY',table:id,count:payload.count,ts:payload.ts};
@@ -944,6 +1082,7 @@ async function dbProc(file,id){
     window.ATLAS_DATA[id]={rows,file:file.name,ts:tsNow,count:rows.length,user:usuarioAtual};
     await atlasSaveBase(id, window.ATLAS_DATA[id]);
     atlasSaveLogCloud(id, window.ATLAS_DATA[id]); // grava log na nuvem (não bloqueante)
+    atlasSaveBaseCloudData(id, window.ATLAS_DATA[id]); // grava a base na nuvem para outras máquinas (não bloqueante)
     atlasBroadcast(id, window.ATLAS_DATA[id]);
     const sec=((Date.now()-t0)/1000).toFixed(1);
     dbSt(id,'ok',dbFmt(rows.length)+' reg.');
