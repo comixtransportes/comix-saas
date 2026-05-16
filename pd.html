@@ -64,7 +64,7 @@ select.sel{border:1px solid var(--bd);border-radius:3px;padding:3px 6px;font-siz
 .pane.on{display:flex;flex-direction:column;}
 
 /* VISÃO GERAL */
-#p-vg{padding:7px 8px;gap:7px;overflow:hidden;}
+#p-vg{padding:7px 8px;gap:7px;overflow-y:auto;overflow-x:hidden;}
 .vg-top{display:grid;grid-template-columns:190px 1fr 230px;gap:6px;flex-shrink:0;}
 .panel-pd{background:var(--wh);border:1px solid var(--bd);border-radius:4px;overflow:hidden;}
 .panel-rec{background:var(--wh);border:1px solid var(--bd);border-radius:4px;overflow:hidden;}
@@ -401,17 +401,17 @@ table.dt td.dia-cell::after{
         <!-- Card 2: Projeção de Fechamento — ícone alvo laranja -->
         <div class="pc pc-icon">
           <div class="pc-ic" style="color:#d97706">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <!-- círculo externo (anel fino) -->
-              <circle cx="12" cy="12" r="10" stroke="#d97706" stroke-width="1.5" fill="none" opacity=".4"/>
-              <!-- círculo médio preenchido suave -->
-              <circle cx="12" cy="12" r="6.5" stroke="#d97706" stroke-width="1.5" fill="#fff7ed" opacity=".9"/>
-              <!-- círculo interno sólido laranja -->
-              <circle cx="12" cy="12" r="3" fill="#d97706"/>
-              <!-- seta de cursor diagonal superior direito -->
-              <line x1="15.5" y1="4" x2="20" y2="4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round"/>
-              <line x1="20" y1="4" x2="20" y2="8.5" stroke="#d97706" stroke-width="1.8" stroke-linecap="round"/>
-              <line x1="14.8" y1="9.2" x2="19.6" y2="4.4" stroke="#d97706" stroke-width="1.8" stroke-linecap="round"/>
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <!-- anel externo -->
+              <circle cx="13" cy="15" r="10.5" stroke="#d97706" stroke-width="1.5" fill="none" opacity=".3"/>
+              <!-- anel médio -->
+              <circle cx="13" cy="15" r="6.5" stroke="#d97706" stroke-width="1.5" fill="#fff7ed"/>
+              <!-- centro sólido -->
+              <circle cx="13" cy="15" r="2.7" fill="#d97706"/>
+              <!-- haste da flecha —  canto sup-dir até próximo do centro -->
+              <line x1="22" y1="3" x2="15" y2="12.5" stroke="#d97706" stroke-width="1.8" stroke-linecap="round"/>
+              <!-- ponta da flecha (seta aberta) -->
+              <polyline points="19,3 22,3 22,6" stroke="#d97706" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
             </svg>
           </div>
           <div class="pc-content">
@@ -2884,16 +2884,11 @@ function triggerAI() {
   }
 })();
 
-/* ══ ATLAS: receptor de dados do Download Base ══
-   Quando o index.html faz broadcast de ATLAS_DATA_READY para a tabela 'szb',
-   este módulo injeta os dados diretamente e ativa o dashboard sem upload manual. */
-window.addEventListener('message', function(event) {
-  if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
-  if (event.data.table !== 'szb') return;
-
+/* ══ ATLAS: receptor de dados do Download Base ══ */
+function tryAtlasSZB() {
   try {
     var parentData = window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
-    if (!parentData || !parentData.rows || !parentData.rows.length) return;
+    if (!parentData || !parentData.rows || !parentData.rows.length) return false;
 
     RAW = parentData.rows;
     DATA = [];
@@ -2907,10 +2902,21 @@ window.addEventListener('message', function(event) {
 
     buildDash();
     setTimeout(triggerAI, 800);
-
+    return true;
   } catch(e) {
-    console.warn('[PD Diário] Erro ao receber dados do Download Base:', e);
+    console.warn('[PD Diário] tryAtlasSZB erro:', e);
+    return false;
   }
+}
+
+/* Ao carregar: se o parent já tem SZB (iframe aberto depois do upload) */
+(function() { setTimeout(function() { tryAtlasSZB(); }, 200); })();
+
+/* Broadcast: acionado quando o usuário carrega SZB no Download Base */
+window.addEventListener('message', function(event) {
+  if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
+  if (event.data.table !== 'szb') return;
+  setTimeout(tryAtlasSZB, 150);
 });
 </script>
 </body>
