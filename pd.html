@@ -835,7 +835,12 @@ async function loadDataFromCloud() {
     // Timeout de 8 segundos para não travar
     const controller = new AbortController();
     const timer = setTimeout(()=>controller.abort(), 8000);
-    const resp = await fetch(WORKER_URL + '/api/data', { signal: controller.signal });
+    const sep = WORKER_URL.includes('?') ? '&' : '?';
+    const resp = await fetch(WORKER_URL + '/api/data?_ts=' + Date.now(), {
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+    });
     clearTimeout(timer);
     if (!resp.ok) return false;
     const data = await resp.json();
@@ -2230,18 +2235,33 @@ window.addEventListener('DOMContentLoaded', ()=>{
   // Carregar parâmetros em background sem bloquear a UI
   loadParamsFromCloud().catch(()=>{});
 
-  // Dentro do COMIX Atlas, a origem correta é a Download Base.
-  // Não chama loadDataFromCloud aqui para evitar sobrescrever/competir com o SZB do Atlas.
+  // Dentro do COMIX Atlas, a prioridade é: dados recém-carregados no parent -> resposta do Atlas -> nuvem oficial do PD.
+  // Não usa IndexedDB local aqui, porque ele pode conter uma carga antiga do próprio aparelho.
   if (window.self !== window.top) {
     setTimeout(()=>{
       if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
       if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
-      if (typeof tryAtlasSZBFromIndexedDB === 'function') tryAtlasSZBFromIndexedDB();
     }, 150);
     setTimeout(()=>{
       if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
       if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
     }, 900);
+    setTimeout(async ()=>{
+      if (__ATLAS_PD_CARREGADO) return;
+      try {
+        const hasData = await loadDataFromCloud();
+        if (hasData && !__ATLAS_PD_CARREGADO) {
+          __ATLAS_PD_CARREGADO = true;
+          __ATLAS_PD_ORIGEM = 'Nuvem PD';
+          const drop = document.getElementById('scr-drop');
+          const main = document.getElementById('scr-main');
+          if (drop) drop.style.display = 'none';
+          if (main) main.style.display = 'flex';
+          fullRebuild();
+          setTimeout(triggerAI, 1000);
+        }
+      } catch(e) {}
+    }, 1800);
     return;
   }
 
@@ -3075,13 +3095,8 @@ async function atlasLoadBase(id) {
 }
 
 async function tryAtlasSZBFromIndexedDB() {
-  if (__ATLAS_PD_CARREGADO) return true;
-  try {
-    var payload = await atlasLoadBase('szb');
-    if (payload && Array.isArray(payload.rows) && payload.rows.length) {
-      return applyAtlasSZB(payload, 'Download Base local');
-    }
-  } catch(e) {}
+  // Desativado no PD dentro do Atlas: IndexedDB é local por navegador/máquina e pode conter dados antigos.
+  // A origem correta para cross-device é o parent/Download Base ou a nuvem oficial do PD.
   return false;
 }
 
@@ -3096,7 +3111,6 @@ window.addEventListener('message', function(event) {
     setTimeout(function() {
       if (!tryAtlasSZB()) {
         requestAtlasSZB();
-        tryAtlasSZBFromIndexedDB();
       }
     }, 80);
   }
@@ -3106,14 +3120,12 @@ window.addEventListener('message', function(event) {
   setTimeout(function() {
     if (!tryAtlasSZB()) {
       requestAtlasSZB();
-      tryAtlasSZBFromIndexedDB();
     }
   }, 100);
   setTimeout(function() {
     if (!__ATLAS_PD_CARREGADO) {
       if (!tryAtlasSZB()) {
         requestAtlasSZB();
-        tryAtlasSZBFromIndexedDB();
       }
     }
   }, 900);
