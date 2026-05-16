@@ -6,6 +6,7 @@
 <title>COMIX Atlas</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
@@ -656,32 +657,166 @@ function dbDrag(e,id){e.preventDefault();document.getElementById('dbdrop-'+id).c
 function dbOff(id){document.getElementById('dbdrop-'+id).classList.remove('drag');}
 function dbDrop(e,id){e.preventDefault();dbOff(id);const f=e.dataTransfer.files[0];if(f)dbProc(f,id);}
 function dbFile(e,id){const f=e.target.files[0];if(f)dbProc(f,id);}
+function dbPickSheet(wb){
+  let bestName=wb.SheetNames[0], bestRows=-1, bestCols=-1;
+  for(const name of wb.SheetNames){
+    const ws=wb.Sheets[name];
+    const ref=ws && ws['!ref'];
+    let rows=0, cols=0;
+    if(ref){
+      try{const rg=XLSX.utils.decode_range(ref);rows=rg.e.r-rg.s.r+1;cols=rg.e.c-rg.s.c+1;}catch(_){rows=0;cols=0;}
+    }
+    if(rows>bestRows || (rows===bestRows && cols>bestCols)){bestName=name;bestRows=rows;bestCols=cols;}
+  }
+  return wb.Sheets[bestName];
+}
+function dbCleanHeader(h,i){
+  const v=String(h==null?'':h).replace(/\s+/g,' ').trim();
+  return v || ('COL_'+(i+1));
+}
+function dbRowsFromSheet(ws){
+  if(!ws) return [];
+  let raw=[];
+  try{raw=XLSX.utils.sheet_to_json(ws,{defval:'',raw:true,blankrows:false});}catch(_){raw=[];}
+  if(raw && raw.length) return raw;
+  let aoa=[];
+  try{aoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true,blankrows:false});}catch(_){aoa=[];}
+  if(!aoa || aoa.length<2) return [];
+  const header=(aoa[0]||[]).map(dbCleanHeader);
+  return aoa.slice(1).filter(row=>Array.isArray(row)&&row.some(v=>v!==''&&v!=null)).map(row=>{
+    const o={};
+    header.forEach((h,i)=>{o[h]=row[i]??'';});
+    return o;
+  });
+}
+function dbNormalizeRows(raw){
+  return (raw||[]).map(r=>{
+    const o={};
+    for(const k of Object.keys(r||{})){
+      const nk=String(k).replace(/\s+/g,' ').trim();
+      if(nk) o[nk]=r[k];
+    }
+    return o;
+  }).filter(r=>Object.values(r).some(v=>v!==''&&v!=null));
+}
+function dbXmlDecode(v){
+  return String(v==null?'':v)
+    .replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+    .replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&amp;/g,'&');
+}
+function dbColIndex(ref){
+  const m=String(ref||'').match(/[A-Z]+/i); if(!m) return 0;
+  let n=0; for(const ch of m[0].toUpperCase()){n=n*26+(ch.charCodeAt(0)-64);} return n-1;
+}
+async function dbXmlFallbackRows(buf,id){
+  if(typeof JSZip==='undefined') throw new Error('Leitor compatível não disponível: JSZip não carregou.');
+  dbLog(`⚠ ${id.toUpperCase()} retornou 0 linhas no SheetJS. Acionando leitor XML compatível...`,'info');
+  dbPct(id,82);
+  const zip=await JSZip.loadAsync(buf);
+  const ssFile=zip.file('xl/sharedStrings.xml');
+  let shared=[];
+  if(ssFile){
+    const ss=await ssFile.async('string');
+    const siRe=/<si[\s\S]*?<\/si>/g;
+    let m;
+    while((m=siRe.exec(ss))){
+      const block=m[0];
+      let txt='';
+      const tRe=/<t[^>]*>([\s\S]*?)<\/t>/g;
+      let tm;
+      while((tm=tRe.exec(block))) txt+=dbXmlDecode(tm[1]);
+      shared.push(txt);
+    }
+  }
+  dbPct(id,86);
+  const sheetNames=Object.keys(zip.files).filter(n=>/^xl\/worksheets\/sheet\d+\.xml$/i.test(n)).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
+  if(!sheetNames.length) return [];
+  let chosen=sheetNames[0], best=-1;
+  for(const n of sheetNames){
+    const f=zip.file(n); if(!f) continue;
+    const txt=await f.async('string');
+    const dim=(txt.match(/<dimension[^>]*ref="([^"]+)"/i)||[])[1]||'';
+    let rows=0;
+    const mr=dim.match(/:(?:[A-Z]+)(\d+)/i) || dim.match(/(?:[A-Z]+)(\d+)/i);
+    if(mr) rows=parseInt(mr[1],10)||0;
+    if(rows>best){best=rows;chosen=n;}
+  }
+  const xml=await zip.file(chosen).async('string');
+  dbPct(id,90);
+  const rows=[];
+  const rowRe=/<row\b[^>]*>([\s\S]*?)<\/row>/g;
+  let rm, header=null, seen=0;
+  while((rm=rowRe.exec(xml))){
+    const cells=[];
+    const rowXml=rm[1];
+    const cRe=/<c\b([^>]*)>([\s\S]*?)<\/c>/g;
+    let cm;
+    while((cm=cRe.exec(rowXml))){
+      const attrs=cm[1], body=cm[2];
+      const ref=(attrs.match(/\br="([^"]+)"/i)||[])[1]||'';
+      const typ=(attrs.match(/\bt="([^"]+)"/i)||[])[1]||'';
+      const idx=dbColIndex(ref);
+      let val='';
+      if(typ==='inlineStr'){
+        const t=(body.match(/<t[^>]*>([\s\S]*?)<\/t>/i)||[])[1]||'';
+        val=dbXmlDecode(t);
+      }else{
+        const v=(body.match(/<v[^>]*>([\s\S]*?)<\/v>/i)||[])[1];
+        if(v!=null){
+          val=(typ==='s') ? (shared[Number(v)]??'') : dbXmlDecode(v);
+        }
+      }
+      cells[idx]=val;
+    }
+    if(!cells.some(v=>v!==''&&v!=null)) continue;
+    if(!header){ header=cells.map(dbCleanHeader); continue; }
+    const o={};
+    for(let i=0;i<header.length;i++) if(header[i]) o[header[i]]=cells[i]??'';
+    if(Object.values(o).some(v=>v!==''&&v!=null)) rows.push(o);
+    seen++;
+    if(seen%25000===0){ dbPct(id, Math.min(98,90+Math.floor(seen/25000))); await new Promise(r=>setTimeout(r,0)); }
+  }
+  return rows;
+}
+async function dbReadRows(file,id,buf){
+  let raw=[];
+  try{
+    let wb=XLSX.read(buf,{type:'array',cellDates:false,cellNF:false,cellHTML:false,cellStyles:false});
+    let ws=dbPickSheet(wb);
+    raw=dbRowsFromSheet(ws);
+    if(!raw.length){
+      wb=XLSX.read(buf,{type:'array',cellDates:false,dense:true,cellNF:false,cellHTML:false,cellStyles:false});
+      ws=dbPickSheet(wb);
+      raw=dbRowsFromSheet(ws);
+    }
+  }catch(e){
+    dbLog(`⚠ ${id.toUpperCase()} falhou no SheetJS: ${e.message}`,'info');
+    raw=[];
+  }
+  if(!raw.length && /\.xlsm?$/i.test(file.name||'')) raw=await dbXmlFallbackRows(buf,id);
+  return dbNormalizeRows(raw);
+}
+
 async function dbProc(file,id){
   const t0=Date.now();
-  dbSt(id,'busy','Lendo...');dbProg(id,true);dbPct(id,15);
+  dbSt(id,'busy','Lendo...');dbProg(id,true);dbPct(id,10);
   dbLog(`📂 ${file.name} (${dbSz(file.size)})`,'info');
   try {
-    const buf=await file.arrayBuffer(); dbPct(id,45);
-    const wb=XLSX.read(buf,{type:'array',cellDates:false});
-    const ws=wb.Sheets[wb.SheetNames[0]]; dbPct(id,75);
-    const raw=XLSX.utils.sheet_to_json(ws,{defval:'',raw:true}); dbPct(id,95);
-    const rows=raw.map(r=>{const o={};for(const k of Object.keys(r))o[k.trim()]=r[k];return o;});
-    dbPct(id,100);
+    const buf=await file.arrayBuffer(); dbPct(id,35);
+    const rows=await dbReadRows(file,id,buf); dbPct(id,100);
+    if(!rows.length){
+      throw new Error('0 linhas lidas. O arquivo foi aberto, mas nenhuma linha de dados foi encontrada; não gravei base vazia.');
+    }
     const tsNow=new Date().toISOString();
     const usuarioAtual=(window._atlasUser||document.getElementById('user-name')?.textContent||'—').trim();
     window.ATLAS_DATA[id]={rows,file:file.name,ts:tsNow,count:rows.length,user:usuarioAtual};
-    /* ── BROADCAST PARA TODOS OS IFRAMES: atualização automática ── */
-    const broadcastMsg = {type:'ATLAS_DATA_READY', table:id, count:rows.length, ts:tsNow};
-    document.querySelectorAll('.fr-wrap iframe').forEach(fr=>{
-      try{fr.contentWindow.postMessage(broadcastMsg,'*');}catch(_){}
-    });
-    /* Também salva no objeto global para acesso direto pelos iframes via parent */
+    const broadcastMsg={type:'ATLAS_DATA_READY',table:id,count:rows.length,ts:tsNow};
+    document.querySelectorAll('.fr-wrap iframe').forEach(fr=>{try{fr.contentWindow.postMessage(broadcastMsg,'*');}catch(_){}});
     const sec=((Date.now()-t0)/1000).toFixed(1);
     dbSt(id,'ok',dbFmt(rows.length)+' reg.');
     document.getElementById('dbc-'+id).className='db-card loaded';
     const res=document.getElementById('dbres-'+id);
     res.className='db-res ok';res.textContent=`✓ ${dbFmt(rows.length)} registros em ${sec}s`;
-    /* Atualizar timestamp e usuário individuais no card */
     const tsEl=document.getElementById('dbts-'+id);
     if(tsEl)tsEl.textContent=new Date(tsNow).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     const usEl=document.getElementById('dbus-'+id);
@@ -689,12 +824,13 @@ async function dbProc(file,id){
     dbLog(`✓ ${id.toUpperCase()} — ${dbFmt(rows.length)} reg. em ${sec}s`,'ok');
     dbSummary();toast(`${id.toUpperCase()} carregado: ${dbFmt(rows.length)} registros`,'gn');
   } catch(err) {
+    delete window.ATLAS_DATA[id];
     dbSt(id,'err','Erro');
     document.getElementById('dbc-'+id).className='db-card error';
     const res=document.getElementById('dbres-'+id);
     res.className='db-res err';res.textContent=`✗ ${err.message}`;
     dbLog(`✗ ${id.toUpperCase()} — ${err.message}`,'err');
-    toast(`Erro ${id.toUpperCase()}: ${err.message}`,'rd');
+    dbSummary();toast(`Erro ${id.toUpperCase()}: ${err.message}`,'rd');
   } finally{dbProg(id,false);}
 }
 function dbAll(){
