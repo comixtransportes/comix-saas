@@ -2,7 +2,9 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!-- Viewport: width=device-width pois o portal é responsivo (sidebar+iframe).
+     user-scalable=yes libera pinch-to-zoom no celular para ler textos pequenos. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <title>COMIX Atlas</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
@@ -530,9 +532,13 @@ function showApp() {
   document.getElementById('sb-role').textContent  = curPerfil;
   applyPerfil();
   loadPermissions();
-  /* Sincronização em tempo real do SZB: quando alguém carrega um arquivo
-     novo, todos os navegadores logados recebem o update automaticamente. */
-  try{ atlasWatchSZBMeta(); }catch(_){}
+  /* Pré-carrega todas as bases sincronizadas (SZB, SE1, SE2, SE5) da nuvem.
+     Faz com que o PD e o Financeiro encontrem os dados prontos ao abrir,
+     mesmo quando o usuário não carregou nada nesta sessão. Não bloqueia. */
+  try{ atlasPreloadAllBases(); }catch(_){}
+  /* Watchers em tempo real: quando alguém em qualquer lugar sobe uma base
+     nova pelo Download Base, esta sessão recebe e propaga aos iframes. */
+  try{ atlasWatchAllBases(); }catch(_){}
   /* Abre PD Diário como padrão */
   go('pd-diario');
 }
@@ -680,18 +686,24 @@ async function atlasSaveBase(id,payload){
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   NUVEM DO PD DIÁRIO — FIRESTORE como fonte da verdade
+   NUVEM DAS BASES — FIRESTORE como fonte da verdade (multi-base)
    
-   Por que: o Worker antigo era frágil (24MB hard limit, erros silenciosos,
-   sem feedback de quem subiu). Firestore tem auth real, permissões por usuário,
-   tempo real via onSnapshot, e o projeto já está autenticado aqui.
+   Por que: o Worker antigo era frágil (24MB hard limit, erros silenciosos)
+   e ainda assim só atendia SZB. Outras bases (SE1/SE2/SE5 do Financeiro)
+   ficavam só no IndexedDB local — cada navegador via uma versão diferente.
+   
+   Firestore tem auth real, permissões por usuário, tempo real via
+   onSnapshot, e o projeto já está autenticado aqui.
    
    Estrutura no Firestore:
-     bases_szb/meta              → { ts, count, user, email, uid, numChunks, file }
-     bases_szb/chunks/{0,1,...}  → { rows: [...] }  ~700KB cada (limite doc 1MB)
+     bases_szb/meta             → SZB metadados (mantido por compatibilidade)
+     bases_szb/meta/chunks/{n}  → SZB chunks
+     
+     bases_cloud/{id}             → metadados da base id (se1, se2, se5, ...)
+     bases_cloud/{id}/chunks/{n}  → chunks da base id
    
-   Worker antigo permanece como FALLBACK de leitura para não quebrar acessos
-   que ainda dependam dele, mas a gravação canônica é Firestore.
+   Quais bases vão para a nuvem: definido em ATLAS_CLOUD_BASES abaixo.
+   Worker antigo permanece como FALLBACK SÓ para SZB.
    ══════════════════════════════════════════════════════════════════════ */
 const ATLAS_PD_WORKER_URL = 'https://comix-pd-diario.comixtransportes.workers.dev';
 const ATLAS_PD_COLS_NEEDED = [
@@ -700,30 +712,52 @@ const ATLAS_PD_COLS_NEEDED = [
   'Peso Liquido','Tarifa','Valor Total','Placa Veicul','Nome Motoris',
   'Frota','Rota','Dt Cancel'
 ];
-// Tamanho-alvo por chunk em bytes. Firestore aceita até 1MB por doc; deixamos
-// folga generosa para evitar estourar com strings UTF-8 e overhead do Firestore.
-const ATLAS_SZB_CHUNK_BYTES = 700 * 1024;
-// Máximo de chunks por carga — protege contra arquivos absurdamente grandes.
-// 200 chunks × ~700KB = ~140MB de JSON slim (acima de qualquer SZB real do PD).
-const ATLAS_SZB_MAX_CHUNKS = 200;
+// Tamanho-alvo por chunk em bytes. Firestore aceita até 1MB por doc;
+// deixamos folga generosa para overhead de UTF-8/Firestore.
+const ATLAS_CLOUD_CHUNK_BYTES = 700 * 1024;
+// Teto de chunks por base. 300 × 700KB ≈ 210MB de JSON — bem acima de
+// qualquer base real (SE1/SE2/SE5 do Financeiro raramente passam de 50MB).
+const ATLAS_CLOUD_MAX_CHUNKS = 300;
+// Bases que devem ser sincronizadas via Firestore.
+// SE4 e SA1 não estão aqui porque não são usadas pelo Financeiro nem PD;
+// se forem precisar de sync no futuro, basta adicionar.
+const ATLAS_CLOUD_BASES = new Set(['szb','se1','se2','se5']);
 
-function atlasSlimSZBRows(raw){
-  return (raw||[]).map(r=>{
-    const slim={};
-    ATLAS_PD_COLS_NEEDED.forEach(k=>{ if(r && r[k] !== undefined) slim[k]=r[k]; });
-    return slim;
-  });
+/* ── Caminho do Firestore para uma base. SZB usa esquema legado por compat. ── */
+function atlasCloudDocRef(id){
+  id = String(id||'').toLowerCase();
+  if(id === 'szb') return db.collection('bases_szb').doc('meta');
+  return db.collection('bases_cloud').doc(id);
 }
 
-/* ── Divide as linhas slim em pedaços que cabem num doc Firestore ── */
-function atlasChunkSZBRows(slimRows){
+/* ── Slim: redução de colunas conforme a base. ── */
+function atlasSlimRows(id, raw){
+  raw = raw || [];
+  if (id === 'szb') {
+    // PD Diário usa só 17 colunas. Reduz dramaticamente o tamanho do upload.
+    return raw.map(r=>{
+      const slim={};
+      ATLAS_PD_COLS_NEEDED.forEach(k=>{ if(r && r[k] !== undefined) slim[k]=r[k]; });
+      return slim;
+    });
+  }
+  // SE1/SE2/SE5 e demais: o Financeiro usa muitas colunas de forma defensiva
+  // (busca por múltiplos aliases). Salvar a linha inteira é mais seguro.
+  return raw;
+}
+
+/* Compat: alias preservado caso código antigo chame atlasSlimSZBRows. */
+function atlasSlimSZBRows(raw){ return atlasSlimRows('szb', raw); }
+
+/* ── Divide as linhas em pedaços que cabem num doc Firestore. ── */
+function atlasChunkRows(slimRows){
   const chunks=[];
   let buf=[];
   let bufSize=2; // colchetes
   for(let i=0;i<slimRows.length;i++){
     const rowStr=JSON.stringify(slimRows[i]);
     const addSize=rowStr.length + (buf.length?1:0); // +vírgula
-    if(bufSize + addSize > ATLAS_SZB_CHUNK_BYTES && buf.length){
+    if(bufSize + addSize > ATLAS_CLOUD_CHUNK_BYTES && buf.length){
       chunks.push(buf);
       buf=[];
       bufSize=2;
@@ -734,40 +768,47 @@ function atlasChunkSZBRows(slimRows){
   if(buf.length) chunks.push(buf);
   return chunks;
 }
+/* Alias compat. */
+function atlasChunkSZBRows(slimRows){ return atlasChunkRows(slimRows); }
 
-/* ── Salva SZB no Firestore em chunks. Bloqueante: lança erro real. ── */
-async function atlasSaveSZBToFirestore(payload){
+/* ── Salva uma base no Firestore em chunks. Bloqueante; lança erro real. ── */
+async function atlasSaveBaseToFirestore(id, payload){
   if(!db || !curUser) throw new Error('Sem autenticação Firebase — recarregue e faça login.');
-  if(!payload || !Array.isArray(payload.rows) || !payload.rows.length) throw new Error('Payload SZB vazio.');
+  if(!payload || !Array.isArray(payload.rows) || !payload.rows.length) throw new Error(`Payload ${id.toUpperCase()} vazio.`);
   
-  const slim = atlasSlimSZBRows(payload.rows);
-  const chunks = atlasChunkSZBRows(slim);
-  if(chunks.length > ATLAS_SZB_MAX_CHUNKS){
-    throw new Error(`SZB gerou ${chunks.length} chunks (limite ${ATLAS_SZB_MAX_CHUNKS}). Arquivo grande demais.`);
+  const slim = atlasSlimRows(id, payload.rows);
+  const chunks = atlasChunkRows(slim);
+  if(chunks.length > ATLAS_CLOUD_MAX_CHUNKS){
+    throw new Error(`${id.toUpperCase()} gerou ${chunks.length} chunks (limite ${ATLAS_CLOUD_MAX_CHUNKS}). Arquivo grande demais.`);
   }
   
   const totalMB = chunks.reduce((a,c)=>a + JSON.stringify(c).length, 0) / 1024 / 1024;
-  dbLog(`☁ SZB → Firestore: ${chunks.length} chunks, ${totalMB.toFixed(2)}MB...`,'info');
+  dbLog(`☁ ${id.toUpperCase()} → Firestore: ${chunks.length} chunks, ${totalMB.toFixed(2)}MB...`,'info');
   
-  // 1) Limpa chunks antigos que possam ter sobrado de uma carga maior anterior.
-  //    (Se a carga atual tem 30 chunks e a anterior tinha 40, os chunks 30..39 ficariam zumbis.)
+  const docRef = atlasCloudDocRef(id);
+  
+  // 1) Limpa chunks antigos que tenham sobrado de carga maior anterior.
   try{
-    const oldMetaSnap = await db.collection('bases_szb').doc('meta').get();
+    const oldMetaSnap = await docRef.get();
     if(oldMetaSnap.exists){
       const oldN = oldMetaSnap.data().numChunks || 0;
       if(oldN > chunks.length){
-        const batch=db.batch();
-        for(let i=chunks.length;i<oldN;i++){
-          batch.delete(db.collection('bases_szb').doc('meta').collection('chunks').doc(String(i)));
+        // Firestore batch suporta até 500 ops; fazemos em lotes para segurança.
+        for(let start=chunks.length; start<oldN; start+=400){
+          const batch=db.batch();
+          const end=Math.min(oldN, start+400);
+          for(let i=start;i<end;i++){
+            batch.delete(docRef.collection('chunks').doc(String(i)));
+          }
+          await batch.commit();
         }
-        await batch.commit();
       }
     }
   }catch(e){
-    dbLog(`⚠ Não consegui limpar chunks antigos: ${e.message}`,'warn');
+    dbLog(`⚠ ${id.toUpperCase()}: não consegui limpar chunks antigos: ${e.message}`,'warn');
   }
   
-  // 2) Grava chunks em paralelo, mas com concorrência limitada para não estourar quotas.
+  // 2) Grava chunks em paralelo com concorrência limitada (não estourar quotas).
   const POOL = 4;
   let idx = 0;
   const errors = [];
@@ -775,9 +816,7 @@ async function atlasSaveSZBToFirestore(payload){
     while(idx < chunks.length){
       const i = idx++;
       try{
-        await db.collection('bases_szb').doc('meta')
-          .collection('chunks').doc(String(i))
-          .set({ rows: chunks[i] });
+        await docRef.collection('chunks').doc(String(i)).set({ rows: chunks[i] });
       }catch(e){
         errors.push(`chunk ${i}: ${e.message}`);
       }
@@ -788,12 +827,12 @@ async function atlasSaveSZBToFirestore(payload){
     throw new Error(`Falha em ${errors.length} chunk(s): ${errors[0]}`);
   }
   
-  // 3) Grava o meta POR ÚLTIMO. Isso é o "commit" lógico: leitores só veem a
-  //    nova carga depois que todos os chunks estão no lugar.
-  await db.collection('bases_szb').doc('meta').set({
+  // 3) Grava o meta POR ÚLTIMO. É o "commit" lógico: leitores só veem a nova
+  //    carga depois que todos os chunks estão no lugar.
+  await docRef.set({
     ts: payload.ts || new Date().toISOString(),
     count: payload.count || slim.length,
-    file: payload.file || 'SZB_CONTROLE_FRETE.xlsm',
+    file: payload.file || (id.toUpperCase()+'.xlsm'),
     user: payload.user || curUser.email || '—',
     email: curUser.email || '',
     uid: curUser.uid || '',
@@ -801,25 +840,29 @@ async function atlasSaveSZBToFirestore(payload){
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   });
   
-  dbLog(`✓ SZB salvo no Firestore (${chunks.length} chunks, ${totalMB.toFixed(2)}MB) — visível em qualquer navegador`,'ok');
+  dbLog(`✓ ${id.toUpperCase()} salvo no Firestore (${chunks.length} chunks, ${totalMB.toFixed(2)}MB) — visível em qualquer navegador`,'ok');
 }
 
-/* ── Lê SZB do Firestore. Devolve null se nada gravado ainda. ── */
-async function atlasLoadSZBFromFirestore(){
+/* Compat: chamada antiga específica do SZB. */
+async function atlasSaveSZBToFirestore(payload){
+  return atlasSaveBaseToFirestore('szb', payload);
+}
+
+/* ── Lê uma base do Firestore. Devolve null se nada gravado ainda. ── */
+async function atlasLoadBaseFromFirestore(id){
   if(!db) return null;
   try{
-    const metaSnap = await db.collection('bases_szb').doc('meta').get();
+    const docRef = atlasCloudDocRef(id);
+    const metaSnap = await docRef.get();
     if(!metaSnap.exists) return null;
     const meta = metaSnap.data();
     const n = meta.numChunks || 0;
     if(!n) return null;
     
-    // Lê chunks em paralelo
+    // Lê chunks em paralelo.
     const promises = [];
     for(let i=0;i<n;i++){
-      promises.push(
-        db.collection('bases_szb').doc('meta').collection('chunks').doc(String(i)).get()
-      );
+      promises.push(docRef.collection('chunks').doc(String(i)).get());
     }
     const snaps = await Promise.all(promises);
     const rows = [];
@@ -832,18 +875,23 @@ async function atlasLoadSZBFromFirestore(){
     if(!rows.length) return null;
     return {
       rows,
-      file: meta.file || 'SZB_CONTROLE_FRETE.xlsm',
+      file: meta.file || (id.toUpperCase()+'.xlsm'),
       ts: meta.ts || new Date().toISOString(),
       count: rows.length,
       user: meta.user || 'nuvem'
     };
   }catch(e){
-    console.warn('[Atlas] SZB Firestore load falhou:', e.message);
+    console.warn(`[Atlas] ${id.toUpperCase()} Firestore load falhou:`, e.message);
     return null;
   }
 }
 
-/* ── Fallback de LEITURA pelo Worker antigo (compatibilidade) ── */
+/* Compat: leitor antigo específico do SZB. */
+async function atlasLoadSZBFromFirestore(){
+  return atlasLoadBaseFromFirestore('szb');
+}
+
+/* ── Fallback de LEITURA pelo Worker antigo (SÓ para SZB) ── */
 async function atlasPDGet(path){
   const r = await fetch(ATLAS_PD_WORKER_URL + path);
   if(!r.ok) throw new Error('HTTP '+r.status);
@@ -851,9 +899,9 @@ async function atlasPDGet(path){
 }
 async function atlasLoadSZBFromPDCloud(){
   // Primeiro tenta Firestore (fonte canônica)
-  const fs = await atlasLoadSZBFromFirestore();
+  const fs = await atlasLoadBaseFromFirestore('szb');
   if(fs) return fs;
-  // Fallback: Worker antigo
+  // Fallback: Worker antigo (só existe para SZB)
   try{
     const data = await atlasPDGet('/api/data');
     if(!Array.isArray(data) || !data.length) return null;
@@ -866,57 +914,104 @@ async function atlasLoadSZBFromPDCloud(){
   }catch(_){ return null; }
 }
 
-/* ── Wrapper de gravação que o dbProc chama. Bloqueante com feedback claro. ── */
+/* ── Wrapper de gravação. Bloqueante com feedback claro. ── */
+async function atlasSaveBaseToCloud(id, payload){
+  await atlasSaveBaseToFirestore(id, payload);
+}
+/* Compat: nome antigo. */
 async function atlasSaveSZBToPDCloud(payload){
-  await atlasSaveSZBToFirestore(payload);
+  await atlasSaveBaseToFirestore('szb', payload);
 }
 
-/* ── Versão em background usada após upload local — agora COM feedback visível ── */
-function atlasSaveSZBToPDCloudBg(payload){
-  dbLog('☁ SZB → Firestore: enviando para a nuvem...','info');
-  atlasSaveSZBToPDCloud(payload)
+/* ── Versão em background usada após upload local — feedback visível ── */
+function atlasSaveBaseToCloudBg(id, payload){
+  dbLog(`☁ ${id.toUpperCase()} → Firestore: enviando para a nuvem...`,'info');
+  atlasSaveBaseToCloud(id, payload)
     .then(()=>{
-      toast('SZB salvo na nuvem (Firestore) — visível para todos','gn');
+      toast(`${id.toUpperCase()} salvo na nuvem — visível para todos`,'gn');
     })
     .catch(e=>{
-      dbLog(`✗ SZB NÃO foi salvo na nuvem: ${e.message}`,'err');
-      toast('Falha ao salvar SZB na nuvem: '+e.message,'rd');
+      dbLog(`✗ ${id.toUpperCase()} NÃO foi salvo na nuvem: ${e.message}`,'err');
+      toast(`Falha ao salvar ${id.toUpperCase()} na nuvem: `+e.message,'rd');
     });
 }
+/* Compat: nome antigo. */
+function atlasSaveSZBToPDCloudBg(payload){
+  atlasSaveBaseToCloudBg('szb', payload);
+}
 
-/* ── Listener em tempo real: quando alguém sobe SZB novo, este navegador atualiza ── */
-let __atlasSZBUnsub = null;
-function atlasWatchSZBMeta(){
+/* ── Listener em tempo real por base: quando outro navegador sobe uma base,
+   esta sessão recebe a atualização e propaga para os iframes abertos. ── */
+const __atlasWatchUnsubs = {};
+const __atlasWatchLastTs = {};
+function atlasWatchBase(id){
   if(!db || !curUser) return;
-  if(__atlasSZBUnsub) { try{__atlasSZBUnsub();}catch(_){} __atlasSZBUnsub=null; }
+  if(!ATLAS_CLOUD_BASES.has(id)) return;
+  if(__atlasWatchUnsubs[id]) { try{__atlasWatchUnsubs[id]();}catch(_){} delete __atlasWatchUnsubs[id]; }
   let firstSnapshot = true;
-  __atlasSZBUnsub = db.collection('bases_szb').doc('meta').onSnapshot(async snap=>{
+  const docRef = atlasCloudDocRef(id);
+  __atlasWatchUnsubs[id] = docRef.onSnapshot(async snap=>{
     if(!snap.exists) { firstSnapshot=false; return; }
     const meta = snap.data();
-    // No primeiro snapshot, só registra a versão atual sem recarregar (a inicialização normal já cuida disso)
+    // Primeiro snapshot: só registra o ts atual; a inicialização normal cuida do load.
     if(firstSnapshot){
       firstSnapshot = false;
-      window.__atlasSZBLastTs = meta.ts;
+      __atlasWatchLastTs[id] = meta.ts;
+      // Compat com o watcher antigo do SZB:
+      if(id === 'szb') window.__atlasSZBLastTs = meta.ts;
       return;
     }
-    // Se o ts mudou, é uma nova carga vinda de outro navegador/usuário
-    if(meta.ts && meta.ts !== window.__atlasSZBLastTs){
-      window.__atlasSZBLastTs = meta.ts;
-      dbLog(`☁ Nova versão do SZB detectada na nuvem (carga de ${meta.user||'—'})`,'info');
+    if(meta.ts && meta.ts !== __atlasWatchLastTs[id]){
+      __atlasWatchLastTs[id] = meta.ts;
+      if(id === 'szb') window.__atlasSZBLastTs = meta.ts;
+      dbLog(`☁ Nova versão de ${id.toUpperCase()} na nuvem (carga de ${meta.user||'—'})`,'info');
       try{
-        const cloudPayload = await atlasLoadSZBFromFirestore();
+        const cloudPayload = await atlasLoadBaseFromFirestore(id);
         if(cloudPayload && Array.isArray(cloudPayload.rows) && cloudPayload.rows.length){
-          window.ATLAS_DATA['szb'] = cloudPayload;
-          atlasSaveBase('szb', cloudPayload).catch(()=>{});
-          atlasMarkLoadedCard('szb', cloudPayload, 'da nuvem (auto-sync)');
-          atlasBroadcast('szb', cloudPayload);
-          toast('SZB atualizado pela nuvem','gn');
+          window.ATLAS_DATA[id] = cloudPayload;
+          atlasSaveBase(id, cloudPayload).catch(()=>{});
+          atlasMarkLoadedCard(id, cloudPayload, 'da nuvem (auto-sync)');
+          atlasBroadcast(id, cloudPayload);
+          toast(`${id.toUpperCase()} atualizado pela nuvem`,'gn');
         }
-      }catch(e){ console.warn('[Atlas] auto-sync SZB falhou:', e.message); }
+      }catch(e){ console.warn(`[Atlas] auto-sync ${id} falhou:`, e.message); }
     }
   }, err=>{
-    console.warn('[Atlas] onSnapshot SZB meta:', err.message);
+    console.warn(`[Atlas] onSnapshot ${id}:`, err.message);
   });
+}
+
+/* Ativa watchers para todas as bases que devem ser sincronizadas. */
+function atlasWatchAllBases(){
+  ATLAS_CLOUD_BASES.forEach(id => atlasWatchBase(id));
+}
+
+/* Compat: nome antigo só do SZB. */
+function atlasWatchSZBMeta(){ atlasWatchBase('szb'); }
+
+/* Carrega TODAS as bases da nuvem ao logar — assim o Financeiro/PD encontra
+   os dados prontos quando abrir os iframes, mesmo sem novo upload nesta sessão. */
+async function atlasPreloadAllBases(){
+  if(!db || !curUser) return;
+  for(const id of ATLAS_CLOUD_BASES){
+    try{
+      const p = await atlasLoadBaseFromFirestore(id);
+      if(p && Array.isArray(p.rows) && p.rows.length){
+        // Marca como vindo da nuvem (não sobrescreve carga local recente desta sessão)
+        const mem = window.ATLAS_DATA[id];
+        const memTs = mem && mem.ts ? new Date(mem.ts).getTime() : 0;
+        const cloudTs = p.ts ? new Date(p.ts).getTime() : 0;
+        if(!mem || cloudTs >= memTs){
+          window.ATLAS_DATA[id] = p;
+          atlasSaveBase(id, p).catch(()=>{});
+          atlasMarkLoadedCard(id, p, 'da nuvem');
+          // Inicializa o ts para o watcher não considerar isso como "nova versão"
+          __atlasWatchLastTs[id] = p.ts;
+          if(id === 'szb') window.__atlasSZBLastTs = p.ts;
+        }
+      }
+    }catch(e){ console.warn(`[Atlas] preload ${id}:`, e.message); }
+  }
 }
 function atlasMarkLoadedCard(id,payload,sourceTxt){
   try{
@@ -974,30 +1069,38 @@ window.addEventListener('message',async ev=>{
   const id=String(d.table).toLowerCase();
   let payload=null;
 
-  if(id==='szb'){
-    // SZB é a base do PD. Para outros navegadores/máquinas, a nuvem do PD deve ter prioridade
-    // sobre o IndexedDB local, pois o IndexedDB pode conter uma carga antiga daquele aparelho.
+  if(ATLAS_CLOUD_BASES.has(id)){
+    // Bases sincronizadas (SZB, SE1, SE2, SE5):
+    // 1) Se nesta sessão já temos uma carga LOCAL recente do Download Base, ela ganha
+    //    (evita ir buscar na nuvem se acabamos de subir um arquivo aqui mesmo).
+    // 2) Senão, busca da nuvem (Firestore + fallback Worker pro SZB).
+    // 3) IndexedDB local NÃO é fallback automático — ele pode conter carga antiga
+    //    desta mesma máquina e contaminar o que outros navegadores estão vendo.
     const mem=window.ATLAS_DATA&&window.ATLAS_DATA[id];
-    if(mem && Array.isArray(mem.rows) && mem.rows.length && mem.user && mem.user!=='nuvem'){
-      payload=mem; // carga feita nesta sessão pelo Download Base
+    const memLocal = mem && Array.isArray(mem.rows) && mem.rows.length && mem.user && mem.user!=='nuvem' && !/nuvem/i.test(mem.user||'');
+    if(memLocal){
+      payload=mem;
     }
     if(!payload){
       try{
-        const cloudPayload=await atlasLoadSZBFromPDCloud();
+        let cloudPayload;
+        if(id==='szb') cloudPayload=await atlasLoadSZBFromPDCloud(); // inclui fallback worker
+        else cloudPayload=await atlasLoadBaseFromFirestore(id);
         if(cloudPayload && Array.isArray(cloudPayload.rows) && cloudPayload.rows.length){
           payload=cloudPayload;
           window.ATLAS_DATA[id]=payload;
           atlasSaveBase(id,payload).catch(()=>{});
           atlasMarkLoadedCard(id,payload,'da nuvem');
+          __atlasWatchLastTs[id] = payload.ts;
+          if(id==='szb') window.__atlasSZBLastTs = payload.ts;
         }
       }catch(e){
-        console.warn('[Atlas] SZB não carregado da nuvem do PD:', e.message);
+        console.warn(`[Atlas] ${id.toUpperCase()} não carregado da nuvem:`, e.message);
       }
     }
-    if(!payload && mem) payload=mem;
-    // Para SZB, não usamos IndexedDB como fallback automático: é local por navegador/máquina
-    // e pode devolver uma carga antiga. A fallback real do PD é a nuvem oficial do Worker.
+    if(!payload && mem) payload=mem; // último recurso: o que tiver em memória
   } else {
+    // Bases não sincronizadas (ex: SE4, SA1): comportamento legado.
     payload=window.ATLAS_DATA&&window.ATLAS_DATA[id];
     if(!payload){
       try{payload=await atlasLoadBase(id);if(payload)window.ATLAS_DATA[id]=payload;}catch(_){}
@@ -1205,10 +1308,13 @@ async function dbProc(file,id){
     window.ATLAS_DATA[id]={rows,file:file.name,ts:tsNow,count:rows.length,user:usuarioAtual};
     await atlasSaveBase(id, window.ATLAS_DATA[id]);
     atlasSaveLogCloud(id, window.ATLAS_DATA[id]); // log opcional, não bloqueante
-    if(id==='szb'){
-      // Marca este ts como "já é meu" para o onSnapshot não disparar releitura redundante
-      window.__atlasSZBLastTs = tsNow;
-      atlasSaveSZBToPDCloudBg(window.ATLAS_DATA[id]);
+    /* Sincronização cross-device: bases registradas em ATLAS_CLOUD_BASES (szb, se1, se2, se5)
+       vão para o Firestore. Marca o ts atual como "já é meu" para o onSnapshot
+       não disparar releitura redundante logo após a gravação. */
+    if(ATLAS_CLOUD_BASES.has(id)){
+      __atlasWatchLastTs[id] = tsNow;
+      if(id==='szb') window.__atlasSZBLastTs = tsNow;
+      atlasSaveBaseToCloudBg(id, window.ATLAS_DATA[id]);
     }
     atlasBroadcast(id, window.ATLAS_DATA[id]);
     const sec=((Date.now()-t0)/1000).toFixed(1);
