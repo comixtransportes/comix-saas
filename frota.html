@@ -1,0 +1,2452 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+<title>COMIX — Frota</title>
+<style id="atlas-iframe-head">#scr_login { display: none !important; }</style>
+<script>
+if (window.self === window.top) {
+  var s = document.getElementById("atlas-iframe-head");
+  if (s) s.parentNode.removeChild(s);
+}
+</script>
+<style>
+/* ═══ TOKENS (mesmo padrão Atlas/cadastros) ═══ */
+:root{
+  --black:#1a1a1a;--white:#fff;--bg:#f5f4f0;
+  --gray:#888780;--gray-l:#d3d1c7;--gray-ll:#e8e7e3;--gray-bg:#f1f0ec;
+  --green:#0f6e56;--green-m:#1d9e75;--green-l:#e1f5ee;--green-b:#9fe1cb;
+  --amber:#faeeda;--amber-d:#854f0b;--amber-b:#fac775;
+  --blue:#185fa5;--blue-l:#e6f1fb;--blue-b:#b5d4f4;
+  --red:#a32d2d;--red-l:#fcebeb;--red-b:#f09595;
+  --orange:#c2410c;--orange-l:#fff1e6;--orange-b:#fdba74;
+  --purple:#6d28d9;--purple-l:#ede9fe;--purple-b:#c4b5fd;
+  --r:10px;--r-sm:7px;--r-xs:5px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvetica Neue',Arial,sans-serif;font-size:14px;color:var(--black);min-height:100vh;overflow-x:hidden}
+
+/* ═══ SCREENS ═══ */
+.screen{display:none;min-height:100vh;flex-direction:column}
+.screen.active{display:flex}
+
+/* ═══ LOGIN (padrão cadastros) ═══ */
+#scr_login{justify-content:center;align-items:center;background:var(--black);padding:24px}
+.login-card{background:var(--white);border-radius:16px;padding:36px 28px;width:100%;max-width:420px;box-shadow:0 24px 64px rgba(0,0,0,.5)}
+.login-logo{font-size:30px;font-weight:900;color:var(--black);letter-spacing:-1px;margin-bottom:4px}
+.login-sub{font-size:12px;color:var(--gray);margin-bottom:32px}
+.login-field{margin-bottom:14px;display:flex;flex-direction:column;gap:5px}
+.login-field label{font-size:10px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.4px}
+.login-field input{padding:13px 14px;font-size:15px;border:1.5px solid var(--gray-l);border-radius:var(--r-sm);outline:none;width:100%;transition:border-color .15s}
+.login-field input:focus{border-color:var(--black)}
+.login-field input.err{border-color:var(--red);background:var(--red-l)}
+.login-err{font-size:11px;color:var(--red);font-weight:600;min-height:18px;margin-bottom:6px}
+.login-btn{width:100%;padding:13px;background:var(--black);color:var(--white);border:none;border-radius:var(--r-sm);font-size:14px;font-weight:600;cursor:pointer;font-family:inherit}
+.login-spinner{display:none;text-align:center;font-size:11px;color:var(--gray);margin-top:8px}
+.forgot-link{display:block;margin-top:16px;background:none;border:none;color:var(--blue);font-size:12px;cursor:pointer;text-align:center;width:100%}
+.forgot-success{display:none;font-size:11px;color:var(--green);background:var(--green-l);border:1px solid var(--green-b);padding:8px;border-radius:var(--r-sm);margin-top:10px;text-align:center}
+.forgot-success.show{display:block}
+
+/* ═══ MAIN APP ═══ */
+#scr_home{background:var(--bg)}
+
+/* Module header (PD-Diario-like tabs) */
+.mod-hdr{
+  background:var(--white);
+  padding:14px 24px 0;
+  border-bottom:1px solid var(--gray-l);
+  position:sticky;top:0;z-index:50;
+}
+.mod-title{
+  display:flex;align-items:center;gap:10px;
+  font-size:15px;font-weight:700;color:var(--gray);
+  margin-bottom:12px;
+}
+.mod-title .name{color:var(--blue);font-weight:800;letter-spacing:-.2px}
+.mod-title .sep{color:var(--gray-l)}
+.mod-title .mod-name{color:var(--black)}
+.mod-title .badge-perfil{
+  margin-left:auto;font-size:10px;background:var(--gray-bg);color:var(--gray);
+  padding:3px 9px;border-radius:10px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.04em;font-family:inherit;
+}
+.mod-title .badge-perfil.admin{background:var(--blue-l);color:var(--blue)}
+
+.tabs{display:flex;gap:0;margin-bottom:-1px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{
+  padding:10px 18px;font-size:13.5px;font-weight:500;
+  color:var(--gray);border:none;background:none;cursor:pointer;
+  border-bottom:3px solid transparent;transition:all .15s;white-space:nowrap;
+  font-family:inherit;
+}
+.tab:hover{color:var(--black)}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue);font-weight:700}
+
+/* View containers */
+.view{display:none;flex-direction:column;flex:1;min-height:0}
+.view.active{display:flex}
+
+/* ═══ TOOLBAR ═══ */
+.toolbar{
+  background:var(--white);padding:11px 24px;
+  border-bottom:1px solid var(--gray-l);
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+}
+.search-box{
+  display:flex;align-items:center;gap:7px;
+  background:var(--gray-bg);
+  border:1px solid var(--gray-l);
+  border-radius:var(--r-sm);
+  padding:6px 11px;flex:1;max-width:340px;
+}
+.search-box:focus-within{border-color:var(--blue);background:var(--white)}
+.search-box input{flex:1;border:none;outline:none;background:transparent;font-size:13px;font-family:inherit}
+.search-box svg{color:var(--gray);flex-shrink:0}
+
+.filter-group{
+  display:flex;align-items:center;gap:3px;
+  background:var(--gray-bg);padding:3px;
+  border-radius:var(--r-sm);border:1px solid var(--gray-l);
+}
+.filter-chip{
+  padding:5px 11px;font-size:11.5px;font-weight:500;
+  color:var(--gray);border-radius:4px;cursor:pointer;
+  border:none;background:none;font-family:inherit;white-space:nowrap;
+  transition:all .12s;
+}
+.filter-chip:hover{color:var(--black)}
+.filter-chip.active{background:var(--white);color:var(--black);box-shadow:0 1px 2px rgba(0,0,0,.06)}
+
+.tb-divider{width:1px;height:22px;background:var(--gray-l)}
+.stat-pill{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 9px;background:var(--gray-bg);border-radius:18px;
+  font-size:11.5px;color:var(--gray);border:1px solid var(--gray-l);
+}
+.stat-pill strong{color:var(--black);font-weight:700}
+.stat-pill .dot{width:7px;height:7px;border-radius:50%}
+
+.btn{
+  padding:7px 13px;border-radius:var(--r-sm);
+  font-size:12.5px;font-weight:600;
+  display:inline-flex;align-items:center;gap:5px;
+  cursor:pointer;border:1px solid transparent;font-family:inherit;
+}
+.btn-primary{background:var(--blue);color:var(--white)}
+.btn-primary:hover{background:#1850a0}
+.btn-secondary{background:var(--white);color:var(--black);border-color:var(--gray-l)}
+.btn-secondary:hover{background:var(--gray-bg)}
+.btn-danger{background:var(--red);color:var(--white)}
+.btn-icon{
+  width:30px;height:30px;padding:0;
+  background:var(--white);border:1px solid var(--gray-l);
+  border-radius:var(--r-sm);
+  display:inline-flex;align-items:center;justify-content:center;
+  color:var(--gray);cursor:pointer;
+}
+.btn-icon:hover{background:var(--gray-bg);color:var(--black)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ═══ BOARD (Alocação Kanban) ═══ */
+.board{
+  display:grid;grid-template-columns:repeat(4,minmax(280px,1fr));
+  gap:12px;padding:14px 24px;
+  flex:1;overflow-x:auto;overflow-y:auto;min-height:0;
+  background:var(--bg);
+}
+.column{
+  display:flex;flex-direction:column;
+  background:var(--white);border:1px solid var(--gray-l);
+  border-radius:var(--r);min-width:280px;
+  max-height:calc(100vh - 200px);overflow:hidden;
+}
+.column-header{
+  padding:12px 14px;border-bottom:1px solid var(--gray-l);
+  background:var(--white);position:sticky;top:0;z-index:2;
+}
+.column-header-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:5px}
+.column-title{
+  display:flex;align-items:center;gap:7px;
+  font-size:12.5px;font-weight:700;
+  letter-spacing:.02em;text-transform:uppercase;
+}
+.column-icon{
+  width:22px;height:22px;border-radius:5px;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--white);flex-shrink:0;
+}
+.col-SC .column-icon{background:linear-gradient(135deg,#ef4444,#dc2626)}
+.col-SP .column-icon{background:linear-gradient(135deg,#0f172a,#334155)}
+.col-PR .column-icon{background:linear-gradient(135deg,#16a34a,#15803d)}
+.col-RESERVA .column-icon{background:linear-gradient(135deg,#6b7280,#4b5563)}
+.col-EM-REFORMA .column-icon{background:linear-gradient(135deg,#f59e0b,#d97706)}
+.col-A-REFORMAR .column-icon{background:linear-gradient(135deg,#f97316,#ea580c)}
+.col-RESERVA{border-color:var(--gray-l)}
+.col-EM-REFORMA{border-style:dashed;border-color:#fcd34d}
+.col-A-REFORMAR{border-style:dashed;border-color:var(--orange-b)}
+
+.column-count{
+  background:var(--gray-bg);padding:2px 8px;border-radius:11px;
+  font-size:11px;font-weight:700;color:var(--gray);
+}
+.column-stats{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--gray)}
+.column-stats .alert-mini{display:inline-flex;align-items:center;gap:3px}
+.column-stats .alert-mini .dot{width:6px;height:6px;border-radius:50%}
+
+.column-body{
+  padding:9px;overflow-y:auto;flex:1;
+  display:flex;flex-direction:column;gap:7px;
+}
+.column-body::-webkit-scrollbar{width:5px}
+.column-body::-webkit-scrollbar-thumb{background:var(--gray-l);border-radius:3px}
+.column-body.drag-over{
+  background:var(--blue-l);outline:2px dashed var(--blue);outline-offset:-4px;border-radius:8px;
+}
+.column-body.drag-over.no-perm{
+  background:var(--red-l);outline-color:var(--red);
+}
+
+/* ═══ CARD ═══ */
+.card{
+  background:var(--white);border:1px solid var(--gray-l);
+  border-radius:var(--r);padding:11px;
+  cursor:grab;transition:all .15s;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+  position:relative;
+}
+.card:hover{
+  border-color:var(--gray);
+  box-shadow:0 4px 10px rgba(0,0,0,.07);
+  transform:translateY(-1px);
+}
+.card.no-drag{cursor:pointer}
+.card:active{cursor:grabbing}
+.card.dragging{opacity:.4;transform:rotate(1deg)}
+
+.card-row{display:flex;align-items:flex-start;gap:9px}
+.card-icon{
+  width:40px;height:40px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;position:relative;
+  background:#10b981;color:var(--white);
+}
+.card-icon.alert-yellow{background:#f59e0b}
+.card-icon.alert-orange{background:#f97316}
+.card-icon.alert-red{background:#dc2626}
+.card-icon.unavail{background:#94a3b8}
+.card-icon svg{width:24px;height:24px}
+.card-icon-pulse{
+  position:absolute;inset:-3px;border-radius:50%;
+  border:2px solid currentColor;opacity:0;
+}
+.card-icon.alert-red .card-icon-pulse{animation:pulse 1.6s infinite}
+@keyframes pulse{
+  0%{opacity:.7;transform:scale(1)}
+  100%{opacity:0;transform:scale(1.4)}
+}
+
+.card-main{flex:1;min-width:0}
+.card-title{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:5px;margin-bottom:1px}
+.card-title .frota-id{color:var(--black)}
+.badge-vinculo{
+  font-size:9px;padding:1.5px 6px;border-radius:3px;
+  font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+}
+.badge-vinculo.frota{background:var(--blue-l);color:var(--blue)}
+.badge-vinculo.agregado{background:var(--purple-l);color:var(--purple)}
+.card-plate{
+  font-size:11px;color:var(--gray);
+  font-family:'IBM Plex Mono',monospace;font-weight:500;
+  letter-spacing:.02em;
+}
+.card-driver{
+  font-size:11.5px;color:var(--black);margin-top:3px;font-weight:500;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.card-driver.no-driver{color:var(--red);font-style:italic;font-weight:600}
+
+.card-side{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.card-days{font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:10px;white-space:nowrap}
+.card-days.green{background:var(--green-l);color:var(--green)}
+.card-days.yellow{background:#fef3c7;color:#92400e}
+.card-days.orange{background:var(--orange-l);color:var(--orange)}
+.card-days.red{background:var(--red-l);color:var(--red)}
+.card-days.gray{background:var(--gray-bg);color:var(--gray)}
+
+.card-composition{
+  margin-top:9px;padding-top:9px;
+  border-top:1px dashed var(--gray-l);
+  display:flex;flex-direction:column;gap:4px;
+}
+.comp-row{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--gray)}
+.comp-icon{width:14px;height:14px;color:var(--gray);flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.comp-icon svg{width:14px;height:14px}
+.comp-label{font-weight:700;color:var(--gray);font-size:9px;letter-spacing:.06em;text-transform:uppercase;min-width:46px}
+.comp-val{color:var(--black);font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.comp-val.empty{color:var(--gray);font-style:italic;font-weight:400}
+
+.card-footer-meta{
+  margin-top:7px;display:flex;align-items:center;gap:7px;
+  font-size:10px;color:var(--gray);flex-wrap:wrap;
+}
+.card-meta-item{display:inline-flex;align-items:center;gap:3px}
+.status-tag{
+  font-size:9px;font-weight:700;padding:1.5px 6px;border-radius:3px;
+  letter-spacing:.04em;text-transform:uppercase;
+}
+.status-tag.operando{background:var(--green-l);color:var(--green)}
+.status-tag.disponivel{background:var(--blue-l);color:var(--blue)}
+.status-tag.indisponivel{background:var(--red-l);color:var(--red)}
+.status-tag.reforma{background:var(--orange-l);color:var(--orange)}
+.status-tag.em_reforma{background:#fef3c7;color:#854f0b}
+.status-tag.a_reformar{background:var(--orange-l);color:var(--orange)}
+.status-tag.reserva{background:var(--gray-bg);color:var(--gray)}
+
+/* Placa Mercosul */
+.plate-mercosul{
+  display:inline-flex;flex-direction:column;align-items:stretch;
+  width:108px;border:1.5px solid #1a1a1a;border-radius:4px;
+  background:#fff;overflow:hidden;flex-shrink:0;
+  box-shadow:0 1px 2px rgba(0,0,0,.08);font-family:'IBM Plex Mono',monospace;
+}
+.plate-mercosul .pm-top{
+  background:#1d4ed8;color:#fff;font-size:7.5px;font-weight:700;
+  letter-spacing:.06em;display:flex;align-items:center;justify-content:space-between;
+  padding:1px 6px;line-height:1.4;
+}
+.plate-mercosul .pm-top .br-flag{
+  width:11px;height:8px;background:#16a34a;position:relative;border-radius:1px;
+}
+.plate-mercosul .pm-num{
+  font-size:14px;font-weight:700;text-align:center;padding:3px 4px;
+  color:#1a1a1a;letter-spacing:.05em;line-height:1;
+}
+.plate-mercosul.sm{width:90px}
+.plate-mercosul.sm .pm-num{font-size:12px;padding:2px 4px}
+.plate-mercosul.sm .pm-top{font-size:6.5px;padding:1px 5px}
+
+/* Card alongado (modo filtrado por filial) */
+.board.filtered{grid-template-columns:1fr 1fr;gap:10px}
+.board.filtered .card{padding:10px 14px}
+.board.filtered .card-row{align-items:center}
+.board.filtered .card-composition{flex-direction:row;flex-wrap:wrap;gap:14px 22px;padding-top:8px}
+.board.filtered .comp-row{min-width:160px}
+.board.single{grid-template-columns:1fr}
+.board.single .column{max-height:none}
+.board.single .column-body{max-height:none}
+
+/* Card identificação */
+.card-id-row{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+.card-id-row .frota-pill{
+  font-size:12px;font-weight:800;color:var(--black);
+  background:var(--gray-bg);padding:3px 9px;border-radius:4px;
+  letter-spacing:.02em;border:1px solid var(--gray-l);
+}
+
+/* Ícones inline editáveis */
+.comp-row.editable{cursor:pointer;border-radius:4px;padding:2px 4px;margin:-2px -4px;transition:background .12s}
+.comp-row.editable:hover{background:var(--gray-bg)}
+.comp-row .comp-clear{
+  opacity:0;margin-left:auto;font-size:14px;color:var(--red);
+  width:18px;height:18px;display:flex;align-items:center;justify-content:center;
+  border-radius:50%;transition:opacity .12s,background .12s;
+}
+.comp-row.editable:hover .comp-clear{opacity:1}
+.comp-row .comp-clear:hover{background:var(--red-l)}
+.comp-row.drag-over-slot{background:var(--blue-l) !important;outline:2px dashed var(--blue);outline-offset:-2px}
+.comp-row .comp-empty-slot{color:var(--gray);font-style:italic}
+
+/* Dias operados */
+.card-ops-badge{
+  font-size:10px;color:var(--gray);
+  background:var(--gray-bg);padding:2px 7px;border-radius:10px;
+  font-weight:600;white-space:nowrap;
+  border:1px solid var(--gray-l);
+}
+.card-ops-badge strong{color:var(--green);font-weight:700}
+
+/* ═══ TABELA ═══ */
+.table-wrap{flex:1;overflow:auto;padding:14px 24px;background:var(--bg)}
+table.data-table{
+  width:100%;border-collapse:separate;border-spacing:0;
+  background:var(--white);border:1px solid var(--gray-l);
+  border-radius:var(--r);overflow:hidden;font-size:12.5px;
+}
+.data-table thead th{
+  background:var(--gray-bg);padding:9px 12px;text-align:left;
+  font-weight:700;color:var(--gray);
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;
+  border-bottom:1px solid var(--gray-l);
+  position:sticky;top:0;z-index:1;white-space:nowrap;
+}
+.data-table tbody td{padding:8px 12px;border-bottom:1px solid var(--gray-ll);vertical-align:middle}
+.data-table tbody tr:hover{background:var(--gray-bg);cursor:pointer}
+.data-table tbody tr:last-child td{border-bottom:none}
+.data-table .mono{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--black)}
+.data-table .muted{color:var(--gray)}
+.tcat{
+  display:inline-flex;align-items:center;gap:5px;
+  font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:3px;
+}
+.tcat.cavalo{background:var(--blue-l);color:var(--blue)}
+.tcat.carreta{background:var(--green-l);color:var(--green)}
+.tcat.apoio{background:#fef3c7;color:#92400e}
+.tcat svg{width:12px;height:12px}
+
+.empty-state{
+  padding:60px 24px;text-align:center;color:var(--gray);
+  font-size:13px;
+}
+.empty-state .ico{font-size:36px;margin-bottom:8px;opacity:.5}
+
+/* ═══ DASHBOARD ═══ */
+.dashboard{flex:1;overflow-y:auto;padding:18px 24px;background:var(--bg)}
+.kpi-grid{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:12px;margin-bottom:18px;
+}
+.kpi{
+  background:var(--white);border:1px solid var(--gray-l);
+  border-radius:var(--r);padding:14px 16px;position:relative;overflow:hidden;
+}
+.kpi-label{
+  font-size:10.5px;color:var(--gray);text-transform:uppercase;
+  letter-spacing:.05em;font-weight:700;margin-bottom:5px;
+}
+.kpi-value{font-size:26px;font-weight:800;color:var(--black);line-height:1;letter-spacing:-.02em}
+.kpi-sub{font-size:10.5px;color:var(--gray);margin-top:4px}
+.kpi.accent-blue{border-top:3px solid var(--blue)}
+.kpi.accent-green{border-top:3px solid var(--green)}
+.kpi.accent-orange{border-top:3px solid var(--orange)}
+.kpi.accent-red{border-top:3px solid var(--red)}
+.kpi.accent-purple{border-top:3px solid var(--purple)}
+
+.dash-section{
+  background:var(--white);border:1px solid var(--gray-l);
+  border-radius:var(--r);margin-bottom:14px;overflow:hidden;
+}
+.dash-section-header{
+  padding:12px 16px;border-bottom:1px solid var(--gray-l);
+  font-size:12.5px;font-weight:700;
+  display:flex;align-items:center;gap:7px;background:var(--gray-bg);
+}
+.dash-section-header .count{
+  margin-left:auto;background:var(--white);padding:2px 9px;border-radius:11px;
+  font-size:10.5px;font-weight:700;color:var(--gray);border:1px solid var(--gray-l);
+}
+.dash-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--gray-l)}
+.dash-unit{background:var(--white);padding:14px 16px}
+.dash-unit-header{display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12.5px;font-weight:700}
+.dash-unit-icon{width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--white)}
+.dash-unit.SC .dash-unit-icon{background:linear-gradient(135deg,#ef4444,#dc2626)}
+.dash-unit.SP .dash-unit-icon{background:linear-gradient(135deg,#0f172a,#334155)}
+.dash-unit.PR .dash-unit-icon{background:linear-gradient(135deg,#16a34a,#15803d)}
+.dash-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:5px 0;font-size:12px;border-bottom:1px dashed var(--gray-ll);
+}
+.dash-row:last-child{border-bottom:none}
+.dash-row .label{color:var(--gray);display:flex;align-items:center;gap:5px}
+.dash-row .value{font-weight:700;color:var(--black)}
+.dash-row.total{
+  margin-top:6px;padding-top:8px;
+  border-top:2px solid var(--black);border-bottom:none;font-weight:700;
+}
+.dash-row.total .label{color:var(--black)}
+.dash-row.total .value{font-size:15px;color:var(--blue)}
+
+.dash-bar-row{display:flex;align-items:center;gap:11px;padding:9px 16px;border-bottom:1px solid var(--gray-ll);font-size:12px}
+.dash-bar-row:last-child{border-bottom:none}
+.dash-bar-row .lbl{min-width:160px;color:var(--gray);font-weight:500;display:flex;align-items:center;gap:6px}
+.dash-bar-row .bar-track{flex:1;height:18px;background:var(--gray-bg);border-radius:4px;overflow:hidden;position:relative}
+.dash-bar-row .bar-fill{height:100%;display:flex;align-items:center;padding:0 8px;color:var(--white);font-size:11px;font-weight:700;border-radius:4px;transition:width .4s ease}
+.dash-bar-row .bar-fill.empty{background:transparent;color:var(--gray);font-weight:600}
+.dash-bar-row .val{min-width:50px;text-align:right;font-weight:700;color:var(--black)}
+
+/* ═══ MODAL ═══ */
+.modal-backdrop{
+  position:fixed;inset:0;background:rgba(15,23,42,.5);
+  display:none;align-items:center;justify-content:center;
+  z-index:200;padding:16px;
+}
+.modal-backdrop.open{display:flex}
+.modal{
+  background:var(--white);border-radius:12px;
+  width:100%;max-width:560px;max-height:90vh;overflow-y:auto;
+  box-shadow:0 20px 60px rgba(0,0,0,.3);
+}
+.modal-header{
+  padding:16px 20px;border-bottom:1px solid var(--gray-l);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.modal-title{font-size:15px;font-weight:700}
+.modal-body{padding:18px 20px}
+.modal-footer{
+  padding:12px 20px;border-top:1px solid var(--gray-l);
+  display:flex;gap:8px;justify-content:flex-end;background:var(--gray-bg);
+  border-radius:0 0 12px 12px;
+}
+
+.threshold-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+.threshold-cell{
+  border:1px solid var(--gray-l);border-radius:var(--r-sm);
+  padding:9px;text-align:center;background:var(--white);
+}
+.threshold-cell .dot{width:12px;height:12px;border-radius:50%;margin:0 auto 5px}
+.threshold-cell.green .dot{background:#10b981}
+.threshold-cell.yellow .dot{background:#f59e0b}
+.threshold-cell.orange .dot{background:#f97316}
+.threshold-cell.red .dot{background:#dc2626}
+.threshold-cell label{display:block;font-size:9.5px;font-weight:700;color:var(--gray);margin-bottom:6px;text-transform:uppercase}
+.threshold-cell input{
+  text-align:center;font-weight:700;width:100%;padding:6px;
+  border:1px solid var(--gray-l);border-radius:var(--r-xs);font-size:14px;font-family:inherit;
+}
+
+.helper{
+  font-size:12px;color:var(--gray);
+  background:var(--gray-bg);padding:9px 11px;
+  border-radius:var(--r-sm);border-left:3px solid var(--blue);margin-bottom:13px;
+}
+
+.detail-section{margin-bottom:16px}
+.detail-section-title{
+  font-size:10.5px;font-weight:700;letter-spacing:.08em;
+  color:var(--gray);text-transform:uppercase;
+  margin-bottom:7px;display:flex;align-items:center;gap:5px;
+}
+.detail-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px 16px}
+.detail-item label{display:block;font-size:10px;color:var(--gray);text-transform:uppercase;letter-spacing:.03em;font-weight:700;margin-bottom:2px}
+.detail-item .value{font-size:13px;color:var(--black);font-weight:500}
+.detail-item .value.mono{font-family:'IBM Plex Mono',monospace}
+
+/* Form (compressor) */
+.form-row{margin-bottom:12px}
+.form-row label{display:block;font-size:11px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px}
+.form-row input,.form-row select{
+  width:100%;padding:9px 11px;
+  border:1px solid var(--gray-l);border-radius:var(--r-sm);
+  font-size:13px;background:var(--white);font-family:inherit;
+}
+.form-row input:focus,.form-row select:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 3px rgba(24,95,165,.1)}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+
+/* Toast */
+.toast{
+  position:fixed;bottom:20px;left:50%;transform:translateX(-50%) translateY(80px);
+  background:var(--black);color:var(--white);padding:11px 18px;border-radius:8px;
+  font-size:13px;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.25);
+  z-index:300;opacity:0;transition:all .25s;pointer-events:none;max-width:90vw;
+}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.error{background:var(--red)}
+.toast.success{background:var(--green)}
+
+.empty-col{padding:24px 12px;text-align:center;color:var(--gray);font-size:11.5px;font-style:italic}
+
+.loading-screen{
+  display:flex;align-items:center;justify-content:center;
+  flex:1;min-height:400px;flex-direction:column;gap:14px;
+  color:var(--gray);font-size:13px;
+}
+.loading-spin{
+  width:32px;height:32px;border:3px solid var(--gray-l);
+  border-top-color:var(--blue);border-radius:50%;
+  animation:spin 1s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.access-denied{
+  display:flex;align-items:center;justify-content:center;
+  flex:1;min-height:400px;flex-direction:column;gap:10px;
+  padding:24px;text-align:center;
+}
+.access-denied .ico{font-size:48px;opacity:.6}
+.access-denied h3{font-size:18px;color:var(--black)}
+.access-denied p{font-size:13px;color:var(--gray);max-width:380px}
+
+@media (max-width:1100px){
+  .board{grid-template-columns:repeat(2,minmax(280px,1fr));overflow-x:visible}
+  .dash-grid{grid-template-columns:1fr}
+}
+@media (max-width:640px){
+  .board{grid-template-columns:1fr;padding:10px}
+  .mod-hdr,.toolbar,.dashboard,.table-wrap{padding-left:12px;padding-right:12px}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ SPRITE ÍCONES ═══ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- Cavalo mecânico profissional -->
+    <symbol id="ico-cavalo" viewBox="0 0 80 48">
+      <path fill="currentColor" d="M44 6 h18 a5 5 0 0 1 5 5 v22 h4 a3 3 0 0 1 3 3 v6 h-5 a6 6 0 1 0 -12 0 h-2 v-18 h-11 v18 h-17 a6 6 0 1 0 -12 0 h-10 a3 3 0 0 1 -3 -3 v-12 a5 5 0 0 1 5 -5 h37 z M48 12 v12 h12 v-8 a4 4 0 0 0 -4 -4 z M50 14 h5 v8 h-5 z M15 36 a4 4 0 1 0 0 8 a4 4 0 0 0 0 -8 z M15 38 a2 2 0 1 1 0 4 a2 2 0 0 1 0 -4 z M55 36 a4 4 0 1 0 0 8 a4 4 0 0 0 0 -8 z M55 38 a2 2 0 1 1 0 4 a2 2 0 0 1 0 -4 z"/>
+    </symbol>
+    <!-- Carreta silo cimento profissional -->
+    <symbol id="ico-carreta" viewBox="0 0 100 50">
+      <g fill="currentColor">
+        <path d="M4 10 h78 a4 4 0 0 1 4 4 q6 1 10 8 v10 a3 3 0 0 1 -3 3 h-4 a5 5 0 1 0 -10 0 h-32 a5 5 0 1 0 -10 0 h-3 a5 5 0 1 0 -10 0 h-3 a5 5 0 1 0 -10 0 h-7 a3 3 0 0 1 -3 -3 v-18 a4 4 0 0 1 3 -4 z"/>
+        <ellipse cx="83" cy="22" rx="9" ry="4" fill="rgba(255,255,255,.18)"/>
+        <rect x="20" y="15" width="3" height="13" fill="rgba(255,255,255,.18)"/>
+        <rect x="38" y="15" width="3" height="13" fill="rgba(255,255,255,.18)"/>
+        <rect x="56" y="15" width="3" height="13" fill="rgba(255,255,255,.18)"/>
+      </g>
+      <g fill="currentColor">
+        <circle cx="14" cy="42" r="5"/><circle cx="14" cy="42" r="2" fill="rgba(255,255,255,.3)"/>
+        <circle cx="27" cy="42" r="5"/><circle cx="27" cy="42" r="2" fill="rgba(255,255,255,.3)"/>
+        <circle cx="48" cy="42" r="5"/><circle cx="48" cy="42" r="2" fill="rgba(255,255,255,.3)"/>
+        <circle cx="85" cy="42" r="5"/><circle cx="85" cy="42" r="2" fill="rgba(255,255,255,.3)"/>
+      </g>
+    </symbol>
+    <!-- Carro de apoio (sedan moderno) -->
+    <symbol id="ico-carro" viewBox="0 0 80 42">
+      <g fill="currentColor">
+        <path d="M6 26 l5 -12 a5 5 0 0 1 5 -3 h36 a5 5 0 0 1 5 3 l6 12 h6 a3 3 0 0 1 3 3 v5 h-5 a5 5 0 1 0 -10 0 h-30 a5 5 0 1 0 -10 0 h-7 a3 3 0 0 1 -3 -3 v-2 a3 3 0 0 1 3 -3 z M14 24 h44 l-4 -8 a3 3 0 0 0 -3 -2 h-30 a3 3 0 0 0 -3 2 z"/>
+        <rect x="16" y="14" width="13" height="9" rx="1" fill="rgba(255,255,255,.25)"/>
+        <rect x="32" y="14" width="13" height="9" rx="1" fill="rgba(255,255,255,.25)"/>
+        <circle cx="20" cy="32" r="5"/><circle cx="20" cy="32" r="2" fill="rgba(255,255,255,.3)"/>
+        <circle cx="54" cy="32" r="5"/><circle cx="54" cy="32" r="2" fill="rgba(255,255,255,.3)"/>
+      </g>
+    </symbol>
+    <!-- Compressor industrial -->
+    <symbol id="ico-compressor" viewBox="0 0 64 56">
+      <g fill="currentColor">
+        <rect x="22" y="6" width="20" height="18" rx="2"/>
+        <circle cx="32" cy="15" r="5" fill="rgba(255,255,255,.3)"/>
+        <circle cx="32" cy="15" r="2"/>
+        <path d="M14 10 v8 a3 3 0 0 0 3 3 h5"/>
+        <path d="M50 10 v8 a3 3 0 0 1 -3 3 h-5"/>
+        <rect x="12" y="6" width="6" height="6" rx="1"/>
+        <rect x="46" y="6" width="6" height="6" rx="1"/>
+        <rect x="4" y="26" width="56" height="20" rx="6"/>
+        <rect x="48" y="20" width="4" height="8"/>
+        <circle cx="12" cy="50" r="4"/><circle cx="12" cy="50" r="1.5" fill="rgba(255,255,255,.3)"/>
+        <circle cx="52" cy="50" r="4"/><circle cx="52" cy="50" r="1.5" fill="rgba(255,255,255,.3)"/>
+        <rect x="10" y="32" width="44" height="3" rx="1" fill="rgba(255,255,255,.25)"/>
+        <rect x="10" y="38" width="30" height="3" rx="1" fill="rgba(255,255,255,.25)"/>
+      </g>
+    </symbol>
+    <symbol id="ico-pin" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M12 2 a8 8 0 0 0 -8 8 c0 6 8 12 8 12 s8 -6 8 -12 a8 8 0 0 0 -8 -8 z M12 12 a3 3 0 1 1 0 -6 a3 3 0 0 1 0 6 z"/>
+    </symbol>
+    <symbol id="ico-wrench" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M21.7 5.6 l-3.4 3.4 l-2.3 -2.3 l3.4 -3.4 a5 5 0 0 0 -6.7 6.7 l-9 9 a2.4 2.4 0 0 0 3.4 3.4 l9 -9 a5 5 0 0 0 6.7 -6.7 z M5.5 21 a1 1 0 1 1 0 -2 a1 1 0 0 1 0 2 z"/>
+    </symbol>
+  </defs>
+</svg>
+
+<!-- ═══ LOGIN (escondida em iframe) ═══ -->
+<div class="screen" id="scr_login">
+  <div class="login-card">
+    <div class="login-logo">COMIX</div>
+    <div class="login-sub">Frota — acesso restrito</div>
+    <div class="login-field">
+      <label>E-mail</label>
+      <input type="email" id="li_email" placeholder="seu@email.com" autocomplete="username">
+    </div>
+    <div class="login-field">
+      <label>Senha</label>
+      <input type="password" id="li_senha" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div class="login-err" id="li_err"></div>
+    <button class="login-btn" id="li_btn" onclick="doLogin()">Entrar</button>
+    <div class="login-spinner" id="li_spin">Autenticando...</div>
+    <button class="forgot-link" onclick="forgotPassword()">Esqueci minha senha</button>
+    <div class="forgot-success" id="li_forgot_ok"></div>
+  </div>
+</div>
+
+<!-- ═══ APP ═══ -->
+<div class="screen" id="scr_home">
+  <div class="mod-hdr">
+    <div class="mod-title">
+      <span class="name">COMIX</span>
+      <span class="sep">·</span>
+      <span class="mod-name">Frota</span>
+      <span class="badge-perfil" id="badge-perfil">…</span>
+    </div>
+    <div class="tabs" id="tabs">
+      <button class="tab" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="alocacao">Alocação</button>
+      <button class="tab" data-tab="geral">Geral</button>
+      <button class="tab" data-tab="compressores">Compressores</button>
+    </div>
+  </div>
+
+  <!-- DASHBOARD -->
+  <div class="view" id="view-dashboard">
+    <div class="dashboard" id="dashboard-content">
+      <div class="loading-screen">
+        <div class="loading-spin"></div>
+        <div>Carregando dados…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ALOCAÇÃO -->
+  <div class="view" id="view-alocacao">
+    <div class="toolbar">
+      <div class="search-box">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="search-alocacao" placeholder="Buscar frota, placa, motorista...">
+      </div>
+      <div class="filter-group" id="filter-alocacao-unit">
+        <button class="filter-chip active" data-unit="all">Todas filiais</button>
+        <button class="filter-chip" data-unit="SC">Santa Catarina</button>
+        <button class="filter-chip" data-unit="SP">São Paulo</button>
+        <button class="filter-chip" data-unit="PR">Paraná</button>
+      </div>
+      <div class="filter-group" id="filter-alerta">
+        <button class="filter-chip active" data-alert="all">Todos</button>
+        <button class="filter-chip" data-alert="yellow">⚠ Atenção+</button>
+        <button class="filter-chip" data-alert="orange">⚠ Alerta+</button>
+        <button class="filter-chip" data-alert="red">🔴 Crítico</button>
+      </div>
+      <div class="tb-divider"></div>
+      <div class="stat-pill"><span class="dot" style="background:#10b981"></span><strong id="stat-green">0</strong>OK</div>
+      <div class="stat-pill"><span class="dot" style="background:#f59e0b"></span><strong id="stat-yellow">0</strong>Atenção</div>
+      <div class="stat-pill"><span class="dot" style="background:#f97316"></span><strong id="stat-orange">0</strong>Alerta</div>
+      <div class="stat-pill"><span class="dot" style="background:#dc2626"></span><strong id="stat-red">0</strong>Crítico</div>
+      <div class="tb-divider"></div>
+      <button class="btn btn-secondary" id="btn-thresholds" title="Configurar parâmetros (admin)">⚙ Parâmetros</button>
+      <button class="btn btn-secondary" id="btn-refresh">↻ SZB</button>
+    </div>
+    <div class="board" id="board"></div>
+  </div>
+
+  <!-- GERAL -->
+  <div class="view" id="view-geral">
+    <div class="toolbar">
+      <div class="search-box">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="search-geral" placeholder="Buscar frota, placa, modelo...">
+      </div>
+      <div class="filter-group" id="filter-geral-cat">
+        <button class="filter-chip active" data-cat="all">Todos</button>
+        <button class="filter-chip" data-cat="cavalo">Cavalos</button>
+        <button class="filter-chip" data-cat="carreta">Carretas</button>
+        <button class="filter-chip" data-cat="apoio">Apoio</button>
+      </div>
+      <div class="filter-group" id="filter-geral-unit">
+        <button class="filter-chip active" data-unit="all">Todas unidades</button>
+      </div>
+      <div class="tb-divider"></div>
+      <div class="stat-pill"><strong id="geral-total">0</strong>itens</div>
+    </div>
+    <div class="table-wrap" id="geral-table-wrap"></div>
+  </div>
+
+  <!-- COMPRESSORES -->
+  <div class="view" id="view-compressores">
+    <div class="toolbar">
+      <div class="search-box">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="search-comp" placeholder="Buscar compressor, série, frota...">
+      </div>
+      <div class="filter-group" id="filter-comp-unit">
+        <button class="filter-chip active" data-unit="all">Todas</button>
+      </div>
+      <div class="filter-group" id="filter-comp-status">
+        <button class="filter-chip active" data-st="all">Todos</button>
+        <button class="filter-chip" data-st="operando">Operando</button>
+        <button class="filter-chip" data-st="estoque">Estoque</button>
+        <button class="filter-chip" data-st="manutencao">Manutenção</button>
+      </div>
+      <div class="tb-divider"></div>
+      <div class="stat-pill"><strong id="comp-total">0</strong>compressores</div>
+      <button class="btn btn-primary" id="btn-new-compressor" style="display:none">+ Novo</button>
+    </div>
+    <div class="table-wrap" id="comp-table-wrap"></div>
+  </div>
+
+</div>
+
+<!-- ═══ MODAIS ═══ -->
+<div class="modal-backdrop" id="modal-thresholds">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Parâmetros de alerta</div>
+      <button class="btn-icon" onclick="closeModal('modal-thresholds')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="helper">
+        Defina a partir de quantos <strong>dias sem viagem</strong> cada nível de alerta é disparado.
+        Configuração <strong>global</strong> (apenas admin) — todos os usuários verão os mesmos limiares.
+      </div>
+      <div class="threshold-grid">
+        <div class="threshold-cell green"><div class="dot"></div><label>OK até</label><input type="number" id="th-green" min="0" max="365"></div>
+        <div class="threshold-cell yellow"><div class="dot"></div><label>Atenção +</label><input type="number" id="th-yellow" min="0" max="365"></div>
+        <div class="threshold-cell orange"><div class="dot"></div><label>Alerta +</label><input type="number" id="th-orange" min="0" max="365"></div>
+        <div class="threshold-cell red"><div class="dot"></div><label>Crítico +</label><input type="number" id="th-red" min="0" max="365"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-thresholds')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-save-thresholds">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-detail">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="detail-title">Detalhes</div>
+      <button class="btn-icon" onclick="closeModal('modal-detail')">×</button>
+    </div>
+    <div class="modal-body" id="detail-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-detail')">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="modal-compressor">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="comp-modal-title">Novo compressor</div>
+      <button class="btn-icon" onclick="closeModal('modal-compressor')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="helper">Apenas administradores podem cadastrar ou editar compressores.</div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label>Identificação</label>
+          <input type="text" id="cf_id" placeholder="Ex.: CMP-001 ou descrição">
+        </div>
+        <div class="form-row">
+          <label>Série</label>
+          <input type="text" id="cf_serie" placeholder="Número de série">
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label>Vínculo</label>
+          <select id="cf_vinculo">
+            <option value="FROTA">Frota</option>
+            <option value="PRÓPRIO">Próprio</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Status</label>
+          <select id="cf_status">
+            <option value="operando">Operando</option>
+            <option value="estoque">Em estoque</option>
+            <option value="manutencao">Manutenção</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label>Unidade</label>
+          <select id="cf_unidade"><option value="">— Selecione —</option></select>
+        </div>
+        <div class="form-row">
+          <label>Cavalo associado (placa)</label>
+          <select id="cf_cavalo"><option value="">— Nenhum —</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Observações</label>
+        <input type="text" id="cf_obs" placeholder="Opcional">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-danger" id="cf_del" style="margin-right:auto;display:none">Excluir</button>
+      <button class="btn btn-secondary" onclick="closeModal('modal-compressor')">Cancelar</button>
+      <button class="btn btn-primary" id="cf_save">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════
+     SCRIPTS · Firebase + Lógica do módulo Frota
+═══════════════════════════════════════════════════════════════════ -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script>
+/* ═══ Firebase init (mesmo projeto Atlas) ═══ */
+(function(){
+  const firebaseConfig = {
+    apiKey:            "AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",
+    authDomain:        "comix-relatorios.firebaseapp.com",
+    projectId:         "comix-relatorios",
+    storageBucket:     "comix-relatorios.firebasestorage.app",
+    messagingSenderId: "586258388438",
+    appId:             "1:586258388438:web:3b9da22e650e88ddcf4077"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db   = firebase.firestore();
+
+  let currentUser   = null;
+  let currentPerfil = "motorista";
+
+  function normalizeEmail(e) { return String(e || "").trim().toLowerCase(); }
+  function upper(v) { return String(v || "").trim().toUpperCase(); }
+
+  /* ─── window._FB · Camada de acesso compartilhável ─── */
+  window._FB = {
+    getCurrentUser:   () => currentUser,
+    getCurrentPerfil: () => currentPerfil,
+    _db: () => db,
+
+    doLogin:  (email, senha) => auth.signInWithEmailAndPassword(email, senha),
+    doLogout: () => auth.signOut(),
+
+    listarCadastros: async function(collectionName) {
+      if (!currentUser) throw new Error("Usuário não autenticado");
+      const allowed = ["veiculos", "motoristas", "filiais"];
+      if (!allowed.includes(collectionName)) throw new Error("Coleção operacional não permitida");
+      const snap = await db.collection(collectionName).get();
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    },
+
+    /* ─── Coleções específicas do módulo Frota ─── */
+    listarCompressores: async function() {
+      if (!currentUser) throw new Error("Não autenticado");
+      const snap = await db.collection("compressores").get();
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    },
+    salvarCompressor: async function(id, dados) {
+      if (currentPerfil !== "admin") throw new Error("Apenas administradores podem editar compressores");
+      const payload = {
+        ...dados,
+        updatedAt: firebase.firestore.Timestamp.now(),
+        updatedBy: currentUser.email,
+      };
+      if (id) {
+        await db.collection("compressores").doc(id).set(payload, { merge: true });
+        return id;
+      }
+      payload.createdAt = firebase.firestore.Timestamp.now();
+      payload.createdBy = currentUser.email;
+      const ref = await db.collection("compressores").add(payload);
+      return ref.id;
+    },
+    excluirCompressor: async function(id) {
+      if (currentPerfil !== "admin") throw new Error("Apenas administradores podem excluir");
+      await db.collection("compressores").doc(id).delete();
+    },
+
+    listarAlocacoes: async function() {
+      if (!currentUser) throw new Error("Não autenticado");
+      const snap = await db.collection("alocacao_frota").get();
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    },
+    salvarAlocacao: async function(cavaloId, dados) {
+      if (currentPerfil !== "admin") throw new Error("Apenas administradores podem mover veículos");
+      const payload = {
+        ...dados,
+        cavalo_id: cavaloId,
+        updatedAt: firebase.firestore.Timestamp.now(),
+        updatedBy: currentUser.email,
+      };
+      await db.collection("alocacao_frota").doc(cavaloId).set(payload, { merge: true });
+    },
+
+    getFrotaConfig: async function() {
+      const snap = await db.collection("frota_config").doc("alertas").get();
+      if (snap.exists) return snap.data();
+      return { green: 2, yellow: 3, orange: 6, red: 10 };
+    },
+    saveFrotaConfig: async function(cfg) {
+      if (currentPerfil !== "admin") throw new Error("Apenas administradores");
+      await db.collection("frota_config").doc("alertas").set({
+        ...cfg,
+        updatedAt: firebase.firestore.Timestamp.now(),
+        updatedBy: currentUser.email,
+      });
+    },
+  };
+
+  /* ─── Auth state ─── */
+  auth.onAuthStateChanged(async function(user) {
+    if (user) {
+      currentUser = user;
+      try {
+        const snapUid = await db.collection("usuarios").doc(user.uid).get();
+        let perfilDoc = snapUid.exists ? { id: snapUid.id, ...snapUid.data() } : null;
+        if (!perfilDoc && user.email) {
+          const q = await db.collection("usuarios")
+            .where("email", "==", normalizeEmail(user.email))
+            .limit(1).get();
+          if (!q.empty) perfilDoc = { id: q.docs[0].id, ...q.docs[0].data() };
+        }
+        if (perfilDoc && (perfilDoc.bloqueado === true || perfilDoc.status === "bloqueado")) {
+          currentUser = null;
+          currentPerfil = "motorista";
+          await auth.signOut();
+          setTimeout(() => {
+            const errEl = document.getElementById("li_err");
+            if (errEl) errEl.textContent = "Conta bloqueada. Contate o administrador.";
+          }, 0);
+          return;
+        }
+        currentPerfil = perfilDoc ? (perfilDoc.perfil || perfilDoc.tipo || "motorista") : "usuario";
+      } catch(e) {
+        currentPerfil = "motorista";
+        console.warn("Frota: erro ao buscar perfil", e);
+      }
+      var tries = 0;
+      (function tryReady() {
+        if (typeof window._appReady === "function") {
+          window._appReady(currentUser, currentPerfil);
+        } else if (tries++ < 60) {
+          setTimeout(tryReady, 50);
+        }
+      })();
+    } else {
+      currentUser = null;
+      currentPerfil = "usuario";
+      if (typeof window.showScreen === "function") window.showScreen("scr_login");
+    }
+  });
+})();
+
+/* ═══════════════════════════════════════════════════════════════════
+   LÓGICA DO MÓDULO FROTA
+═══════════════════════════════════════════════════════════════════ */
+
+/* ─── Utilitários globais ─── */
+function showScreen(id) {
+  document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+  const el = document.getElementById(id);
+  if (el) el.classList.add("active");
+}
+window.showScreen = showScreen;
+
+let _toast_to;
+function showToast(msg, type) {
+  const t = document.getElementById("toast");
+  if (!t) return;
+  t.textContent = msg;
+  t.className = "toast show" + (type === "error" ? " error" : type === "success" ? " success" : "");
+  clearTimeout(_toast_to);
+  _toast_to = setTimeout(() => t.classList.remove("show"), 3500);
+}
+window.showToast = showToast;
+
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m]));
+}
+
+function ico(id, size) {
+  size = size || 14;
+  return '<svg width="'+size+'" height="'+size+'" aria-hidden="true"><use href="#'+id+'"/></svg>';
+}
+
+/* ─── LOGIN / LOGOUT ─── */
+window.doLogin = async function() {
+  const email = document.getElementById("li_email").value.trim();
+  const senha = document.getElementById("li_senha").value;
+  const errEl = document.getElementById("li_err");
+  const btn = document.getElementById("li_btn");
+  const spin = document.getElementById("li_spin");
+  errEl.textContent = "";
+  document.getElementById("li_email").classList.remove("err");
+  document.getElementById("li_senha").classList.remove("err");
+  if (!email) { document.getElementById("li_email").classList.add("err"); errEl.textContent = "Informe o e-mail"; return; }
+  if (!senha) { document.getElementById("li_senha").classList.add("err"); errEl.textContent = "Informe a senha"; return; }
+  btn.disabled = true; btn.textContent = "Entrando..."; spin.style.display = "block";
+  try {
+    await window._FB.doLogin(email, senha);
+  } catch(e) {
+    btn.disabled = false; btn.textContent = "Entrar"; spin.style.display = "none";
+    errEl.textContent = "E-mail ou senha incorretos";
+    document.getElementById("li_senha").classList.add("err");
+  }
+};
+window.doLogout = async function() {
+  await window._FB.doLogout();
+  showScreen("scr_login");
+};
+window.forgotPassword = async function() {
+  const email = document.getElementById("li_email").value.trim();
+  const errEl = document.getElementById("li_err");
+  const okEl  = document.getElementById("li_forgot_ok");
+  errEl.textContent = ""; okEl.classList.remove("show");
+  if (!email) { document.getElementById("li_email").classList.add("err"); errEl.textContent = "Informe o e-mail para recuperar a senha"; return; }
+  try {
+    await firebase.auth().sendPasswordResetEmail(email);
+    okEl.textContent = "Verifique sua caixa de entrada. Pode levar alguns minutos.";
+    okEl.classList.add("show");
+  } catch(e) {
+    errEl.textContent = "Não foi possível enviar o e-mail de recuperação.";
+  }
+};
+
+/* ─── STATE ─── */
+const STATE = {
+  user: null,
+  perfil: "motorista",
+  isAdmin: false,
+  thresholds: { green: 2, yellow: 3, orange: 6, red: 10 },
+  currentTab: "dashboard",
+  search: { alocacao: "", geral: "", comp: "" },
+  filterAlerta: "all",
+  filterAlocUnit: "all",
+  filterGeral: { cat: "all", unit: "all" },
+  filterComp: { unit: "all", st: "all" },
+  veiculos: [],       // de db.veiculos (cavalos + carretas + apoio)
+  motoristas: [],     // de db.motoristas
+  filiais: [],        // de db.filiais
+  compressores: [],   // de db.compressores
+  alocacoes: {},      // de db.alocacao_frota (mapa cavalo_id → composição)
+  szb: {},            // de SZB (mock por enquanto)
+};
+
+/* ─── Normalização ─── */
+/* Veículos do Firestore: { tipo: "Cavalo|Carreta|Carro de apoio", placa, frota, modelo, ano, filial, subtipo } */
+function normalizeVeiculo(v) {
+  const tipo = String(v.tipo || "Cavalo").trim();
+  let categoria;
+  if (tipo.toLowerCase().includes("apoio")) categoria = "apoio";
+  else if (tipo.toLowerCase().includes("carreta")) categoria = "carreta";
+  else categoria = "cavalo";
+
+  // unidade slug a partir da filial
+  const filialUp = upperText(v.filial);
+  let unidade_slug = null;
+  if (filialUp) {
+    if (filialUp.includes("SANTA CATARINA")) unidade_slug = "SC";
+    else if (filialUp.includes("SÃO PAULO") || filialUp.includes("SAO PAULO")) unidade_slug = "SP";
+    else if (filialUp.includes("PARANÁ") || filialUp.includes("PARANA")) unidade_slug = "PR";
+  }
+
+  // disponibilidade normalizada
+  const stRaw = String(v.status || "").toUpperCase();
+  let disp = "operando";
+  if (stRaw.includes("INDISPON")) disp = "indisponivel";
+  else if (stRaw.includes("EM REFORMA")) disp = "em_reforma";
+  else if (stRaw.includes("A REFORMAR") || stRaw.includes("REFORMAR")) disp = "a_reformar";
+  else if (stRaw.includes("REFORMA")) disp = "em_reforma";
+  else if (stRaw.includes("RESERVA")) disp = "reserva";
+  else if (stRaw.includes("DISPON")) disp = "disponivel";
+  else if (stRaw && stRaw !== "OPERANDO") disp = (v.status || "operando").toLowerCase();
+
+  return {
+    id: v.id || v.placa,
+    frota: upperText(v.frota),
+    placa: upperText(v.placa || v.id),
+    modelo: upperText(v.modelo),
+    ano: String(v.ano || "").trim(),
+    subtipo: upperText(v.subtipo),
+    tipo_raw: tipo,
+    categoria,
+    unidade: filialUp,
+    unidade_slug,
+    vinculo: upperText(v.vinculo) || "FROTA",
+    motorista: upperText(v.motorista),
+    disponibilidade: disp,
+    status_raw: v.status || "OPERANDO",
+    observacao: v.observacao || v.observacoes || null,
+    chassi: v.chassi || null,
+    renavam: v.renavam || null,
+  };
+}
+function upperText(s) { return String(s || "").trim().toUpperCase(); }
+
+/* ─── Carregamento de dados ─── */
+async function loadAllData() {
+  try {
+    const [veiculos, motoristas, filiais, compressores, alocSnap] = await Promise.all([
+      window._FB.listarCadastros("veiculos"),
+      window._FB.listarCadastros("motoristas").catch(()=>[]),
+      window._FB.listarCadastros("filiais").catch(()=>[]),
+      window._FB.listarCompressores().catch(err => {
+        console.warn("Frota: coleção 'compressores' indisponível ainda:", err.message);
+        return [];
+      }),
+      window._FB.listarAlocacoes().catch(()=>[])
+    ]);
+
+    STATE.veiculos = veiculos.map(normalizeVeiculo);
+    STATE.motoristas = motoristas;
+    STATE.filiais = filiais;
+    STATE.compressores = compressores;
+    STATE.alocacoes = {};
+    alocSnap.forEach(a => { STATE.alocacoes[a.cavalo_id || a.id] = a; });
+
+    // Aplica alocações salvas sobre veículos (sobrescreve unidade)
+    Object.values(STATE.alocacoes).forEach(a => {
+      const v = STATE.veiculos.find(x => x.id === a.cavalo_id || x.placa === a.cavalo_id);
+      if (v) {
+        if (a.unidade_slug) { v.unidade_slug = a.unidade_slug; }
+        if (a.unidade) { v.unidade = a.unidade; }
+        if (a.disponibilidade) { v.disponibilidade = a.disponibilidade; }
+      }
+    });
+
+    // Match motoristas com cavalos (por unidade — simplificação inicial)
+    // No futuro, criar campo motorista_id direto em veiculos ou em alocacoes
+    // Por enquanto: se a alocação tiver motorista_nome, usa
+    Object.values(STATE.alocacoes).forEach(a => {
+      const v = STATE.veiculos.find(x => x.id === a.cavalo_id || x.placa === a.cavalo_id);
+      if (v && a.motorista) v.motorista = upperText(a.motorista);
+    });
+
+    // Carrega config global
+    try {
+      const cfg = await window._FB.getFrotaConfig();
+      STATE.thresholds = { green: cfg.green||2, yellow: cfg.yellow||3, orange: cfg.orange||6, red: cfg.red||10 };
+    } catch(e) { /* usa default */ }
+
+    // SZB mock (até integração com API Protheus F2)
+    STATE.szb = gerarSzbMock();
+
+    populateFilialFilters();
+    refreshCurrentView();
+  } catch(err) {
+    console.error("Frota: erro ao carregar dados", err);
+    showToast("Erro ao carregar dados: " + err.message, "error");
+  }
+}
+
+/* ─── SZB MOCK (substituir por API Protheus quando F2 estiver pronto) ─── */
+function gerarSzbMock() {
+  const hoje = new Date();
+  // Dias trabalhados nos últimos 30d por filial (regra da filial; SZB real virá daqui)
+  const diasTrabalhadosFilial = { SC: 26, SP: 24, PR: 25, null: 26 };
+  const out = {};
+  STATE.veiculos.filter(v => v.categoria === "cavalo").forEach(v => {
+    let seed = 0;
+    for (let i = 0; i < v.id.length; i++) seed = (seed * 31 + v.id.charCodeAt(i)) & 0xffff;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    let dias;
+    const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+    if (isIndisp) dias = Math.floor(rnd() * 45 + 15);
+    else {
+      const r = rnd();
+      if (r < 0.55) dias = Math.floor(rnd() * 3);
+      else if (r < 0.80) dias = Math.floor(rnd() * 3) + 3;
+      else if (r < 0.92) dias = Math.floor(rnd() * 4) + 6;
+      else if (r < 0.98) dias = Math.floor(rnd() * 9) + 10;
+      else dias = Math.floor(rnd() * 20) + 20;
+    }
+    const ultima = new Date(hoje.getTime() - dias * 86400000);
+    const maxTrab = diasTrabalhadosFilial[v.unidade_slug] || 26;
+    // Dias operados nos últimos 30 dias = teto pelo dias trabalhados da filial
+    let opsDias;
+    if (isIndisp || dias >= 30) opsDias = 0;
+    else opsDias = Math.max(0, maxTrab - Math.floor(dias * 0.6) - Math.floor(rnd() * 3));
+    opsDias = Math.min(opsDias, maxTrab);
+
+    out[v.id] = {
+      ultima_viagem: ultima.toISOString().slice(0,10),
+      dias_sem_viagem: dias,
+      dias_operados_30d: opsDias,
+      dias_trabalhados_filial_30d: maxTrab,
+      viagens_30d: dias < 30 ? Math.max(0, 25 - Math.floor(dias/2) + Math.floor(rnd()*6)-3) : 0,
+      km_30d: dias < 30 ? (Math.max(0, 25 - Math.floor(dias/2)) * (Math.floor(rnd()*240)+280)) : 0,
+    };
+  });
+  return out;
+}
+
+/* ─── Helpers ─── */
+function findVeiculo(id) {
+  return STATE.veiculos.find(v => v.id === id || v.placa === id) || null;
+}
+function szbDe(id) { return STATE.szb[id] || null; }
+function classificarAlerta(dias) {
+  if (dias == null || dias < 0) return "gray";
+  const t = STATE.thresholds;
+  if (dias >= t.red) return "red";
+  if (dias >= t.orange) return "orange";
+  if (dias >= t.yellow) return "yellow";
+  return "green";
+}
+const ALERT_LABEL = { gray: "Sem dado", green: "OK", yellow: "Atenção", orange: "Alerta", red: "Crítico" };
+const UNIT_LABEL = { SC: "Santa Catarina", SP: "São Paulo", PR: "Paraná", RESERVA: "Reservas", EM_REFORMA: "Em reforma", A_REFORMAR: "A reformar" };
+
+function iconForVeiculo(v) {
+  if (v.categoria === "apoio") return ico("ico-carro", 24);
+  if (v.categoria === "carreta") return ico("ico-carreta", 24);
+  return ico("ico-cavalo", 24);
+}
+
+/* ─── TABS ─── */
+function activateTab(tabId) {
+  STATE.currentTab = tabId;
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === tabId));
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + tabId));
+  try { localStorage.setItem("frota_tab", tabId); } catch(e) {}
+  refreshCurrentView();
+}
+function refreshCurrentView() {
+  if (STATE.currentTab === "dashboard") renderDashboard();
+  else if (STATE.currentTab === "alocacao") renderBoard();
+  else if (STATE.currentTab === "geral") renderGeral();
+  else if (STATE.currentTab === "compressores") renderCompressores();
+}
+
+/* ─── ALOCAÇÃO (Kanban) ─── */
+const COLUMNS = [
+  { id: "SC", title: "Santa Catarina", cls: "col-SC", iconId: "ico-pin" },
+  { id: "SP", title: "São Paulo", cls: "col-SP", iconId: "ico-pin" },
+  { id: "PR", title: "Paraná", cls: "col-PR", iconId: "ico-pin" },
+  { id: "RESERVA", title: "Reservas", cls: "col-RESERVA", iconId: "ico-pin" },
+  { id: "EM_REFORMA", title: "Em reforma", cls: "col-EM-REFORMA", iconId: "ico-carreta" },
+  { id: "A_REFORMAR", title: "A reformar", cls: "col-A-REFORMAR", iconId: "ico-carreta" },
+];
+
+function getCavalosPorColuna(colId) {
+  return STATE.veiculos.filter(v => {
+    if (v.categoria !== "cavalo") return false;
+    const d = v.disponibilidade;
+    if (colId === "EM_REFORMA") return d === "em_reforma";
+    if (colId === "A_REFORMAR") return d === "a_reformar" || d === "indisponivel";
+    if (colId === "RESERVA") return d === "reserva" || d === "disponivel";
+    // SC/SP/PR: operando + na unidade correta
+    if (["em_reforma","a_reformar","indisponivel","reserva","disponivel"].includes(d)) return false;
+    return v.unidade_slug === colId;
+  }).filter(v => {
+    // Filtro de filial (afeta apenas colunas operacionais; reformas/reservas sempre visíveis)
+    if (STATE.filterAlocUnit && STATE.filterAlocUnit !== "all"
+        && ["SC","SP","PR"].includes(colId) && colId !== STATE.filterAlocUnit) return false;
+    const szb = szbDe(v.id);
+    const dias = szb ? szb.dias_sem_viagem : null;
+    const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+    const alert = isIndisp ? "gray" : classificarAlerta(dias);
+    if (STATE.search.alocacao) {
+      const q = STATE.search.alocacao.toLowerCase();
+      const hay = [v.frota, v.placa, v.motorista, v.modelo].filter(Boolean).join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (STATE.filterAlerta !== "all") {
+      const ordem = { green: 0, yellow: 1, orange: 2, red: 3, gray: -1 };
+      if (ordem[alert] < ordem[STATE.filterAlerta]) return false;
+    }
+    return true;
+  });
+}
+
+function renderPlaca(placa, size) {
+  size = size || "";
+  const num = escapeHtml(placa || "—");
+  return `<div class="plate-mercosul ${size}">
+    <div class="pm-top"><span>BRASIL</span><span class="br-flag"></span></div>
+    <div class="pm-num">${num}</div>
+  </div>`;
+}
+
+function renderCard(cavalo) {
+  const szb = szbDe(cavalo.id);
+  const dias = szb ? szb.dias_sem_viagem : null;
+  const opsDias = szb ? (szb.dias_operados_30d != null ? szb.dias_operados_30d : Math.min(30, szb.viagens_30d || 0)) : null;
+  const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(cavalo.disponibilidade);
+  const alert = isIndisp ? "gray" : classificarAlerta(dias);
+  const iconClass = { green: "", yellow: "alert-yellow", orange: "alert-orange", red: "alert-red", gray: "unavail" }[alert];
+
+  const aloc = STATE.alocacoes[cavalo.id] || {};
+  const c1 = aloc.carreta1_id ? findVeiculo(aloc.carreta1_id) : null;
+  const c2 = aloc.carreta2_id ? findVeiculo(aloc.carreta2_id) : null;
+  const compressor = aloc.compressor_id ? STATE.compressores.find(c => c.id === aloc.compressor_id) : null;
+
+  const isAgregado = cavalo.vinculo === "AGREGADO";
+  const isApoio = cavalo.categoria === "apoio";
+  const vincBadge = isAgregado
+    ? '<span class="badge-vinculo agregado">Agregado</span>'
+    : '<span class="badge-vinculo frota">Frota</span>';
+
+  const motoristaHtml = cavalo.motorista
+    ? '<div class="card-driver">'+escapeHtml(cavalo.motorista)+'</div>'
+    : '<div class="card-driver no-driver">Sem motorista</div>';
+  const diasHtml = dias != null
+    ? '<div class="card-days '+alert+'">'+(dias === 0 ? 'Hoje' : dias+'d')+'</div>'
+    : '<div class="card-days gray">—</div>';
+
+  const dispLabel = { operando:'operando', disponivel:'disponivel', indisponivel:'indisponivel',
+                      em_reforma:'em reforma', a_reformar:'a reformar', reserva:'reserva' };
+  const statusTag = '<span class="status-tag '+cavalo.disponibilidade+'">'+(dispLabel[cavalo.disponibilidade]||cavalo.disponibilidade)+'</span>';
+
+  const canEdit = STATE.isAdmin;
+  const editAttr = canEdit ? 'editable' : '';
+
+  // Slots editáveis: compressor + carreta1 + carreta2
+  const compSlot = compressor
+    ? `<div class="comp-row ${editAttr}" data-slot="compressor" data-cavalo="${escapeHtml(cavalo.id)}">
+         <span class="comp-icon">${ico('ico-compressor', 14)}</span>
+         <span class="comp-label">Compr.</span>
+         <span class="comp-val">${escapeHtml(compressor.identificacao || compressor.id)}</span>
+         ${canEdit ? '<span class="comp-clear" title="Remover">×</span>' : ''}
+       </div>`
+    : (canEdit ? `<div class="comp-row editable" data-slot="compressor" data-cavalo="${escapeHtml(cavalo.id)}" data-empty="1">
+         <span class="comp-icon">${ico('ico-compressor', 14)}</span>
+         <span class="comp-label">Compr.</span>
+         <span class="comp-val comp-empty-slot">Arraste ou clique aqui</span>
+       </div>` : '');
+
+  const c1Slot = c1
+    ? `<div class="comp-row ${editAttr}" data-slot="carreta1" data-cavalo="${escapeHtml(cavalo.id)}">
+         <span class="comp-icon">${ico('ico-carreta', 14)}</span>
+         <span class="comp-label">Carr. 1</span>
+         <span class="comp-val">${escapeHtml(c1.frota || '')} · ${escapeHtml(c1.placa)}</span>
+         ${canEdit ? '<span class="comp-clear" title="Remover">×</span>' : ''}
+       </div>`
+    : (canEdit ? `<div class="comp-row editable" data-slot="carreta1" data-cavalo="${escapeHtml(cavalo.id)}" data-empty="1">
+         <span class="comp-icon">${ico('ico-carreta', 14)}</span>
+         <span class="comp-label">Carr. 1</span>
+         <span class="comp-val comp-empty-slot">Arraste ou clique aqui</span>
+       </div>` : '');
+
+  const c2Slot = c2
+    ? `<div class="comp-row ${editAttr}" data-slot="carreta2" data-cavalo="${escapeHtml(cavalo.id)}">
+         <span class="comp-icon">${ico('ico-carreta', 14)}</span>
+         <span class="comp-label">Carr. 2</span>
+         <span class="comp-val">${escapeHtml(c2.frota || '')} · ${escapeHtml(c2.placa)}</span>
+         ${canEdit ? '<span class="comp-clear" title="Remover">×</span>' : ''}
+       </div>`
+    : (canEdit ? `<div class="comp-row editable" data-slot="carreta2" data-cavalo="${escapeHtml(cavalo.id)}" data-empty="1">
+         <span class="comp-icon">${ico('ico-carreta', 14)}</span>
+         <span class="comp-label">Carr. 2</span>
+         <span class="comp-val comp-empty-slot">Arraste ou clique aqui</span>
+       </div>` : '');
+
+  const compHtml = !isApoio ? `<div class="card-composition">${compSlot}${c1Slot}${c2Slot}</div>` : '';
+
+  const cardClass = "card" + (STATE.isAdmin ? "" : " no-drag");
+  const draggable = STATE.isAdmin ? "true" : "false";
+  const opsBadge = opsDias != null && !isIndisp
+    ? `<span class="card-ops-badge" title="Dias operados nos últimos 30 dias trabalhados">Operou: <strong>${opsDias}</strong>/30d</span>`
+    : '';
+
+  return `
+    <div class="${cardClass}" draggable="${draggable}" data-id="${escapeHtml(cavalo.id)}" data-cavalo-card="1" onclick="openDetail('${escapeHtml(cavalo.id)}')">
+      <div class="card-row">
+        <div class="card-icon ${iconClass}">
+          <div class="card-icon-pulse"></div>
+          ${iconForVeiculo(cavalo)}
+        </div>
+        <div class="card-main">
+          <div class="card-id-row">
+            ${renderPlaca(cavalo.placa, 'sm')}
+            <span class="frota-pill">${escapeHtml(cavalo.frota || '—')}</span>
+            ${vincBadge}
+          </div>
+          ${motoristaHtml}
+        </div>
+        <div class="card-side">${diasHtml}</div>
+      </div>
+      ${compHtml}
+      <div class="card-footer-meta">
+        ${statusTag}
+        ${opsBadge}
+      </div>
+    </div>
+  `;
+}
+
+function renderBoard() {
+  const board = document.getElementById("board");
+  if (!board) return;
+
+  // Aplica classes de modo (alongado quando filtrado por filial)
+  board.classList.remove("filtered", "single");
+  if (STATE.filterAlocUnit && STATE.filterAlocUnit !== "all") {
+    board.classList.add("filtered");
+  }
+
+  // Stats globais
+  const stats = { green: 0, yellow: 0, orange: 0, red: 0, gray: 0 };
+  STATE.veiculos.forEach(v => {
+    if (v.categoria !== "cavalo") return;
+    const szb = szbDe(v.id);
+    const dias = szb ? szb.dias_sem_viagem : null;
+    const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+    stats[isIndisp ? "gray" : classificarAlerta(dias)]++;
+  });
+  document.getElementById("stat-green").textContent = stats.green;
+  document.getElementById("stat-yellow").textContent = stats.yellow;
+  document.getElementById("stat-orange").textContent = stats.orange;
+  document.getElementById("stat-red").textContent = stats.red;
+
+  board.innerHTML = "";
+  // Quando há filtro de filial, esconde colunas de outras filiais e mostra Reservas + reformas como suporte
+  const visibleCols = COLUMNS.filter(c => {
+    if (!STATE.filterAlocUnit || STATE.filterAlocUnit === "all") return true;
+    // Filtrado: mostra a filial escolhida + Reservas + EM_REFORMA + A_REFORMAR
+    return c.id === STATE.filterAlocUnit || ["RESERVA","EM_REFORMA","A_REFORMAR"].includes(c.id);
+  });
+
+  visibleCols.forEach(col => {
+    const cavalos = getCavalosPorColuna(col.id);
+    cavalos.sort((a, b) => {
+      const dA = (szbDe(a.id) || {}).dias_sem_viagem ?? -1;
+      const dB = (szbDe(b.id) || {}).dias_sem_viagem ?? -1;
+      return dB - dA;
+    });
+    const colStats = { green: 0, yellow: 0, orange: 0, red: 0, gray: 0 };
+    cavalos.forEach(v => {
+      const szb = szbDe(v.id);
+      const dias = szb ? szb.dias_sem_viagem : null;
+      const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+      colStats[isIndisp ? "gray" : classificarAlerta(dias)]++;
+    });
+    const colEl = document.createElement("div");
+    colEl.className = "column " + col.cls;
+    colEl.dataset.col = col.id;
+    colEl.innerHTML = `
+      <div class="column-header">
+        <div class="column-header-top">
+          <div class="column-title">
+            <div class="column-icon">${ico(col.iconId, 14)}</div>
+            ${col.title}
+          </div>
+          <div class="column-count">${cavalos.length}</div>
+        </div>
+        <div class="column-stats">
+          ${colStats.red ? '<span class="alert-mini"><span class="dot" style="background:#dc2626"></span>'+colStats.red+'</span>' : ''}
+          ${colStats.orange ? '<span class="alert-mini"><span class="dot" style="background:#f97316"></span>'+colStats.orange+'</span>' : ''}
+          ${colStats.yellow ? '<span class="alert-mini"><span class="dot" style="background:#f59e0b"></span>'+colStats.yellow+'</span>' : ''}
+          ${colStats.green ? '<span class="alert-mini"><span class="dot" style="background:#10b981"></span>'+colStats.green+'</span>' : ''}
+          ${colStats.gray ? '<span class="alert-mini"><span class="dot" style="background:#94a3b8"></span>'+colStats.gray+'</span>' : ''}
+        </div>
+      </div>
+      <div class="column-body" data-col="${col.id}">
+        ${cavalos.length ? cavalos.map(renderCard).join("") : '<div class="empty-col">Vazio</div>'}
+      </div>
+    `;
+    board.appendChild(colEl);
+  });
+  if (STATE.isAdmin) attachDragHandlers();
+}
+
+/* ─── Drag & Drop (apenas admin) ─── */
+let _draggedId = null;
+function attachDragHandlers() {
+  // Cards de cavalo (drag inter-coluna)
+  document.querySelectorAll(".card[data-cavalo-card]").forEach(card => {
+    card.addEventListener("dragstart", e => {
+      // Só dispara se não vier de um slot interno
+      if (e.target.closest(".comp-row")) { e.preventDefault(); return; }
+      _draggedId = card.dataset.id;
+      _draggedKind = "cavalo";
+      card.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", JSON.stringify({kind:"cavalo", id:_draggedId}));
+    });
+    card.addEventListener("dragend", () => { card.classList.remove("dragging"); _draggedId = null; _draggedKind = null; });
+  });
+
+  // Column body (drop destino de cavalo)
+  document.querySelectorAll(".column-body").forEach(body => {
+    body.addEventListener("dragover", e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (_draggedKind === "cavalo") body.classList.add("drag-over");
+    });
+    body.addEventListener("dragleave", e => {
+      if (!body.contains(e.relatedTarget)) body.classList.remove("drag-over");
+    });
+    body.addEventListener("drop", async e => {
+      e.preventDefault();
+      body.classList.remove("drag-over");
+      let payload; try { payload = JSON.parse(e.dataTransfer.getData("text/plain")); } catch(_){ return; }
+      if (payload && payload.kind === "cavalo") {
+        await moveCavalo(payload.id, body.dataset.col);
+      }
+    });
+  });
+
+  // Slots editáveis (compressor + carretas): drag pra trocar/transferir + click pra remover
+  document.querySelectorAll(".comp-row.editable").forEach(row => {
+    const slot = row.dataset.slot;
+    const cavaloId = row.dataset.cavalo;
+    const isEmpty = row.dataset.empty === "1";
+
+    // Slot ocupado: arrastável + clique no × remove
+    if (!isEmpty) {
+      row.setAttribute("draggable", "true");
+      row.addEventListener("dragstart", e => {
+        e.stopPropagation();
+        const aloc = STATE.alocacoes[cavaloId] || {};
+        const itemId = (slot === "compressor") ? aloc.compressor_id
+                      : (slot === "carreta1") ? aloc.carreta1_id
+                      : aloc.carreta2_id;
+        if (!itemId) return;
+        _draggedKind = "slot";
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", JSON.stringify({
+          kind: slot === "compressor" ? "compressor" : "carreta",
+          id: itemId,
+          fromCavalo: cavaloId,
+          fromSlot: slot
+        }));
+      });
+      row.addEventListener("dragend", () => { _draggedKind = null; });
+
+      const clearBtn = row.querySelector(".comp-clear");
+      if (clearBtn) {
+        clearBtn.addEventListener("click", async e => {
+          e.stopPropagation();
+          await clearSlot(cavaloId, slot);
+        });
+      }
+    }
+
+    // Drop em qualquer slot (vazio ou ocupado)
+    row.addEventListener("dragover", e => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (_draggedKind === "slot") row.classList.add("drag-over-slot");
+    });
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over-slot"));
+    row.addEventListener("drop", async e => {
+      e.preventDefault();
+      e.stopPropagation();
+      row.classList.remove("drag-over-slot");
+      let payload; try { payload = JSON.parse(e.dataTransfer.getData("text/plain")); } catch(_){ return; }
+      if (!payload || payload.kind === "cavalo") return;
+
+      // Validações de tipo (não jogar compressor em slot de carreta e vice-versa)
+      const isComp = payload.kind === "compressor";
+      const isCarr = payload.kind === "carreta";
+      if (isComp && slot !== "compressor") { showToast("Compressor só pode ir em slot de compressor", "error"); return; }
+      if (isCarr && slot === "compressor") { showToast("Carreta não pode ir em slot de compressor", "error"); return; }
+      if (payload.fromCavalo === cavaloId && payload.fromSlot === slot) return;
+
+      await assignSlot(cavaloId, slot, payload);
+    });
+  });
+}
+
+let _draggedKind = null;
+
+async function moveCavalo(id, targetCol) {
+  if (!STATE.isAdmin) { showToast("Apenas admin pode mover veículos", "error"); return; }
+  const v = findVeiculo(id);
+  if (!v) return;
+
+  // Atualiza local
+  let newDisp = v.disponibilidade;
+  let newSlug = v.unidade_slug;
+  let newUnidade = v.unidade;
+  if (targetCol === "EM_REFORMA") {
+    newDisp = "em_reforma";
+  } else if (targetCol === "A_REFORMAR") {
+    newDisp = "a_reformar";
+  } else if (targetCol === "RESERVA") {
+    newDisp = "reserva";
+  } else {
+    newDisp = "operando";
+    const map = { SC: "SANTA CATARINA", SP: "SÃO PAULO", PR: "PARANÁ" };
+    newUnidade = map[targetCol];
+    newSlug = targetCol;
+  }
+
+  // Persiste no Firestore (alocacao_frota)
+  try {
+    await window._FB.salvarAlocacao(v.id, {
+      cavalo_placa: v.placa,
+      cavalo_frota: v.frota,
+      unidade: newUnidade,
+      unidade_slug: newSlug,
+      disponibilidade: newDisp,
+      // mantém composição existente
+      carreta1_id: (STATE.alocacoes[v.id] || {}).carreta1_id || null,
+      carreta2_id: (STATE.alocacoes[v.id] || {}).carreta2_id || null,
+      compressor_id: (STATE.alocacoes[v.id] || {}).compressor_id || null,
+      motorista: (STATE.alocacoes[v.id] || {}).motorista || v.motorista || null,
+    });
+    // Atualiza estado local
+    v.disponibilidade = newDisp;
+    v.unidade_slug = newSlug;
+    v.unidade = newUnidade;
+    STATE.alocacoes[v.id] = STATE.alocacoes[v.id] || {};
+    Object.assign(STATE.alocacoes[v.id], {
+      cavalo_id: v.id, cavalo_placa: v.placa,
+      unidade: newUnidade, unidade_slug: newSlug, disponibilidade: newDisp
+    });
+    renderBoard();
+    renderDashboard();
+    showToast((v.frota || v.placa) + " → " + UNIT_LABEL[targetCol], "success");
+  } catch(err) {
+    console.error(err);
+    showToast("Erro ao salvar: " + err.message, "error");
+  }
+}
+
+/* ─── Slots: limpar (clique no ×) e atribuir (drop) ─── */
+async function clearSlot(cavaloId, slot) {
+  if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
+  const aloc = STATE.alocacoes[cavaloId] || {};
+  const patch = { ...aloc };
+  if (slot === "compressor") patch.compressor_id = null;
+  else if (slot === "carreta1") patch.carreta1_id = null;
+  else if (slot === "carreta2") patch.carreta2_id = null;
+  try {
+    await window._FB.salvarAlocacao(cavaloId, sanitizeAloc(patch, cavaloId));
+    STATE.alocacoes[cavaloId] = { ...aloc, ...patch };
+    renderBoard();
+    showToast("Item removido", "success");
+  } catch(e) { showToast("Erro: " + e.message, "error"); }
+}
+
+async function assignSlot(targetCavalo, slot, payload) {
+  if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
+  const itemId = payload.id;
+
+  // 1) Se o item já está em outro cavalo, remove de lá (integridade: 1 item por slot)
+  if (payload.fromCavalo && payload.fromCavalo !== targetCavalo && payload.fromSlot) {
+    const src = { ...(STATE.alocacoes[payload.fromCavalo] || {}) };
+    if (payload.fromSlot === "compressor") src.compressor_id = null;
+    else if (payload.fromSlot === "carreta1") src.carreta1_id = null;
+    else if (payload.fromSlot === "carreta2") src.carreta2_id = null;
+    try {
+      await window._FB.salvarAlocacao(payload.fromCavalo, sanitizeAloc(src, payload.fromCavalo));
+      STATE.alocacoes[payload.fromCavalo] = src;
+    } catch(e) { showToast("Erro ao desvincular origem: " + e.message, "error"); return; }
+  }
+
+  // 2) Atribui no destino
+  const tgt = { ...(STATE.alocacoes[targetCavalo] || {}) };
+  if (slot === "compressor") tgt.compressor_id = itemId;
+  else if (slot === "carreta1") tgt.carreta1_id = itemId;
+  else if (slot === "carreta2") tgt.carreta2_id = itemId;
+  try {
+    await window._FB.salvarAlocacao(targetCavalo, sanitizeAloc(tgt, targetCavalo));
+    STATE.alocacoes[targetCavalo] = tgt;
+    renderBoard();
+    showToast("Atribuído", "success");
+  } catch(e) { showToast("Erro: " + e.message, "error"); }
+}
+
+function sanitizeAloc(a, cavaloId) {
+  const v = findVeiculo(cavaloId);
+  return {
+    cavalo_id: cavaloId,
+    cavalo_placa: v ? v.placa : cavaloId,
+    cavalo_frota: v ? v.frota : null,
+    unidade: a.unidade || (v ? v.unidade : null),
+    unidade_slug: a.unidade_slug || (v ? v.unidade_slug : null),
+    disponibilidade: a.disponibilidade || (v ? v.disponibilidade : "operando"),
+    carreta1_id: a.carreta1_id || null,
+    carreta2_id: a.carreta2_id || null,
+    compressor_id: a.compressor_id || null,
+    motorista: a.motorista || (v ? v.motorista : null) || null,
+  };
+}
+
+window.openDetail = function(id) {
+  const v = findVeiculo(id);
+  if (!v) return;
+  const szb = szbDe(id);
+  const aloc = STATE.alocacoes[id] || {};
+  const c1 = aloc.carreta1_id ? findVeiculo(aloc.carreta1_id) : null;
+  const c2 = aloc.carreta2_id ? findVeiculo(aloc.carreta2_id) : null;
+  const compressor = aloc.compressor_id ? STATE.compressores.find(c => c.id === aloc.compressor_id) : null;
+  const dias = szb ? szb.dias_sem_viagem : null;
+  const isIndisp = v.disponibilidade === "indisponivel" || v.disponibilidade === "reforma";
+  const alert = isIndisp ? "gray" : classificarAlerta(dias);
+
+  document.getElementById("detail-title").textContent = (v.frota || v.placa) + " · " + (v.placa || "");
+  document.getElementById("detail-body").innerHTML = `
+    <div class="detail-section">
+      <div class="detail-section-title">${ico('ico-pin',12)} Operação</div>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Status</label><div class="value">${v.status_raw || '—'}</div></div>
+        <div class="detail-item"><label>Unidade</label><div class="value">${v.unidade || '—'}</div></div>
+        <div class="detail-item"><label>Alerta</label><div class="value">● ${ALERT_LABEL[alert]}</div></div>
+        <div class="detail-item"><label>Dias sem viagem</label><div class="value">${dias != null ? dias + ' dias' : '— (sem SZB)'}</div></div>
+        ${szb ? '<div class="detail-item"><label>Última viagem</label><div class="value mono">'+szb.ultima_viagem+'</div></div>' : ''}
+        ${szb ? '<div class="detail-item"><label>Viagens (30d)</label><div class="value">'+szb.viagens_30d+'</div></div>' : ''}
+        ${szb ? '<div class="detail-item"><label>KM (30d)</label><div class="value">'+szb.km_30d.toLocaleString('pt-BR')+' km</div></div>' : ''}
+      </div>
+    </div>
+    <div class="detail-section">
+      <div class="detail-section-title">${ico(v.categoria==='apoio'?'ico-carro':v.categoria==='carreta'?'ico-carreta':'ico-cavalo',14)} ${v.categoria === 'cavalo' ? 'Cavalo mecânico' : v.categoria === 'carreta' ? 'Carreta' : 'Veículo de apoio'}</div>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Frota</label><div class="value mono">${escapeHtml(v.frota || '—')}</div></div>
+        <div class="detail-item"><label>Placa</label><div class="value mono">${escapeHtml(v.placa || '—')}</div></div>
+        <div class="detail-item"><label>Modelo</label><div class="value">${escapeHtml(v.modelo || '—')}</div></div>
+        <div class="detail-item"><label>Ano</label><div class="value">${escapeHtml(v.ano || '—')}</div></div>
+        <div class="detail-item"><label>Subtipo</label><div class="value">${escapeHtml(v.subtipo || '—')}</div></div>
+        <div class="detail-item"><label>Vínculo</label><div class="value">${v.vinculo === 'AGREGADO' ? 'Agregado' : 'Frota própria'}</div></div>
+        <div class="detail-item"><label>Motorista</label><div class="value">${escapeHtml(v.motorista || '— Sem motorista')}</div></div>
+      </div>
+    </div>
+    ${compressor ? `
+    <div class="detail-section">
+      <div class="detail-section-title">${ico('ico-compressor',14)} Compressor</div>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Identificação</label><div class="value">${escapeHtml(compressor.identificacao || '—')}</div></div>
+        <div class="detail-item"><label>Série</label><div class="value mono">${escapeHtml(compressor.serie || '—')}</div></div>
+        <div class="detail-item"><label>Status</label><div class="value">${escapeHtml(compressor.status || '—')}</div></div>
+      </div>
+    </div>` : ''}
+    ${c1 ? `
+    <div class="detail-section">
+      <div class="detail-section-title">${ico('ico-carreta',14)} Carreta 1</div>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Frota</label><div class="value mono">${escapeHtml(c1.frota || '—')}</div></div>
+        <div class="detail-item"><label>Placa</label><div class="value mono">${escapeHtml(c1.placa || '—')}</div></div>
+        <div class="detail-item"><label>Modelo</label><div class="value">${escapeHtml(c1.modelo || '—')}</div></div>
+        <div class="detail-item"><label>Subtipo</label><div class="value">${escapeHtml(c1.subtipo || '—')}</div></div>
+      </div>
+    </div>` : ''}
+    ${c2 ? `
+    <div class="detail-section">
+      <div class="detail-section-title">${ico('ico-carreta',14)} Carreta 2</div>
+      <div class="detail-grid">
+        <div class="detail-item"><label>Frota</label><div class="value mono">${escapeHtml(c2.frota || '—')}</div></div>
+        <div class="detail-item"><label>Placa</label><div class="value mono">${escapeHtml(c2.placa || '—')}</div></div>
+        <div class="detail-item"><label>Modelo</label><div class="value">${escapeHtml(c2.modelo || '—')}</div></div>
+        <div class="detail-item"><label>Subtipo</label><div class="value">${escapeHtml(c2.subtipo || '—')}</div></div>
+      </div>
+    </div>` : ''}
+  `;
+  openModal("modal-detail");
+};
+
+/* ─── GERAL ─── */
+function renderGeral() {
+  const wrap = document.getElementById("geral-table-wrap");
+  let items = STATE.veiculos.slice();
+  const q = STATE.search.geral.toLowerCase();
+  const cat = STATE.filterGeral.cat;
+  const unit = STATE.filterGeral.unit;
+  if (cat !== "all") items = items.filter(v => v.categoria === cat);
+  if (unit !== "all") items = items.filter(v => v.unidade_slug === unit);
+  if (q) items = items.filter(v => {
+    const hay = [v.frota, v.placa, v.motorista, v.modelo, v.chassi, v.renavam, v.subtipo].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+  document.getElementById("geral-total").textContent = items.length;
+  const catIco = { cavalo: "ico-cavalo", carreta: "ico-carreta", apoio: "ico-carro" };
+  const catLabel = { cavalo: "Cavalo", carreta: "Carreta", apoio: "Apoio" };
+  if (!items.length) {
+    wrap.innerHTML = '<div class="empty-state"><div class="ico">📭</div>Nenhum veículo encontrado<br><small>Verifique os filtros ou cadastre veículos em Cadastros</small></div>';
+    return;
+  }
+
+  const STATUS_OPTS = [
+    {v:"operando",l:"Operando"},
+    {v:"disponivel",l:"Disponível"},
+    {v:"reserva",l:"Reserva"},
+    {v:"em_reforma",l:"Em reforma"},
+    {v:"a_reformar",l:"A reformar"},
+    {v:"indisponivel",l:"Indisponível"},
+  ];
+  const UNIT_OPTS = [
+    {v:"SC",l:"Santa Catarina"},
+    {v:"SP",l:"São Paulo"},
+    {v:"PR",l:"Paraná"},
+  ];
+
+  wrap.innerHTML = `
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Tipo</th><th>Frota</th><th>Placa</th><th>Modelo</th>
+          <th>Subtipo</th><th>Unidade</th><th>Status</th><th>Ano</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${items.map(v => `
+          <tr>
+            <td><span class="tcat ${v.categoria}">${ico(catIco[v.categoria],12)} ${catLabel[v.categoria]}</span></td>
+            <td class="mono"><strong onclick="openDetail('${escapeHtml(v.id)}')" style="cursor:pointer">${escapeHtml(v.frota || '—')}</strong></td>
+            <td class="mono">${renderPlaca(v.placa, 'sm')}</td>
+            <td>${escapeHtml(v.modelo || '—')}</td>
+            <td class="muted">${escapeHtml(v.subtipo || '—')}</td>
+            <td>${STATE.isAdmin
+              ? `<select class="inline-edit" onchange="editGeralField('${escapeHtml(v.id)}','unit',this.value)" style="padding:3px 6px;border:1px solid var(--gray-l);border-radius:4px;font-size:11.5px;font-family:inherit">
+                  <option value="">${escapeHtml(v.unidade || '—')}</option>
+                  ${UNIT_OPTS.map(o => `<option value="${o.v}" ${v.unidade_slug===o.v?'selected':''}>${o.l}</option>`).join('')}
+                </select>`
+              : escapeHtml(v.unidade || '—')}</td>
+            <td>${STATE.isAdmin
+              ? `<select class="inline-edit" onchange="editGeralField('${escapeHtml(v.id)}','status',this.value)" style="padding:3px 6px;border:1px solid var(--gray-l);border-radius:4px;font-size:11.5px;font-family:inherit">
+                  ${STATUS_OPTS.map(o => `<option value="${o.v}" ${v.disponibilidade===o.v?'selected':''}>${o.l}</option>`).join('')}
+                </select>`
+              : `<span class="status-tag ${v.disponibilidade}">${v.disponibilidade}</span>`}</td>
+            <td class="muted">${escapeHtml(v.ano || '—')}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+window.editGeralField = async function(id, field, value) {
+  if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
+  const v = findVeiculo(id);
+  if (!v) return;
+  const aloc = STATE.alocacoes[id] || {};
+  const patch = { ...aloc };
+  if (field === "status") {
+    patch.disponibilidade = value;
+    v.disponibilidade = value;
+  } else if (field === "unit") {
+    if (!value) return;
+    const map = { SC: "SANTA CATARINA", SP: "SÃO PAULO", PR: "PARANÁ" };
+    patch.unidade_slug = value;
+    patch.unidade = map[value];
+    v.unidade_slug = value;
+    v.unidade = map[value];
+  }
+  // Para carreta/apoio também: persiste como alocação (mesma coleção)
+  try {
+    await window._FB.salvarAlocacao(id, sanitizeAloc(patch, id));
+    STATE.alocacoes[id] = { ...aloc, ...patch };
+    // Re-renderiza aba atual + dashboard (sincronia entre abas)
+    refreshCurrentView();
+    showToast("Atualizado", "success");
+  } catch(e) { showToast("Erro: " + e.message, "error"); }
+};
+
+/* ─── COMPRESSORES ─── */
+function renderCompressores() {
+  const wrap = document.getElementById("comp-table-wrap");
+  let items = STATE.compressores.slice();
+  const q = STATE.search.comp.toLowerCase();
+  if (STATE.filterComp.unit !== "all") items = items.filter(c => normalizeUnitSlug(c.unidade) === STATE.filterComp.unit);
+  if (STATE.filterComp.st !== "all") items = items.filter(c => (c.status || "operando") === STATE.filterComp.st);
+  if (q) items = items.filter(c => {
+    const hay = [c.identificacao, c.serie, c.cavalo_placa, c.id].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+  document.getElementById("comp-total").textContent = items.length;
+  const stLabel = { operando: "Operando", estoque: "Em estoque", manutencao: "Manutenção" };
+  const stClass = { operando: "operando", estoque: "disponivel", manutencao: "reforma" };
+
+  if (!items.length) {
+    wrap.innerHTML = `
+      <div class="empty-state">
+        <div class="ico">${ico('ico-compressor', 48)}</div>
+        Nenhum compressor cadastrado<br>
+        <small>${STATE.isAdmin ? 'Use o botão "+ Novo" para cadastrar o primeiro compressor' : 'Aguarde o administrador cadastrar os compressores'}</small>
+      </div>`;
+    return;
+  }
+  wrap.innerHTML = `
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th></th><th>Identificação</th><th>Série</th>
+          <th>Vínculo</th>
+          <th>Unidade</th><th>Status</th>
+          ${STATE.isAdmin ? '<th></th>' : ''}
+        </tr>
+      </thead>
+      <tbody>
+        ${items.map(c => {
+          const vincRaw = (c.vinculo || "FROTA").toUpperCase();
+          const vincLabel = vincRaw === "AGREGADO" ? "PRÓPRIO" : vincRaw;
+          const vincCls = vincRaw === "AGREGADO" ? "agregado" : "frota";
+          return `
+          <tr ${STATE.isAdmin ? 'onclick="editCompressor(\''+escapeHtml(c.id)+'\')"' : ''}>
+            <td style="color:var(--gray)">${ico('ico-compressor', 16)}</td>
+            <td><strong>${escapeHtml(c.identificacao || c.id)}</strong></td>
+            <td class="mono muted">${escapeHtml(c.serie || '—')}</td>
+            <td><span class="badge-vinculo ${vincCls}">${vincLabel}</span></td>
+            <td>${escapeHtml(c.unidade || '—')}</td>
+            <td><span class="status-tag ${stClass[c.status||'operando']||'reserva'}">${stLabel[c.status||'operando']||c.status||'—'}</span></td>
+            ${STATE.isAdmin ? '<td><button class="btn-icon" title="Editar">✏</button></td>' : ''}
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function normalizeUnitSlug(s) {
+  if (!s) return null;
+  const u = String(s).toUpperCase();
+  if (u.includes("SANTA CATARINA")) return "SC";
+  if (u.includes("SÃO PAULO") || u.includes("SAO PAULO")) return "SP";
+  if (u.includes("PARANÁ") || u.includes("PARANA")) return "PR";
+  return null;
+}
+
+window.editCompressor = function(id) {
+  if (!STATE.isAdmin) return;
+  const c = STATE.compressores.find(x => x.id === id);
+  if (!c) return;
+  document.getElementById("comp-modal-title").textContent = "Editar compressor";
+  document.getElementById("cf_id").value = c.identificacao || "";
+  document.getElementById("cf_id").dataset.editId = c.id;
+  document.getElementById("cf_serie").value = c.serie || "";
+  document.getElementById("cf_vinculo").value = c.vinculo || "FROTA";
+  document.getElementById("cf_status").value = c.status || "operando";
+  document.getElementById("cf_unidade").value = c.unidade || "";
+  document.getElementById("cf_cavalo").value = c.cavalo_placa || "";
+  document.getElementById("cf_obs").value = c.observacao || "";
+  document.getElementById("cf_del").style.display = "inline-flex";
+  openModal("modal-compressor");
+};
+
+function newCompressor() {
+  if (!STATE.isAdmin) return;
+  document.getElementById("comp-modal-title").textContent = "Novo compressor";
+  ["cf_id","cf_serie","cf_obs"].forEach(i => document.getElementById(i).value = "");
+  document.getElementById("cf_id").dataset.editId = "";
+  document.getElementById("cf_vinculo").value = "FROTA";
+  document.getElementById("cf_status").value = "operando";
+  document.getElementById("cf_unidade").value = "";
+  document.getElementById("cf_cavalo").value = "";
+  document.getElementById("cf_del").style.display = "none";
+  openModal("modal-compressor");
+}
+
+async function saveCompressor() {
+  if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
+  const identificacao = document.getElementById("cf_id").value.trim();
+  const editId = document.getElementById("cf_id").dataset.editId;
+  if (!identificacao) { showToast("Informe a identificação", "error"); return; }
+  const dados = {
+    identificacao: identificacao.toUpperCase(),
+    serie: document.getElementById("cf_serie").value.trim(),
+    vinculo: document.getElementById("cf_vinculo").value,
+    status: document.getElementById("cf_status").value,
+    unidade: document.getElementById("cf_unidade").value,
+    cavalo_placa: document.getElementById("cf_cavalo").value,
+    observacao: document.getElementById("cf_obs").value.trim(),
+  };
+  try {
+    await window._FB.salvarCompressor(editId || null, dados);
+    showToast("Compressor salvo", "success");
+    closeModal("modal-compressor");
+    STATE.compressores = await window._FB.listarCompressores();
+    renderCompressores();
+    renderDashboard();
+  } catch(e) {
+    showToast("Erro: " + e.message, "error");
+  }
+}
+
+async function deleteCompressor() {
+  if (!STATE.isAdmin) return;
+  const editId = document.getElementById("cf_id").dataset.editId;
+  if (!editId) return;
+  if (!confirm("Excluir este compressor permanentemente?")) return;
+  try {
+    await window._FB.excluirCompressor(editId);
+    showToast("Compressor excluído", "success");
+    closeModal("modal-compressor");
+    STATE.compressores = await window._FB.listarCompressores();
+    renderCompressores();
+    renderDashboard();
+  } catch(e) {
+    showToast("Erro: " + e.message, "error");
+  }
+}
+
+/* ─── DASHBOARD ─── */
+function calcResumo() {
+  const u = { SC: blank(), SP: blank(), PR: blank(), MANUT: blank() };
+  function blank() {
+    return {
+      cavalos_op: 0, frota_op: 0, agregado_op: 0,
+      cavalos_disp: 0, cavalos_indisp: 0,
+      carretas: 0, carretas_op: 0, carretas_reforma: 0, carretas_indisp: 0,
+      compressores_op: 0, compressores_estoque: 0, compressores_manut: 0,
+    };
+  }
+  STATE.veiculos.forEach(v => {
+    const unit = v.unidade_slug;
+    const isIndisp = v.disponibilidade === "indisponivel" || v.disponibilidade === "reforma";
+    if (v.categoria === "cavalo") {
+      if (isIndisp) { if (unit && u[unit]) u[unit].cavalos_indisp++; }
+      else if (v.disponibilidade === "disponivel") { if (unit && u[unit]) u[unit].cavalos_disp++; }
+      else if (unit && u[unit]) {
+        u[unit].cavalos_op++;
+        if (v.vinculo === "AGREGADO") u[unit].agregado_op++; else u[unit].frota_op++;
+      }
+    }
+    if (v.categoria === "carreta" && unit && u[unit]) {
+      u[unit].carretas++;
+      if (v.disponibilidade === "reforma") u[unit].carretas_reforma++;
+      else if (v.disponibilidade === "indisponivel") u[unit].carretas_indisp++;
+      else u[unit].carretas_op++;
+    }
+  });
+  STATE.compressores.forEach(c => {
+    const unit = normalizeUnitSlug(c.unidade);
+    if (!unit || !u[unit]) return;
+    const st = c.status || "operando";
+    if (st === "operando") u[unit].compressores_op++;
+    else if (st === "estoque") u[unit].compressores_estoque++;
+    else if (st === "manutencao") u[unit].compressores_manut++;
+  });
+  const total = {};
+  Object.keys(u.SC).forEach(k => { total[k] = (u.SC[k]||0) + (u.SP[k]||0) + (u.PR[k]||0); });
+  const alertas = { green: 0, yellow: 0, orange: 0, red: 0, gray: 0 };
+  STATE.veiculos.filter(v => v.categoria === "cavalo").forEach(v => {
+    const szb = szbDe(v.id);
+    const dias = szb ? szb.dias_sem_viagem : null;
+    const isIndisp = v.disponibilidade === "indisponivel" || v.disponibilidade === "reforma";
+    alertas[isIndisp ? "gray" : classificarAlerta(dias)]++;
+  });
+  return { byUnit: u, total, alertas };
+}
+
+function renderDashboard() {
+  const el = document.getElementById("dashboard-content");
+  if (!el || !STATE.veiculos.length) {
+    if (el) el.innerHTML = '<div class="loading-screen"><div class="loading-spin"></div><div>Carregando…</div></div>';
+    return;
+  }
+  const r = calcResumo();
+  const totalCavalosOp = r.total.cavalos_op;
+  const totalCarretas = r.total.carretas;
+  const totalCompressores = r.total.compressores_op + r.total.compressores_estoque + r.total.compressores_manut;
+  const totalCriticos = r.alertas.red + r.alertas.orange;
+  const totalManut = r.total.cavalos_indisp + r.total.carretas_reforma + r.total.carretas_indisp;
+
+  el.innerHTML = `
+    <div class="kpi-grid">
+      <div class="kpi accent-blue">
+        <div class="kpi-label">Cavalos Operando</div>
+        <div class="kpi-value">${totalCavalosOp}</div>
+        <div class="kpi-sub">${r.total.frota_op} Frota · ${r.total.agregado_op} Agregado</div>
+      </div>
+      <div class="kpi accent-green">
+        <div class="kpi-label">Carretas</div>
+        <div class="kpi-value">${totalCarretas}</div>
+        <div class="kpi-sub">${r.total.carretas_op} operando · ${r.total.carretas_reforma} reforma</div>
+      </div>
+      <div class="kpi accent-purple">
+        <div class="kpi-label">Compressores</div>
+        <div class="kpi-value">${totalCompressores}</div>
+        <div class="kpi-sub">${r.total.compressores_op} ativos · ${r.total.compressores_manut} manut.</div>
+      </div>
+      <div class="kpi accent-red">
+        <div class="kpi-label">Alertas Críticos</div>
+        <div class="kpi-value" style="color:${totalCriticos>0?'var(--red)':'var(--black)'}">${totalCriticos}</div>
+        <div class="kpi-sub">${r.alertas.red} crítico · ${r.alertas.orange} alerta</div>
+      </div>
+      <div class="kpi accent-orange">
+        <div class="kpi-label">Em Manutenção</div>
+        <div class="kpi-value">${totalManut}</div>
+        <div class="kpi-sub">${r.total.cavalos_indisp} cavalos · ${r.total.carretas_reforma + r.total.carretas_indisp} carretas</div>
+      </div>
+    </div>
+
+    <div class="dash-section">
+      <div class="dash-section-header">⏱ Tempo de caminhões parados por filial</div>
+      <div class="dash-grid">
+        ${['SC','SP','PR'].map(uk => {
+          // Calcula caminhões parados (>= limiar yellow) da filial e tempo médio
+          const cavalosFilial = STATE.veiculos.filter(v => v.categoria === 'cavalo' && v.unidade_slug === uk);
+          const parados = cavalosFilial.map(v => {
+            const szb = szbDe(v.id);
+            const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+            return { v, dias: szb ? szb.dias_sem_viagem : null, isIndisp };
+          }).filter(x => x.isIndisp || (x.dias != null && x.dias >= STATE.thresholds.yellow));
+          const totalDias = parados.reduce((s, x) => s + (x.dias || 0), 0);
+          const media = parados.length ? (totalDias / parados.length).toFixed(1) : "0";
+          const max = parados.reduce((m, x) => (x.dias || 0) > m ? (x.dias || 0) : m, 0);
+          return `
+            <div class="dash-unit ${uk}">
+              <div class="dash-unit-header">
+                <div class="dash-unit-icon">${ico('ico-pin',12)}</div>
+                ${UNIT_LABEL[uk]}
+              </div>
+              <div class="dash-row"><span class="label">Total parados</span><span class="value" style="color:${parados.length>0?'var(--orange)':'var(--black)'}">${parados.length}</span></div>
+              <div class="dash-row"><span class="label">Média dias parados</span><span class="value">${media}d</span></div>
+              <div class="dash-row"><span class="label">Maior tempo parado</span><span class="value" style="color:${max>=STATE.thresholds.red?'var(--red)':'var(--black)'}">${max}d</span></div>
+              <div class="dash-row total"><span class="label">Operando</span><span class="value">${cavalosFilial.length - parados.length}/${cavalosFilial.length}</span></div>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="dash-section">
+      <div class="dash-section-header">${ico('ico-pin',14)} Equipamentos por Unidade</div>
+      <div class="dash-grid">
+        ${['SC','SP','PR'].map(uk => {
+          const x = r.byUnit[uk];
+          const tu = x.cavalos_op + x.cavalos_disp + x.cavalos_indisp;
+          return `
+            <div class="dash-unit ${uk}">
+              <div class="dash-unit-header">
+                <div class="dash-unit-icon">${ico('ico-pin',12)}</div>
+                ${UNIT_LABEL[uk]}
+              </div>
+              <div class="dash-row"><span class="label">${ico('ico-cavalo',14)} Frota Operando</span><span class="value">${x.frota_op}</span></div>
+              <div class="dash-row"><span class="label">${ico('ico-cavalo',14)} Agregado Operando</span><span class="value">${x.agregado_op}</span></div>
+              <div class="dash-row"><span class="label">${ico('ico-cavalo',14)} Disponível</span><span class="value">${x.cavalos_disp}</span></div>
+              <div class="dash-row"><span class="label">${ico('ico-wrench',14)} Indisponível</span><span class="value" style="color:${x.cavalos_indisp>0?'var(--red)':'var(--black)'}">${x.cavalos_indisp}</span></div>
+              <div class="dash-row"><span class="label">${ico('ico-carreta',14)} Carretas</span><span class="value">${x.carretas}</span></div>
+              <div class="dash-row"><span class="label">${ico('ico-compressor',14)} Compressores</span><span class="value">${x.compressores_op + x.compressores_estoque + x.compressores_manut}</span></div>
+              <div class="dash-row total"><span class="label">Total na Unidade</span><span class="value">${tu}</span></div>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="dash-section">
+      <div class="dash-section-header">
+        🚨 Distribuição de Alertas
+        <div class="count">${STATE.veiculos.filter(v=>v.categoria==='cavalo').length} cavalos</div>
+      </div>
+      <div style="padding:6px 0">
+        ${renderAlertBar('OK (verde)', r.alertas.green, '#10b981')}
+        ${renderAlertBar('Atenção (amarelo)', r.alertas.yellow, '#f59e0b')}
+        ${renderAlertBar('Alerta (laranja)', r.alertas.orange, '#f97316')}
+        ${renderAlertBar('Crítico (vermelho)', r.alertas.red, '#dc2626')}
+        ${r.alertas.gray ? renderAlertBar('Em manutenção', r.alertas.gray, '#94a3b8') : ''}
+      </div>
+    </div>
+
+    <div class="dash-section">
+      <div class="dash-section-header">${ico('ico-carreta',14)} Carretas — Detalhamento</div>
+      <div class="dash-grid">
+        ${['SC','SP','PR'].map(uk => {
+          const x = r.byUnit[uk];
+          return `
+            <div class="dash-unit ${uk}">
+              <div class="dash-unit-header">
+                <div class="dash-unit-icon">${ico('ico-pin',12)}</div>
+                ${UNIT_LABEL[uk]}
+              </div>
+              <div class="dash-row"><span class="label">Operando</span><span class="value">${x.carretas_op}</span></div>
+              <div class="dash-row"><span class="label">Em reforma</span><span class="value" style="color:${x.carretas_reforma>0?'var(--orange)':'var(--black)'}">${x.carretas_reforma}</span></div>
+              <div class="dash-row"><span class="label">Indisponível</span><span class="value" style="color:${x.carretas_indisp>0?'var(--red)':'var(--black)'}">${x.carretas_indisp}</span></div>
+              <div class="dash-row total"><span class="label">Total</span><span class="value">${x.carretas}</span></div>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="dash-section">
+      <div class="dash-section-header">${ico('ico-compressor',14)} Compressores — Status</div>
+      <div class="dash-grid">
+        ${['SC','SP','PR'].map(uk => {
+          const x = r.byUnit[uk];
+          const tc = x.compressores_op + x.compressores_estoque + x.compressores_manut;
+          return `
+            <div class="dash-unit ${uk}">
+              <div class="dash-unit-header">
+                <div class="dash-unit-icon">${ico('ico-pin',12)}</div>
+                ${UNIT_LABEL[uk]}
+              </div>
+              <div class="dash-row"><span class="label">Operando</span><span class="value">${x.compressores_op}</span></div>
+              <div class="dash-row"><span class="label">Em estoque</span><span class="value">${x.compressores_estoque}</span></div>
+              <div class="dash-row"><span class="label">Manutenção</span><span class="value" style="color:${x.compressores_manut>0?'var(--orange)':'var(--black)'}">${x.compressores_manut}</span></div>
+              <div class="dash-row total"><span class="label">Total</span><span class="value">${tc}</span></div>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderAlertBar(label, val, color) {
+  const total = STATE.veiculos.filter(v => v.categoria === "cavalo").length;
+  const pct = total > 0 ? (val/total*100) : 0;
+  return `
+    <div class="dash-bar-row">
+      <div class="lbl"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color}"></span>${label}</div>
+      <div class="bar-track"><div class="bar-fill ${val===0?'empty':''}" style="background:${val===0?'transparent':color};width:${Math.max(pct, val===0?0:6)}%">${val>0 && pct>5 ? pct.toFixed(0)+'%' : ''}</div></div>
+      <div class="val">${val}</div>
+    </div>
+  `;
+}
+
+/* ─── Popular selects de filial ─── */
+function populateFilialFilters() {
+  // Filtros de unidade já têm SC/SP/PR fixos; mas se houver filiais diferentes no cadastro, adiciona dinamicamente
+  const unitsFromVeiculos = [...new Set(STATE.veiculos.map(v => v.unidade_slug).filter(Boolean))];
+  // Adiciona em filter-geral-unit e filter-comp-unit os botões dinâmicos
+  ['filter-geral-unit', 'filter-comp-unit'].forEach(gid => {
+    const g = document.getElementById(gid);
+    if (!g) return;
+    // limpa adicionados (mantém botão "Todas")
+    g.querySelectorAll('.filter-chip:not([data-unit="all"])').forEach(c => c.remove());
+    unitsFromVeiculos.forEach(uk => {
+      const btn = document.createElement("button");
+      btn.className = "filter-chip";
+      btn.dataset.unit = uk;
+      btn.textContent = uk;
+      btn.addEventListener("click", () => {
+        g.querySelectorAll(".filter-chip").forEach(c => c.classList.remove("active"));
+        btn.classList.add("active");
+        if (gid === "filter-geral-unit") { STATE.filterGeral.unit = uk; renderGeral(); }
+        else { STATE.filterComp.unit = uk; renderCompressores(); }
+      });
+      g.appendChild(btn);
+    });
+  });
+
+  // Popula select de unidade no modal de compressor
+  const selU = document.getElementById("cf_unidade");
+  if (selU) {
+    selU.innerHTML = '<option value="">— Selecione —</option>' +
+      [...new Set(STATE.veiculos.map(v => v.unidade).filter(Boolean))].sort().map(u =>
+        `<option value="${escapeHtml(u)}">${escapeHtml(u)}</option>`).join("");
+  }
+  // Popula select de cavalo no modal de compressor
+  const selC = document.getElementById("cf_cavalo");
+  if (selC) {
+    selC.innerHTML = '<option value="">— Nenhum —</option>' +
+      STATE.veiculos.filter(v => v.categoria === "cavalo").sort((a,b)=>(a.frota||"").localeCompare(b.frota||""))
+        .map(v => `<option value="${escapeHtml(v.placa)}">${escapeHtml(v.frota || v.placa)} · ${escapeHtml(v.placa)}</option>`).join("");
+  }
+}
+
+/* ─── MODAIS ─── */
+function openModal(id) { document.getElementById(id).classList.add("open"); }
+function closeModal(id) { document.getElementById(id).classList.remove("open"); }
+window.closeModal = closeModal;
+
+/* ─── Atualizar SZB (placeholder até API Protheus F2) ─── */
+async function refreshSzb() {
+  showToast("Atualizando dados SZB…");
+  try {
+    // PONTO DE INTEGRAÇÃO ATLAS F2:
+    // const res = await fetch('/api/szb/movimentacao?frotas=...');
+    // STATE.szb = await res.json();
+    STATE.szb = gerarSzbMock();
+    refreshCurrentView();
+    showToast("SZB atualizado", "success");
+  } catch(err) {
+    showToast("Erro ao buscar SZB", "error");
+  }
+}
+
+/* ─── BIND UI ─── */
+function bindUI() {
+  document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => activateTab(t.dataset.tab)));
+
+  document.getElementById("search-alocacao").addEventListener("input", e => {
+    STATE.search.alocacao = e.target.value.trim(); renderBoard();
+  });
+  document.querySelectorAll("#filter-alerta .filter-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll("#filter-alerta .filter-chip").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      STATE.filterAlerta = chip.dataset.alert;
+      renderBoard();
+    });
+  });
+
+  document.querySelectorAll("#filter-alocacao-unit .filter-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll("#filter-alocacao-unit .filter-chip").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      STATE.filterAlocUnit = chip.dataset.unit;
+      renderBoard();
+    });
+  });
+
+  document.getElementById("search-geral").addEventListener("input", e => {
+    STATE.search.geral = e.target.value.trim(); renderGeral();
+  });
+  document.querySelectorAll("#filter-geral-cat .filter-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll("#filter-geral-cat .filter-chip").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      STATE.filterGeral.cat = chip.dataset.cat;
+      renderGeral();
+    });
+  });
+
+  document.getElementById("search-comp").addEventListener("input", e => {
+    STATE.search.comp = e.target.value.trim(); renderCompressores();
+  });
+  document.querySelectorAll("#filter-comp-status .filter-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll("#filter-comp-status .filter-chip").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      STATE.filterComp.st = chip.dataset.st;
+      renderCompressores();
+    });
+  });
+
+  document.getElementById("btn-thresholds").addEventListener("click", () => {
+    if (!STATE.isAdmin) { showToast("Apenas admin pode alterar parâmetros", "error"); return; }
+    document.getElementById("th-green").value = STATE.thresholds.green;
+    document.getElementById("th-yellow").value = STATE.thresholds.yellow;
+    document.getElementById("th-orange").value = STATE.thresholds.orange;
+    document.getElementById("th-red").value = STATE.thresholds.red;
+    openModal("modal-thresholds");
+  });
+  document.getElementById("btn-save-thresholds").addEventListener("click", async () => {
+    const cfg = {
+      green:  parseInt(document.getElementById("th-green").value) || 2,
+      yellow: parseInt(document.getElementById("th-yellow").value) || 3,
+      orange: parseInt(document.getElementById("th-orange").value) || 6,
+      red:    parseInt(document.getElementById("th-red").value) || 10,
+    };
+    try {
+      await window._FB.saveFrotaConfig(cfg);
+      STATE.thresholds = cfg;
+      closeModal("modal-thresholds");
+      refreshCurrentView();
+      showToast("Parâmetros atualizados", "success");
+    } catch(e) {
+      showToast("Erro: " + e.message, "error");
+    }
+  });
+
+  document.getElementById("btn-refresh").addEventListener("click", refreshSzb);
+  document.getElementById("btn-new-compressor").addEventListener("click", newCompressor);
+  document.getElementById("cf_save").addEventListener("click", saveCompressor);
+  document.getElementById("cf_del").addEventListener("click", deleteCompressor);
+
+  document.querySelectorAll(".modal-backdrop").forEach(m => {
+    m.addEventListener("click", e => { if (e.target === m) m.classList.remove("open"); });
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") document.querySelectorAll(".modal-backdrop.open").forEach(m => m.classList.remove("open"));
+  });
+
+  // Enter no login
+  const em = document.getElementById("li_email");
+  const pw = document.getElementById("li_senha");
+  if (em) em.addEventListener("keydown", e => { if (e.key === "Enter") pw && pw.focus(); });
+  if (pw) pw.addEventListener("keydown", e => { if (e.key === "Enter") window.doLogin(); });
+}
+
+/* ─── _appReady (chamado após auth) ─── */
+window._appReady = async function(user, perfil) {
+  STATE.user = user;
+  STATE.perfil = perfil;
+  STATE.isAdmin = (perfil === "admin");
+
+  const badge = document.getElementById("badge-perfil");
+  badge.textContent = perfil;
+  badge.className = "badge-perfil" + (STATE.isAdmin ? " admin" : "");
+
+  // Mostra botão de novo compressor apenas para admin
+  document.getElementById("btn-new-compressor").style.display = STATE.isAdmin ? "inline-flex" : "none";
+
+  // Tela inicial
+  showScreen("scr_home");
+
+  // Tab inicial: Dashboard
+  let startTab = "dashboard";
+  try { startTab = localStorage.getItem("frota_tab") || "dashboard"; } catch(e) {}
+  activateTab(startTab);
+
+  // Carrega dados
+  await loadAllData();
+};
+
+/* ─── INIT ─── */
+document.addEventListener("DOMContentLoaded", function() {
+  bindUI();
+});
+
+// Se já carregou antes do DOMContentLoaded (improvável mas seguro)
+if (document.readyState === "loading") {
+  // espera
+} else {
+  bindUI();
+}
+</script>
+</body>
+</html>
