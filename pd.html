@@ -7,6 +7,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- Firebase para leitura do SZB no Firestore (mesma config do Atlas).
+     No iframe, reutilizamos a instância do parent. Standalone, inicializamos aqui. -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 :root{
@@ -736,6 +741,85 @@ async function apiPost(path, data) {
   }
 }
 
+// ═══════════════════════════════════════════════════════
+// FIRESTORE — fonte canônica do SZB (compartilhada com o Atlas)
+// 
+// Estratégia:
+//   - Dentro do iframe do Atlas: reusa firebase do parent (já inicializado).
+//   - Standalone: inicializa firebase aqui com a mesma config.
+//   - Tenta Firestore PRIMEIRO; Worker é fallback.
+// ═══════════════════════════════════════════════════════
+let _pdFb = null;
+function pdGetFirebase() {
+  if (_pdFb !== null) return _pdFb;
+  try {
+    // Dentro do iframe: tenta usar a instância do parent
+    if (window.self !== window.top && window.parent.firebase) {
+      _pdFb = window.parent.firebase;
+      return _pdFb;
+    }
+  } catch(_) {}
+  // Standalone: inicializa aqui
+  try {
+    if (typeof firebase === 'undefined') { _pdFb = false; return _pdFb; }
+    if (!firebase.apps || !firebase.apps.length) {
+      firebase.initializeApp({
+        apiKey:"AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",
+        authDomain:"comix-relatorios.firebaseapp.com",
+        projectId:"comix-relatorios",
+        storageBucket:"comix-relatorios.firebasestorage.app",
+        messagingSenderId:"586258388438",
+        appId:"1:586258388438:web:3b9da22e650e88ddcf4077"
+      });
+    }
+    _pdFb = firebase;
+  } catch(e) {
+    console.warn('[PD] Firebase indisponível:', e.message);
+    _pdFb = false;
+  }
+  return _pdFb;
+}
+
+async function loadSZBFromFirestore() {
+  const fb = pdGetFirebase();
+  if (!fb) return null;
+  try {
+    const db = fb.firestore();
+    const metaSnap = await db.collection('bases_szb').doc('meta').get();
+    if (!metaSnap.exists) return null;
+    const meta = metaSnap.data();
+    const n = meta.numChunks || 0;
+    if (!n) return null;
+    
+    // Lê chunks em paralelo
+    const promises = [];
+    for (let i=0; i<n; i++) {
+      promises.push(
+        db.collection('bases_szb').doc('meta').collection('chunks').doc(String(i)).get()
+      );
+    }
+    const snaps = await Promise.all(promises);
+    const rows = [];
+    for (const s of snaps) {
+      if (s.exists) {
+        const r = s.data().rows;
+        if (Array.isArray(r)) rows.push(...r);
+      }
+    }
+    if (!rows.length) return null;
+    return {
+      rows,
+      file: meta.file || 'SZB_CONTROLE_FRETE.xlsm',
+      ts: meta.ts || new Date().toISOString(),
+      count: rows.length,
+      user: meta.user || 'nuvem'
+    };
+  } catch(e) {
+    console.warn('[PD] Firestore SZB load falhou:', e.message);
+    return null;
+  }
+}
+
 // ── Carregar parâmetros da nuvem ──
 async function loadParamsFromCloud() {
   const data = await apiGet('/api/params');
@@ -832,7 +916,30 @@ async function loadDataFromCloud() {
   try {
     const el = document.getElementById('h-sync');
     if (el) { el.textContent = 'Carregando dados…'; el.className = 'hm-sync'; }
-    // Timeout de 8 segundos para não travar
+    
+    // 1) Tenta Firestore (fonte canônica e atual)
+    try {
+      const fs = await loadSZBFromFirestore();
+      if (fs && Array.isArray(fs.rows) && fs.rows.length > 0) {
+        RAW = fs.rows;
+        const dzH = document.getElementById('dz-h');
+        if (dzH) dzH.textContent = '✓ Nuvem (Firestore) — ' + RAW.length + ' registros';
+        const dz = document.getElementById('dz');
+        if (dz) dz.classList.add('ok');
+        const btnGo = document.getElementById('btn-go');
+        if (btnGo) btnGo.disabled = false;
+        const synEl = document.getElementById('h-sync');
+        if (synEl) {
+          const dt = new Date(fs.ts);
+          const fmt = dt.toLocaleDateString('pt-BR')+' '+dt.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
+          synEl.textContent = '✓ Nuvem — ' + fmt + ' (por ' + (fs.user||'—') + ')';
+          synEl.className = 'hm-sync ok';
+        }
+        return true;
+      }
+    } catch(_) {}
+    
+    // 2) Fallback: Worker antigo (caso o Firestore ainda esteja vazio em ambientes legados)
     const controller = new AbortController();
     const timer = setTimeout(()=>controller.abort(), 8000);
     const resp = await fetch(WORKER_URL + '/api/data', { signal: controller.signal });
@@ -842,13 +949,13 @@ async function loadDataFromCloud() {
     if (data && Array.isArray(data) && data.length > 0) {
       RAW = data;
       const dzH = document.getElementById('dz-h');
-      if (dzH) dzH.textContent = '✓ Dados da nuvem — ' + RAW.length + ' registros';
+      if (dzH) dzH.textContent = '✓ Nuvem (legacy) — ' + RAW.length + ' registros';
       const dz = document.getElementById('dz');
       if (dz) dz.classList.add('ok');
       const btnGo = document.getElementById('btn-go');
       if (btnGo) btnGo.disabled = false;
       const synEl = document.getElementById('h-sync');
-      if (synEl) { synEl.textContent = '✓ Dados carregados da nuvem'; synEl.className = 'hm-sync ok'; }
+      if (synEl) { synEl.textContent = '✓ Dados carregados da nuvem (worker)'; synEl.className = 'hm-sync ok'; }
       return true;
     }
     const synEl = document.getElementById('h-sync');
@@ -3124,6 +3231,58 @@ window.addEventListener('message', function(event) {
       }
     }
   }, 900);
+})();
+
+// ═══════════════════════════════════════════════════════
+// SYNC EM TEMPO REAL — onSnapshot no meta do SZB
+// 
+// Quando alguém em qualquer lugar sobe um arquivo novo via Download Base
+// do Atlas, este navegador recebe o update e recarrega o dashboard sem
+// precisar de refresh manual.
+// ═══════════════════════════════════════════════════════
+(function watchSZBChanges() {
+  // Dentro do iframe, o firebase do parent pode demorar para inicializar.
+  // Tenta até 5 vezes com 600ms entre tentativas (≈3s no pior caso).
+  var attempts = 0;
+  function attach() {
+    var fb = pdGetFirebase();
+    if (!fb) {
+      attempts++;
+      // Reset do cache: pdGetFirebase pode ter dado false se parent ainda não tinha firebase
+      _pdFb = null;
+      if (attempts < 5) {
+        setTimeout(attach, 600);
+      }
+      return;
+    }
+    var lastTs = null;
+    var firstSnap = true;
+    try {
+      fb.firestore().collection('bases_szb').doc('meta').onSnapshot(async function(snap) {
+        if (!snap.exists) return;
+        var meta = snap.data();
+        if (firstSnap) {
+          firstSnap = false;
+          lastTs = meta.ts;
+          return;
+        }
+        if (meta.ts && meta.ts !== lastTs) {
+          lastTs = meta.ts;
+          try {
+            var fs = await loadSZBFromFirestore();
+            if (fs && fs.rows && fs.rows.length) {
+              applyAtlasSZB(fs, 'Nuvem (atualização automática)');
+            }
+          } catch(_) {}
+        }
+      }, function(err) {
+        console.warn('[PD] onSnapshot SZB:', err.message);
+      });
+    } catch(e) {
+      console.warn('[PD] watchSZBChanges:', e.message);
+    }
+  }
+  setTimeout(attach, 300);
 })();
 </script>
 
