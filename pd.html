@@ -494,7 +494,7 @@ table.dt td.dia-cell::after{
         </div>
         <div class="cw">
           <div class="ct">Top 10 — Faturamento por Cliente</div>
-          <div id="ct10-h" style="height:190px;width:100%;overflow:hidden;position:relative;"><canvas id="c-t10"></canvas></div>
+          <div id="ct10-h" style="height:190px;width:100%;position:relative;"><canvas id="c-t10"></canvas></div>
         </div>
       </div>
       <!-- COMPARATIVO HISTÓRICO 12 MESES -->
@@ -1522,10 +1522,19 @@ function buildVG(uid, mes){
   if(elT10){
     const fmtT10=v=>
       'R$ '+(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+    // Truncamento de nomes de cliente. Limite por caracteres puro era insuficiente
+    // porque o Chart.js, ao colidir com a largura máxima do eixo Y (antes 120px),
+    // cortava à ESQUERDA (mostrava "DRANTIM CIMENTOS S.A." em vez de "VOTORANTIM…").
+    // Agora truncamos com elipse explícita no FIM e aumentamos a largura do eixo.
+    // 26 chars cabem com folga em ~160px na fonte 9px do eixo.
+    const truncCli = n => {
+      const s = String(n||'').trim();
+      return s.length > 26 ? s.slice(0, 25) + '…' : s;
+    };
     CHS['c-t10']=new Chart(elT10,{
       type:'bar',
       data:{
-        labels:t10vg.map(r=>r.n.length>38?r.n.slice(0,37)+'…':r.n),
+        labels:t10vg.map(r=>truncCli(r.n)),
         datasets:[{
           data:t10vg.map(r=>r.f),
           backgroundColor:'rgba(26,86,219,.65)',
@@ -1568,16 +1577,26 @@ function buildVG(uid, mes){
       options:{
         indexAxis:'y',
         responsive:true,maintainAspectRatio:false,
-        layout:{padding:{right:96,left:4,top:2,bottom:2}},
+        // Padding direito: precisa caber o maior valor formatado ("R$ 999.999,99"
+        // ≈ 90px em fonte mono 9px) + GAP de 5 + folga de segurança. 120 cobre.
+        layout:{padding:{right:120,left:4,top:2,bottom:2}},
         plugins:{
           legend:{display:false},
-          tooltip:{...TTP,callbacks:{label:ctx=>'R$\u00a0'+N(ctx.parsed.x)}},
+          // Tooltip mostra o nome COMPLETO (sem truncamento) ao tocar/passar
+          // o mouse — útil pra identificar clientes cujo nome foi cortado.
+          tooltip:{...TTP,callbacks:{
+            title:items=>items.length?t10vg[items[0].dataIndex].n:'',
+            label:ctx=>'R$\u00a0'+N(ctx.parsed.x)
+          }},
           datalabels:{display:false},
         },
         scales:{
           x:{ticks:{display:false},grid:{color:CG,lineWidth:.5},beginAtZero:true},
           y:{ticks:{color:CT,font:{size:9},maxRotation:0},grid:{display:false},
-            afterFit(axis){ axis.width = Math.min(Math.round(axis.width * 1.15), 120); }}
+            // Largura máxima do eixo Y: 120 → 160 px. 160 comporta 26 chars
+            // em fonte 9px com folga e elimina o "corte à esquerda" que aparecia
+            // em nomes longos como "VOTORANTIM CIMENTOS S.A.".
+            afterFit(axis){ axis.width = Math.min(Math.round(axis.width * 1.15), 160); }}
         }
       }
     });
