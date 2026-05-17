@@ -2,9 +2,15 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=1280, initial-scale=0.25">
+<!-- Viewport: width=1280 deixa o navegador calcular o scale automaticamente (initial-scale = larguraDoDevice/1280), exibindo TODA a área do dashboard dentro da tela do celular. user-scalable=yes libera pinch-to-zoom para aproximar de qualquer região. -->
+<meta name="viewport" content="width=1280, minimum-scale=0.1, maximum-scale=5, user-scalable=yes">
 <title>COMIX — Financeiro v6</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- Firebase para leitura de SE1/SE2/SE5 no Firestore (mesma config do Atlas).
+     No iframe, reusa a instância do parent. Standalone, inicializa aqui. -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 :root{
@@ -1332,6 +1338,161 @@ window.addEventListener('message', function(event) {
   atlasRequestFinanceiroData();
   setTimeout(tryAtlasData, 150);
 });
+
+/* ══════════════════════════════════════════════════════════════════════
+   FIRESTORE — fonte da verdade para SE1/SE2/SE5
+   
+   Camada paralela ao postMessage: se o parent (Atlas) não tiver as bases
+   em memória (login novo, navegador diferente, etc.), buscamos direto do
+   Firestore. Também escutamos mudanças em tempo real: quando outro usuário
+   sobe uma base nova pelo Download Base, o financeiro recarrega sozinho.
+   ══════════════════════════════════════════════════════════════════════ */
+var _finFb = null;
+function finGetFirebase() {
+  if (_finFb !== null) return _finFb;
+  try {
+    if (window.self !== window.top && window.parent.firebase) {
+      _finFb = window.parent.firebase;
+      return _finFb;
+    }
+  } catch(_) {}
+  try {
+    if (typeof firebase === 'undefined') { _finFb = false; return _finFb; }
+    if (!firebase.apps || !firebase.apps.length) {
+      firebase.initializeApp({
+        apiKey:"AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",
+        authDomain:"comix-relatorios.firebaseapp.com",
+        projectId:"comix-relatorios",
+        storageBucket:"comix-relatorios.firebasestorage.app",
+        messagingSenderId:"586258388438",
+        appId:"1:586258388438:web:3b9da22e650e88ddcf4077"
+      });
+    }
+    _finFb = firebase;
+  } catch(e) {
+    console.warn('[Financeiro] Firebase indisponível:', e.message);
+    _finFb = false;
+  }
+  return _finFb;
+}
+
+/* Mapeia id → caminho do doc no Firestore. SZB usa esquema legado;
+   demais usam bases_cloud/{id}. */
+function finCloudDocRef(db, id) {
+  id = String(id||'').toLowerCase();
+  if (id === 'szb') return db.collection('bases_szb').doc('meta');
+  return db.collection('bases_cloud').doc(id);
+}
+
+async function finLoadBaseFromFirestore(id) {
+  var fb = finGetFirebase();
+  if (!fb) return null;
+  try {
+    var db = fb.firestore();
+    var docRef = finCloudDocRef(db, id);
+    var metaSnap = await docRef.get();
+    if (!metaSnap.exists) return null;
+    var meta = metaSnap.data();
+    var n = meta.numChunks || 0;
+    if (!n) return null;
+    var promises = [];
+    for (var i=0; i<n; i++) {
+      promises.push(docRef.collection('chunks').doc(String(i)).get());
+    }
+    var snaps = await Promise.all(promises);
+    var rows = [];
+    for (var j=0; j<snaps.length; j++) {
+      if (snaps[j].exists) {
+        var r = snaps[j].data().rows;
+        if (Array.isArray(r)) Array.prototype.push.apply(rows, r);
+      }
+    }
+    if (!rows.length) return null;
+    return {
+      rows: rows,
+      file: meta.file || (id.toUpperCase()+'.xlsm'),
+      ts: meta.ts || new Date().toISOString(),
+      count: rows.length,
+      user: meta.user || 'nuvem'
+    };
+  } catch(e) {
+    console.warn('[Financeiro] Firestore '+id+' load falhou:', e.message);
+    return null;
+  }
+}
+
+/* Tenta carregar do Firestore as bases que ainda não chegaram pelo parent.
+   Chamado depois da janela de espera do postMessage (3s). */
+async function finFallbackFirestore() {
+  if (__ATLAS_FINANCEIRO_CARREGADO) return;
+  var ids = ['se1','se2','se5'];
+  for (var i=0; i<ids.length; i++) {
+    var id = ids[i];
+    // Se já temos algo do parent OU já carregamos do firestore antes, pula
+    if (atlasGetPayload(id)) continue;
+    try {
+      var p = await finLoadBaseFromFirestore(id);
+      if (p && Array.isArray(p.rows) && p.rows.length) {
+        __ATLAS_FINANCEIRO_FALLBACK[id] = p;
+      }
+    } catch(_) {}
+  }
+  setTimeout(tryAtlasData, 100);
+}
+
+/* Aciona o fallback Firestore caso o parent não tenha as bases. */
+setTimeout(function() {
+  if (!__ATLAS_FINANCEIRO_CARREGADO) finFallbackFirestore();
+}, 2500);
+setTimeout(function() {
+  if (!__ATLAS_FINANCEIRO_CARREGADO) finFallbackFirestore();
+}, 5000);
+
+/* Sync em tempo real: quando uma base do Financeiro muda na nuvem
+   (outro usuário/máquina subiu arquivo), recarrega automaticamente. */
+(function watchFinanceiroBases() {
+  var attempts = 0;
+  function attach() {
+    var fb = finGetFirebase();
+    if (!fb) {
+      attempts++;
+      _finFb = null;
+      if (attempts < 5) setTimeout(attach, 600);
+      return;
+    }
+    var db = fb.firestore();
+    var lastTs = { se1:null, se2:null, se5:null };
+    var firstSnap = { se1:true, se2:true, se5:true };
+    ['se1','se2','se5'].forEach(function(id) {
+      try {
+        finCloudDocRef(db, id).onSnapshot(async function(snap) {
+          if (!snap.exists) return;
+          var meta = snap.data();
+          if (firstSnap[id]) {
+            firstSnap[id] = false;
+            lastTs[id] = meta.ts;
+            return;
+          }
+          if (meta.ts && meta.ts !== lastTs[id]) {
+            lastTs[id] = meta.ts;
+            try {
+              var p = await finLoadBaseFromFirestore(id);
+              if (p && p.rows && p.rows.length) {
+                __ATLAS_FINANCEIRO_FALLBACK[id] = p;
+                tryAtlasData();
+              }
+            } catch(_) {}
+          }
+        }, function(err) {
+          console.warn('[Financeiro] onSnapshot '+id+':', err.message);
+        });
+      } catch(e) {
+        console.warn('[Financeiro] watch '+id+':', e.message);
+      }
+    });
+  }
+  setTimeout(attach, 400);
+})();
 
 /* ── Pipeline de processamento: raw rows → estrutura DB ──
    Replica FIELMENTE as regras do dashboard:
