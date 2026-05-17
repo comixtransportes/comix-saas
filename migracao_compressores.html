@@ -244,9 +244,19 @@ $("file-input").addEventListener("change",async e=>{
 
     const UNIT_MAP={SC:"SANTA CATARINA",SP:"SÃO PAULO",PR:"PARANÁ"};
     const allocsRaw=[];
-    [["Alocação_equipamentos_SC","SC"],["Alocação_equipamentos_SP","SP"],["Alocação_equipamentos_PR","PR"]].forEach(([sheet,slug])=>{
-      if(!wb.SheetNames.includes(sheet))return;
-      const arr=XLSX.utils.sheet_to_json(wb.Sheets[sheet],{header:1,defval:null});
+    // Localiza abas de alocação por padrão (tolerante a acentos/variações)
+    function findSheet(wb, slug) {
+      const target = slug.toUpperCase();
+      for (const name of wb.SheetNames) {
+        const N = name.toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+        if (N.includes("ALOCA") && N.includes(target)) return name;
+      }
+      return null;
+    }
+    [["SC","SC"],["SP","SP"],["PR","PR"]].forEach(([key,slug])=>{
+      const sheetName = findSheet(wb, key);
+      if(!sheetName){console.warn("Aba de alocação não encontrada para "+key);return}
+      const arr=XLSX.utils.sheet_to_json(wb.Sheets[sheetName],{header:1,defval:null});
       for(let i=3;i<arr.length;i++){
         const row=arr[i];if(!row||!row[1])continue;
         allocsRaw.push({
