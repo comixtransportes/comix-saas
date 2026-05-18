@@ -3180,32 +3180,83 @@ window.addEventListener('message', function(event) {
 });
 
 (function bootAtlasSZB() {
-  // Retry progressivo: o preload do Firestore no Atlas pode levar 3-8s dependendo
-  // do tamanho da SZB e da latência. Tentamos em intervalos crescentes por até 15s.
-  // Quando o Atlas termina o preload, ele faz broadcast ATLAS_DATA_READY — o listener
-  // de mensagens acima captura e chama tryAtlasSZB. Este loop é o safety net.
-  if (window.self === window.top) return; // só roda dentro do iframe
-  var delays = [150, 500, 1200, 2500, 4500, 7000, 10000, 14000];
+  // Estratégia em camadas com logs detalhados (abrir F12 para ver):
+  //  T+0ms:    tenta parent.ATLAS_DATA (caso o preload já tenha terminado)
+  //  T+150-7s: retry com postMessage para o parent
+  //  T+3s:     PARALELO — tenta Firestore direto (caso o parent esteja com problema)
+  //  T+12s:    último recurso — Firestore direto novamente + mostra mensagem de erro
+  if (window.self === window.top) {
+    console.log('[PD Boot] standalone (fora do iframe) — bootAtlasSZB não roda');
+    return;
+  }
+  console.log('[PD Boot] iniciando dentro do iframe do Atlas');
+
+  // Tentativa imediata
+  if (tryAtlasSZB()) {
+    console.log('[PD Boot] T+0ms: dados já estavam em parent.ATLAS_DATA — carregado');
+    return;
+  }
+  console.log('[PD Boot] T+0ms: parent.ATLAS_DATA.szb vazio, iniciando retries');
+
+  // Retries via postMessage para o parent
+  var delays = [150, 500, 1200, 2500, 4500, 7000];
   delays.forEach(function(ms) {
     setTimeout(function() {
       if (__ATLAS_PD_CARREGADO) return;
-      if (!tryAtlasSZB()) requestAtlasSZB();
+      var ok = tryAtlasSZB();
+      console.log('[PD Boot] T+' + ms + 'ms: tryAtlasSZB =', ok);
+      if (!ok) requestAtlasSZB();
     }, ms);
   });
-  // Fallback de UI: se após 16s ainda não carregou, lê direto do Firestore como último recurso.
-  // Garante que o usuário não fique olhando para tela em branco eternamente.
+
+  // T+3s: tenta Firestore direto em PARALELO (não esperar o parent)
+  // Se o parent estiver com problema (preload travou, autenticação, etc), saímos por aqui.
   setTimeout(async function() {
     if (__ATLAS_PD_CARREGADO) return;
+    console.log('[PD Boot] T+3s: tentando Firestore direto em paralelo…');
+    try {
+      var fs = await loadSZBFromFirestore();
+      if (fs && fs.rows && fs.rows.length) {
+        console.log('[PD Boot] T+3s: Firestore retornou ' + fs.rows.length + ' linhas');
+        if (!__ATLAS_PD_CARREGADO) {
+          applyAtlasSZB(fs, 'Firestore direto');
+        }
+      } else {
+        console.warn('[PD Boot] T+3s: Firestore retornou null ou vazio');
+      }
+    } catch(e) {
+      console.error('[PD Boot] T+3s: erro no Firestore direto:', e.message);
+    }
+  }, 3000);
+
+  // T+12s: último recurso
+  setTimeout(async function() {
+    if (__ATLAS_PD_CARREGADO) return;
+    console.warn('[PD Boot] T+12s: ainda sem dados após retries — última tentativa');
     setAtlasSyncMsg('Tentando ler direto do Firestore…', false);
     try {
       var fs = await loadSZBFromFirestore();
       if (fs && fs.rows && fs.rows.length) {
-        applyAtlasSZB(fs, 'Firestore (fallback)');
+        console.log('[PD Boot] T+12s: sucesso na última tentativa, ' + fs.rows.length + ' linhas');
+        applyAtlasSZB(fs, 'Firestore (último recurso)');
         return;
+      } else {
+        console.error('[PD Boot] T+12s: Firestore vazio — possíveis causas:');
+        console.error('  1. Regras do Firestore não permitem leitura de bases_szb');
+        console.error('  2. Documento bases_szb/meta não existe (nenhum upload concluído)');
+        console.error('  3. Firebase Auth não está autenticado dentro do iframe');
+        var fb = pdGetFirebase();
+        console.error('  Firebase disponível?', !!fb);
+        if (fb) {
+          var auth = fb.auth().currentUser;
+          console.error('  Auth user:', auth ? auth.email : 'NÃO AUTENTICADO');
+        }
       }
-    } catch(_) {}
+    } catch(e) {
+      console.error('[PD Boot] T+12s: exceção no Firestore:', e);
+    }
     setAtlasSyncMsg('Sem dados — use Download Base ou Trocar arquivo', false);
-  }, 16000);
+  }, 12000);
 })();
 
 // ═══════════════════════════════════════════════════════
