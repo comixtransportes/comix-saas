@@ -947,27 +947,10 @@ async function loadDataFromCloud() {
       }
     } catch(_) {}
 
-    // 2) Fallback: Worker antigo (caso o Firestore ainda esteja vazio em ambientes legados)
-    const controller = new AbortController();
-    const timer = setTimeout(()=>controller.abort(), 8000);
-    const resp = await fetch(WORKER_URL + '/api/data', { signal: controller.signal });
-    clearTimeout(timer);
-    if (!resp.ok) return false;
-    const data = await resp.json();
-    if (data && Array.isArray(data) && data.length > 0) {
-      RAW = data;
-      const dzH = document.getElementById('dz-h');
-      if (dzH) dzH.textContent = '✓ Nuvem (legacy) — ' + RAW.length + ' registros';
-      const dz = document.getElementById('dz');
-      if (dz) dz.classList.add('ok');
-      const btnGo = document.getElementById('btn-go');
-      if (btnGo) btnGo.disabled = false;
-      const synEl = document.getElementById('h-sync');
-      if (synEl) { synEl.textContent = '✓ Dados carregados da nuvem (worker)'; synEl.className = 'hm-sync ok'; }
-      return true;
-    }
+    // Worker antigo REMOVIDO: retornava versões desatualizadas (sábado) quando
+    // o Firestore estava inacessível por regras incorretas. Firestore é a fonte única.
     const synEl = document.getElementById('h-sync');
-    if (synEl) { synEl.textContent = 'Sem dados salvos'; synEl.className = 'hm-sync'; }
+    if (synEl) { synEl.textContent = 'Sem dados na nuvem — faça upload via Download Base'; synEl.className = 'hm-sync'; }
     return false;
   } catch(e) {
     const synEl = document.getElementById('h-sync');
@@ -2367,30 +2350,11 @@ window.addEventListener('DOMContentLoaded', ()=>{
   // Dentro do COMIX Atlas, a prioridade é: dados recém-carregados no parent -> resposta do Atlas -> nuvem oficial do PD.
   // Não usa IndexedDB local aqui, porque ele pode conter uma carga antiga do próprio aparelho.
   if (window.self !== window.top) {
-    setTimeout(()=>{
-      if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
-      if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
-    }, 150);
-    setTimeout(()=>{
-      if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
-      if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
-    }, 900);
-    setTimeout(async ()=>{
-      if (__ATLAS_PD_CARREGADO) return;
-      try {
-        const hasData = await loadDataFromCloud();
-        if (hasData && !__ATLAS_PD_CARREGADO) {
-          __ATLAS_PD_CARREGADO = true;
-          __ATLAS_PD_ORIGEM = 'Nuvem PD';
-          const drop = document.getElementById('scr-drop');
-          const main = document.getElementById('scr-main');
-          if (drop) drop.style.display = 'none';
-          if (main) main.style.display = 'flex';
-          fullRebuild();
-          setTimeout(triggerAI, 1000);
-        }
-      } catch(e) {}
-    }, 1800);
+    // Dentro do iframe do Atlas: o bloco bootAtlasSZB (mais abaixo) gerencia
+    // retries progressivos até 14s, e o onSnapshot pega atualizações em tempo real.
+    // NÃO chamamos loadDataFromCloud aqui — ela tem fallback para o Worker antigo
+    // (com dados desatualizados de sábado) e estava causando estado inconsistente.
+    // A fonte de dados oficial dentro do Atlas é o parent.ATLAS_DATA.szb (Firestore).
     return;
   }
 
@@ -3049,39 +3013,9 @@ function triggerAI() {
 })();
 
 /* ══ ATLAS: receptor de dados do Download Base ══ */
-function tryAtlasSZB() {
-  try {
-    var parentData = window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
-    if (!parentData || !parentData.rows || !parentData.rows.length) return false;
-
-    RAW = parentData.rows;
-    DATA = [];
-
-    var dzH = document.getElementById('dz-h');
-    if (dzH) dzH.textContent = '✓ Download Base — ' + RAW.length + ' registros';
-    var dz = document.getElementById('dz');
-    if (dz) dz.classList.add('ok');
-    var btnGo = document.getElementById('btn-go');
-    if (btnGo) btnGo.disabled = false;
-
-    buildDash();
-    setTimeout(triggerAI, 800);
-    return true;
-  } catch(e) {
-    console.warn('[PD Diário] tryAtlasSZB erro:', e);
-    return false;
-  }
-}
-
-/* Ao carregar: se o parent já tem SZB (iframe aberto depois do upload) */
-(function() { setTimeout(function() { tryAtlasSZB(); }, 200); })();
-
-/* Broadcast: acionado quando o usuário carrega SZB no Download Base */
-window.addEventListener('message', function(event) {
-  if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
-  if (event.data.table !== 'szb') return;
-  setTimeout(tryAtlasSZB, 150);
-});
+/* Bloco antigo de tryAtlasSZB removido: era uma versão duplicada que não escondia
+   a tela de drop, deixando o PD em estado intermediário (carregando infinito).
+   A versão canônica está logo abaixo, no bloco "Integração PD Diário x Download Base". */
 </script>
 
 <script>
@@ -3250,6 +3184,7 @@ window.addEventListener('message', function(event) {
   // do tamanho da SZB e da latência. Tentamos em intervalos crescentes por até 15s.
   // Quando o Atlas termina o preload, ele faz broadcast ATLAS_DATA_READY — o listener
   // de mensagens acima captura e chama tryAtlasSZB. Este loop é o safety net.
+  if (window.self === window.top) return; // só roda dentro do iframe
   var delays = [150, 500, 1200, 2500, 4500, 7000, 10000, 14000];
   delays.forEach(function(ms) {
     setTimeout(function() {
@@ -3257,6 +3192,20 @@ window.addEventListener('message', function(event) {
       if (!tryAtlasSZB()) requestAtlasSZB();
     }, ms);
   });
+  // Fallback de UI: se após 16s ainda não carregou, lê direto do Firestore como último recurso.
+  // Garante que o usuário não fique olhando para tela em branco eternamente.
+  setTimeout(async function() {
+    if (__ATLAS_PD_CARREGADO) return;
+    setAtlasSyncMsg('Tentando ler direto do Firestore…', false);
+    try {
+      var fs = await loadSZBFromFirestore();
+      if (fs && fs.rows && fs.rows.length) {
+        applyAtlasSZB(fs, 'Firestore (fallback)');
+        return;
+      }
+    } catch(_) {}
+    setAtlasSyncMsg('Sem dados — use Download Base ou Trocar arquivo', false);
+  }, 16000);
 })();
 
 // ═══════════════════════════════════════════════════════
