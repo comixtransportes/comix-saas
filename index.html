@@ -233,7 +233,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 
 /* ── MOBILE ── */
 .sb-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90}
-@media(max-width:768px){
+@media(max-width:900px){
   .sb{position:fixed;left:0;top:0;bottom:0;width:var(--sb-w)!important;transform:translateX(-100%);z-index:200;box-shadow:var(--shd-l);transition:transform .22s ease}
   .sb.mb-open{transform:translateX(0)}
   .sb-ov.on{display:block}
@@ -245,115 +245,76 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 ::-webkit-scrollbar-thumb{background:#1e3a5f;border-radius:2px}
 
 /* ── MOBILE RESPONSIVO / SCROLL FLUIDO ── */
-@media(max-width:768px){
 
-  /* Shell: altura real da viewport no mobile (evita corte pela barra do browser) */
+/*
+  ESTRATÉGIA:
+  - Shell mantém height:100dvh, overflow:hidden (estrutura travada = correto)
+  - .fr-wrap recebe overflow:auto + -webkit-overflow-scrolling:touch
+    → isso cria um scroll container real que o iOS Safari reconhece
+  - iframe mantém position:absolute + width/height 100% dentro do fr-wrap
+  - touch-action libera pan em todas direções dentro do fr-wrap
+  - Para views sem iframe (download-base), o .view em si vira scroll container
+*/
+
+@media(max-width:900px){
+
+  /* ── Shell: altura real para não cortar com barra do Safari ── */
   #scr-app{
     height:100dvh;
-    height:100vh; /* fallback */
-    overflow:hidden;
+    height:100vh;
   }
 
-  /* Main: deixa a área de conteúdo crescer sem travar */
+  /* ── Main column: sem overflow próprio, deixa filhos controlarem ── */
   .main{
-    overflow:hidden;
     min-width:0;
-    display:flex;
-    flex-direction:column;
+    overflow:hidden;
   }
 
-  /* View-area: ocupa o restante e permite scroll total */
+  /* ── View-area: posição relativa, filhos absolute se encaixam ── */
   .view-area{
     flex:1;
-    overflow-y:auto;
-    overflow-x:hidden;
-    -webkit-overflow-scrolling:touch;
     position:relative;
+    overflow:hidden;
   }
 
-  /* Cada view individual: altura auto para scroll funcionar */
+  /* ── Cada view: ocupa 100% da view-area ── */
   .view{
-    position:relative;
-    inset:auto;
-    min-height:100%;
+    position:absolute;
+    inset:0;
     display:none;
     flex-direction:column;
+    overflow:hidden;
   }
   .view.on{display:flex}
 
-  /* Wrapper do iframe: altura mínima generosa para conteúdo extenso */
+  /* ── fr-wrap: O SCROLL CONTAINER REAL para iOS ──
+     overflow:auto aqui é o que faz o iOS Safari rolar o iframe.
+     -webkit-overflow-scrolling:touch garante momentum scroll suave.
+     touch-action libera pan em x e y sem conflito. */
   .fr-wrap{
     flex:1;
     position:relative;
     overflow:auto;
-    overflow-x:auto;
-    overflow-y:auto;
     -webkit-overflow-scrolling:touch;
-    min-height:calc(100dvh - var(--top-h));
-    min-height:calc(100vh - var(--top-h));
+    touch-action:pan-x pan-y pinch-zoom;
   }
 
-  /* iframe: expande para altura total e permite pan/zoom */
+  /* ── iframe: cobre 100% do fr-wrap, conteúdo interno rola junto ── */
   .fr-wrap iframe{
-    position:relative;
-    inset:auto;
+    position:absolute;
+    inset:0;
     width:100%;
-    min-height:calc(100dvh - var(--top-h));
-    min-height:calc(100vh - var(--top-h));
     height:100%;
     border:none;
     touch-action:pan-x pan-y pinch-zoom;
-    -webkit-overflow-scrolling:touch;
   }
 
-  /* Download Base: scroll vertical total */
-  #view-download-base{
-    overflow:auto;
-    -webkit-overflow-scrolling:touch;
-  }
-  .db-inner{
-    height:auto;
-    min-height:100%;
-    overflow:visible;
-    padding:10px 12px;
-  }
-  .db-body{
-    overflow:visible;
-    flex:none;
-  }
-  .db-log{
-    max-height:160px;
-  }
-
-  /* Cards do Download Base: 1 coluna em telas pequenas */
-  .db-grid-4,.db-grid-2{
-    grid-template-columns:1fr;
-  }
-
-  /* Config: liberar scroll interno */
-  #view-config{overflow:auto;-webkit-overflow-scrolling:touch}
-  #view-config .fr-wrap{overflow:auto;-webkit-overflow-scrolling:touch}
-
-  /* Welcome: scroll se necessário */
-  .welcome{
-    overflow-y:auto;
-    -webkit-overflow-scrolling:touch;
-    padding:24px 16px;
-  }
-  .wl-grid{
-    grid-template-columns:1fr 1fr;
-  }
-
-  /* Placeholder: sem overflow oculto */
-  .ph{overflow:visible}
-
-  /* Topbar: não cortar */
+  /* ── Topbar: sempre visível, não encolhe ── */
   .topbar{
     flex-shrink:0;
-    overflow:visible;
   }
 
-  /* Garantir que sidebar fechada não trave scroll do conteúdo */
+  /* ── Sidebar fechada: não captura toques no conteúdo ── */
   .sb:not(.mb-open){
     pointer-events:none;
   }
@@ -361,27 +322,70 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
     pointer-events:auto;
   }
 
-  /* Toast: longe da barra inferior do iOS */
+  /* ── Download Base: view vira scroll container ── */
+  #view-download-base{
+    overflow-y:auto;
+    overflow-x:hidden;
+    -webkit-overflow-scrolling:touch;
+  }
+  .db-inner{
+    height:auto;
+    overflow:visible;
+    padding:10px 12px;
+    gap:10px;
+  }
+  .db-body{
+    overflow:visible;
+    flex:none;
+    min-height:0;
+  }
+  .db-log{
+    max-height:180px;
+  }
+
+  /* ── Config: mesmo padrão que fr-wrap regular ── */
+  #view-config{overflow:hidden}
+  #view-config .fr-wrap{
+    overflow:auto;
+    -webkit-overflow-scrolling:touch;
+    touch-action:pan-x pan-y pinch-zoom;
+  }
+
+  /* ── Welcome screen: scroll se conteúdo passar da tela ── */
+  .welcome{
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+
+  /* ── Toast: safe area iOS (notch / home bar) ── */
   .toast{
     bottom:calc(env(safe-area-inset-bottom, 0px) + 16px);
   }
 }
 
-/* Telas muito pequenas (< 400px): ajuste extra */
+/* ── Cards em 1 coluna em celulares (< 600px) ── */
+@media(max-width:600px){
+  .db-grid-4,.db-grid-2{
+    grid-template-columns:1fr;
+  }
+  .wl-grid{
+    grid-template-columns:1fr 1fr;
+  }
+}
+
+/* ── Ajustes para telas muito pequenas (< 400px) ── */
 @media(max-width:400px){
   .wl-grid{grid-template-columns:1fr}
-  .db-sum{flex-direction:column;gap:8px}
-  .db-si{border-right:none;border-bottom:1px solid var(--bd2);padding:6px 0}
-  .db-si:last-child{border-bottom:none}
+  .db-sum{flex-wrap:wrap}
+  .db-si{flex:1 1 45%;border-right:none;border-bottom:1px solid var(--bd2);padding:6px 4px}
   .db-footer{flex-direction:column}
   .db-btn{width:100%}
 }
 
-/* iOS safe area: impede conteúdo atrás do notch/home bar */
+/* ── iOS safe area no sb-user ── */
 @supports(padding-bottom:env(safe-area-inset-bottom)){
-  @media(max-width:768px){
+  @media(max-width:900px){
     .sb-user{padding-bottom:calc(8px + env(safe-area-inset-bottom));}
-    .toast{bottom:calc(16px + env(safe-area-inset-bottom));}
   }
 }
 
@@ -1682,11 +1686,30 @@ function applyDynamicPermissions() {
 /* ── ALTURA REAL MOBILE (viewport dinâmico, sem interferir em login/auth) ── */
 (function(){
   function setMbH(){
-    document.documentElement.style.setProperty('--real-vh', window.innerHeight + 'px');
+    var h = window.innerHeight;
+    var topH = 40; // var(--top-h)
+    document.documentElement.style.setProperty('--real-vh', h + 'px');
+    // Em mobile (< 900px), forçar altura do fr-wrap para preencher área útil real
+    if(window.innerWidth <= 900){
+      var wraps = document.querySelectorAll('.fr-wrap');
+      for(var i=0;i<wraps.length;i++){
+        wraps[i].style.height = (h - topH) + 'px';
+      }
+    } else {
+      var wraps = document.querySelectorAll('.fr-wrap');
+      for(var i=0;i<wraps.length;i++){
+        wraps[i].style.height = '';
+      }
+    }
   }
-  setMbH();
+  // Rodar após load para garantir DOM pronto
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', setMbH);
+  } else {
+    setMbH();
+  }
   window.addEventListener('resize', setMbH);
-  window.addEventListener('orientationchange', function(){ setTimeout(setMbH, 200); });
+  window.addEventListener('orientationchange', function(){ setTimeout(setMbH, 300); });
 })();
 
 /* ── MENSAGENS ENTRE MÓDULOS ── */
