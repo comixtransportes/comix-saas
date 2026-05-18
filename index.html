@@ -745,14 +745,12 @@ const ATLAS_PD_COLS_NEEDED = [
   'Peso Liquido','Tarifa','Valor Total','Placa Veicul','Nome Motoris',
   'Frota','Rota','Dt Cancel'
 ];
-// Tamanho-alvo por chunk em bytes. Firestore aceita até 1MB por doc, mas em
-// alto throughput chunks menores (~300KB) sofrem menos rate limit e gravam mais rápido
-// no total — porque o limite efetivo é o "write stream" da conexão, não bytes/seg.
-// Mais chunks pequenos paralelos > poucos chunks grandes sequenciais.
-const ATLAS_CLOUD_CHUNK_BYTES = 300 * 1024;
-// Teto de chunks por base. 700 × 300KB ≈ 210MB de JSON — suficiente para
-// bases bem maiores que SE1/SE2/SE5 do Financeiro (que raramente passam de 50MB).
-const ATLAS_CLOUD_MAX_CHUNKS = 700;
+// Tamanho-alvo por chunk em bytes. Firestore aceita até 1MB por doc;
+// deixamos folga generosa para overhead de UTF-8/Firestore.
+const ATLAS_CLOUD_CHUNK_BYTES = 700 * 1024;
+// Teto de chunks por base. 300 × 700KB ≈ 210MB de JSON — bem acima de
+// qualquer base real (SE1/SE2/SE5 do Financeiro raramente passam de 50MB).
+const ATLAS_CLOUD_MAX_CHUNKS = 300;
 // Bases que devem ser sincronizadas via Firestore.
 // Todas as bases agora vão para a nuvem — garante consistência cross-device
 // e elimina dependência de IndexedDB local (que continha versões antigas).
@@ -856,74 +854,76 @@ async function atlasSaveBaseToFirestore(id, payload){
     }
   }
   
-  // 2) Gravação via WriteBatch: até 500 docs por commit atômico, sem rate limit
-  // por documento individual. Para uma base de 24 chunks vira UMA única round-trip.
-  // Para bases maiores (até 500 chunks), também uma round-trip. Acima disso, divide
-  // em múltiplos batches em paralelo. Velocidade típica: 10-25s em vez de 4min.
-  //
-  // Limites do Firestore para WriteBatch:
-  //   - 500 operações por batch
-  //   - 10MB de payload total por batch
-  // Com chunks de 300KB, cabem ~30 chunks por batch (limite de 10MB), bem antes
-  // de bater no limite de 500 ops. Calculamos o split automaticamente.
-  dbLog(`☁ ${id.toUpperCase()} → gravando ${chunks.length} chunks via batch...`,'info');
-  const MAX_BYTES_PER_BATCH = 9 * 1024 * 1024; // 9MB (margem sobre o limite de 10MB)
-  const MAX_OPS_PER_BATCH   = 450;             // 450 (margem sobre 500)
+  // 2) Gravação ADAPTATIVA: começa rápida (paralelo 3), reduz pool se rate-limita,
+  // chega até sequencial em último caso. Cada chunk tem retry com backoff exponencial.
+  // Resultado: tipicamente 60-90s em vez de 4min, e continua confiável se Firestore
+  // estrangular a banda.
+  console.log('[Atlas Save] gravando ' + chunks.length + ' chunks em ' + docRef.path);
+  const errors = [];
+  let savedCount = 0;
+  let currentPool = 3;        // começa com 3 gravações em paralelo
+  let consecutiveRateLimits = 0;
 
-  // Divide os chunks em grupos de batches respeitando os dois limites
-  const batchGroups = [];
-  let curGroup = [];
-  let curBytes = 0;
-  for(let i=0; i<chunks.length; i++){
-    const chunkBytes = JSON.stringify(chunks[i]).length;
-    const wouldExceedBytes = curBytes + chunkBytes > MAX_BYTES_PER_BATCH;
-    const wouldExceedOps   = curGroup.length >= MAX_OPS_PER_BATCH;
-    if(curGroup.length > 0 && (wouldExceedBytes || wouldExceedOps)){
-      batchGroups.push(curGroup);
-      curGroup = [];
-      curBytes = 0;
-    }
-    curGroup.push({ index: i, data: chunks[i] });
-    curBytes += chunkBytes;
-  }
-  if(curGroup.length > 0) batchGroups.push(curGroup);
-
-  console.log('[Atlas Save] ' + chunks.length + ' chunks divididos em ' + batchGroups.length + ' batch(es)');
-
-  // Executa os batches EM PARALELO. Cada um é atômico e tem retry com backoff.
-  async function commitBatch(group, attempt){
-    attempt = attempt || 0;
-    try {
-      const batch = db.batch();
-      for(const item of group){
-        batch.set(docRef.collection('chunks').doc(String(item.index)), { rows: item.data });
+  async function saveChunk(i){
+    let attempt = 0;
+    while(attempt < 5){
+      try{
+        await docRef.collection('chunks').doc(String(i)).set({ rows: chunks[i] });
+        savedCount++;
+        consecutiveRateLimits = Math.max(0, consecutiveRateLimits - 1);
+        if(savedCount % 5 === 0 || savedCount === chunks.length){
+          console.log('[Atlas Save] ' + savedCount + '/' + chunks.length + ' chunks gravados');
+          dbPct(id, 10 + Math.floor(85 * savedCount / chunks.length));
+        }
+        return true;
+      }catch(e){
+        attempt++;
+        if(e.code === 'resource-exhausted' || /resource-exhausted|exhausted|unavailable|deadline/i.test(e.message)){
+          consecutiveRateLimits++;
+          // Backoff exponencial: 400ms, 800ms, 1.6s, 3.2s, 6.4s
+          const wait = 400 * Math.pow(2, attempt - 1);
+          if(attempt <= 2) {
+            // Log silencioso nas primeiras tentativas (esperado em alto throughput)
+          } else {
+            console.warn('[Atlas Save] chunk ' + i + ' rate limited, retry em ' + wait + 'ms (tentativa ' + attempt + '/5)');
+          }
+          await new Promise(r => setTimeout(r, wait));
+        } else {
+          console.error('[Atlas Save] chunk ' + i + ' falhou (não-retentável): ' + e.message + ' (code=' + e.code + ')');
+          errors.push(`chunk ${i}: ${e.message}`);
+          return false;
+        }
       }
-      await batch.commit();
-      return true;
-    } catch(e) {
-      if((e.code === 'resource-exhausted' || /resource-exhausted|unavailable|deadline|aborted/i.test(e.message)) && attempt < 4){
-        const wait = 500 * Math.pow(2, attempt);
-        console.warn('[Atlas Save] batch retry em ' + wait + 'ms (tentativa ' + (attempt+1) + '/4): ' + e.message);
-        await new Promise(r => setTimeout(r, wait));
-        return commitBatch(group, attempt + 1);
-      }
-      throw e;
     }
+    errors.push(`chunk ${i}: falhou após 5 tentativas (rate limit)`);
+    console.error('[Atlas Save] chunk ' + i + ' desistiu após 5 retries');
+    return false;
   }
 
-  let completedBatches = 0;
-  const batchPromises = batchGroups.map(async (group, gIdx) => {
-    try {
-      await commitBatch(group);
-      completedBatches++;
-      dbPct(id, 10 + Math.floor(85 * completedBatches / batchGroups.length));
-    } catch(e) {
-      console.error('[Atlas Save] batch ' + gIdx + ' falhou:', e.message);
-      throw new Error(`batch ${gIdx}: ${e.message}`);
+  // Processa em ondas. Se uma onda inteira ficar rate-limitada, reduz o pool da próxima.
+  let idx = 0;
+  while(idx < chunks.length){
+    const waveSize = Math.min(currentPool, chunks.length - idx);
+    const wave = [];
+    for(let k=0; k<waveSize; k++){
+      wave.push(saveChunk(idx + k));
     }
-  });
-  await Promise.all(batchPromises);
-  console.log('[Atlas Save] todos os ' + chunks.length + ' chunks gravados em ' + batchGroups.length + ' batch(es), agora o meta');
+    await Promise.all(wave);
+    idx += waveSize;
+    // Adapta o pool baseado em quantos rate limits ocorreram nesta onda
+    if(consecutiveRateLimits >= 2 && currentPool > 1){
+      currentPool = Math.max(1, currentPool - 1);
+      console.warn('[Atlas Save] reduzindo paralelismo para ' + currentPool + ' (rate limit detectado)');
+    } else if(consecutiveRateLimits === 0 && currentPool < 3 && idx < chunks.length){
+      currentPool = Math.min(3, currentPool + 1);
+    }
+  }
+
+  if(errors.length){
+    console.error('[Atlas Save] ' + errors.length + ' chunks falharam. Primeiro erro:', errors[0]);
+    throw new Error(`Falha em ${errors.length} chunk(s): ${errors[0]}`);
+  }
+  console.log('[Atlas Save] todos os ' + chunks.length + ' chunks gravados, agora o meta');
   
   // 3) Grava o meta POR ÚLTIMO. É o "commit" lógico: leitores só veem a nova
   //    carga depois que todos os chunks estão no lugar.
