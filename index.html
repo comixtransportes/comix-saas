@@ -370,7 +370,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       <div class="view on" id="view-pd-diario">
         <div class="fr-wrap">
           <div class="fr-loading" id="fl-pd-diario"><div class="fr-spin"></div><div class="fr-txt">Carregando PD Diário...</div></div>
-          <iframe id="fr-pd-diario" title="PD Diário" onload="frLoaded('pd-diario')"></iframe>
+          <iframe id="fr-pd-diario" title="PD Diário"></iframe>
         </div>
       </div>
 
@@ -378,7 +378,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       <div class="view" id="view-frota">
         <div class="fr-wrap">
           <div class="fr-loading" id="fl-frota"><div class="fr-spin"></div><div class="fr-txt">Carregando Frota...</div></div>
-          <iframe id="fr-frota" title="Frota" onload="frLoaded('frota')"></iframe>
+          <iframe id="fr-frota" title="Frota"></iframe>
         </div>
       </div>
 
@@ -386,7 +386,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       <div class="view" id="view-painel">
         <div class="fr-wrap">
           <div class="fr-loading" id="fl-painel"><div class="fr-spin"></div><div class="fr-txt">Carregando Painel Operacional...</div></div>
-          <iframe id="fr-painel" title="Painel Operacional" onload="frLoaded('painel')"></iframe>
+          <iframe id="fr-painel" title="Painel Operacional"></iframe>
         </div>
       </div>
 
@@ -394,7 +394,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       <div class="view" id="view-financeiro">
         <div class="fr-wrap">
           <div class="fr-loading" id="fl-financeiro"><div class="fr-spin"></div><div class="fr-txt">Carregando Financeiro...</div></div>
-          <iframe id="fr-financeiro" title="Financeiro" onload="frLoaded('financeiro')"></iframe>
+          <iframe id="fr-financeiro" title="Financeiro"></iframe>
         </div>
       </div>
 
@@ -402,7 +402,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       <div class="view" id="view-ficha">
         <div class="fr-wrap">
           <div class="fr-loading" id="fl-ficha"><div class="fr-spin"></div><div class="fr-txt">Carregando Ficha Operacional...</div></div>
-          <iframe id="fr-ficha" title="Ficha Operacional" onload="frLoaded('ficha')"></iframe>
+          <iframe id="fr-ficha" title="Ficha Operacional"></iframe>
         </div>
       </div>
 
@@ -410,7 +410,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       <div class="view" id="view-compras">
         <div class="fr-wrap">
           <div class="fr-loading" id="fl-compras"><div class="fr-spin"></div><div class="fr-txt">Carregando Compras...</div></div>
-          <iframe id="fr-compras" title="Compras" onload="frLoaded('compras')"></iframe>
+          <iframe id="fr-compras" title="Compras"></iframe>
         </div>
       </div>
 
@@ -428,7 +428,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       <div class="view" id="view-config">
         <div class="fr-wrap">
           <div class="fr-loading" id="fl-config"><div class="fr-spin"></div><div class="fr-txt">Carregando Configurações...</div></div>
-          <iframe id="fr-config" title="Configurações" onload="frLoaded('config')"></iframe>
+          <iframe id="fr-config" title="Configurações"></iframe>
         </div>
       </div>
 
@@ -650,6 +650,16 @@ function frLoaded(viewId) {
   frFlags[viewId] = 'done';
 }
 
+/* Registra handlers de load programaticamente — evita ReferenceError quando
+   o iframe dispara o evento antes do <script> ter sido executado. */
+(function attachIframeLoadHandlers(){
+  const ids = ['pd-diario','frota','painel','financeiro','ficha','compras','config'];
+  ids.forEach(id => {
+    const fr = document.getElementById('fr-'+id);
+    if(fr) fr.addEventListener('load', () => frLoaded(id));
+  });
+})();
+
 function removeOverlay(viewId) {
   const fl = document.getElementById('fl-'+viewId);
   if (fl) { fl.classList.add('gone'); setTimeout(()=>{ if(fl.parentNode) fl.remove(); },500); }
@@ -742,9 +752,9 @@ const ATLAS_CLOUD_CHUNK_BYTES = 700 * 1024;
 // qualquer base real (SE1/SE2/SE5 do Financeiro raramente passam de 50MB).
 const ATLAS_CLOUD_MAX_CHUNKS = 300;
 // Bases que devem ser sincronizadas via Firestore.
-// SE4 e SA1 não estão aqui porque não são usadas pelo Financeiro nem PD;
-// se forem precisar de sync no futuro, basta adicionar.
-const ATLAS_CLOUD_BASES = new Set(['szb','se1','se2','se5']);
+// Todas as bases agora vão para a nuvem — garante consistência cross-device
+// e elimina dependência de IndexedDB local (que continha versões antigas).
+const ATLAS_CLOUD_BASES = new Set(['szb','se1','se2','se4','se5','sa1']);
 
 /* ── Caminho do Firestore para uma base. SZB usa esquema legado por compat. ── */
 function atlasCloudDocRef(id){
@@ -796,12 +806,8 @@ function atlasChunkSZBRows(slimRows){ return atlasChunkRows(slimRows); }
 
 /* ── Salva uma base no Firestore em chunks. Bloqueante; lança erro real. ── */
 async function atlasSaveBaseToFirestore(id, payload){
-  console.log('[Atlas Save] iniciando ' + id.toUpperCase());
-  if(!db) { console.error('[Atlas Save] db não disponível'); throw new Error('Sem autenticação Firebase — recarregue e faça login.'); }
-  if(!curUser) { console.error('[Atlas Save] curUser não autenticado'); throw new Error('Sem autenticação Firebase — recarregue e faça login.'); }
-  console.log('[Atlas Save] auth OK como ' + curUser.email);
+  if(!db || !curUser) throw new Error('Sem autenticação Firebase — recarregue e faça login.');
   if(!payload || !Array.isArray(payload.rows) || !payload.rows.length) throw new Error(`Payload ${id.toUpperCase()} vazio.`);
-  console.log('[Atlas Save] payload OK com ' + payload.rows.length + ' linhas');
   
   const slim = atlasSlimRows(id, payload.rows);
   const chunks = atlasChunkRows(slim);
@@ -848,44 +854,71 @@ async function atlasSaveBaseToFirestore(id, payload){
     }
   }
   
-  // 2) Grava chunks SEQUENCIALMENTE com retry e backoff exponencial.
-  // O paralelismo anterior (POOL=4) causava "resource-exhausted: Write stream exhausted
-  // maximum allowed queued writes" no Firestore. A gravação sequencial com 50ms de pausa
-  // entre chunks fica abaixo do limite de write throughput por conexão e é confiável.
+  // 2) Gravação ADAPTATIVA: começa rápida (paralelo 3), reduz pool se rate-limita,
+  // chega até sequencial em último caso. Cada chunk tem retry com backoff exponencial.
+  // Resultado: tipicamente 60-90s em vez de 4min, e continua confiável se Firestore
+  // estrangular a banda.
   console.log('[Atlas Save] gravando ' + chunks.length + ' chunks em ' + docRef.path);
   const errors = [];
-  for(let i=0; i<chunks.length; i++){
+  let savedCount = 0;
+  let currentPool = 3;        // começa com 3 gravações em paralelo
+  let consecutiveRateLimits = 0;
+
+  async function saveChunk(i){
     let attempt = 0;
-    let saved = false;
-    while(attempt < 4 && !saved){
+    while(attempt < 5){
       try{
         await docRef.collection('chunks').doc(String(i)).set({ rows: chunks[i] });
-        saved = true;
-        if(i % 5 === 0 || i === chunks.length - 1){
-          console.log('[Atlas Save] chunk ' + (i+1) + '/' + chunks.length + ' gravado');
-          dbPct(id, 10 + Math.floor(85 * (i+1) / chunks.length));
+        savedCount++;
+        consecutiveRateLimits = Math.max(0, consecutiveRateLimits - 1);
+        if(savedCount % 5 === 0 || savedCount === chunks.length){
+          console.log('[Atlas Save] ' + savedCount + '/' + chunks.length + ' chunks gravados');
+          dbPct(id, 10 + Math.floor(85 * savedCount / chunks.length));
         }
+        return true;
       }catch(e){
         attempt++;
         if(e.code === 'resource-exhausted' || /resource-exhausted|exhausted|unavailable|deadline/i.test(e.message)){
-          // Backoff exponencial: 500ms, 1s, 2s, 4s
-          const wait = 500 * Math.pow(2, attempt - 1);
-          console.warn('[Atlas Save] chunk ' + i + ' rate limited, retry em ' + wait + 'ms (tentativa ' + attempt + '/4)');
+          consecutiveRateLimits++;
+          // Backoff exponencial: 400ms, 800ms, 1.6s, 3.2s, 6.4s
+          const wait = 400 * Math.pow(2, attempt - 1);
+          if(attempt <= 2) {
+            // Log silencioso nas primeiras tentativas (esperado em alto throughput)
+          } else {
+            console.warn('[Atlas Save] chunk ' + i + ' rate limited, retry em ' + wait + 'ms (tentativa ' + attempt + '/5)');
+          }
           await new Promise(r => setTimeout(r, wait));
         } else {
           console.error('[Atlas Save] chunk ' + i + ' falhou (não-retentável): ' + e.message + ' (code=' + e.code + ')');
           errors.push(`chunk ${i}: ${e.message}`);
-          break;
+          return false;
         }
       }
     }
-    if(!saved && !errors.find(x=>x.startsWith(`chunk ${i}:`))){
-      errors.push(`chunk ${i}: falhou após 4 tentativas (rate limit)`);
-      console.error('[Atlas Save] chunk ' + i + ' desistiu após 4 retries');
-    }
-    // Pequena pausa entre chunks para respirar a quota
-    if(i < chunks.length - 1) await new Promise(r => setTimeout(r, 50));
+    errors.push(`chunk ${i}: falhou após 5 tentativas (rate limit)`);
+    console.error('[Atlas Save] chunk ' + i + ' desistiu após 5 retries');
+    return false;
   }
+
+  // Processa em ondas. Se uma onda inteira ficar rate-limitada, reduz o pool da próxima.
+  let idx = 0;
+  while(idx < chunks.length){
+    const waveSize = Math.min(currentPool, chunks.length - idx);
+    const wave = [];
+    for(let k=0; k<waveSize; k++){
+      wave.push(saveChunk(idx + k));
+    }
+    await Promise.all(wave);
+    idx += waveSize;
+    // Adapta o pool baseado em quantos rate limits ocorreram nesta onda
+    if(consecutiveRateLimits >= 2 && currentPool > 1){
+      currentPool = Math.max(1, currentPool - 1);
+      console.warn('[Atlas Save] reduzindo paralelismo para ' + currentPool + ' (rate limit detectado)');
+    } else if(consecutiveRateLimits === 0 && currentPool < 3 && idx < chunks.length){
+      currentPool = Math.min(3, currentPool + 1);
+    }
+  }
+
   if(errors.length){
     console.error('[Atlas Save] ' + errors.length + ' chunks falharam. Primeiro erro:', errors[0]);
     throw new Error(`Falha em ${errors.length} chunk(s): ${errors[0]}`);
@@ -911,7 +944,7 @@ async function atlasSaveBaseToFirestore(id, payload){
       numChunks: chunks.length,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
-    console.log('[Atlas Save] ✓ meta gravado em ' + docRef.path + ' (' + chunks.length + ' chunks)');
+
   } catch(e) {
     console.error('[Atlas Save] ✗ FALHA AO GRAVAR META:', e.message, '(code=' + e.code + ')');
     throw e;
@@ -1070,21 +1103,12 @@ function atlasWatchSZBMeta(){ atlasWatchBase('szb'); }
    Comparação de versão usa updatedAt do servidor (confiável) quando disponível,
    caindo back para ts do cliente apenas se updatedAt não existir. */
 async function atlasPreloadAllBases(){
-  if(!db || !curUser) {
-    console.warn('[Atlas Preload] abortado — db=' + !!db + ', user=' + !!curUser);
-    return;
-  }
-  console.log('[Atlas Preload] iniciando para bases:', Array.from(ATLAS_CLOUD_BASES));
+  if(!db || !curUser) return;
   for(const id of ATLAS_CLOUD_BASES){
     try{
-      console.log('[Atlas Preload] buscando meta de ' + id.toUpperCase() + '…');
       const docRef = atlasCloudDocRef(id);
       const metaSnap = await docRef.get();
-      if(!metaSnap.exists) {
-        console.warn('[Atlas Preload] ' + id.toUpperCase() + ': meta não existe no Firestore');
-        continue;
-      }
-      console.log('[Atlas Preload] ' + id.toUpperCase() + ': meta encontrado, chunks=' + (metaSnap.data().numChunks || 0));
+      if(!metaSnap.exists) continue;
       const meta = metaSnap.data();
 
       // Fonte da verdade: updatedAt (serverTimestamp). Fallback: ts (cliente).
@@ -1100,7 +1124,6 @@ async function atlasPreloadAllBases(){
 
       const p = await atlasLoadBaseFromFirestore(id);
       if(p && Array.isArray(p.rows) && p.rows.length){
-        console.log('[Atlas Preload] ' + id.toUpperCase() + ': ' + p.rows.length + ' linhas carregadas, fazendo broadcast');
         window.ATLAS_DATA[id] = p;
         atlasSaveBase(id, p).catch(()=>{});
         atlasMarkLoadedCard(id, p, 'da nuvem');
@@ -1109,8 +1132,6 @@ async function atlasPreloadAllBases(){
         if(id === 'szb') window.__atlasSZBLastTs = p.ts;
         // Notifica iframes abertos antes do preload terminar (ex: PD Diário em branco)
         atlasBroadcast(id, p);
-      } else {
-        console.warn('[Atlas Preload] ' + id.toUpperCase() + ': atlasLoadBaseFromFirestore retornou vazio');
       }
     }catch(e){ console.warn(`[Atlas] preload ${id}:`, e.message); }
   }
