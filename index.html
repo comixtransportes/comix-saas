@@ -796,8 +796,12 @@ function atlasChunkSZBRows(slimRows){ return atlasChunkRows(slimRows); }
 
 /* ── Salva uma base no Firestore em chunks. Bloqueante; lança erro real. ── */
 async function atlasSaveBaseToFirestore(id, payload){
-  if(!db || !curUser) throw new Error('Sem autenticação Firebase — recarregue e faça login.');
+  console.log('[Atlas Save] iniciando ' + id.toUpperCase());
+  if(!db) { console.error('[Atlas Save] db não disponível'); throw new Error('Sem autenticação Firebase — recarregue e faça login.'); }
+  if(!curUser) { console.error('[Atlas Save] curUser não autenticado'); throw new Error('Sem autenticação Firebase — recarregue e faça login.'); }
+  console.log('[Atlas Save] auth OK como ' + curUser.email);
   if(!payload || !Array.isArray(payload.rows) || !payload.rows.length) throw new Error(`Payload ${id.toUpperCase()} vazio.`);
+  console.log('[Atlas Save] payload OK com ' + payload.rows.length + ' linhas');
   
   const slim = atlasSlimRows(id, payload.rows);
   const chunks = atlasChunkRows(slim);
@@ -845,6 +849,7 @@ async function atlasSaveBaseToFirestore(id, payload){
   }
   
   // 2) Grava chunks em paralelo com concorrência limitada (não estourar quotas).
+  console.log('[Atlas Save] gravando ' + chunks.length + ' chunks em ' + docRef.path);
   const POOL = 4;
   let idx = 0;
   const errors = [];
@@ -854,14 +859,17 @@ async function atlasSaveBaseToFirestore(id, payload){
       try{
         await docRef.collection('chunks').doc(String(i)).set({ rows: chunks[i] });
       }catch(e){
+        console.error('[Atlas Save] chunk ' + i + ' falhou: ' + e.message + ' (code=' + e.code + ')');
         errors.push(`chunk ${i}: ${e.message}`);
       }
     }
   }
   await Promise.all(Array.from({length:POOL},()=>worker()));
   if(errors.length){
+    console.error('[Atlas Save] ' + errors.length + ' chunks falharam. Primeiro erro:', errors[0]);
     throw new Error(`Falha em ${errors.length} chunk(s): ${errors[0]}`);
   }
+  console.log('[Atlas Save] todos os ' + chunks.length + ' chunks gravados, agora o meta');
   
   // 3) Grava o meta POR ÚLTIMO. É o "commit" lógico: leitores só veem a nova
   //    carga depois que todos os chunks estão no lugar.
@@ -870,17 +878,23 @@ async function atlasSaveBaseToFirestore(id, payload){
   //      de versões — imune a relógio desajustado no cliente).
   //    - ts: mantido como alias de clientTs para compatibilidade com código legado.
   const clientTs = payload.ts || new Date().toISOString();
-  await docRef.set({
-    ts: clientTs,
-    clientTs: clientTs,
-    count: payload.count || slim.length,
-    file: payload.file || (id.toUpperCase()+'.xlsm'),
-    user: payload.user || curUser.email || '—',
-    email: curUser.email || '',
-    uid: curUser.uid || '',
-    numChunks: chunks.length,
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
+  try {
+    await docRef.set({
+      ts: clientTs,
+      clientTs: clientTs,
+      count: payload.count || slim.length,
+      file: payload.file || (id.toUpperCase()+'.xlsm'),
+      user: payload.user || curUser.email || '—',
+      email: curUser.email || '',
+      uid: curUser.uid || '',
+      numChunks: chunks.length,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    console.log('[Atlas Save] ✓ meta gravado em ' + docRef.path + ' (' + chunks.length + ' chunks)');
+  } catch(e) {
+    console.error('[Atlas Save] ✗ FALHA AO GRAVAR META:', e.message, '(code=' + e.code + ')');
+    throw e;
+  }
   
   dbLog(`✓ ${id.toUpperCase()} salvo no Firestore (${chunks.length} chunks, ${totalMB.toFixed(2)}MB) — visível em qualquer navegador`,'ok');
 }
@@ -1382,7 +1396,15 @@ async function dbProc(file,id){
       __atlasWatchLastTs[id] = tsNow;
       __atlasWatchLastTs[id+'__serverMs'] = 0; // será preenchido quando o onSnapshot confirmar
       if(id==='szb') window.__atlasSZBLastTs = tsNow;
-      atlasSaveBaseToCloudBg(id, window.ATLAS_DATA[id]);
+      // BLOQUEANTE para sabermos se a nuvem aceitou. Se falhar, aparece no log e toast.
+      try {
+        await atlasSaveBaseToCloud(id, window.ATLAS_DATA[id]);
+        toast(`${id.toUpperCase()} salvo na nuvem — visível para todos`,'gn');
+      } catch(e) {
+        console.error('[Atlas dbProc] FALHA NA NUVEM ' + id + ':', e);
+        dbLog(`✗ ${id.toUpperCase()} NÃO foi salvo na nuvem: ${e.message}`,'err');
+        toast(`Falha ao salvar ${id.toUpperCase()} na nuvem: `+e.message,'rd');
+      }
     }
     atlasBroadcast(id, window.ATLAS_DATA[id]);
     const sec=((Date.now()-t0)/1000).toFixed(1);
