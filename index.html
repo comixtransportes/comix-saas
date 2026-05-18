@@ -726,7 +726,7 @@ async function atlasSaveBase(id,payload){
      bases_cloud/{id}/chunks/{n}  → chunks da base id
    
    Quais bases vão para a nuvem: definido em ATLAS_CLOUD_BASES abaixo.
-   Worker antigo permanece como FALLBACK SÓ para SZB.
+   Worker antigo foi REMOVIDO do caminho de leitura (retornava versões antigas).
    ══════════════════════════════════════════════════════════════════════ */
 const ATLAS_PD_WORKER_URL = 'https://comix-pd-diario.comixtransportes.workers.dev';
 const ATLAS_PD_COLS_NEEDED = [
@@ -933,27 +933,18 @@ async function atlasLoadSZBFromFirestore(){
   return atlasLoadBaseFromFirestore('szb');
 }
 
-/* ── Fallback de LEITURA pelo Worker antigo (SÓ para SZB) ── */
+/* ── Worker antigo: mantido apenas por compat de código legado, NÃO usado na leitura ── */
 async function atlasPDGet(path){
   const r = await fetch(ATLAS_PD_WORKER_URL + path);
   if(!r.ok) throw new Error('HTTP '+r.status);
   return await r.json();
 }
+/* SZB: leitura exclusivamente pelo Firestore.
+   O Worker antigo foi removido do caminho de leitura — ele retornava versões
+   desatualizadas (sábado) quando o Firestore estava inacessível por regras incorretas.
+   Com as Firestore Rules corrigidas, o Firestore é a única fonte de leitura. */
 async function atlasLoadSZBFromPDCloud(){
-  // Primeiro tenta Firestore (fonte canônica)
-  const fs = await atlasLoadBaseFromFirestore('szb');
-  if(fs) return fs;
-  // Fallback: Worker antigo (só existe para SZB)
-  try{
-    const data = await atlasPDGet('/api/data');
-    if(!Array.isArray(data) || !data.length) return null;
-    let ts = new Date().toISOString();
-    try{
-      const lu = await atlasPDGet('/api/lastupdate');
-      if(lu && lu.ts) ts = lu.ts;
-    }catch(_){}
-    return { rows:data, file:'SZB_CONTROLE_FRETE.xlsm', ts, count:data.length, user:'nuvem (worker)' };
-  }catch(_){ return null; }
+  return atlasLoadBaseFromFirestore('szb');
 }
 
 /* ── Wrapper de gravação. Bloqueante com feedback claro. ── */
@@ -1147,7 +1138,7 @@ window.addEventListener('message',async ev=>{
     if(!payload){
       try{
         let cloudPayload;
-        if(id==='szb') cloudPayload=await atlasLoadSZBFromPDCloud(); // inclui fallback worker
+        if(id==='szb') cloudPayload=await atlasLoadSZBFromPDCloud(); // Firestore exclusivo (Worker removido)
         else cloudPayload=await atlasLoadBaseFromFirestore(id);
         if(cloudPayload && Array.isArray(cloudPayload.rows) && cloudPayload.rows.length){
           payload=cloudPayload;
