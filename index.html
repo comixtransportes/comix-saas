@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <!-- Viewport: width=device-width pois o portal é responsivo (sidebar+iframe).
      user-scalable=yes libera pinch-to-zoom no celular para ler textos pequenos. -->
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <title>COMIX Atlas</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
@@ -123,48 +123,13 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 .fr-wrap{flex:1;position:relative;overflow:hidden}
 .fr-wrap iframe{position:absolute;inset:0;width:100%;height:100%;border:none;background:var(--wh)}
 
-/* ── PINCH-ZOOM SHELL ──
-   O wrapper #pinch-wrap envolve o app inteiro e aplica scale() via JS.
-   Os iframes ficam dentro dele — o zoom afeta tudo de forma uniforme.
-   touch-action:none no wrapper desativa gestos nativos do browser para
-   que o handler manual assuma controle total. */
-#pinch-wrap {
-  position: fixed;
-  inset: 0;
-  transform-origin: 0 0;
-  /* will-change evita repaints desnecessários durante o gesto */
-  will-change: transform;
-}
-
-/* Botão flutuante de reset de zoom — só aparece quando há zoom ativo */
-#zoom-reset-btn {
-  display: none;
-  position: fixed;
-  bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 9999;
-  background: rgba(30,45,69,.92);
-  color: #ddebff;
-  border: 1px solid #2c4363;
-  border-radius: 20px;
-  padding: 6px 14px;
-  font-size: 11px;
-  font-family: var(--m);
-  font-weight: 600;
-  cursor: pointer;
-  backdrop-filter: blur(6px);
-  box-shadow: 0 4px 16px rgba(0,0,0,.3);
-  white-space: nowrap;
-  letter-spacing: .3px;
-}
-#zoom-reset-btn.visible { display: block; }
-
-/* Em mobile, libera pointer-events nos iframes durante zoom */
+/* ── MOBILE: gestos liberados no contêiner do iframe ──
+   O dimensionamento do conteúdo interno é feito pelo viewport de cada
+   dashboard (initial-scale=0.5). Aqui apenas garantimos que iOS Chrome
+   não capture gestos no nível do contêiner. */
 @media (max-width: 900px) {
   .fr-wrap, .fr-wrap iframe {
-    touch-action: none;
-    pointer-events: auto;
+    touch-action: pan-x pan-y pinch-zoom;
   }
 }
 .fr-loading{position:absolute;inset:0;background:var(--hd);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:5;transition:opacity .4s}
@@ -288,12 +253,6 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 </style>
 </head>
 <body>
-
-<!-- PINCH-ZOOM WRAPPER: envolve todo o app para zoom/pan via JS -->
-<div id="pinch-wrap">
-
-<!-- Botão flutuante de reset de zoom -->
-<button id="zoom-reset-btn" onclick="zoomReset()" title="Resetar zoom">⊙ Resetar zoom</button>
 
 <!-- LOGIN -->
 <div id="scr-login">
@@ -1588,193 +1547,6 @@ window.addEventListener('message', function(ev) {
     toast(`Permissões atualizadas para perfil "${ev.data.tipo}".`, 'gn');
   }
 });
-</div><!-- /pinch-wrap -->
-
-<script>
-/* ══════════════════════════════════════════════════════
-   PINCH-ZOOM + PAN — Shell do COMIX Atlas
-   ──────────────────────────────────────────────────────
-   Estratégia:
-   • Captura gestos de 2 dedos (pinch) e 1 dedo (pan) no #pinch-wrap.
-   • Aplica CSS transform: translate(tx,ty) scale(s) no wrapper.
-   • Os iframes e todo o conteúdo escalam junto, uniformemente.
-   • Zoom mínimo = 1 (tamanho original). Máximo = 4×.
-   • Duplo-toque: alterna entre 1× e 1.8×.
-   • Botão flutuante aparece quando zoom > 1 para reset rápido.
-   ══════════════════════════════════════════════════════ */
-(function () {
-  'use strict';
-
-  const WRAP   = document.getElementById('pinch-wrap');
-  const RSBTN  = document.getElementById('zoom-reset-btn');
-  const MIN_SCALE = 1;
-  const MAX_SCALE = 4;
-
-  let scale  = 1;
-  let tx     = 0;
-  let ty     = 0;
-
-  /* Estado de toque */
-  let lastTouches    = [];
-  let startDist      = 0;
-  let startScale     = 1;
-  let startTx        = 0;
-  let startTy        = 0;
-  let startMidX      = 0;
-  let startMidY      = 0;
-  let lastTapTime    = 0;
-  let lastTapX       = 0;
-  let lastTapY       = 0;
-
-  function applyTransform() {
-    clampPan();
-    WRAP.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
-    RSBTN.classList.toggle('visible', scale > 1.01);
-  }
-
-  function clampPan() {
-    /* Garante que o usuário não arraste para além das bordas do conteúdo */
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const maxTx = 0;
-    const minTx = vw  - vw  * scale;
-    const maxTy = 0;
-    const minTy = vh  - vh  * scale;
-    tx = Math.min(maxTx, Math.max(minTx, tx));
-    ty = Math.min(maxTy, Math.max(minTy, ty));
-  }
-
-  function dist(t1, t2) {
-    const dx = t1.clientX - t2.clientX;
-    const dy = t1.clientY - t2.clientY;
-    return Math.hypot(dx, dy);
-  }
-
-  function mid(t1, t2) {
-    return {
-      x: (t1.clientX + t2.clientX) / 2,
-      y: (t1.clientY + t2.clientY) / 2
-    };
-  }
-
-  WRAP.addEventListener('touchstart', function (e) {
-    const touches = Array.from(e.touches);
-    lastTouches = touches;
-
-    if (touches.length === 2) {
-      /* Início do pinch */
-      e.preventDefault();
-      startDist  = dist(touches[0], touches[1]);
-      startScale = scale;
-      const m    = mid(touches[0], touches[1]);
-      startMidX  = m.x;
-      startMidY  = m.y;
-      startTx    = tx;
-      startTy    = ty;
-    } else if (touches.length === 1) {
-      /* Início do pan — só intercepta se já há zoom ativo */
-      if (scale > 1.01) {
-        e.preventDefault();
-        startTx = tx;
-        startTy = ty;
-        startMidX = touches[0].clientX;
-        startMidY = touches[0].clientY;
-      }
-      /* Duplo-toque */
-      const now  = Date.now();
-      const dtap = now - lastTapTime;
-      if (dtap < 300 && dtap > 0) {
-        e.preventDefault();
-        const tx0 = touches[0].clientX;
-        const ty0 = touches[0].clientY;
-        if (scale > 1.01) {
-          /* Volta para 1× */
-          scale = 1; tx = 0; ty = 0;
-        } else {
-          /* Zoom 1.8× centrado no toque */
-          const newScale = 1.8;
-          tx = tx0 - tx0 * newScale;
-          ty = ty0 - ty0 * newScale;
-          scale = newScale;
-        }
-        applyTransform();
-        lastTapTime = 0; /* reseta para evitar triplo-toque */
-        return;
-      }
-      lastTapTime = now;
-      lastTapX    = touches[0].clientX;
-      lastTapY    = touches[0].clientY;
-    }
-  }, { passive: false });
-
-  WRAP.addEventListener('touchmove', function (e) {
-    const touches = Array.from(e.touches);
-
-    if (touches.length === 2) {
-      e.preventDefault();
-      const d        = dist(touches[0], touches[1]);
-      const m        = mid(touches[0], touches[1]);
-      let   newScale = startScale * (d / startDist);
-      newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, newScale));
-
-      /* Ajusta translação para manter o ponto de pinch estável */
-      const ratio  = newScale / startScale;
-      tx = m.x - ratio * (startMidX - startTx) - startMidX + m.x - m.x;
-      ty = m.y - ratio * (startMidY - startTy) - startMidY + m.y - m.y;
-      /* Cálculo correto: o ponto do pinch deve ser o piv */
-      tx = startTx + (m.x - startMidX) - (startMidX) * (ratio - 1);
-      ty = startTy + (m.y - startMidY) - (startMidY) * (ratio - 1);
-      scale = newScale;
-      applyTransform();
-    } else if (touches.length === 1 && scale > 1.01) {
-      e.preventDefault();
-      tx = startTx + (touches[0].clientX - startMidX);
-      ty = startTy + (touches[0].clientY - startMidY);
-      applyTransform();
-    }
-  }, { passive: false });
-
-  WRAP.addEventListener('touchend', function (e) {
-    lastTouches = Array.from(e.touches);
-    /* Se soltou um dos dedos durante pinch, reinicia referência */
-    if (lastTouches.length === 1) {
-      startMidX = lastTouches[0].clientX;
-      startMidY = lastTouches[0].clientY;
-      startTx   = tx;
-      startTy   = ty;
-    }
-  }, { passive: true });
-
-  /* Scroll de mouse (desktop) para zoom também */
-  WRAP.addEventListener('wheel', function (e) {
-    if (!e.ctrlKey && !e.metaKey) return; /* só com Ctrl/Cmd */
-    e.preventDefault();
-    const factor   = e.deltaY < 0 ? 1.1 : 0.9;
-    const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * factor));
-    const ox       = e.clientX;
-    const oy       = e.clientY;
-    tx = ox - (ox - tx) * (newScale / scale);
-    ty = oy - (oy - ty) * (newScale / scale);
-    scale = newScale;
-    applyTransform();
-  }, { passive: false });
-
-  /* Reset global */
-  window.zoomReset = function () {
-    scale = 1; tx = 0; ty = 0;
-    applyTransform();
-  };
-
-  /* Reposiciona ao girar o dispositivo */
-  window.addEventListener('orientationchange', function () {
-    setTimeout(function () {
-      if (scale < 1.01) { tx = 0; ty = 0; }
-      else { clampPan(); }
-      applyTransform();
-    }, 350);
-  });
-
-})();
 </script>
 </body>
 </html>
