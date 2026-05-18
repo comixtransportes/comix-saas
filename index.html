@@ -1035,13 +1035,21 @@ function atlasWatchSZBMeta(){ atlasWatchBase('szb'); }
    Comparação de versão usa updatedAt do servidor (confiável) quando disponível,
    caindo back para ts do cliente apenas se updatedAt não existir. */
 async function atlasPreloadAllBases(){
-  if(!db || !curUser) return;
+  if(!db || !curUser) {
+    console.warn('[Atlas Preload] abortado — db=' + !!db + ', user=' + !!curUser);
+    return;
+  }
+  console.log('[Atlas Preload] iniciando para bases:', Array.from(ATLAS_CLOUD_BASES));
   for(const id of ATLAS_CLOUD_BASES){
     try{
-      // Lê o meta primeiro (leve) para decidir se vale buscar os chunks
+      console.log('[Atlas Preload] buscando meta de ' + id.toUpperCase() + '…');
       const docRef = atlasCloudDocRef(id);
       const metaSnap = await docRef.get();
-      if(!metaSnap.exists) continue;
+      if(!metaSnap.exists) {
+        console.warn('[Atlas Preload] ' + id.toUpperCase() + ': meta não existe no Firestore');
+        continue;
+      }
+      console.log('[Atlas Preload] ' + id.toUpperCase() + ': meta encontrado, chunks=' + (metaSnap.data().numChunks || 0));
       const meta = metaSnap.data();
 
       // Fonte da verdade: updatedAt (serverTimestamp). Fallback: ts (cliente).
@@ -1057,6 +1065,7 @@ async function atlasPreloadAllBases(){
 
       const p = await atlasLoadBaseFromFirestore(id);
       if(p && Array.isArray(p.rows) && p.rows.length){
+        console.log('[Atlas Preload] ' + id.toUpperCase() + ': ' + p.rows.length + ' linhas carregadas, fazendo broadcast');
         window.ATLAS_DATA[id] = p;
         atlasSaveBase(id, p).catch(()=>{});
         atlasMarkLoadedCard(id, p, 'da nuvem');
@@ -1065,6 +1074,8 @@ async function atlasPreloadAllBases(){
         if(id === 'szb') window.__atlasSZBLastTs = p.ts;
         // Notifica iframes abertos antes do preload terminar (ex: PD Diário em branco)
         atlasBroadcast(id, p);
+      } else {
+        console.warn('[Atlas Preload] ' + id.toUpperCase() + ': atlasLoadBaseFromFirestore retornou vazio');
       }
     }catch(e){ console.warn(`[Atlas] preload ${id}:`, e.message); }
   }
