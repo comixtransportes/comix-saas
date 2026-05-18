@@ -3246,18 +3246,17 @@ window.addEventListener('message', function(event) {
 });
 
 (function bootAtlasSZB() {
-  setTimeout(function() {
-    if (!tryAtlasSZB()) {
-      requestAtlasSZB();
-    }
-  }, 100);
-  setTimeout(function() {
-    if (!__ATLAS_PD_CARREGADO) {
-      if (!tryAtlasSZB()) {
-        requestAtlasSZB();
-      }
-    }
-  }, 900);
+  // Retry progressivo: o preload do Firestore no Atlas pode levar 3-8s dependendo
+  // do tamanho da SZB e da latência. Tentamos em intervalos crescentes por até 15s.
+  // Quando o Atlas termina o preload, ele faz broadcast ATLAS_DATA_READY — o listener
+  // de mensagens acima captura e chama tryAtlasSZB. Este loop é o safety net.
+  var delays = [150, 500, 1200, 2500, 4500, 7000, 10000, 14000];
+  delays.forEach(function(ms) {
+    setTimeout(function() {
+      if (__ATLAS_PD_CARREGADO) return;
+      if (!tryAtlasSZB()) requestAtlasSZB();
+    }, ms);
+  });
 })();
 
 // ═══════════════════════════════════════════════════════
@@ -3276,6 +3275,7 @@ window.addEventListener('message', function(event) {
       return;
     }
     var lastTs = null;
+    var lastUpdatedMs = 0;
     var firstSnap = true;
     try {
       fb.firestore().collection('bases_szb').doc('meta').onSnapshot(async function(snap) {
@@ -3286,8 +3286,12 @@ window.addEventListener('message', function(event) {
           lastTs = meta.ts;
           return;
         }
-        if (meta.ts && meta.ts !== lastTs) {
+        // Usa updatedAt (server time) quando disponível — mais confiável que ts (cliente)
+        var newMs = meta.updatedAt && meta.updatedAt.toMillis ? meta.updatedAt.toMillis() : 0;
+        var changed = newMs ? (newMs > (lastUpdatedMs || 0)) : (meta.ts && meta.ts !== lastTs);
+        if (changed) {
           lastTs = meta.ts;
+          lastUpdatedMs = newMs;
           try {
             var fs = await loadSZBFromFirestore();
             if (fs && fs.rows && fs.rows.length) {
