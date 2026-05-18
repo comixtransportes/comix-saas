@@ -848,23 +848,44 @@ async function atlasSaveBaseToFirestore(id, payload){
     }
   }
   
-  // 2) Grava chunks em paralelo com concorrência limitada (não estourar quotas).
+  // 2) Grava chunks SEQUENCIALMENTE com retry e backoff exponencial.
+  // O paralelismo anterior (POOL=4) causava "resource-exhausted: Write stream exhausted
+  // maximum allowed queued writes" no Firestore. A gravação sequencial com 50ms de pausa
+  // entre chunks fica abaixo do limite de write throughput por conexão e é confiável.
   console.log('[Atlas Save] gravando ' + chunks.length + ' chunks em ' + docRef.path);
-  const POOL = 4;
-  let idx = 0;
   const errors = [];
-  async function worker(){
-    while(idx < chunks.length){
-      const i = idx++;
+  for(let i=0; i<chunks.length; i++){
+    let attempt = 0;
+    let saved = false;
+    while(attempt < 4 && !saved){
       try{
         await docRef.collection('chunks').doc(String(i)).set({ rows: chunks[i] });
+        saved = true;
+        if(i % 5 === 0 || i === chunks.length - 1){
+          console.log('[Atlas Save] chunk ' + (i+1) + '/' + chunks.length + ' gravado');
+          dbPct(id, 10 + Math.floor(85 * (i+1) / chunks.length));
+        }
       }catch(e){
-        console.error('[Atlas Save] chunk ' + i + ' falhou: ' + e.message + ' (code=' + e.code + ')');
-        errors.push(`chunk ${i}: ${e.message}`);
+        attempt++;
+        if(e.code === 'resource-exhausted' || /resource-exhausted|exhausted|unavailable|deadline/i.test(e.message)){
+          // Backoff exponencial: 500ms, 1s, 2s, 4s
+          const wait = 500 * Math.pow(2, attempt - 1);
+          console.warn('[Atlas Save] chunk ' + i + ' rate limited, retry em ' + wait + 'ms (tentativa ' + attempt + '/4)');
+          await new Promise(r => setTimeout(r, wait));
+        } else {
+          console.error('[Atlas Save] chunk ' + i + ' falhou (não-retentável): ' + e.message + ' (code=' + e.code + ')');
+          errors.push(`chunk ${i}: ${e.message}`);
+          break;
+        }
       }
     }
+    if(!saved && !errors.find(x=>x.startsWith(`chunk ${i}:`))){
+      errors.push(`chunk ${i}: falhou após 4 tentativas (rate limit)`);
+      console.error('[Atlas Save] chunk ' + i + ' desistiu após 4 retries');
+    }
+    // Pequena pausa entre chunks para respirar a quota
+    if(i < chunks.length - 1) await new Promise(r => setTimeout(r, 50));
   }
-  await Promise.all(Array.from({length:POOL},()=>worker()));
   if(errors.length){
     console.error('[Atlas Save] ' + errors.length + ' chunks falharam. Primeiro erro:', errors[0]);
     throw new Error(`Falha em ${errors.length} chunk(s): ${errors[0]}`);
