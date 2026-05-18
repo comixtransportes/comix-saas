@@ -811,6 +811,9 @@ async function atlasSaveBaseToFirestore(id, payload){
   const docRef = atlasCloudDocRef(id);
   
   // 1) Limpa chunks antigos que tenham sobrado de carga maior anterior.
+  //    Falha de permissão aqui é inofensiva (novos chunks sobrescrevem os antigos
+  //    e numChunks é atualizado no passo 3), mas indica que as Firestore Rules
+  //    precisam permitir delete em bases_szb/meta/chunks e bases_cloud/{id}/chunks.
   try{
     const oldMetaSnap = await docRef.get();
     if(oldMetaSnap.exists){
@@ -825,10 +828,20 @@ async function atlasSaveBaseToFirestore(id, payload){
           }
           await batch.commit();
         }
+        dbLog(`🧹 ${id.toUpperCase()}: ${oldN - chunks.length} chunk(s) antigo(s) removido(s).`,'info');
       }
     }
   }catch(e){
-    dbLog(`⚠ ${id.toUpperCase()}: não consegui limpar chunks antigos: ${e.message}`,'warn');
+    // Erro de permissão: chunks antigos ficam órfãos, mas NÃO afeta a leitura
+    // porque numChunks no meta aponta só para os novos chunks.
+    // Para corrigir definitivamente, adicione no Firestore Rules:
+    //   match /bases_szb/{doc}/{subcoll=**} { allow read, write: if request.auth != null; }
+    //   match /bases_cloud/{base}/{subcoll=**} { allow read, write: if request.auth != null; }
+    if(e.code === 'permission-denied' || /permission/i.test(e.message)){
+      dbLog(`⚠ ${id.toUpperCase()}: sem permissão para limpar chunks antigos (inofensivo — regras do Firestore precisam de ajuste).`,'warn');
+    } else {
+      dbLog(`⚠ ${id.toUpperCase()}: não consegui limpar chunks antigos: ${e.message}`,'warn');
+    }
   }
   
   // 2) Grava chunks em paralelo com concorrência limitada (não estourar quotas).
@@ -852,8 +865,14 @@ async function atlasSaveBaseToFirestore(id, payload){
   
   // 3) Grava o meta POR ÚLTIMO. É o "commit" lógico: leitores só veem a nova
   //    carga depois que todos os chunks estão no lugar.
+  //    - clientTs: horário do navegador de quem fez o upload (para exibição).
+  //    - updatedAt: serverTimestamp do Firestore (fonte da verdade para comparação
+  //      de versões — imune a relógio desajustado no cliente).
+  //    - ts: mantido como alias de clientTs para compatibilidade com código legado.
+  const clientTs = payload.ts || new Date().toISOString();
   await docRef.set({
-    ts: payload.ts || new Date().toISOString(),
+    ts: clientTs,
+    clientTs: clientTs,
     count: payload.count || slim.length,
     file: payload.file || (id.toUpperCase()+'.xlsm'),
     user: payload.user || curUser.email || '—',
@@ -984,8 +1003,16 @@ function atlasWatchBase(id){
       if(id === 'szb') window.__atlasSZBLastTs = meta.ts;
       return;
     }
-    if(meta.ts && meta.ts !== __atlasWatchLastTs[id]){
+    // Compara por updatedAt (server time) se disponível — mais confiável que ts (cliente).
+    // Se updatedAt ainda não chegou (pending), cai back para ts.
+    const newUpdatedAt = meta.updatedAt && meta.updatedAt.toMillis ? meta.updatedAt.toMillis() : 0;
+    const prevUpdatedAt = __atlasWatchLastTs[id+'__serverMs'] || 0;
+    const versionChanged = newUpdatedAt
+      ? (newUpdatedAt > prevUpdatedAt)
+      : (meta.ts && meta.ts !== __atlasWatchLastTs[id]);
+    if(versionChanged){
       __atlasWatchLastTs[id] = meta.ts;
+      __atlasWatchLastTs[id+'__serverMs'] = newUpdatedAt;
       if(id === 'szb') window.__atlasSZBLastTs = meta.ts;
       dbLog(`☁ Nova versão de ${id.toUpperCase()} na nuvem (carga de ${meta.user||'—'})`,'info');
       try{
@@ -1013,25 +1040,38 @@ function atlasWatchAllBases(){
 function atlasWatchSZBMeta(){ atlasWatchBase('szb'); }
 
 /* Carrega TODAS as bases da nuvem ao logar — assim o Financeiro/PD encontra
-   os dados prontos quando abrir os iframes, mesmo sem novo upload nesta sessão. */
+   os dados prontos quando abrir os iframes, mesmo sem novo upload nesta sessão.
+   Comparação de versão usa updatedAt do servidor (confiável) quando disponível,
+   caindo back para ts do cliente apenas se updatedAt não existir. */
 async function atlasPreloadAllBases(){
   if(!db || !curUser) return;
   for(const id of ATLAS_CLOUD_BASES){
     try{
+      // Lê o meta primeiro (leve) para decidir se vale buscar os chunks
+      const docRef = atlasCloudDocRef(id);
+      const metaSnap = await docRef.get();
+      if(!metaSnap.exists) continue;
+      const meta = metaSnap.data();
+
+      // Fonte da verdade: updatedAt (serverTimestamp). Fallback: ts (cliente).
+      const cloudUpdatedAt = meta.updatedAt ? meta.updatedAt.toMillis() : 0;
+      const cloudTs        = meta.ts ? new Date(meta.ts).getTime() : 0;
+      const cloudVersion   = cloudUpdatedAt || cloudTs; // preferência ao server time
+
+      const mem    = window.ATLAS_DATA[id];
+      const memTs  = mem && mem.ts ? new Date(mem.ts).getTime() : 0;
+
+      // Só busca chunks se a nuvem tiver algo mais recente (ou memória vazia)
+      if(mem && cloudVersion && memTs && cloudVersion < memTs) continue;
+
       const p = await atlasLoadBaseFromFirestore(id);
       if(p && Array.isArray(p.rows) && p.rows.length){
-        // Marca como vindo da nuvem (não sobrescreve carga local recente desta sessão)
-        const mem = window.ATLAS_DATA[id];
-        const memTs = mem && mem.ts ? new Date(mem.ts).getTime() : 0;
-        const cloudTs = p.ts ? new Date(p.ts).getTime() : 0;
-        if(!mem || cloudTs >= memTs){
-          window.ATLAS_DATA[id] = p;
-          atlasSaveBase(id, p).catch(()=>{});
-          atlasMarkLoadedCard(id, p, 'da nuvem');
-          // Inicializa o ts para o watcher não considerar isso como "nova versão"
-          __atlasWatchLastTs[id] = p.ts;
-          if(id === 'szb') window.__atlasSZBLastTs = p.ts;
-        }
+        window.ATLAS_DATA[id] = p;
+        atlasSaveBase(id, p).catch(()=>{});
+        atlasMarkLoadedCard(id, p, 'da nuvem');
+        // Inicializa o ts para o watcher não considerar isso como "nova versão"
+        __atlasWatchLastTs[id] = p.ts;
+        if(id === 'szb') window.__atlasSZBLastTs = p.ts;
       }
     }catch(e){ console.warn(`[Atlas] preload ${id}:`, e.message); }
   }
@@ -1336,6 +1376,7 @@ async function dbProc(file,id){
        não disparar releitura redundante logo após a gravação. */
     if(ATLAS_CLOUD_BASES.has(id)){
       __atlasWatchLastTs[id] = tsNow;
+      __atlasWatchLastTs[id+'__serverMs'] = 0; // será preenchido quando o onSnapshot confirmar
       if(id==='szb') window.__atlasSZBLastTs = tsNow;
       atlasSaveBaseToCloudBg(id, window.ATLAS_DATA[id]);
     }
