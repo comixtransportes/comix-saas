@@ -256,7 +256,7 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
   100%{opacity:0;transform:scale(1.4)}
 }
 
-.card-main{flex:1;min-width:0}
+.card-main{flex:1;min-width:0;padding-right:28px}
 .card-title{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:5px;margin-bottom:1px}
 .card-title .frota-id{color:var(--black)}
 .badge-vinculo{
@@ -364,6 +364,7 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 
 .card-side{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;padding-right:26px;min-width:50px}
 .card-days{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;display:inline-block;line-height:1.4}
+.card-meta-sub{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:3px;margin-bottom:1px}
 .card-days.green{background:var(--green-l);color:var(--green)}
 .card-days.yellow{background:#fef3c7;color:#92400e}
 .card-days.orange{background:var(--orange-l);color:var(--orange)}
@@ -1747,7 +1748,17 @@ function renderPlaca(placa, size) {
 
 function renderCard(cavalo) {
   const szb = szbDe(cavalo.id);
-  const dias = szb ? szb.dias_sem_viagem : null;
+  // Calcula dias sem carregamento: data atual - última data de emissão de CTRC (ultima_viagem)
+  let dias = null;
+  if (szb) {
+    if (szb.ultima_viagem) {
+      const hoje = new Date();
+      const ultima = new Date(szb.ultima_viagem + 'T00:00:00');
+      dias = Math.max(0, Math.floor((hoje.setHours(0,0,0,0) - ultima.setHours(0,0,0,0)) / 86400000));
+    } else if (szb.dias_sem_viagem != null) {
+      dias = szb.dias_sem_viagem;
+    }
+  }
   const opsDias = szb ? (szb.dias_operados_30d != null ? szb.dias_operados_30d : Math.min(30, szb.viagens_30d || 0)) : null;
   const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(cavalo.disponibilidade);
   const alert = isIndisp ? "gray" : classificarAlerta(dias);
@@ -1827,7 +1838,7 @@ function renderCard(cavalo) {
     : '';
 
   const modeloLine = cavalo.modelo
-    ? `<div class="card-modelo">${escapeHtml(cavalo.modelo)}</div>`
+    ? `<div class="card-modelo">${escapeHtml(cavalo.modelo)}${cavalo.ano ? ' <span style="opacity:.65">• '+escapeHtml(cavalo.ano)+'</span>' : ''}</div>`
     : '';
 
   const actionsMenu = STATE.isAdmin ? `
@@ -1854,12 +1865,11 @@ function renderCard(cavalo) {
           <div class="card-id-row">
             ${renderPlaca(cavalo.placa, 'sm')}
             <span class="frota-pill">${escapeHtml(cavalo.frota || '—')}</span>
-            ${vincBadge}
           </div>
+          <div class="card-meta-sub">${vincBadge}${diasHtml}</div>
           ${modeloLine}
           ${motoristaHtml}
         </div>
-        <div class="card-side">${diasHtml}</div>
       </div>
       ${compHtml}
       <div class="card-footer-meta">
