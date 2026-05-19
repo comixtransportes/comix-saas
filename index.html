@@ -247,74 +247,21 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 /* ── MOBILE RESPONSIVO / SCROLL FLUIDO ── */
 
 /*
-  ESTRATÉGIA:
-  - Shell mantém height:100dvh, overflow:hidden (estrutura travada = correto)
-  - .fr-wrap recebe overflow:auto + -webkit-overflow-scrolling:touch
-    → isso cria um scroll container real que o iOS Safari reconhece
-  - iframe mantém position:absolute + width/height 100% dentro do fr-wrap
-  - touch-action libera pan em todas direções dentro do fr-wrap
-  - Para views sem iframe (download-base), o .view em si vira scroll container
+  ESTRATÉGIA CORRETA:
+  O index.html (shell) NÃO rola. Ele é apenas o container.
+  Quem controla pan/zoom é o viewport de CADA módulo (pd.html, financeiro.html, etc.)
+  configurado com: width=1280, initial-scale=0.5, user-scalable=yes
+  O usuário vê o dashboard em 50% de zoom e pode arrastar + pinch livremente.
+
+  O index só precisa:
+  1. Liberar touch-action no fr-wrap para iOS não bloquear gestos
+  2. Corrigir sidebar mobile (hamburguer, overlay)
+  3. Liberar scroll no Download Base (única view sem iframe)
 */
 
 @media(max-width:900px){
 
-  /* ── Shell: altura real para não cortar com barra do Safari ── */
-  #scr-app{
-    height:100dvh;
-    height:100vh;
-  }
-
-  /* ── Main column: sem overflow próprio, deixa filhos controlarem ── */
-  .main{
-    min-width:0;
-    overflow:hidden;
-  }
-
-  /* ── View-area: posição relativa, filhos absolute se encaixam ── */
-  .view-area{
-    flex:1;
-    position:relative;
-    overflow:hidden;
-  }
-
-  /* ── Cada view: ocupa 100% da view-area ── */
-  .view{
-    position:absolute;
-    inset:0;
-    display:none;
-    flex-direction:column;
-    overflow:hidden;
-  }
-  .view.on{display:flex}
-
-  /* ── fr-wrap: O SCROLL CONTAINER REAL para iOS ──
-     overflow:auto aqui é o que faz o iOS Safari rolar o iframe.
-     -webkit-overflow-scrolling:touch garante momentum scroll suave.
-     touch-action libera pan em x e y sem conflito. */
-  .fr-wrap{
-    flex:1;
-    position:relative;
-    overflow:auto;
-    -webkit-overflow-scrolling:touch;
-    touch-action:pan-x pan-y pinch-zoom;
-  }
-
-  /* ── iframe: cobre 100% do fr-wrap, conteúdo interno rola junto ── */
-  .fr-wrap iframe{
-    position:absolute;
-    inset:0;
-    width:100%;
-    height:100%;
-    border:none;
-    touch-action:pan-x pan-y pinch-zoom;
-  }
-
-  /* ── Topbar: sempre visível, não encolhe ── */
-  .topbar{
-    flex-shrink:0;
-  }
-
-  /* ── Sidebar fechada: não captura toques no conteúdo ── */
+  /* Sidebar fechada não captura toques */
   .sb:not(.mb-open){
     pointer-events:none;
   }
@@ -322,7 +269,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
     pointer-events:auto;
   }
 
-  /* ── Download Base: view vira scroll container ── */
+  /* Download Base: única view sem iframe — precisa de scroll */
   #view-download-base{
     overflow-y:auto;
     overflow-x:hidden;
@@ -332,60 +279,33 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
     height:auto;
     overflow:visible;
     padding:10px 12px;
-    gap:10px;
   }
   .db-body{
     overflow:visible;
     flex:none;
-    min-height:0;
   }
   .db-log{
     max-height:180px;
   }
 
-  /* ── Config: mesmo padrão que fr-wrap regular ── */
-  #view-config{overflow:hidden}
-  #view-config .fr-wrap{
-    overflow:auto;
-    -webkit-overflow-scrolling:touch;
-    touch-action:pan-x pan-y pinch-zoom;
-  }
-
-  /* ── Welcome screen: scroll se conteúdo passar da tela ── */
-  .welcome{
-    overflow-y:auto;
-    -webkit-overflow-scrolling:touch;
-  }
-
-  /* ── Toast: safe area iOS (notch / home bar) ── */
+  /* Toast: safe area iOS */
   .toast{
     bottom:calc(env(safe-area-inset-bottom, 0px) + 16px);
   }
 }
 
-/* ── Cards em 1 coluna em celulares (< 600px) ── */
+/* Cards Download Base em 1 coluna no celular */
 @media(max-width:600px){
   .db-grid-4,.db-grid-2{
     grid-template-columns:1fr;
   }
-  .wl-grid{
-    grid-template-columns:1fr 1fr;
-  }
 }
 
-/* ── Ajustes para telas muito pequenas (< 400px) ── */
-@media(max-width:400px){
-  .wl-grid{grid-template-columns:1fr}
-  .db-sum{flex-wrap:wrap}
-  .db-si{flex:1 1 45%;border-right:none;border-bottom:1px solid var(--bd2);padding:6px 4px}
-  .db-footer{flex-direction:column}
-  .db-btn{width:100%}
-}
-
-/* ── iOS safe area no sb-user ── */
+/* iOS safe area */
 @supports(padding-bottom:env(safe-area-inset-bottom)){
   @media(max-width:900px){
     .sb-user{padding-bottom:calc(8px + env(safe-area-inset-bottom));}
+    .toast{bottom:calc(16px + env(safe-area-inset-bottom));}
   }
 }
 
@@ -1683,31 +1603,12 @@ function applyDynamicPermissions() {
   });
 }
 
-/* ── ALTURA REAL MOBILE (viewport dinâmico, sem interferir em login/auth) ── */
+/* ── VARIÁVEL DE ALTURA REAL (para uso futuro, não interfere no shell) ── */
 (function(){
   function setMbH(){
-    var h = window.innerHeight;
-    var topH = 40; // var(--top-h)
-    document.documentElement.style.setProperty('--real-vh', h + 'px');
-    // Em mobile (< 900px), forçar altura do fr-wrap para preencher área útil real
-    if(window.innerWidth <= 900){
-      var wraps = document.querySelectorAll('.fr-wrap');
-      for(var i=0;i<wraps.length;i++){
-        wraps[i].style.height = (h - topH) + 'px';
-      }
-    } else {
-      var wraps = document.querySelectorAll('.fr-wrap');
-      for(var i=0;i<wraps.length;i++){
-        wraps[i].style.height = '';
-      }
-    }
+    document.documentElement.style.setProperty('--real-vh', window.innerHeight + 'px');
   }
-  // Rodar após load para garantir DOM pronto
-  if(document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', setMbH);
-  } else {
-    setMbH();
-  }
+  setMbH();
   window.addEventListener('resize', setMbH);
   window.addEventListener('orientationchange', function(){ setTimeout(setMbH, 300); });
 })();
