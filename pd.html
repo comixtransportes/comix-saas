@@ -4,10 +4,9 @@
 <meta charset="UTF-8">
 <!-- Viewport: width=1280 deixa o navegador calcular o scale automaticamente (initial-scale = larguraDoDevice/1280), exibindo TODA a área do dashboard dentro da tela do celular. user-scalable=yes libera pinch-to-zoom para aproximar de qualquer região. -->
 <!-- ── VIEWPORT MOBILE ──
-     width=device-width: respeita a largura real do dispositivo (iOS/Android/qualquer tamanho).
+     width=device-width: respeita a largura real do dispositivo.
      Sem maximum-scale: pinch-zoom totalmente livre.
-     O dimensionamento do conteúdo (1280px → tela) é feito via transform:scale no body
-     pelo script no fim do head. -->
+     O dimensionamento (1280×altura_virtual → tela) é feito via transform:scale no body. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">
 <title>COMIX — PD Diário</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -309,15 +308,17 @@ table.dt td.dia-cell::after{
   }
 }
 
-/* ── MOBILE FIT-TO-SCREEN ──
-   Em telas < 900px, o body é forçado a 1280px de largura virtual e encolhido via
-   transform:scale para caber na tela do dispositivo. A altura do html é ajustada
-   por JS para coincidir com o body escalado (sem barra cinza embaixo).
-   Pinch-zoom continua livre — o navegador faz zoom sobre o resultado. */
+/* ── MOBILE FIT-TO-SCREEN (preserva layout flex interno) ──
+   Em telas < 900px:
+   - O body é forçado a 1280px de largura E altura virtual fixa (espelho de desktop)
+   - transform:scale encolhe o pacote inteiro para caber na tela
+   - A estrutura flex interna do .content/.pane/#p-vg continua funcionando porque
+     o body tem altura real definida (não depende mais de height:100% do html)
+   Pinch-zoom continua livre. */
 @media (max-width: 899px){
   html{
     height:auto !important;
-    min-height:100%;
+    min-height:100% !important;
     overflow-x:hidden !important;
     overflow-y:auto !important;
     -webkit-overflow-scrolling:touch;
@@ -325,15 +326,12 @@ table.dt td.dia-cell::after{
   body{
     width:1280px !important;
     min-width:1280px !important;
-    height:auto !important;
-    min-height:auto !important;
-    overflow:visible !important;
+    /* height será definida pelo JS, baseada na proporção da tela do usuário */
+    overflow:hidden !important; /* mantém overflow:hidden como no desktop original */
     transform-origin:0 0;
-    /* O scale e a altura virtual são definidos pelo JS abaixo, baseado na largura real da tela */
-  }
-  /* Libera overflow em containers internos que poderiam estar travando o crescimento */
-  body > *{
-    overflow:visible !important;
+    position:absolute;
+    top:0;
+    left:0;
   }
 }
 </style>
@@ -342,25 +340,25 @@ table.dt td.dia-cell::after{
   var VIRTUAL_W = 1280;
   function applyFit(){
     var w = window.innerWidth || document.documentElement.clientWidth;
+    var h = window.innerHeight || document.documentElement.clientHeight;
     var body = document.body;
     if(!body){ return; }
     if(w < 900 && w > 0){
       var factor = w / VIRTUAL_W;
+      // Calcula altura virtual proporcional à tela do usuário
+      // Ex: tela 390x844 → altura virtual = 844/0.305 ≈ 2768 (mantém proporção)
+      var virtualH = h / factor;
+      body.style.width = VIRTUAL_W + 'px';
+      body.style.height = virtualH + 'px';
       body.style.transformOrigin = '0 0';
       body.style.transform = 'scale(' + factor + ')';
-      // Mede altura real do conteúdo após render e ajusta html para coincidir com body escalado.
-      // Usa dupla medição (raf + setTimeout) porque alguns elementos só calculam altura depois do paint.
-      var measure = function(){
-        var realH = Math.max(body.scrollHeight, body.offsetHeight);
-        document.documentElement.style.height = (realH * factor) + 'px';
-      };
-      requestAnimationFrame(measure);
-      setTimeout(measure, 300);
-      setTimeout(measure, 1000);
-      setTimeout(measure, 2500);
+      // Ajusta html para coincidir com body escalado
+      document.documentElement.style.height = h + 'px';
     } else {
       body.style.transform = '';
       body.style.transformOrigin = '';
+      body.style.width = '';
+      body.style.height = '';
       document.documentElement.style.height = '';
     }
   }
@@ -372,15 +370,6 @@ table.dt td.dia-cell::after{
   window.addEventListener('load', function(){ setTimeout(applyFit, 100); });
   window.addEventListener('resize', applyFit);
   window.addEventListener('orientationchange', function(){ setTimeout(applyFit, 300); });
-  // Observa mutações de conteúdo (gráficos que carregam tardiamente) e re-mede
-  if(typeof MutationObserver !== 'undefined'){
-    document.addEventListener('DOMContentLoaded', function(){
-      var mo = new MutationObserver(function(){
-        if(window.innerWidth < 900) setTimeout(applyFit, 200);
-      });
-      mo.observe(document.body, {childList:true, subtree:true, attributes:false});
-    });
-  }
 })();
 </script>
 </head>
