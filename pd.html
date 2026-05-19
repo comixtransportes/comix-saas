@@ -3,9 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <!-- Viewport: width=1280 deixa o navegador calcular o scale automaticamente (initial-scale = larguraDoDevice/1280), exibindo TODA a área do dashboard dentro da tela do celular. user-scalable=yes libera pinch-to-zoom para aproximar de qualquer região. -->
-<!-- Viewport device-width: a tela do dispositivo é a referência.
-     O fit-to-screen é feito via transform:scale no #app-scaler (ver script no final do body).
-     Isso funciona dentro de iframe no iOS, ao contrário de viewport tricks. -->
+<!-- ── VIEWPORT MOBILE ──
+     width=device-width: respeita a largura real do dispositivo (iOS/Android/qualquer tamanho).
+     Sem maximum-scale: pinch-zoom totalmente livre.
+     O dimensionamento do conteúdo (1280px → tela) é feito via transform:scale no body
+     pelo script no fim do head. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">
 <title>COMIX — PD Diário</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -307,38 +309,62 @@ table.dt td.dia-cell::after{
   }
 }
 
+/* ── MOBILE FIT-TO-SCREEN ──
+   Em telas < 900px, o body é forçado a 1280px de largura virtual e encolhido via
+   transform:scale para caber na tela do dispositivo. A altura do html é ajustada
+   por JS para coincidir com o body escalado (sem barra cinza embaixo).
+   Pinch-zoom continua livre — o navegador faz zoom sobre o resultado. */
+@media (max-width: 899px){
+  html{
+    overflow-x:hidden;
+    overflow-y:auto;
+    -webkit-overflow-scrolling:touch;
+  }
+  body{
+    width:1280px !important;
+    min-width:1280px !important;
+    transform-origin:0 0;
+    /* O scale e a altura virtual são definidos pelo JS abaixo, baseado na largura real da tela */
+  }
+}
 </style>
-</head>
-<body>
-
-<!-- ── MOBILE FIT-TO-SCREEN ──
-     Em vez de depender de viewport (que falha em iframes no iOS), usamos zoom CSS.
-     O script abaixo mede a largura real disponível e aplica zoom proporcional ao body
-     para que toda a largura virtual de 1280px caiba na tela. Pinch-to-zoom continua
-     funcionando normalmente sobre o resultado escalado. -->
 <script>
 (function(){
   var VIRTUAL_W = 1280;
   function applyFit(){
     var w = window.innerWidth || document.documentElement.clientWidth;
+    var body = document.body;
+    if(!body){ return; }
     if(w < 900 && w > 0){
       var factor = w / VIRTUAL_W;
-      // Define largura fixa de 1280 e aplica zoom para caber
-      document.documentElement.style.minWidth = VIRTUAL_W + 'px';
-      document.body.style.minWidth = VIRTUAL_W + 'px';
-      document.body.style.zoom = factor;
+      body.style.transformOrigin = '0 0';
+      body.style.transform = 'scale(' + factor + ')';
+      // Ajusta altura do html para coincidir com o body escalado.
+      // Como o body tem height:100% (já no CSS original), pegamos a altura real do conteúdo:
+      requestAnimationFrame(function(){
+        var realH = body.scrollHeight;
+        document.documentElement.style.height = (realH * factor) + 'px';
+      });
     } else {
-      document.documentElement.style.minWidth = '';
-      document.body.style.minWidth = '';
-      document.body.style.zoom = '';
+      body.style.transform = '';
+      body.style.transformOrigin = '';
+      document.documentElement.style.height = '';
     }
   }
-  // Aplica antes do paint inicial
-  applyFit();
+  // Roda quando o DOM estiver pronto (precisa do body existir)
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', applyFit);
+  } else {
+    applyFit();
+  }
+  // Roda também depois do load completo, para pegar alturas finais corretas
+  window.addEventListener('load', function(){ setTimeout(applyFit, 100); });
   window.addEventListener('resize', applyFit);
-  window.addEventListener('orientationchange', function(){ setTimeout(applyFit, 250); });
+  window.addEventListener('orientationchange', function(){ setTimeout(applyFit, 300); });
 })();
 </script>
+</head>
+<body>
 
 <!-- LOADING OVERLAY -->
 <div id="ld-overlay">
