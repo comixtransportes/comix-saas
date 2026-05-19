@@ -3,30 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <!-- Viewport: width=1280 deixa o navegador calcular o scale automaticamente (initial-scale = larguraDoDevice/1280), exibindo TODA a área do dashboard dentro da tela do celular. user-scalable=yes libera pinch-to-zoom para aproximar de qualquer região. -->
-<!-- Viewport device-width + script de fit-to-screen.
-     O JS abaixo calcula initial-scale automaticamente com base na largura real
-     do dispositivo, mostrando o dashboard inteiro (1280px) cabendo na tela.
-     Pinch-zoom totalmente liberado para aproximar qualquer ponto. -->
-<meta name="viewport" id="meta-viewport" content="width=1280, user-scalable=yes">
-<script>
-(function(){
-  function fitViewport(){
-    var vp = document.getElementById('meta-viewport');
-    if(!vp) return;
-    var w = window.innerWidth || document.documentElement.clientWidth;
-    // Em celular (largura < 900), calcula scale para caber a largura virtual de 1280
-    if(w < 900){
-      var scale = (w / 1280).toFixed(4);
-      vp.setAttribute('content','width=1280, initial-scale='+scale+', minimum-scale='+scale+', maximum-scale=5, user-scalable=yes');
-    } else {
-      vp.setAttribute('content','width=device-width, initial-scale=1, user-scalable=yes');
-    }
-  }
-  fitViewport();
-  // Reajusta em rotação
-  window.addEventListener('orientationchange', function(){ setTimeout(fitViewport, 250); });
-})();
-</script>
+<!-- Viewport device-width: a tela do dispositivo é a referência.
+     O fit-to-screen é feito via transform:scale no #app-scaler (ver script no final do body).
+     Isso funciona dentro de iframe no iOS, ao contrário de viewport tricks. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">
 <title>COMIX — PD Diário</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
@@ -330,6 +310,35 @@ table.dt td.dia-cell::after{
 </style>
 </head>
 <body>
+
+<!-- ── MOBILE FIT-TO-SCREEN ──
+     Em vez de depender de viewport (que falha em iframes no iOS), usamos zoom CSS.
+     O script abaixo mede a largura real disponível e aplica zoom proporcional ao body
+     para que toda a largura virtual de 1280px caiba na tela. Pinch-to-zoom continua
+     funcionando normalmente sobre o resultado escalado. -->
+<script>
+(function(){
+  var VIRTUAL_W = 1280;
+  function applyFit(){
+    var w = window.innerWidth || document.documentElement.clientWidth;
+    if(w < 900 && w > 0){
+      var factor = w / VIRTUAL_W;
+      // Define largura fixa de 1280 e aplica zoom para caber
+      document.documentElement.style.minWidth = VIRTUAL_W + 'px';
+      document.body.style.minWidth = VIRTUAL_W + 'px';
+      document.body.style.zoom = factor;
+    } else {
+      document.documentElement.style.minWidth = '';
+      document.body.style.minWidth = '';
+      document.body.style.zoom = '';
+    }
+  }
+  // Aplica antes do paint inicial
+  applyFit();
+  window.addEventListener('resize', applyFit);
+  window.addEventListener('orientationchange', function(){ setTimeout(applyFit, 250); });
+})();
+</script>
 
 <!-- LOADING OVERLAY -->
 <div id="ld-overlay">
