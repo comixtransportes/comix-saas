@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<meta name="viewport" content="width=1280, minimum-scale=0.1, maximum-scale=5, user-scalable=yes">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <title>COMIX — Frota</title>
 <style id="atlas-iframe-head">#scr_login { display: none !important; }</style>
 <script>
@@ -675,9 +675,37 @@ table.data-table{
   .board{grid-template-columns:1fr;padding:10px}
   .mod-hdr,.toolbar,.dashboard,.table-wrap{padding-left:12px;padding-right:12px}
 }
+
+/* ── Loader global de carregamento (Frotas) ── */
+#frota-global-loader {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(14,22,36,0.82);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 16px; backdrop-filter: blur(2px);
+  transition: opacity 0.35s ease;
+}
+#frota-global-loader.hidden { opacity: 0; pointer-events: none; }
+#frota-global-loader .fgl-spinner {
+  width: 44px; height: 44px;
+  border: 4px solid rgba(255,255,255,0.12);
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: fgl-spin 0.8s linear infinite;
+}
+#frota-global-loader .fgl-msg {
+  color: #94a3b8; font-size: 14px; font-family: inherit; letter-spacing: 0.02em;
+}
+@keyframes fgl-spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
+
+<!-- ── Loader global: aparece durante autenticação e busca de dados ── -->
+<div id="frota-global-loader">
+  <div class="fgl-spinner"></div>
+  <div class="fgl-msg" id="frota-loader-msg">Conectando…</div>
+</div>
 
 <!-- ═══ SPRITE ÍCONES ═══ -->
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -1491,8 +1519,11 @@ function upperText(s) { return String(s || "").trim().toUpperCase(); }
 
 /* ─── Carregamento de dados ─── */
 async function loadAllData() {
+  // Exibe loader global enquanto busca dados do Firestore
+  _frotaLoaderShow("Carregando frota…");
   try {
-    const [veiculos, motoristas, filiais, compressores, alocSnap] = await Promise.all([
+    // getFrotaConfig agora entra no Promise.all — elimina a call serial que adicionava ~300-600ms
+    const [veiculos, motoristas, filiais, compressores, alocSnap, frotaCfg] = await Promise.all([
       window._FB.listarCadastros("veiculos"),
       window._FB.listarCadastros("motoristas").catch(()=>[]),
       window._FB.listarCadastros("filiais").catch(()=>[]),
@@ -1500,7 +1531,8 @@ async function loadAllData() {
         console.warn("Frota: coleção 'compressores' indisponível ainda:", err.message);
         return [];
       }),
-      window._FB.listarAlocacoes().catch(()=>[])
+      window._FB.listarAlocacoes().catch(()=>[]),
+      window._FB.getFrotaConfig().catch(()=>null)
     ]);
 
     STATE.veiculos = veiculos.map(normalizeVeiculo);
@@ -1528,15 +1560,15 @@ async function loadAllData() {
       if (v && a.motorista) v.motorista = upperText(a.motorista);
     });
 
-    // Carrega config global
-    try {
-      const cfg = await window._FB.getFrotaConfig();
-      STATE.thresholds = { green: cfg.green||2, yellow: cfg.yellow||3, orange: cfg.orange||6, red: cfg.red||10 };
-    } catch(e) { /* usa default */ }
+    // Aplica config global (já veio no Promise.all, sem round-trip serial)
+    if (frotaCfg) {
+      STATE.thresholds = { green: frotaCfg.green||2, yellow: frotaCfg.yellow||3, orange: frotaCfg.orange||6, red: frotaCfg.red||10 };
+    }
 
     // SZB mock (até integração com API Protheus F2)
     STATE.szb = gerarSzbMock();
 
+    _frotaLoaderHide();
     populateFilialFilters();
     refreshCurrentView();
 
@@ -1546,6 +1578,7 @@ async function loadAllData() {
       autoClassifyTipo();
     }
   } catch(err) {
+    _frotaLoaderHide();
     console.error("Frota: erro ao carregar dados", err);
     showToast("Erro ao carregar dados: " + err.message, "error");
   }
@@ -3347,6 +3380,21 @@ function bindUI() {
   if (pw) pw.addEventListener("keydown", e => { if (e.key === "Enter") window.doLogin(); });
 }
 
+/* ─── Loader global helpers ─── */
+function _frotaLoaderShow(msg) {
+  var el = document.getElementById("frota-global-loader");
+  var msgEl = document.getElementById("frota-loader-msg");
+  if (el) { el.classList.remove("hidden"); }
+  if (msgEl && msg) msgEl.textContent = msg;
+}
+function _frotaLoaderHide() {
+  var el = document.getElementById("frota-global-loader");
+  if (!el) return;
+  el.classList.add("hidden");
+  // Remove do DOM após a transição CSS (0.35s)
+  setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 400);
+}
+
 /* ─── _appReady (chamado após auth) ─── */
 window._appReady = async function(user, perfil) {
   STATE.user = user;
@@ -3356,6 +3404,10 @@ window._appReady = async function(user, perfil) {
   // Mostra botão de novo compressor apenas para admin
   document.getElementById("btn-new-compressor").style.display = STATE.isAdmin ? "inline-flex" : "none";
 
+  // Atualiza mensagem do loader (autenticação concluída, buscando dados)
+  var loaderMsg = document.getElementById("frota-loader-msg");
+  if (loaderMsg) loaderMsg.textContent = "Buscando dados da frota…";
+
   // Tela inicial
   showScreen("scr_home");
 
@@ -3364,7 +3416,7 @@ window._appReady = async function(user, perfil) {
   try { startTab = localStorage.getItem("frota_tab") || "dashboard"; } catch(e) {}
   activateTab(startTab);
 
-  // Carrega dados
+  // Carrega dados (loader é escondido dentro de loadAllData ao concluir)
   await loadAllData();
 };
 
