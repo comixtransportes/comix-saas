@@ -334,6 +334,7 @@ table.dt td.dia-cell::after{
     left:0;
   }
 }
+
 </style>
 <script>
 (function(){
@@ -864,16 +865,21 @@ async function loadSZBFromFirestore() {
   if (!fb) return null;
   try {
     const db = fb.firestore();
+    // Etapa 1: busca metadados (rápido — 1 doc)
+    ldSet(10, 'Conectando ao Firestore…');
     const metaSnap = await db.collection('bases_szb').doc('meta').get();
     if (!metaSnap.exists) return null;
     const meta = metaSnap.data();
     const n = meta.numChunks || 0;
     if (!n) return null;
+    // Etapa 2: busca todos os chunks em paralelo (Promise.all — sem serialização)
+    ldSet(20, 'Baixando dados (' + n + ' partes)…');
     const promises = [];
     for (let i=0; i<n; i++) {
       promises.push(db.collection('bases_szb').doc('meta').collection('chunks').doc(String(i)).get());
     }
     const snaps = await Promise.all(promises);
+    ldSet(65, 'Montando registros…');
     const rows = [];
     for (const s of snaps) {
       if (s.exists) {
@@ -992,10 +998,15 @@ async function loadDataFromCloud() {
     const el = document.getElementById('h-sync');
     if (el) { el.textContent = 'Carregando dados…'; el.className = 'hm-sync'; }
 
+    // Ativa o overlay de carregamento para dar feedback visual ao usuário
+    ldShow();
+    ldSet(5, 'Conectando ao servidor…');
+
     // 1) Tenta Firestore (fonte canônica e atual)
     try {
       const fs = await loadSZBFromFirestore();
       if (fs && Array.isArray(fs.rows) && fs.rows.length > 0) {
+        ldSet(78, 'Enriquecendo registros…');
         RAW = fs.rows;
         const dzH = document.getElementById('dz-h');
         if (dzH) dzH.textContent = '✓ Nuvem (Firestore) — ' + RAW.length + ' registros';
@@ -1015,13 +1026,16 @@ async function loadDataFromCloud() {
     } catch(_) {}
 
     // 2) Fallback: Worker antigo (caso o Firestore ainda esteja vazio em ambientes legados)
+    ldSet(40, 'Buscando dados (servidor alternativo)…');
     const controller = new AbortController();
     const timer = setTimeout(()=>controller.abort(), 8000);
     const resp = await fetch(WORKER_URL + '/api/data', { signal: controller.signal });
     clearTimeout(timer);
-    if (!resp.ok) return false;
+    if (!resp.ok) { ldHide(); return false; }
+    ldSet(70, 'Recebendo registros…');
     const data = await resp.json();
     if (data && Array.isArray(data) && data.length > 0) {
+      ldSet(85, 'Montando dashboard…');
       RAW = data;
       const dzH = document.getElementById('dz-h');
       if (dzH) dzH.textContent = '✓ Nuvem (legacy) — ' + RAW.length + ' registros';
@@ -1033,10 +1047,12 @@ async function loadDataFromCloud() {
       if (synEl) { synEl.textContent = '✓ Dados carregados da nuvem (worker)'; synEl.className = 'hm-sync ok'; }
       return true;
     }
+    ldHide();
     const synEl = document.getElementById('h-sync');
     if (synEl) { synEl.textContent = 'Sem dados salvos'; synEl.className = 'hm-sync'; }
     return false;
   } catch(e) {
+    ldHide();
     const synEl = document.getElementById('h-sync');
     if (synEl) { synEl.textContent = 'Sem conexão com a nuvem'; synEl.className = 'hm-sync err'; }
     return false;
@@ -1375,7 +1391,9 @@ function recalc(){
   const uid=document.getElementById('su').value;
   const mes=document.getElementById('sm').value;
   if(!mes) return;
-  DATA=enrich(RAW);
+  // enrich() só roda se DATA ainda não estiver populado com os dados atuais de RAW.
+  // fullRebuild() já chama enrich() antes de invocar recalc() — evita duplo processamento.
+  if(!DATA.length) DATA=enrich(RAW);
   // Dias trabalhados globais do mês = datas distintas com registro na operação selecionada
   // Usados por calcProj em todas as tabelas (igual à célula "Dias trabalhados" da planilha)
   const dmGlobal=filterByOp(uid).filter(r=>r.mes===mes);
@@ -2449,14 +2467,19 @@ window.addEventListener('DOMContentLoaded', ()=>{
         if (hasData && !__ATLAS_PD_CARREGADO) {
           __ATLAS_PD_CARREGADO = true;
           __ATLAS_PD_ORIGEM = 'Nuvem PD';
+          ldSet(90, 'Calculando dashboard…');
           const drop = document.getElementById('scr-drop');
           const main = document.getElementById('scr-main');
           if (drop) drop.style.display = 'none';
           if (main) main.style.display = 'flex';
           fullRebuild();
+          ldSet(100, 'Pronto!');
+          setTimeout(ldHide, 350);
           setTimeout(triggerAI, 1000);
+        } else {
+          ldHide();
         }
-      } catch(e) {}
+      } catch(e) { ldHide(); }
     }, 1800);
     return;
   }
@@ -2466,14 +2489,20 @@ window.addEventListener('DOMContentLoaded', ()=>{
     try {
       const hasData = await loadDataFromCloud();
       if (hasData) {
+        ldSet(90, 'Calculando dashboard…');
         const drop = document.getElementById('scr-drop');
         const main = document.getElementById('scr-main');
         if (drop) drop.style.display = 'none';
         if (main) main.style.display = 'flex';
         fullRebuild();
+        ldSet(100, 'Pronto!');
+        setTimeout(ldHide, 350);
         setTimeout(triggerAI, 1000);
+      } else {
+        ldHide();
       }
     } catch(e) {
+      ldHide();
       const el = document.getElementById('h-sync');
       if (el) { el.textContent = 'Sem dados salvos'; el.className = 'hm-sync'; }
     }
@@ -3247,7 +3276,11 @@ function applyAtlasSZB(parentData, origem) {
     ? '✓ Download Base — ' + ts.toLocaleDateString('pt-BR') + ' ' + ts.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})
     : '✓ Dados carregados do Download Base', true);
 
+  ldShow();
+  ldSet(80, 'Montando dashboard…');
   fullRebuild();
+  ldSet(100, 'Pronto!');
+  setTimeout(ldHide, 350);
   setTimeout(triggerAI, 800);
   return true;
 }
