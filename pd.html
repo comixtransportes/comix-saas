@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <!-- Viewport: width=1280 deixa o navegador calcular o scale automaticamente (initial-scale = larguraDoDevice/1280), exibindo TODA a área do dashboard dentro da tela do celular. user-scalable=yes libera pinch-to-zoom para aproximar de qualquer região. -->
-<meta name="viewport" content="width=1280, initial-scale=0.5, minimum-scale=0.1, maximum-scale=5, user-scalable=yes">
+<meta name="viewport" content="width=1280, minimum-scale=0.1, maximum-scale=5, user-scalable=yes">
 <title>COMIX — PD Diário</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
@@ -947,10 +947,27 @@ async function loadDataFromCloud() {
       }
     } catch(_) {}
 
-    // Worker antigo REMOVIDO: retornava versões desatualizadas (sábado) quando
-    // o Firestore estava inacessível por regras incorretas. Firestore é a fonte única.
+    // 2) Fallback: Worker antigo (caso o Firestore ainda esteja vazio em ambientes legados)
+    const controller = new AbortController();
+    const timer = setTimeout(()=>controller.abort(), 8000);
+    const resp = await fetch(WORKER_URL + '/api/data', { signal: controller.signal });
+    clearTimeout(timer);
+    if (!resp.ok) return false;
+    const data = await resp.json();
+    if (data && Array.isArray(data) && data.length > 0) {
+      RAW = data;
+      const dzH = document.getElementById('dz-h');
+      if (dzH) dzH.textContent = '✓ Nuvem (legacy) — ' + RAW.length + ' registros';
+      const dz = document.getElementById('dz');
+      if (dz) dz.classList.add('ok');
+      const btnGo = document.getElementById('btn-go');
+      if (btnGo) btnGo.disabled = false;
+      const synEl = document.getElementById('h-sync');
+      if (synEl) { synEl.textContent = '✓ Dados carregados da nuvem (worker)'; synEl.className = 'hm-sync ok'; }
+      return true;
+    }
     const synEl = document.getElementById('h-sync');
-    if (synEl) { synEl.textContent = 'Sem dados na nuvem — faça upload via Download Base'; synEl.className = 'hm-sync'; }
+    if (synEl) { synEl.textContent = 'Sem dados salvos'; synEl.className = 'hm-sync'; }
     return false;
   } catch(e) {
     const synEl = document.getElementById('h-sync');
@@ -2350,11 +2367,30 @@ window.addEventListener('DOMContentLoaded', ()=>{
   // Dentro do COMIX Atlas, a prioridade é: dados recém-carregados no parent -> resposta do Atlas -> nuvem oficial do PD.
   // Não usa IndexedDB local aqui, porque ele pode conter uma carga antiga do próprio aparelho.
   if (window.self !== window.top) {
-    // Dentro do iframe do Atlas: o bloco bootAtlasSZB (mais abaixo) gerencia
-    // retries progressivos até 14s, e o onSnapshot pega atualizações em tempo real.
-    // NÃO chamamos loadDataFromCloud aqui — ela tem fallback para o Worker antigo
-    // (com dados desatualizados de sábado) e estava causando estado inconsistente.
-    // A fonte de dados oficial dentro do Atlas é o parent.ATLAS_DATA.szb (Firestore).
+    setTimeout(()=>{
+      if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
+      if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
+    }, 150);
+    setTimeout(()=>{
+      if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
+      if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
+    }, 900);
+    setTimeout(async ()=>{
+      if (__ATLAS_PD_CARREGADO) return;
+      try {
+        const hasData = await loadDataFromCloud();
+        if (hasData && !__ATLAS_PD_CARREGADO) {
+          __ATLAS_PD_CARREGADO = true;
+          __ATLAS_PD_ORIGEM = 'Nuvem PD';
+          const drop = document.getElementById('scr-drop');
+          const main = document.getElementById('scr-main');
+          if (drop) drop.style.display = 'none';
+          if (main) main.style.display = 'flex';
+          fullRebuild();
+          setTimeout(triggerAI, 1000);
+        }
+      } catch(e) {}
+    }, 1800);
     return;
   }
 
@@ -3013,9 +3049,39 @@ function triggerAI() {
 })();
 
 /* ══ ATLAS: receptor de dados do Download Base ══ */
-/* Bloco antigo de tryAtlasSZB removido: era uma versão duplicada que não escondia
-   a tela de drop, deixando o PD em estado intermediário (carregando infinito).
-   A versão canônica está logo abaixo, no bloco "Integração PD Diário x Download Base". */
+function tryAtlasSZB() {
+  try {
+    var parentData = window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
+    if (!parentData || !parentData.rows || !parentData.rows.length) return false;
+
+    RAW = parentData.rows;
+    DATA = [];
+
+    var dzH = document.getElementById('dz-h');
+    if (dzH) dzH.textContent = '✓ Download Base — ' + RAW.length + ' registros';
+    var dz = document.getElementById('dz');
+    if (dz) dz.classList.add('ok');
+    var btnGo = document.getElementById('btn-go');
+    if (btnGo) btnGo.disabled = false;
+
+    buildDash();
+    setTimeout(triggerAI, 800);
+    return true;
+  } catch(e) {
+    console.warn('[PD Diário] tryAtlasSZB erro:', e);
+    return false;
+  }
+}
+
+/* Ao carregar: se o parent já tem SZB (iframe aberto depois do upload) */
+(function() { setTimeout(function() { tryAtlasSZB(); }, 200); })();
+
+/* Broadcast: acionado quando o usuário carrega SZB no Download Base */
+window.addEventListener('message', function(event) {
+  if (!event.data || event.data.type !== 'ATLAS_DATA_READY') return;
+  if (event.data.table !== 'szb') return;
+  setTimeout(tryAtlasSZB, 150);
+});
 </script>
 
 <script>
@@ -3180,61 +3246,18 @@ window.addEventListener('message', function(event) {
 });
 
 (function bootAtlasSZB() {
-  // Estratégia em camadas:
-  //  T+0ms:    tenta parent.ATLAS_DATA (caso o preload já tenha terminado)
-  //  T+150-7s: retry com postMessage para o parent
-  //  T+3s:     em paralelo — tenta Firestore direto (caso o parent esteja com problema)
-  //  T+12s:    último recurso — Firestore direto + mensagem ao usuário
-  if (window.self === window.top) return;
-
-  if (tryAtlasSZB()) return;
-
-  // Retries via postMessage para o parent
-  var delays = [150, 500, 1200, 2500, 4500, 7000];
-  delays.forEach(function(ms) {
-    setTimeout(function() {
-      if (__ATLAS_PD_CARREGADO) return;
-      if (!tryAtlasSZB()) requestAtlasSZB();
-    }, ms);
-  });
-
-  // T+3s: Firestore direto em paralelo
-  setTimeout(async function() {
-    if (__ATLAS_PD_CARREGADO) return;
-    try {
-      var fs = await loadSZBFromFirestore();
-      if (fs && fs.rows && fs.rows.length && !__ATLAS_PD_CARREGADO) {
-        applyAtlasSZB(fs, 'Firestore direto');
-      }
-    } catch(e) {
-      console.error('[PD Boot] Firestore direto falhou:', e.message);
+  setTimeout(function() {
+    if (!tryAtlasSZB()) {
+      requestAtlasSZB();
     }
-  }, 3000);
-
-  // T+12s: último recurso com diagnóstico em caso de falha
-  setTimeout(async function() {
-    if (__ATLAS_PD_CARREGADO) return;
-    setAtlasSyncMsg('Tentando ler direto do Firestore…', false);
-    try {
-      var fs = await loadSZBFromFirestore();
-      if (fs && fs.rows && fs.rows.length) {
-        applyAtlasSZB(fs, 'Firestore (último recurso)');
-        return;
+  }, 100);
+  setTimeout(function() {
+    if (!__ATLAS_PD_CARREGADO) {
+      if (!tryAtlasSZB()) {
+        requestAtlasSZB();
       }
-      console.error('[PD Boot] Firestore vazio após 12s. Possíveis causas:');
-      console.error('  1. Regras do Firestore não permitem leitura de bases_szb');
-      console.error('  2. Documento bases_szb/meta não existe (nenhum upload concluído)');
-      console.error('  3. Firebase Auth não está autenticado dentro do iframe');
-      var fb = pdGetFirebase();
-      if (fb) {
-        var auth = fb.auth().currentUser;
-        console.error('  Auth user:', auth ? auth.email : 'NÃO AUTENTICADO');
-      }
-    } catch(e) {
-      console.error('[PD Boot] última tentativa falhou:', e);
     }
-    setAtlasSyncMsg('Sem dados — use Download Base ou Trocar arquivo', false);
-  }, 12000);
+  }, 900);
 })();
 
 // ═══════════════════════════════════════════════════════
@@ -3253,7 +3276,6 @@ window.addEventListener('message', function(event) {
       return;
     }
     var lastTs = null;
-    var lastUpdatedMs = 0;
     var firstSnap = true;
     try {
       fb.firestore().collection('bases_szb').doc('meta').onSnapshot(async function(snap) {
@@ -3264,12 +3286,8 @@ window.addEventListener('message', function(event) {
           lastTs = meta.ts;
           return;
         }
-        // Usa updatedAt (server time) quando disponível — mais confiável que ts (cliente)
-        var newMs = meta.updatedAt && meta.updatedAt.toMillis ? meta.updatedAt.toMillis() : 0;
-        var changed = newMs ? (newMs > (lastUpdatedMs || 0)) : (meta.ts && meta.ts !== lastTs);
-        if (changed) {
+        if (meta.ts && meta.ts !== lastTs) {
           lastTs = meta.ts;
-          lastUpdatedMs = newMs;
           try {
             var fs = await loadSZBFromFirestore();
             if (fs && fs.rows && fs.rows.length) {
