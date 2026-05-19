@@ -316,15 +316,24 @@ table.dt td.dia-cell::after{
    Pinch-zoom continua livre — o navegador faz zoom sobre o resultado. */
 @media (max-width: 899px){
   html{
-    overflow-x:hidden;
-    overflow-y:auto;
+    height:auto !important;
+    min-height:100%;
+    overflow-x:hidden !important;
+    overflow-y:auto !important;
     -webkit-overflow-scrolling:touch;
   }
   body{
     width:1280px !important;
     min-width:1280px !important;
+    height:auto !important;
+    min-height:auto !important;
+    overflow:visible !important;
     transform-origin:0 0;
     /* O scale e a altura virtual são definidos pelo JS abaixo, baseado na largura real da tela */
+  }
+  /* Libera overflow em containers internos que poderiam estar travando o crescimento */
+  body > *{
+    overflow:visible !important;
   }
 }
 </style>
@@ -339,28 +348,39 @@ table.dt td.dia-cell::after{
       var factor = w / VIRTUAL_W;
       body.style.transformOrigin = '0 0';
       body.style.transform = 'scale(' + factor + ')';
-      // Ajusta altura do html para coincidir com o body escalado.
-      // Como o body tem height:100% (já no CSS original), pegamos a altura real do conteúdo:
-      requestAnimationFrame(function(){
-        var realH = body.scrollHeight;
+      // Mede altura real do conteúdo após render e ajusta html para coincidir com body escalado.
+      // Usa dupla medição (raf + setTimeout) porque alguns elementos só calculam altura depois do paint.
+      var measure = function(){
+        var realH = Math.max(body.scrollHeight, body.offsetHeight);
         document.documentElement.style.height = (realH * factor) + 'px';
-      });
+      };
+      requestAnimationFrame(measure);
+      setTimeout(measure, 300);
+      setTimeout(measure, 1000);
+      setTimeout(measure, 2500);
     } else {
       body.style.transform = '';
       body.style.transformOrigin = '';
       document.documentElement.style.height = '';
     }
   }
-  // Roda quando o DOM estiver pronto (precisa do body existir)
   if(document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', applyFit);
   } else {
     applyFit();
   }
-  // Roda também depois do load completo, para pegar alturas finais corretas
   window.addEventListener('load', function(){ setTimeout(applyFit, 100); });
   window.addEventListener('resize', applyFit);
   window.addEventListener('orientationchange', function(){ setTimeout(applyFit, 300); });
+  // Observa mutações de conteúdo (gráficos que carregam tardiamente) e re-mede
+  if(typeof MutationObserver !== 'undefined'){
+    document.addEventListener('DOMContentLoaded', function(){
+      var mo = new MutationObserver(function(){
+        if(window.innerWidth < 900) setTimeout(applyFit, 200);
+      });
+      mo.observe(document.body, {childList:true, subtree:true, attributes:false});
+    });
+  }
 })();
 </script>
 </head>
