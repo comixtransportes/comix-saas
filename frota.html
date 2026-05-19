@@ -256,7 +256,7 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
   100%{opacity:0;transform:scale(1.4)}
 }
 
-.card-main{flex:1;min-width:0}
+.card-main{flex:1;min-width:0;padding-right:28px}
 .card-title{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:5px;margin-bottom:1px}
 .card-title .frota-id{color:var(--black)}
 .badge-vinculo{
@@ -364,6 +364,7 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 
 .card-side{display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;padding-right:26px;min-width:50px}
 .card-days{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;display:inline-block;line-height:1.4}
+.card-meta-sub{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:3px;margin-bottom:1px}
 .card-days.green{background:var(--green-l);color:var(--green)}
 .card-days.yellow{background:#fef3c7;color:#92400e}
 .card-days.orange{background:var(--orange-l);color:var(--orange)}
@@ -1290,7 +1291,7 @@ table.data-table{
       return items;
     },
 
-    /* Lê o SZB do Firestore (mesmo esquema do index.html — bases_szb/meta/chunks) */
+    /* Lê o SZB do Firestore (mesmo esquema do index.html: bases_szb/meta/chunks) */
     loadSzbFromFirestore: async function() {
       if (!currentUser) throw new Error("Não autenticado");
       const metaRef = db.collection("bases_szb").doc("meta");
@@ -1560,7 +1561,10 @@ async function loadAllData() {
       }),
       window._FB.listarAlocacoes().catch(()=>[]),
       window._FB.getFrotaConfig().catch(()=>null),
-      window._FB.loadSzbFromFirestore().catch(()=>null)
+      window._FB.loadSzbFromFirestore().catch(err => {
+        console.warn("Frota: SZB Firestore indisponível:", err.message);
+        return null;
+      })
     ]);
 
     STATE.veiculos = veiculos.map(normalizeVeiculo);
@@ -1593,15 +1597,16 @@ async function loadAllData() {
       STATE.thresholds = { green: frotaCfg.green||2, yellow: frotaCfg.yellow||3, orange: frotaCfg.orange||6, red: frotaCfg.red||10 };
     }
 
-    // SZB: usa dados reais do Firestore (importados via index.html); fallback para mock
+    // SZB: usa dados reais do Firestore (importados via index.html). Fallback: mock
     if (szbPayload && szbPayload.rows && szbPayload.rows.length) {
       STATE.szb = processarSzbRows(szbPayload.rows);
       const szbEl = document.getElementById("szb-import-info");
       if (szbEl) {
         const tsStr = szbPayload.ts ? new Date(szbPayload.ts).toLocaleDateString("pt-BR") : "—";
-        szbEl.textContent = "SZB: " + szbPayload.rows.length + " CTRCs • " + tsStr;
+        szbEl.textContent = "🚛 SZB: " + szbPayload.rows.length.toLocaleString("pt-BR") + " CTRCs • " + tsStr;
       }
     } else {
+      console.warn("Frota: SZB sem dados na nuvem, usando mock");
       STATE.szb = gerarSzbMock();
     }
 
@@ -1641,41 +1646,84 @@ async function autoClassifyTipo() {
   if (ok > 0) console.log(`[Frota] ✓ ${ok}/${cavalosToFix.length} salvos`);
 }
 
-/* ─── Processa rows do SZB real (vindos do Firestore via index.html) ─── */
+/* ─── Processa rows do SZB real (Firestore, importado via index.html) ─── */
 /*
- * Colunas usadas (conforme ATLAS_PD_COLS_NEEDED do index.html):
- *   "Dt. Emissao"  → data de emissão do CTRC
- *   "Placa Veicul" → placa do veículo
- *   "Frota"        → número de frota (fallback)
- *   "Dt Cancel"    → se preenchido, ignora o CTRC (cancelado)
+ * Esquema das rows (salvas pelo index.html, slim em ATLAS_PD_COLS_NEEDED):
+ *   "Dt. Emissao"   → data de emissão do CTRC (número serial Excel OU string DD/MM/YYYY)
+ *   "Placa Veicul"  → placa do veículo
+ *   "Frota"         → número de frota (fallback)
+ *   "Dt Cancel"     → preenchida = CTRC cancelado (ignorar)
  *
- * Para cada placa: pega a data de emissão MAIS RECENTE não cancelada.
- * Dias sem carregamento = data atual (meia-noite) - última emissão (meia-noite).
+ * Para cada placa: pega a Dt. Emissao MAIS RECENTE entre os CTRCs não cancelados.
+ * dias_sem_viagem = data atual (00:00) - última emissão (00:00).
  */
-function processarSzbRows(rows) {
-  // Parseia data nos formatos DD/MM/YYYY ou YYYY-MM-DD
-  function parseData(val) {
-    if (!val) return null;
-    const s = String(val).trim();
-    if (!s || s === '0' || s === '00/00/0000') return null;
-    const m1 = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
-    if (m1) return new Date(+m1[3], +m1[2]-1, +m1[1]);
-    const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m2) return new Date(+m2[1], +m2[2]-1, +m2[3]);
-    return null;
+function _szbParseDate(val) {
+  if (val == null || val === "") return null;
+
+  // Já é um objeto Date
+  if (val instanceof Date) {
+    return isNaN(val.getTime()) ? null : val;
   }
 
-  // mapaPlaca: placa normalizada → { ultimaData, ctrcCount }
+  // Número serial Excel (forma como index.html salva via raw:true)
+  if (typeof val === "number" && isFinite(val) && val > 0) {
+    // SheetJS converte serial Excel → {y,m,d,H,M,S}
+    try {
+      if (typeof XLSX !== "undefined" && XLSX.SSF && XLSX.SSF.parse_date_code) {
+        const o = XLSX.SSF.parse_date_code(val);
+        if (o && o.y) return new Date(o.y, (o.m||1)-1, o.d||1);
+      }
+    } catch(e) {}
+    // Fallback manual: Excel epoch = 1899-12-30 (com bug do 1900 bissexto)
+    const ms = (val - 25569) * 86400 * 1000;
+    const d = new Date(ms);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  // String numérica que representa serial Excel
+  if (typeof val === "string") {
+    const s = val.trim();
+    if (!s || s === "0" || s === "00/00/0000") return null;
+
+    // DD/MM/YYYY (com ou sem hora)
+    const m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m1) return new Date(+m1[3], +m1[2]-1, +m1[1]);
+
+    // YYYY-MM-DD
+    const m2 = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m2) return new Date(+m2[1], +m2[2]-1, +m2[3]);
+
+    // YYYYMMDD (Protheus às vezes exporta assim)
+    const m3 = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+    if (m3) return new Date(+m3[1], +m3[2]-1, +m3[3]);
+
+    // Número como string
+    const num = Number(s);
+    if (!isNaN(num) && num > 1000) return _szbParseDate(num);
+  }
+
+  return null;
+}
+
+function processarSzbRows(rows) {
+  // Agrupa: placa normalizada → data mais recente + contagem
   const mapaPlaca = {};
   const mapaFrota = {};
+  let totalProcessados = 0;
+  let totalIgnorados = 0;
 
   rows.forEach(function(row) {
-    // Ignora CTRCs cancelados
-    const cancel = String(row["Dt Cancel"] || "").trim();
-    if (cancel && cancel !== "0" && cancel !== "00/00/0000") return;
+    if (!row) return;
 
-    const dt = parseData(row["Dt. Emissao"]);
-    if (!dt || isNaN(dt)) return;
+    // Ignora CTRCs cancelados
+    const cancelRaw = row["Dt Cancel"];
+    if (cancelRaw != null && cancelRaw !== "" && cancelRaw !== 0 && cancelRaw !== "0" && cancelRaw !== "00/00/0000") {
+      const cd = _szbParseDate(cancelRaw);
+      if (cd) { totalIgnorados++; return; }
+    }
+
+    const dt = _szbParseDate(row["Dt. Emissao"]);
+    if (!dt) { totalIgnorados++; return; }
 
     const placaRaw = String(row["Placa Veicul"] || "").trim().toUpperCase().replace(/[-\s]/g, "");
     const frotaRaw = String(row["Frota"] || "").trim().toUpperCase();
@@ -1690,11 +1738,16 @@ function processarSzbRows(rows) {
       else if (dt > mapaFrota[frotaRaw].ultimaData) mapaFrota[frotaRaw].ultimaData = dt;
       mapaFrota[frotaRaw].ctrcCount++;
     }
+    totalProcessados++;
   });
+
+  console.log("[Frota/SZB] " + totalProcessados + " CTRCs processados, " + totalIgnorados + " ignorados");
+  console.log("[Frota/SZB] " + Object.keys(mapaPlaca).length + " placas únicas, " + Object.keys(mapaFrota).length + " frotas únicas");
 
   const hoje = new Date();
   hoje.setHours(0, 0, 0, 0);
   const out = {};
+  let matched = 0;
 
   STATE.veiculos.filter(function(v) { return v.categoria === "cavalo"; }).forEach(function(v) {
     const placaNorm = (v.placa || "").toUpperCase().replace(/[-\s]/g, "");
@@ -1714,10 +1767,11 @@ function processarSzbRows(rows) {
         km_30d: 0,
         _fonte: "firestore",
       };
+      matched++;
     }
-    // Veículos sem dados no SZB ficam sem entrada → exibirão "—" no card
   });
 
+  console.log("[Frota/SZB] " + matched + " veículos vinculados a CTRCs");
   return out;
 }
 
@@ -1863,6 +1917,7 @@ function renderPlaca(placa, size) {
 
 function renderCard(cavalo) {
   const szb = szbDe(cavalo.id);
+  // dias_sem_viagem já vem calculado em processarSzbRows (data atual - última Dt. Emissao do CTRC)
   const dias = szb ? szb.dias_sem_viagem : null;
   const opsDias = szb ? (szb.dias_operados_30d != null ? szb.dias_operados_30d : Math.min(30, szb.viagens_30d || 0)) : null;
   const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(cavalo.disponibilidade);
@@ -1943,7 +1998,7 @@ function renderCard(cavalo) {
     : '';
 
   const modeloLine = cavalo.modelo
-    ? `<div class="card-modelo">${escapeHtml(cavalo.modelo)}</div>`
+    ? `<div class="card-modelo">${escapeHtml(cavalo.modelo)}${cavalo.ano ? ' <span style="opacity:.65">• '+escapeHtml(cavalo.ano)+'</span>' : ''}</div>`
     : '';
 
   const actionsMenu = STATE.isAdmin ? `
@@ -1970,12 +2025,11 @@ function renderCard(cavalo) {
           <div class="card-id-row">
             ${renderPlaca(cavalo.placa, 'sm')}
             <span class="frota-pill">${escapeHtml(cavalo.frota || '—')}</span>
-            ${vincBadge}
           </div>
+          <div class="card-meta-sub">${vincBadge}${diasHtml}</div>
           ${modeloLine}
           ${motoristaHtml}
         </div>
-        <div class="card-side">${diasHtml}</div>
       </div>
       ${compHtml}
       <div class="card-footer-meta">
@@ -3490,7 +3544,6 @@ function bindUI() {
   });
 
   document.getElementById("btn-imprimir").addEventListener("click", imprimirRelatorio);
-
   document.getElementById("btn-new-compressor").addEventListener("click", newCompressor);
   document.getElementById("cf_save").addEventListener("click", saveCompressor);
   document.getElementById("cf_del").addEventListener("click", deleteCompressor);
