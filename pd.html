@@ -1263,6 +1263,8 @@ async function loadF(file){
     if(dzel) dzel.classList.add('ok');
     const btnGo=document.getElementById('btn-go');
     if(btnGo) btnGo.disabled=false;
+    // Registra timestamp do carregamento da SZB (canto superior direito do header)
+    setPDTimestamp(new Date(file.lastModified || Date.now()).toISOString());
     ldSet(60,'Salvando na nuvem…');
     await saveLastUpdate();
     await saveDataToCloud(RAW);
@@ -1608,14 +1610,25 @@ function buildVG(uid, mes){
   if(elT10){
     const fmtT10=v=>
       'R$ '+(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
+    // Formato compacto para o rótulo do valor à direita da barra.
+    // Antes usava o formato extenso ("R$ 600.208,10" ~= 90px em mono 9px), o que exigia
+    // padding direito de 120px e fazia a barra terminar bem antes do fim do card.
+    // Formato compacto ("R$ 600,2 mil" ~= 55px) permite reduzir o padding direito,
+    // estendendo as barras até proximo do fim do card (igual ao Faturamento Diario).
+    const fmtT10Compact = v => {
+      v = v||0;
+      if(v >= 1e6) return 'R$ '+(v/1e6).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:2})+' mi';
+      if(v >= 1e3) return 'R$ '+(v/1e3).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+' mil';
+      return 'R$ '+v.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0});
+    };
     // Truncamento de nomes de cliente. Limite por caracteres puro era insuficiente
     // porque o Chart.js, ao colidir com a largura máxima do eixo Y (antes 120px),
     // cortava à ESQUERDA (mostrava "DRANTIM CIMENTOS S.A." em vez de "VOTORANTIM…").
     // Agora truncamos com elipse explícita no FIM e aumentamos a largura do eixo.
-    // 26 chars cabem com folga em ~160px na fonte 9px do eixo.
+    // 36 chars cabem com folga em ~220px na fonte 9px do eixo.
     const truncCli = n => {
       const s = String(n||'').trim();
-      return s.length > 26 ? s.slice(0, 25) + '…' : s;
+      return s.length > 36 ? s.slice(0, 35) + '…' : s;
     };
     CHS['c-t10']=new Chart(elT10,{
       type:'bar',
@@ -1642,7 +1655,7 @@ function buildVG(uid, mes){
           const vals=t10vg.map(r=>r.f);
           meta.data.forEach((bar,i)=>{
             const val=vals[i]||0;
-            const label=fmtT10(val);
+            const label=fmtT10Compact(val);
             const textW=ctx2.measureText(label).width;
             const GAP=5;
             const xAfter=bar.x+GAP;
@@ -1663,9 +1676,11 @@ function buildVG(uid, mes){
       options:{
         indexAxis:'y',
         responsive:true,maintainAspectRatio:false,
-        // Padding direito: precisa caber o maior valor formatado ("R$ 999.999,99"
-        // ≈ 90px em fonte mono 9px) + GAP de 5 + folga de segurança. 120 cobre.
-        layout:{padding:{right:120,left:4,top:2,bottom:2}},
+        // Padding direito reduzido: como agora usamos formato compacto
+        // ("R$ 600,2 mil" ≈ 55px em mono 9px), 60px de padding já cobrem com folga
+        // e as barras se estendem até bem próximo do fim do card, como no
+        // gráfico de Faturamento Diário.
+        layout:{padding:{right:60,left:4,top:2,bottom:2}},
         plugins:{
           legend:{display:false},
           // Tooltip mostra o nome COMPLETO (sem truncamento) ao tocar/passar
@@ -1679,10 +1694,10 @@ function buildVG(uid, mes){
         scales:{
           x:{ticks:{display:false},grid:{color:CG,lineWidth:.5},beginAtZero:true},
           y:{ticks:{color:CT,font:{size:9},maxRotation:0},grid:{display:false},
-            // Largura máxima do eixo Y: 120 → 160 px. 160 comporta 26 chars
-            // em fonte 9px com folga e elimina o "corte à esquerda" que aparecia
-            // em nomes longos como "VOTORANTIM CIMENTOS S.A.".
-            afterFit(axis){ axis.width = Math.min(Math.round(axis.width * 1.15), 160); }}
+            // Largura máxima do eixo Y: 160 → 220 px. 220 comporta 36 chars
+            // em fonte 9px com folga, permitindo exibir nomes de cliente mais completos
+            // (ex: "VOTORANTIM CIMENTOS S.A." aparece inteiro em vez de truncado).
+            afterFit(axis){ axis.width = Math.min(Math.round(axis.width * 1.15), 220); }}
         }
       }
     });
