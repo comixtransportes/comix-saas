@@ -220,6 +220,7 @@ html,body{height:100%;font-family:var(--f);color:var(--tx);font-size:13px;backgr
       <button class="tab-item"    data-tab="cadastros" onclick="switchTab('cadastros',this)">📋 Cadastros <span class="t-cnt" id="tcnt-cadastros">—</span></button>
       <button class="tab-item"    data-tab="acoes"     onclick="switchTab('acoes',this)">⚡ Ações <span class="t-cnt" id="tcnt-acoes">—</span></button>
       <button class="tab-item"    data-tab="botoes"    onclick="switchTab('botoes',this)">🔘 Botões <span class="t-cnt" id="tcnt-botoes">—</span></button>
+      <button class="tab-item"    data-tab="abas"      onclick="switchTab('abas',this)">🗂️ Abas por Tela <span class="t-cnt" id="tcnt-abas">—</span></button>
       <button class="tab-item"    data-tab="filiais"   onclick="switchTab('filiais',this)">🏢 Filiais Permitidas <span class="t-cnt" id="tcnt-filiais">—</span></button>
       <button class="tab-item"    data-tab="log"       onclick="switchTab('log',this)">📋 Log</button>
     </div>
@@ -280,6 +281,12 @@ html,body{height:100%;font-family:var(--f);color:var(--tx);font-size:13px;backgr
           </div>
           <div class="sec-body" id="body-botoes"></div>
         </div>
+      </div>
+
+      <!-- ABAS POR TELA -->
+      <div class="tab-panel" id="panel-abas">
+        <div class="notice mu" style="margin-bottom:0"><strong style="color:var(--tx)">Permissões por aba:</strong> Controla quais abas dentro de cada tela este perfil pode visualizar. Se nenhuma aba estiver marcada para uma tela, o comportamento padrão é exibir todas (sem restrição). O admin sempre vê tudo.</div>
+        <div id="body-abas"></div>
       </div>
 
       <!-- FILIAIS PERMITIDAS -->
@@ -412,7 +419,68 @@ const SECTIONS = {
   ]},
 };
 
-/* ── Defaults ── */
+/* ── ABAS POR TELA — definição ── */
+const TELA_ABAS = {
+  pd_diario: {
+    label: 'PD Diário',
+    abas: [
+      {id:'visao_geral',     label:'Visão Geral'},
+      {id:'clientes',        label:'Clientes'},
+      {id:'consolidado',     label:'Clientes Consolidado'},
+    ]
+  },
+  financeiro: {
+    label: 'Financeiro',
+    abas: [
+      {id:'painel',          label:'Painel'},
+      {id:'clientes',        label:'Clientes'},
+      {id:'a_pagar',         label:'A Pagar'},
+      {id:'extrato',         label:'Extrato Bancário'},
+    ]
+  },
+  manutencao: {
+    label: 'Manutenção',
+    abas: [
+      {id:'dashboard',       label:'Dashboard'},
+      {id:'checklist',       label:'Checklist Diário'},
+      {id:'nova_os',         label:'Abrir O.S'},
+      {id:'gestao_os',       label:'Gestão de OS'},
+      {id:'kanban',          label:'Kanban'},
+      {id:'preventiva',      label:'Preventiva'},
+      {id:'por_frota',       label:'Por Frota'},
+      {id:'aprovacoes',      label:'Aprovações'},
+      {id:'alertas',         label:'Alertas'},
+      {id:'paradas',         label:'Paradas'},
+      {id:'historico',       label:'Histórico'},
+    ]
+  },
+  frota: {
+    label: 'Frota',
+    abas: [
+      {id:'alocacao',        label:'Alocação'},
+      {id:'composicao',      label:'Composição'},
+      {id:'documentos',      label:'Documentos'},
+    ]
+  },
+};
+
+/* ── Defaults de abas por tela ── */
+const ABAS_DEFAULTS = {
+  admin:     {}, // admin vê tudo, sem restrição
+  motorista: {
+    manutencao: { dashboard:true, checklist:true },
+    pd_diario:  { visao_geral:true },
+  },
+  lr:    {}, // sem restrição
+  lm:    {
+    manutencao: { dashboard:true, checklist:true, nova_os:true, gestao_os:true, kanban:true, preventiva:true, por_frota:true, historico:true },
+  },
+  consulta: {
+    manutencao: { dashboard:true },
+    financeiro:  { painel:true },
+  },
+  lu_sc: {}, lu_pr: {}, lu_sp: {},
+};
 const aOn = s => { const o={}; SECTIONS[s].items.forEach(i=>o[i.id]=true); return o; };
 const pick = (s,ids) => { const o={}; ids.forEach(id=>o[id]=true); return o; };
 const LU_TPL = {
@@ -518,8 +586,83 @@ function switchTab(tab, el) {
 function renderActivePanel() {
   const q = document.getElementById('perm-search').value.toLowerCase();
   if (['telas','cadastros','acoes','botoes'].includes(activeTab)) renderSection(activeTab, q);
+  else if (activeTab === 'abas') renderAbasPanel(q);
   else if (activeTab === 'filiais') renderFiliaisPanel(q);
   else if (activeTab === 'log') renderLog();
+}
+
+/* ══ ABAS POR TELA ══ */
+function renderAbasPanel(q='') {
+  const body = document.getElementById('body-abas');
+  if (!body) return;
+  if (!perms[sel].abas) perms[sel].abas = JSON.parse(JSON.stringify(ABAS_DEFAULTS[sel] || {}));
+  const abasPerf = perms[sel].abas;
+
+  const telasFiltradas = Object.entries(TELA_ABAS).filter(([k, t]) =>
+    !q || t.label.toLowerCase().includes(q) || t.abas.some(a => a.label.toLowerCase().includes(q))
+  );
+
+  body.innerHTML = telasFiltradas.map(([telaId, tela]) => {
+    const abasTela = abasPerf[telaId] || {};
+    const totalAbas = tela.abas.length;
+    const onCount = tela.abas.filter(a => abasTela[a.id] !== false).length;
+    const abasHtml = tela.abas.map(aba => {
+      const active = abasTela[aba.id] !== false; // default true se não definido
+      return `<div class="perm-row" style="padding:6px 16px 6px 32px">
+        <span class="pr-ico" style="font-size:11px">↳</span>
+        <div class="pr-info"><div class="pr-label" style="font-size:11.5px">${aba.label}</div></div>
+        <span class="pr-state ${active?'on':'off'}" id="abast-${telaId}-${aba.id}">${active?'VISÍVEL':'OCULTO'}</span>
+        <label class="toggle">
+          <input type="checkbox" ${active?'checked':''} onchange="toggleAba('${telaId}','${aba.id}',this.checked)">
+          <div class="toggle-track"></div><div class="toggle-thumb"></div>
+        </label>
+      </div>`;
+    }).join('');
+    return `<div class="sec-card" style="margin-bottom:8px">
+      <div class="bulk-bar" style="cursor:pointer" onclick="this.nextElementSibling.classList.toggle('collapsed')">
+        <span class="bk-lbl">🖥️ ${tela.label}</span>
+        <span style="font-size:10px;color:var(--mu);margin-right:auto">${onCount}/${totalAbas} abas visíveis</span>
+        <button class="bk-btn" onclick="event.stopPropagation();bulkAbas('${telaId}',true)">Ativar todas</button>
+        <button class="bk-btn rd" onclick="event.stopPropagation();bulkAbas('${telaId}',false)">Desativar</button>
+      </div>
+      <div class="sec-body">${abasHtml}</div>
+    </div>`;
+  }).join('') || '<div style="padding:18px;text-align:center;color:var(--mu);font-size:12px">Nenhuma tela encontrada.</div>';
+
+  updateAbasCount();
+}
+
+function toggleAba(telaId, abaId, val) {
+  if (!perms[sel].abas) perms[sel].abas = {};
+  if (!perms[sel].abas[telaId]) perms[sel].abas[telaId] = {};
+  perms[sel].abas[telaId][abaId] = val;
+  const el = document.getElementById('abast-'+telaId+'-'+abaId);
+  if (el) { el.textContent = val ? 'VISÍVEL' : 'OCULTO'; el.className = 'pr-state '+(val?'on':'off'); }
+  addLog(`Aba "${abaId}" em "${telaId}": ${val?'VISÍVEL':'OCULTO'}`);
+  updateAbasCount();
+}
+
+function bulkAbas(telaId, val) {
+  if (!perms[sel].abas) perms[sel].abas = {};
+  if (!perms[sel].abas[telaId]) perms[sel].abas[telaId] = {};
+  const tela = TELA_ABAS[telaId];
+  if (!tela) return;
+  tela.abas.forEach(a => { perms[sel].abas[telaId][a.id] = val; });
+  renderAbasPanel(document.getElementById('perm-search').value.toLowerCase());
+  addLog(`Abas "${telaId}": todas ${val?'VISÍVEIS':'OCULTAS'}`);
+}
+
+function updateAbasCount() {
+  const cnt = document.getElementById('tcnt-abas');
+  if (!cnt) return;
+  const abasPerf = perms[sel].abas || {};
+  let tot = 0, on = 0;
+  Object.entries(TELA_ABAS).forEach(([tid, t]) => {
+    const atela = abasPerf[tid] || {};
+    t.abas.forEach(a => { tot++; if (atela[a.id] !== false) on++; });
+  });
+  cnt.textContent = `${on}/${tot}`;
+  cnt.className = 't-cnt '+(on===tot?'all-on':on===0?'':'partial');
 }
 
 /* ══ RENDER SECTION ══ */
@@ -758,6 +901,7 @@ function updateSummary() {
 function updateAllCounts() {
   ['telas','cadastros','acoes','botoes'].forEach(updateTabCount);
   updateFiliaisCount();
+  updateAbasCount();
   updateSummary();
 }
 
@@ -766,6 +910,7 @@ function restoreDefaults() {
   const ut = USER_TYPES.find(u => u.id === sel);
   if (!confirm(`Restaurar permissões padrão para "${ut?.label||sel}"?`)) return;
   perms[sel] = JSON.parse(JSON.stringify(DEFAULTS[sel]||{telas:{},cadastros:{},acoes:{},botoes:{},filiais:{}}));
+  perms[sel].abas = JSON.parse(JSON.stringify(ABAS_DEFAULTS[sel] || {}));
   renderActivePanel();
   updateAllCounts();
   addLog('sistema','PADRÃO RESTAURADO',true);
