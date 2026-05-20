@@ -376,7 +376,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       </button>
       <button class="nav-item" data-v="manutencao" onclick="go('manutencao',this)" id="nav-manutencao">
         <div class="ni-ico"><svg width="19" height="19" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg></div>
-        <div class="ni-text"><strong>Manutenção / Pneus</strong><small>Preventiva e corretiva</small></div>
+        <div class="ni-text"><strong>Manutenção</strong><small>Preventiva e corretiva</small></div>
       </button>
       <button class="nav-item" data-v="painel" onclick="go('painel',this)" id="nav-painel">
         <div class="ni-ico"><svg width="19" height="19" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9"><path stroke-linecap="round" stroke-linejoin="round" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/></svg></div>
@@ -483,7 +483,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
       <div class="view" id="view-manutencao">
         <div class="fr-wrap">
           <div class="fr-loading" id="fl-manutencao"><div class="fr-spin"></div><div class="fr-txt">Carregando Manutenção...</div></div>
-          <iframe id="fr-manutencao" title="Manutenção / Pneus"></iframe>
+          <iframe id="fr-manutencao" title="Manutenção"></iframe>
         </div>
       </div>
 
@@ -1616,6 +1616,31 @@ function applyDynamicPermissions() {
   window.addEventListener('orientationchange', function(){ setTimeout(setMbH, 300); });
 })();
 
+/* ── PERMISSÕES POR ABAS — envia ao iframe quando ele carrega ── */
+// Quando um iframe de módulo termina de carregar, envia as permissões de abas
+// para que o módulo possa ocultar abas não autorizadas.
+function sendTabPermsToFrame(frameId) {
+  const frame = document.getElementById(frameId);
+  if (!frame || !frame.contentWindow) return;
+  const abas = (ATLAS_PERMS.abas || {}); // ex: { manutencao: { dashboard:true, checklist:true, ... } }
+  frame.contentWindow.postMessage({
+    type: 'ATLAS_TAB_PERMS',
+    perfil: curPerfil,
+    abas: abas
+  }, '*');
+}
+
+// Mapa: viewId → frameId
+const FRAME_MAP = {
+  'manutencao':'fr-manutencao','financeiro':'fr-financeiro',
+  'pd-diario':'fr-pd-diario','ficha':'fr-ficha','compras':'fr-compras',
+  'frota':'fr-frota','painel':'fr-painel','config':'fr-config'
+};
+Object.values(FRAME_MAP).forEach(fid => {
+  const fr = document.getElementById(fid);
+  if (fr) fr.addEventListener('load', () => setTimeout(() => sendTabPermsToFrame(fid), 200));
+});
+
 /* ── MENSAGENS ENTRE MÓDULOS ── */
 window.addEventListener('message', function(ev) {
   if (!ev.data || typeof ev.data !== 'object') return;
@@ -1623,6 +1648,14 @@ window.addEventListener('message', function(ev) {
   if (ev.data.type === 'PERM_UPDATED') {
     if (ev.data.tipo === curPerfil) loadPermissions();
     toast(`Permissões atualizadas para perfil "${ev.data.tipo}".`, 'gn');
+  }
+  // Módulo pede suas permissões de abas
+  if (ev.data.type === 'ATLAS_REQUEST_TAB_PERMS') {
+    const fid = Object.values(FRAME_MAP).find(id => {
+      const fr = document.getElementById(id);
+      return fr && fr.contentWindow === ev.source;
+    });
+    if (fid) sendTabPermsToFrame(fid);
   }
 });
 </script>
