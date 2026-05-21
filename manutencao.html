@@ -9,6 +9,7 @@
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
 <script>
 /* ══ FIREBASE — Atlas Manutenção ══
    Mesma config do cadastros.html / index.html.
@@ -384,10 +385,12 @@ tbody tr:last-child{border-bottom:none}
 }
 
 /* ── Botões ícone — Gestão de OS ── */
-.btn-icon-sm{width:28px;height:28px;border-radius:var(--rs);border:1px solid var(--bd);background:var(--wh);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;color:var(--mu);transition:all .15s;vertical-align:middle}
-.btn-icon-sm:hover{border-color:var(--ac);color:var(--ac);background:var(--ac-bg)}
+.btn-icon-sm{width:28px;height:28px;border-radius:var(--rs);border:1px solid var(--bd);background:var(--wh);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;color:var(--mu);transition:all .15s;vertical-align:middle;flex-shrink:0}
+.btn-icon-sm:hover{border-color:var(--ac);color:var(--ac);background:var(--ac-bg);box-shadow:0 1px 4px rgba(26,86,219,.15)}
 .btn-icon-rd{border-color:var(--rd-bd);color:var(--rd);background:var(--rd-bg)}
-.btn-icon-rd:hover{background:var(--rd);color:#fff}
+.btn-icon-rd:hover{background:var(--rd);color:#fff;box-shadow:0 1px 4px rgba(200,30,30,.2)}
+/* Célula de ações — ícones alinhados lado a lado sem quebra */
+td .btn-icon-sm + .btn-icon-sm{margin-left:3px}
 
 /* ── Aprovações — linhas expansíveis ── */
 .aprov-row:hover{background:#f8f9fb}
@@ -564,6 +567,43 @@ tbody tr:last-child{border-bottom:none}
       <!-- ══════ CHECKLIST WIZARD (Inspeção Diária — abre pelo botão Iniciar Inspeção) ══════ -->
       <div class="view" id="view-checklist-wizard">
         <div class="view-body">
+
+          <!-- Formulário de seleção: Motorista e Placa (item 1) -->
+          <!-- Visível apenas quando inspeção ainda não foi iniciada (step -1) -->
+          <div id="insp-form-selecao" style="background:var(--wh);border:1px solid var(--bd2);border-radius:var(--r);padding:14px;margin-bottom:12px;box-shadow:var(--shd)">
+            <div style="font-size:12px;font-weight:700;color:var(--tx);margin-bottom:10px">🚛 Iniciar inspeção</div>
+
+            <!-- Motorista -->
+            <div class="fld" style="margin-bottom:8px">
+              <label>Motorista</label>
+              <div style="position:relative">
+                <input type="text" id="insp-motorista-input" autocomplete="off"
+                  placeholder="Motorista logado..." style="width:100%"
+                  oninput="onInspMotoristaInput(this.value)"
+                  onkeydown="onInspInputKeydown(event,'insp-motorista-sugg')"
+                  onfocus="onInspMotoristaInput(this.value)">
+                <div id="insp-motorista-sugg" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--wh);border:1.5px solid var(--ac);border-radius:var(--rs);z-index:50;max-height:140px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.12)"></div>
+              </div>
+            </div>
+
+            <!-- Placa -->
+            <div class="fld" style="margin-bottom:10px">
+              <label>Placa</label>
+              <div style="position:relative">
+                <input type="text" id="insp-placa-input" autocomplete="off"
+                  placeholder="Placa do veículo..." style="width:100%"
+                  oninput="onInspPlacaInput(this.value)"
+                  onkeydown="onInspInputKeydown(event,'insp-placa-sugg')"
+                  onfocus="onInspPlacaInput(this.value)">
+                <div id="insp-placa-sugg" style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--wh);border:1.5px solid var(--ac);border-radius:var(--rs);z-index:50;max-height:140px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.12)"></div>
+              </div>
+            </div>
+
+            <button class="btn btn-ac" style="width:100%" onclick="confirmarInicioInspecao()">✓ Confirmar e iniciar</button>
+          </div>
+
+          <!-- Hero azul — visível após confirmar -->
+          <div id="insp-hero-content" style="display:none">
           <!-- Título e data removidos conforme item 7; botão Próximo movido para dentro do hero azul -->
           <div class="mobile-inspection-hero">
             <div class="plate-line">
@@ -581,7 +621,9 @@ tbody tr:last-child{border-bottom:none}
               </button>
             </div>
           </div>
+          </div><!-- /insp-hero-content -->
 
+          <div id="insp-checklist-content" style="display:none">
           <div class="step-bar">
             <div class="step"><div class="step-dot curr" id="sd0">1</div><div class="step-lbl curr" id="sl0">Cavalo</div></div>
             <div class="step-conn" id="sc0"></div>
@@ -598,7 +640,7 @@ tbody tr:last-child{border-bottom:none}
             <div class="sec-title">Motor e fluidos</div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível óleo motor</div><div style="font-size:10.5px;color:var(--mu)">Vareta — mínimo/máximo</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado">✓</button><button class="status-btn reprovado" title="Reprovado">✗</button></div></div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível água arrefecimento</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado">✓</button><button class="status-btn reprovado" title="Reprovado">✗</button></div></div>
-            <div class="cl-item reprovado"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível fluido de freio</div><div style="font-size:10.5px;color:var(--rd)">Reprovado — foto + observação obrigatórias</div></div><div class="status-actions"><button class="status-btn aprovado" title="Aprovado">✓</button><button class="status-btn reprovado on" title="Reprovado">✗</button></div><div class="reprova-inline"><div class="inline-photo-zone" onclick="this.querySelector('input').click();this.classList.add('filled');this.innerHTML='📷<span style=\'font-size:10px;color:var(--gn);font-weight:700\'>Foto adicionada ✓</span><input type=\'file\' accept=\'image/*\'>'">📸<span>Toque para foto da reprovação</span><input type="file" accept="image/*"></div><textarea class="inline-obs" placeholder="Observação obrigatória...">Fluido abaixo do nível mínimo. Possível micro-vazamento circuito traseiro.</textarea></div></div>
+            <div class="cl-item reprovado"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível fluido de freio</div><div style="font-size:10.5px;color:var(--rd)">Reprovado — foto + observação obrigatórias</div></div><div class="status-actions"><button class="status-btn aprovado" title="Aprovado">✓</button><button class="status-btn reprovado on" title="Reprovado">✗</button></div><div class="reprova-inline"><div class="inline-photo-zone" id="ipz-fluido-freio"><label style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer">📸<span>Toque para foto da reprovação</span><input type="file" accept="image/*" style="display:none" onchange="onInlinePhotoChange(this,'ipz-fluido-freio')"></label></div><textarea class="inline-obs" placeholder="Observação obrigatória...">Fluido abaixo do nível mínimo. Possível micro-vazamento circuito traseiro.</textarea></div></div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível óleo câmbio</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado">✓</button><button class="status-btn reprovado" title="Reprovado">✗</button></div></div>
             <div class="sec-title">Pneus e freios</div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Pressão Pneus</div><div style="font-size:10.5px;color:var(--mu)">Mínimo 100 psi</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado">✓</button><button class="status-btn reprovado" title="Reprovado">✗</button></div></div>
@@ -610,10 +652,22 @@ tbody tr:last-child{border-bottom:none}
               <div style="font-size:11px;font-weight:700;color:var(--am);margin-bottom:5px">📷 Fotos do veículo <span class="foto-req">OBRIGATÓRIO</span></div>
               <div style="font-size:10.5px;color:var(--mu);margin-bottom:8px">Mínimo 4 fotos: frente, traseira, lateral direita, lateral esquerda.</div>
               <div class="foto-grid">
-                <div class="foto-thumb ok" title="Frente">📷<span>Frente ✓</span></div>
-                <div class="foto-thumb ok" title="Traseira">📷<span>Traseira ✓</span></div>
-                <div class="foto-thumb" onclick="this.className='foto-thumb ok';this.innerHTML='📷<span>Lat.Dir ✓</span>'">➕<span>Lat. Dir</span></div>
-                <div class="foto-thumb" onclick="this.className='foto-thumb ok';this.innerHTML='📷<span>Lat.Esq ✓</span>'">➕<span>Lat. Esq</span></div>
+                <label class="foto-thumb" title="Frente" id="foto-frente-lbl">
+                  <span style="font-size:16px">➕</span><span>Frente</span>
+                  <input type="file" accept="image/*" capture="environment" style="display:none" onchange="marcarFotoVeiculo(this,'foto-frente-lbl','Frente')">
+                </label>
+                <label class="foto-thumb" title="Traseira" id="foto-traseira-lbl">
+                  <span style="font-size:16px">➕</span><span>Traseira</span>
+                  <input type="file" accept="image/*" capture="environment" style="display:none" onchange="marcarFotoVeiculo(this,'foto-traseira-lbl','Traseira')">
+                </label>
+                <label class="foto-thumb" title="Lateral Direita" id="foto-latdir-lbl">
+                  <span style="font-size:16px">➕</span><span>Lat. Dir</span>
+                  <input type="file" accept="image/*" capture="environment" style="display:none" onchange="marcarFotoVeiculo(this,'foto-latdir-lbl','Lat.Dir')">
+                </label>
+                <label class="foto-thumb" title="Lateral Esquerda" id="foto-latesq-lbl">
+                  <span style="font-size:16px">➕</span><span>Lat. Esq</span>
+                  <input type="file" accept="image/*" capture="environment" style="display:none" onchange="marcarFotoVeiculo(this,'foto-latesq-lbl','Lat.Esq')">
+                </label>
               </div>
             </div>
           </div>
@@ -647,6 +701,7 @@ tbody tr:last-child{border-bottom:none}
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Pneus e rodados</div></div><div class="status-actions"><button class="status-btn aprovado on">✓</button><button class="status-btn reprovado">✗</button></div></div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Iluminação traseira</div></div><div class="status-actions"><button class="status-btn aprovado on">✓</button><button class="status-btn reprovado">✗</button></div></div>
           </div>
+          </div><!-- /insp-checklist-content -->
         </div>
       </div>
 
@@ -727,7 +782,76 @@ tbody tr:last-child{border-bottom:none}
               <!-- TASK 4: Título renomeado para "Serviços e envio" (campo já existia como card-title, agora é explícito) -->
               <div class="card-hdr"><div class="card-title">Serviços e envio</div></div>
               <div class="fld"><label>Problema relatado</label><textarea style="height:54px;resize:none" placeholder="Descreva o problema observado..."></textarea></div>
-              <div class="fld"><label>Motivo da parada</label><select><option>Mecânico — freios</option><option>Elétrico</option><option>Pneumático / pneu</option><option>Pressurização silo</option><option>Preventiva programada</option><option>Acidente</option><option>Outro</option></select></div>
+              <div class="fld"><label>Motivo da parada</label><select id="mnt_motivo_parada">
+                <optgroup label="Caminhão / Cavalo mecânico">
+                  <option>Manutenção preventiva</option>
+                  <option>Manutenção corretiva</option>
+                  <option>Falha no motor</option>
+                  <option>Falha no câmbio</option>
+                  <option>Falha na embreagem</option>
+                  <option>Falha no sistema elétrico</option>
+                  <option>Falha no sistema de freios</option>
+                  <option>Vazamento de óleo</option>
+                  <option>Vazamento de ar</option>
+                  <option>Vazamento de combustível</option>
+                  <option>Problema no sistema de arrefecimento</option>
+                  <option>Problema na suspensão</option>
+                  <option>Problema na direção</option>
+                  <option>Problema em pneus</option>
+                  <option>Problema em rodas</option>
+                  <option>Problema em iluminação/sinalização</option>
+                  <option>Pane mecânica</option>
+                  <option>Pane elétrica</option>
+                  <option>Revisão programada</option>
+                  <option>Sinistro/avaria</option>
+                  <option>Aguardando peças</option>
+                  <option>Aguardando fornecedor</option>
+                  <option>Aguardando aprovação</option>
+                </optgroup>
+                <optgroup label="Carreta">
+                  <option>Manutenção preventiva (carreta)</option>
+                  <option>Manutenção corretiva (carreta)</option>
+                  <option>Problema no sistema de freios (carreta)</option>
+                  <option>Problema em suspensão (carreta)</option>
+                  <option>Problema em pneus (carreta)</option>
+                  <option>Problema em rodas (carreta)</option>
+                  <option>Problema em iluminação/sinalização (carreta)</option>
+                  <option>Problema em quinta roda/pino rei</option>
+                  <option>Problema em estrutura/chassi</option>
+                  <option>Problema em assoalho</option>
+                  <option>Problema em baú/tanque/equipamento</option>
+                  <option>Vazamento (carreta)</option>
+                  <option>Avaria operacional</option>
+                  <option>Revisão programada (carreta)</option>
+                  <option>Aguardando peças (carreta)</option>
+                  <option>Aguardando fornecedor (carreta)</option>
+                  <option>Aguardando aprovação (carreta)</option>
+                </optgroup>
+                <optgroup label="Compressor">
+                  <option>Manutenção preventiva (compressor)</option>
+                  <option>Manutenção corretiva (compressor)</option>
+                  <option>Falha no compressor</option>
+                  <option>Falha no motor auxiliar</option>
+                  <option>Falha elétrica (compressor)</option>
+                  <option>Vazamento de óleo (compressor)</option>
+                  <option>Vazamento de ar (compressor)</option>
+                  <option>Baixa pressão</option>
+                  <option>Superaquecimento</option>
+                  <option>Troca de filtros</option>
+                  <option>Troca de óleo (compressor)</option>
+                  <option>Revisão programada (compressor)</option>
+                  <option>Ruído anormal</option>
+                  <option>Vibração anormal</option>
+                  <option>Aguardando peças (compressor)</option>
+                  <option>Aguardando fornecedor (compressor)</option>
+                  <option>Aguardando aprovação (compressor)</option>
+                </optgroup>
+                <optgroup label="Outros">
+                  <option>Pressurização silo</option>
+                  <option>Acidente</option>
+                  <option>Outro</option>
+                </optgroup>
+              </select></div>
 
               <!-- TASK 4: Removido "Responsável/oficina"; adicionado "Prestador de Serviços (OFICINA)" -->
               <!-- Alimentado pela coleção "prestadores" do Cadastros -->
@@ -1397,7 +1521,10 @@ function goTo(id, el) {
     const tab = document.querySelector('.module-tab[data-view="' + id + '"]');
     if (tab) tab.classList.add('on');
   }
-  if (id === 'checklist-wizard') { wizStep(0); setTimeout(upgradeInspectionRows, 0); }
+  if (id === 'checklist-wizard') {
+    // Prepara formulário de seleção de motorista/placa (item 1)
+    setTimeout(prepararFormularioInspecao, 0);
+  }
 }
 
 // ══ PANEL LATERAL OS ══
@@ -1516,6 +1643,22 @@ async function salvarOS() {
 
     if (db) {
       await db.collection('ordens_servico').doc(osId).set(payload);
+
+      // Item 9: muda status da placa para "Manutenção" no Firestore
+      setPlacaEmManutencao(veiculo);
+
+      // Item 4: upload de fotos da OS para Firebase Storage
+      const fotosUrls = [];
+      for (const foto of _osFotos) {
+        if (foto.file) {
+          const url = await uploadOSFotoNuvem(foto.file, osId);
+          if (url) fotosUrls.push(url);
+        }
+      }
+      if (fotosUrls.length) {
+        await db.collection('ordens_servico').doc(osId).set({ fotosUrls }, { merge: true });
+      }
+
       toast(osId + ' criada e salva no sistema!', 'gn');
     } else {
       console.log('[Atlas OS] Modo offline:', payload);
@@ -2128,7 +2271,7 @@ async function deleteChecklistFirebase(id, btn) {
 }
 
 /* ── Iniciar inspeção — data/hora real de abertura ── */
-function iniciarInspecao(placa) {
+function iniciarInspecao(placa, motoristaNomeParam) {
   const agora   = new Date();
   const dataStr = agora.toLocaleDateString('pt-BR');
   const horaStr = agora.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
@@ -2136,9 +2279,9 @@ function iniciarInspecao(placa) {
   const plateNumEl = document.getElementById('insp-plate-num');
   if (plateNumEl && placa) plateNumEl.textContent = placa.replace('-','');
 
-  // Busca motorista do cache real
+  // Motorista: usa o parâmetro passado, ou busca do cache
   const v = MNT_CACHE.veiculos.find(x => x.placa === placa);
-  const motoristaNome = v?.motorista || ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '—';
+  const motoristaNome = motoristaNomeParam || v?.motorista || ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '—';
 
   const driverLine = document.getElementById('insp-driver-line');
   if (driverLine) {
@@ -2147,10 +2290,21 @@ function iniciarInspecao(placa) {
   }
 
   // Guarda placa e timestamp no contexto do wizard
-  window._inspPlaca = placa;
-  window._inspTs    = agora.toISOString();
+  window._inspPlaca    = placa;
+  window._inspTs       = agora.toISOString();
+  window._inspFotos    = {}; // reseta fotos da inspeção anterior
+  window._inspMotorista = motoristaNome;
 
-  goTo('checklist-wizard', null);
+  // Oculta formulário de seleção e exibe inspeção real
+  const formSel = document.getElementById('insp-form-selecao');
+  if (formSel) formSel.style.display = 'none';
+  const heroContent = document.getElementById('insp-hero-content');
+  if (heroContent) heroContent.style.display = '';
+  const checkContent = document.getElementById('insp-checklist-content');
+  if (checkContent) checkContent.style.display = '';
+
+  wizStep(0);
+  setTimeout(upgradeInspectionRows, 0);
 }
 
 // ══ PERMISSÕES POR ABAS ══
@@ -2310,8 +2464,57 @@ function wizStep(n) {
   if (next) next.textContent = n < WIZ_STEPS - 1 ? 'Próximo →' : '✓ Finalizar';
 }
 function wizNext() {
-  if (wizCurrent < WIZ_STEPS - 1) { wizStep(wizCurrent + 1); }
-  else { toast('Inspeção finalizada! OS gerada automaticamente onde necessário.', 'gn'); goTo('checklist', null); }
+  if (wizCurrent < WIZ_STEPS - 1) {
+    wizStep(wizCurrent + 1);
+  } else {
+    // Salva checklist finalizado no Firestore (item 4)
+    salvarChecklistFirebase();
+    toast('Inspeção finalizada! OS gerada automaticamente onde necessário.', 'gn');
+    goTo('checklist', null);
+  }
+}
+
+async function salvarChecklistFirebase() {
+  const db = window._mntDB;
+  if (!db) return;
+  try {
+    const placa     = window._inspPlaca || '—';
+    const motorista = window._inspMotorista || ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '—';
+    const agora     = new Date();
+
+    // Coleta itens reprovados
+    const itensReprovados = [];
+    document.querySelectorAll('.cl-item.reprovado').forEach(row => {
+      const titulo = row.querySelector('[style*="font-weight:500"]')?.textContent || '';
+      const obs    = row.querySelector('.inline-obs')?.value || '';
+      itensReprovados.push({ item: titulo, obs });
+    });
+
+    // URLs das fotos do veículo (coletadas via window._inspFotos)
+    const fotosVeiculo = Object.values(window._inspFotos || {}).map(f => f.url).filter(Boolean);
+
+    const payload = {
+      placa,
+      motorista,
+      motorista_email: ATLAS_CURRENT_USER.email || '—',
+      dataAbertura:    firebase.firestore.Timestamp.fromDate(new Date(window._inspTs || agora)),
+      horario:         agora.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}),
+      data:            agora.toLocaleDateString('pt-BR'),
+      tipo:            'Cavalo', // padrão; pode ser expandido
+      status:          'realizado',
+      aprovados:       document.querySelectorAll('.status-btn.aprovado.on').length,
+      reprovados:      document.querySelectorAll('.status-btn.reprovado.on').length,
+      fotos:           fotosVeiculo.length,
+      fotosUrls:       fotosVeiculo,
+      itens_reprovados: itensReprovados,
+      criadoEm:        firebase.firestore.Timestamp.now(),
+    };
+
+    await db.collection('checklists_diarios').add(payload);
+    console.log('[Inspeção] Checklist salvo no Firestore:', placa);
+  } catch(err) {
+    console.error('[Inspeção] Erro ao salvar checklist:', err);
+  }
 }
 function wizSkip() { if (wizCurrent < WIZ_STEPS - 1) wizStep(wizCurrent + 1); }
 
@@ -2349,7 +2552,9 @@ function ensureReprovaInline(row) {
   if (!row.querySelector('.reprova-inline')) {
     const div = document.createElement('div');
     div.className = 'reprova-inline';
-    div.innerHTML = '<div class="inline-photo-zone" onclick="this.classList.add(\'filled\');this.innerHTML=\'📷<span style=\\\"color:var(--gn);font-size:10px;font-weight:700\\\">Foto adicionada ✓</span>\'">📸<span>Toque para foto</span></div><textarea class="inline-obs" placeholder="Observação obrigatória..."></textarea>';
+    // Gera ID único para o photo-zone
+    const uid = 'ipz-' + Date.now() + '-' + Math.random().toString(36).slice(2,7);
+    div.innerHTML = `<div class="inline-photo-zone" id="${uid}"><label style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer">📸<span>Toque para foto da reprovação</span><input type="file" accept="image/*" style="display:none" onchange="onInlinePhotoChange(this,'${uid}')"></label></div><textarea class="inline-obs" placeholder="Observação obrigatória..."></textarea>`;
     row.appendChild(div);
   }
 }
@@ -2406,6 +2611,15 @@ document.addEventListener('click', function(e) {
   if (!e.target.closest('#mnt_nova_placa_input') && !e.target.closest('#mnt_placa_suggestions')) {
     const box = document.getElementById('mnt_placa_suggestions');
     if (box) box.style.display = 'none';
+  }
+  // Também fecha sugestões da inspeção
+  if (!e.target.closest('#insp-motorista-input') && !e.target.closest('#insp-motorista-sugg')) {
+    const b = document.getElementById('insp-motorista-sugg');
+    if (b) b.style.display = 'none';
+  }
+  if (!e.target.closest('#insp-placa-input') && !e.target.closest('#insp-placa-sugg')) {
+    const b = document.getElementById('insp-placa-sugg');
+    if (b) b.style.display = 'none';
   }
 });
 
@@ -2609,21 +2823,33 @@ function acaoAprov(osId, acao) {
 function osAnexarNF(osId, input) {
   if (!input.files || !input.files.length) return;
   const file = input.files[0];
-  if (APROV_DATA[osId]) APROV_DATA[osId].nfAnexada = true;
+  if (APROV_DATA[osId]) { APROV_DATA[osId].nfAnexada = true; APROV_DATA[osId]._nfFile = file; }
   const status = document.getElementById('nf-status-' + osId);
   if (status) status.textContent = 'Arquivo anexado: ' + file.name + ' ✓';
   const btn = document.getElementById('btn-finalizar-' + osId);
   if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
 }
 
-function finalizarOS(osId) {
+async function finalizarOS(osId) {
   if (!APROV_DATA[osId]?.nfAnexada) { toast('Anexe a nota fiscal antes de finalizar.', 'am'); return; }
-  // Salva NF usando mesma base dos canhotos (Supabase Storage)
   const db = window._mntDB;
-  if (db) {
-    db.collection('ordens_servico').doc(osId).set({ status: 'Concluída', finalizadoEm: new Date().toISOString() }, { merge: true })
-      .then(() => toast('OS-' + osId + ' finalizada com sucesso!', 'gn'))
-      .catch(() => toast('OS finalizada localmente.', 'gn'));
+  try {
+    // Upload NF para Supabase Storage (mesma base dos canhotos)
+    let nfUrl = null;
+    const file = APROV_DATA[osId]?._nfFile;
+    if (file) nfUrl = await uploadNFNuvem(file, osId);
+
+    // Persiste finalização no Firestore
+    if (db) {
+      await db.collection('ordens_servico').doc(osId).set({
+        status: 'Concluída',
+        finalizadoEm: new Date().toISOString(),
+        nfUrl: nfUrl || null
+      }, { merge: true });
+    }
+    toast('OS-' + osId + ' finalizada com sucesso!', 'gn');
+  } catch(err) {
+    toast('OS finalizada com erro parcial: ' + err.message, 'am');
   }
   // Remove linha da tabela de aprovações
   const row = document.querySelector(`.aprov-row[data-os="${osId}"]`);
@@ -2642,6 +2868,243 @@ function filtrarAprovacoes(tipo) {
     const chev = document.getElementById('chev-' + row.dataset.os);
     if (chev) chev.style.transform = '';
   });
+}
+
+// ══════════════════════════════════════════════════════════
+// ITEM 1 — Inspeção: motorista logado + autocomplete
+// ══════════════════════════════════════════════════════════
+
+/* Preenche o formulário de seleção ao entrar na tela de inspeção.
+   - Motorista logado e placa alocada → preenche automaticamente e bloqueia campos.
+   - Admin ou sem alocação → libera autocomplete em ambos os campos. */
+function prepararFormularioInspecao() {
+  const formSel = document.getElementById('insp-form-selecao');
+  if (!formSel) return;
+
+  const isAdmin = ['admin','lr','lm'].includes(ATLAS_CURRENT_USER.perfil);
+  const motInput = document.getElementById('insp-motorista-input');
+  const placaInput = document.getElementById('insp-placa-input');
+
+  const motorista = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '';
+  const placaAloc = ATLAS_CURRENT_USER.placa || '';
+
+  if (!isAdmin && placaAloc && motorista) {
+    // Motorista alocado: preenche e bloqueia
+    if (motInput)  { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
+    if (placaInput){ placaInput.value = placaAloc; placaInput.readOnly = true; placaInput.style.background = 'var(--bg)'; }
+  } else {
+    // Admin ou sem alocação: campos livres com autocomplete
+    if (motInput)  { motInput.readOnly = false; motInput.value = motorista || ''; motInput.style.background = ''; }
+    if (placaInput){ placaInput.readOnly = false; placaInput.value = placaAloc || ''; placaInput.style.background = ''; }
+  }
+
+  formSel.style.display = '';
+  const heroContent = document.getElementById('insp-hero-content');
+  const checkContent = document.getElementById('insp-checklist-content');
+  if (heroContent)  heroContent.style.display = 'none';
+  if (checkContent) checkContent.style.display = 'none';
+}
+
+// Autocomplete Motorista no formulário de inspeção
+function onInspMotoristaInput(val) {
+  const sugg = document.getElementById('insp-motorista-sugg');
+  if (!sugg) return;
+  const q = val.trim().toUpperCase();
+  const matches = MNT_CACHE.motoristas.filter(m => mntUpper(m.nome).includes(q)).slice(0, 10);
+  if (!matches.length) { sugg.style.display = 'none'; return; }
+  sugg.innerHTML = matches.map(m =>
+    `<div class="placa-sugg-item" onmousedown="selecionarInspMotorista('${m.nome.replace(/'/g,"\\'")}')">
+      <span>${m.nome}</span>${m.filial ? `<span style="font-size:10px;color:var(--mu)">${m.filial}</span>` : ''}
+    </div>`
+  ).join('');
+  sugg.style.display = 'block';
+}
+function selecionarInspMotorista(nome) {
+  const inp = document.getElementById('insp-motorista-input');
+  if (inp) inp.value = nome;
+  const sugg = document.getElementById('insp-motorista-sugg');
+  if (sugg) sugg.style.display = 'none';
+  // Tenta preencher a placa do motorista
+  const aloc = Object.values(MNT_CACHE.alocacoes).find(a => mntUpper(a.motorista || '') === mntUpper(nome));
+  if (aloc && aloc.cavalo_id) {
+    const placaInp = document.getElementById('insp-placa-input');
+    if (placaInp && !placaInp.readOnly) placaInp.value = mntUpper(aloc.cavalo_id);
+  }
+}
+
+// Autocomplete Placa no formulário de inspeção
+function onInspPlacaInput(val) {
+  const sugg = document.getElementById('insp-placa-sugg');
+  if (!sugg) return;
+  const q = val.trim().toUpperCase();
+  const matches = MNT_CACHE.veiculos.filter(v => v.placa.includes(q)).slice(0, 10);
+  if (!matches.length) { sugg.style.display = 'none'; return; }
+  sugg.innerHTML = matches.map(v =>
+    `<div class="placa-sugg-item" onmousedown="selecionarInspPlaca('${v.placa}')">
+      <span style="font-family:var(--m)">${v.placa}</span>
+      <span style="font-size:10.5px;color:var(--mu)">${v.frota || ''}${v.tipo ? ' · ' + v.tipo : ''}</span>
+    </div>`
+  ).join('');
+  sugg.style.display = 'block';
+}
+function selecionarInspPlaca(placa) {
+  const inp = document.getElementById('insp-placa-input');
+  if (inp) inp.value = placa;
+  const sugg = document.getElementById('insp-placa-sugg');
+  if (sugg) sugg.style.display = 'none';
+  // Tenta preencher motorista pela alocação
+  const v = MNT_CACHE.veiculos.find(x => x.placa === placa);
+  if (v && v.motorista) {
+    const motInp = document.getElementById('insp-motorista-input');
+    if (motInp && !motInp.readOnly) motInp.value = v.motorista;
+  }
+}
+
+// Teclado nos campos de autocomplete da inspeção
+function onInspInputKeydown(e, suggId) {
+  const sugg = document.getElementById(suggId);
+  if (!sugg || sugg.style.display === 'none') return;
+  const items = sugg.querySelectorAll('.placa-sugg-item');
+  let idx = Array.from(items).findIndex(el => el.classList.contains('selected'));
+  if (e.key === 'ArrowDown') { idx = Math.min(idx + 1, items.length - 1); }
+  else if (e.key === 'ArrowUp') { idx = Math.max(idx - 1, 0); }
+  else if (e.key === 'Enter' && idx >= 0) { items[idx].dispatchEvent(new MouseEvent('mousedown')); e.preventDefault(); return; }
+  else if (e.key === 'Escape') { sugg.style.display = 'none'; return; }
+  items.forEach((el, i) => el.classList.toggle('selected', i === idx));
+  if (idx >= 0) items[idx].scrollIntoView({block:'nearest'});
+}
+
+// Confirma início e abre o wizard real
+function confirmarInicioInspecao() {
+  const motInp  = document.getElementById('insp-motorista-input');
+  const placaInp = document.getElementById('insp-placa-input');
+  const placa    = (placaInp?.value || '').trim().toUpperCase();
+  const motoristaNome = (motInp?.value || '').trim();
+
+  if (!placa) { toast('Selecione ou digite a placa para iniciar a inspeção.', 'am'); return; }
+
+  // Inicia inspeção com os dados confirmados
+  iniciarInspecao(placa, motoristaNome);
+}
+
+// ══════════════════════════════════════════════════════════
+// ITEM 2/3 — Foto real: só marca quando arquivo existir
+// ══════════════════════════════════════════════════════════
+
+/* Chamado ao selecionar arquivo no inline-photo-zone */
+function onInlinePhotoChange(input, zoneId) {
+  if (!input.files || !input.files.length) return; // nenhum arquivo = não faz nada
+  const file = input.files[0];
+  if (!file) return;
+  const zone = document.getElementById(zoneId);
+  if (!zone) return;
+  zone.classList.add('filled');
+  zone.innerHTML = `📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span>`;
+  // Upload para Firebase Storage em nuvem
+  uploadInspFotoNuvem(file, zoneId);
+}
+
+/* Marcação de foto do veículo — só quando arquivo real */
+function marcarFotoVeiculo(input, lblId, label) {
+  if (!input.files || !input.files.length) return;
+  const file = input.files[0];
+  if (!file) return;
+  const lbl = document.getElementById(lblId);
+  if (lbl) {
+    lbl.className = 'foto-thumb ok';
+    lbl.innerHTML = `📷<span>${label} ✓</span>`;
+  }
+  // Upload para Firebase Storage
+  uploadInspFotoNuvem(file, lblId);
+}
+
+// ══════════════════════════════════════════════════════════
+// ITEM 4 — Upload de fotos de inspeção para Firebase Storage
+// ══════════════════════════════════════════════════════════
+// Reutiliza o Firebase Storage do projeto (mesma config do sistema).
+// Path: inspections/{inspPlaca}/{timestamp}_{filename}
+
+async function uploadInspFotoNuvem(file, refId) {
+  try {
+    if (!firebase.apps.length) return;
+    const storage = firebase.storage();
+    const placa = (window._inspPlaca || 'sem-placa').replace(/[^A-Z0-9]/gi, '-');
+    const ts    = Date.now();
+    const path  = `inspections/${placa}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const ref   = storage.ref(path);
+    const snap  = await ref.put(file);
+    const url   = await snap.ref.getDownloadURL();
+    // Salva URL no contexto atual da inspeção
+    if (!window._inspFotos) window._inspFotos = {};
+    window._inspFotos[refId] = { url, path, name: file.name };
+    console.log('[Inspeção] Foto salva em nuvem:', path, url);
+  } catch(err) {
+    console.error('[Inspeção] Erro upload foto:', err);
+    // Silencioso — não quebra o fluxo do usuário
+  }
+}
+
+/* Upload de arquivos de NF para Supabase Storage (mesma base dos canhotos) */
+async function uploadNFNuvem(file, osId) {
+  try {
+    const SUPABASE_URL      = 'https://onomvgnudbgywvtgetfe.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_SpcPe4Fch43LIwK7ox-jIQ_YbbBf5_g';
+    const SUPABASE_BUCKET   = 'canhotos'; // mesmo bucket dos canhotos
+    // Usa supabase-js se disponível no parent, senão faz fetch direto
+    const path = `nf-os/${osId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+    const res  = await fetch(`${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${path}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': file.type || 'application/octet-stream',
+      },
+      body: file
+    });
+    if (!res.ok) throw new Error('Upload NF falhou: ' + res.statusText);
+    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${path}`;
+    return publicUrl;
+  } catch(err) {
+    console.error('[Manutenção] Erro upload NF:', err);
+    return null;
+  }
+}
+
+/* Upload de fotos da OS para Firebase Storage */
+async function uploadOSFotoNuvem(file, osId) {
+  try {
+    if (!firebase.apps.length) return null;
+    const storage = firebase.storage();
+    const ts   = Date.now();
+    const path = `os-fotos/${osId}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+    const ref  = storage.ref(path);
+    const snap = await ref.put(file);
+    return await snap.ref.getDownloadURL();
+  } catch(err) {
+    console.error('[Manutenção] Erro upload foto OS:', err);
+    return null;
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// ITEM 9 — Ao salvar OS: muda placa para status "Manutenção"
+// ══════════════════════════════════════════════════════════
+async function setPlacaEmManutencao(placa) {
+  if (!placa) return;
+  const db = window._mntDB;
+  if (!db) return;
+  try {
+    // Busca o id da alocação da placa
+    const snap = await db.collection('alocacao_frota').where('cavalo_placa','==',placa).limit(1).get();
+    if (!snap.empty) {
+      await snap.docs[0].ref.set({ disponibilidade: 'manutencao' }, { merge: true });
+    } else {
+      // Tenta pelo id (placa como id do doc)
+      await db.collection('alocacao_frota').doc(placa).set({ disponibilidade: 'manutencao', cavalo_placa: placa }, { merge: true });
+    }
+    console.log('[Manutenção] Placa', placa, '→ status manutencao');
+  } catch(err) {
+    console.error('[Manutenção] Erro ao atualizar status placa:', err);
+  }
 }
 
 // ══ INIT ══
