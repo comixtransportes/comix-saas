@@ -511,14 +511,27 @@ let auditLog  = [];
 
 /* ── Firebase ── */
 let fsdb = null;
+let fsWin = window;
 try {
-  const fb = (window.firebase && window.firebase.firestore)
-    ? window.firebase
-    : ((window.parent && window.parent !== window && window.parent.firebase && window.parent.firebase.firestore)
-      ? window.parent.firebase
-      : null);
+  const hasLocalFb  = !!(window.firebase && window.firebase.firestore);
+  const hasParentFb = !!(window.parent && window.parent !== window && window.parent.firebase && window.parent.firebase.firestore);
+  const fb = hasLocalFb ? window.firebase : (hasParentFb ? window.parent.firebase : null);
+  fsWin = hasLocalFb ? window : (hasParentFb ? window.parent : window);
   if (fb) fsdb = fb.firestore();
 } catch(e){}
+
+/*
+  Quando esta tela roda dentro do Atlas, ela usa o Firebase do parent.
+  O Firestore compat valida objetos pelo contexto da janela que carregou o SDK;
+  por isso, antes de salvar, clonamos o payload no mesmo contexto do Firebase.
+*/
+function toFirestorePlain(obj) {
+  try {
+    const ctx = fsWin || window;
+    if (ctx !== window && ctx.JSON) return ctx.JSON.parse(ctx.JSON.stringify(obj));
+  } catch(e){}
+  return JSON.parse(JSON.stringify(obj));
+}
 
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', () => {
@@ -936,7 +949,7 @@ async function savePermissions() {
   closeModal('modal-save');
   try {
     const payload = {tipo:sel, permissoes:perms[sel], atualizadoEm:new Date().toISOString(), atualizadoPor:getUser()};
-    if (fsdb) await fsdb.collection('permissoes').doc(sel).set(payload,{merge:true});
+    if (fsdb) await fsdb.collection('permissoes').doc(sel).set(toFirestorePlain(payload), toFirestorePlain({merge:true}));
     else localStorage.setItem(`perm_${sel}`, JSON.stringify(payload));
     addLog('sistema','SALVO',true);
     showToast(`Permissões de "${USER_TYPES.find(u=>u.id===sel)?.label||sel}" salvas!`,'gn');
