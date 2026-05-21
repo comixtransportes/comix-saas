@@ -1930,26 +1930,66 @@ function addClRowClick(){
       tr.style.background='#dbeafe';
       const t=tr.querySelectorAll('td');
       if(t.length<2) return;
-      const dst=t[1].textContent.trim();
-      showCliHist(dst);
+      // Captura todos os campos necessários para identificar a rota exata
+      const rem   = t[0].textContent.trim();
+      const dst   = t[1].textContent.trim();
+      const coleta= t[2].textContent.trim(); // "LOCAL COLETA/UF"
+      const entrega= t[3].textContent.trim(); // "LOCAL ENTREGA/UF"
+      const frt   = t[4].textContent.trim();
+      // Decompõe "CIDADE/UF" nas partes orig+ufo e dest+ufd
+      const [orig, ufo]  = coleta.split('/');
+      const [dest, ufd]  = entrega.split('/');
+      showCliHist(rem, dst, frt, (orig||'').trim(), (ufo||'').trim(), (dest||'').trim(), (ufd||'').trim());
     });
   });
 }
 
-function showCliHist(dstNome){
-  // Buscar últimos 12 meses do destinatário em todo o histórico
-  const allDst = filterByOp(_clUID).filter(r=>r.d_nome===dstNome);
-  const mesesHist = [...new Set(allDst.map(r=>r.mes))].filter(Boolean).sort();
+function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
+  // Filtra pelo destinatário E pela rota completa (remetente+frete+origem+destino)
+  const allRota = filterByOp(_clUID).filter(r=>
+    r.d_nome  === dstNome &&
+    r.r_nome  === remNome &&
+    r.frete   === frt     &&
+    r.orig    === orig    &&
+    r.ufo     === ufo     &&
+    r.dest    === dest    &&
+    r.ufd     === ufd
+  );
+  const mesesHist = [...new Set(allRota.map(r=>r.mes))].filter(Boolean).sort();
   const ult12 = mesesHist.slice(-12);
-  const fats  = ult12.map(m=>allDst.filter(r=>r.mes===m).reduce((a,r)=>a+r.fat,0));
+
+  // Mês atual para destacar com projeção
+  const _hoje = new Date();
+  const mesAtual = `${_hoje.getFullYear()}-${String(_hoje.getMonth()+1).padStart(2,'0')}`;
+
+  // Para cada mês: realizado; para o mês atual usa fatProj via calcProj
+  const fats = ult12.map(m=>{
+    const fatReal = allRota.filter(r=>r.mes===m).reduce((a,r)=>a+r.fat,0);
+    if(m === mesAtual){
+      const {fatProj} = calcProj(m, fatReal, 0);
+      return fatProj;
+    }
+    return fatReal;
+  });
+
+  // Cores: mês atual = azul destaque, demais = laranja padrão
+  const bgColors = ult12.map(m=>
+    m === mesAtual ? 'rgba(26,86,219,.75)' : 'rgba(234,88,12,.6)'
+  );
+  const bdColors = ult12.map(m=>
+    m === mesAtual ? 'rgba(26,86,219,1)'   : 'rgba(234,88,12,.9)'
+  );
+
   // Labels MM/AA ex: 06/24, 07/24
   const lb = ult12.map(m=>{ const[ano,mo]=m.split('-'); return `${mo}/${ano.slice(2)}`; });
   const ct = document.getElementById('ct-hist-cli');
-  if(ct) ct.textContent = `Histórico — ${dstNome.slice(0,30)}`;
+  // Monta label resumido da rota no título
+  const rotaLabel = `${remNome.slice(0,18)} → ${dstNome.slice(0,18)} (${frt})`;
+  if(ct) ct.textContent = `Histórico — ${rotaLabel}`;
   mkC('c-cm','bar',lb,[{
     data:fats,
-    backgroundColor:'rgba(234,88,12,.6)',
-    borderColor:'rgba(234,88,12,.9)',
+    backgroundColor:bgColors,
+    borderColor:bdColors,
     borderWidth:1,
     borderRadius:2
   }],{ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0}});
