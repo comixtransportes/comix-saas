@@ -1458,7 +1458,7 @@ function openChecklistPanel(chkId) {
   osEl.style.color = chk.osGerada ? 'var(--ac)' : 'var(--mu)';
   document.getElementById('chk-obs').textContent = chk.obs || 'Nenhuma observação registrada.';
 
-  // Fotos do veículo — 4 ângulos fixos
+  // Fotos do veículo
   const fotosGrid = document.getElementById('chk-fotos-grid');
   const veiculoUrls = chk.fotosVeiculoUrls || chk.fotosUrls || [];
   const labVeic = ['Frente','Traseira','Lat. Direita','Lat. Esquerda'];
@@ -1469,7 +1469,7 @@ function openChecklistPanel(chkId) {
       : `<div class="sp-photo-card"><span style="font-size:26px">📷</span><span>${lb}</span><span style="font-size:9px;color:var(--mu)">Sem foto</span></div>`;
   }).join('');
 
-  // Itens reprovados + miniatura da foto
+  // Itens reprovados + foto de reprovação
   const reprovSection = document.getElementById('chk-reprov-section');
   const reprovList    = document.getElementById('chk-reprov-list');
   const reprovFotosMeta = chk.fotosReprovMeta || [];
@@ -1487,7 +1487,6 @@ function openChecklistPanel(chkId) {
     reprovSection.style.display = 'none';
   }
 
-  // Botão Abrir OS — só aparece se tem reprovados e não foi revisado
   const btnOS = document.getElementById('chk-btn-abrir-os');
   if (btnOS) {
     const jaRevisado = chk.revisao_status==='revisado_sem_os'||chk.revisao_status==='os_aberta';
@@ -1614,7 +1613,6 @@ async function salvarOS() {
       await atlasFsSetDoc('ordens_servico', osId, { fotosMeta, fotos: fotosMeta.length, atualizadoEm: new Date() }, { merge: true });
     }
 
-    // Linka de volta ao checklist de origem, se houver
     const chkOrigem = window._osOrigemChecklistId || null;
     if (chkOrigem) {
       try {
@@ -3181,7 +3179,17 @@ async function wizNext() {
   } else {
     const btn = document.getElementById('wiz-next');
     const oldText = btn ? btn.textContent : '';
-    if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
+    if (btn) { btn.disabled = true; btn.textContent = 'Aguardando fotos...'; }
+    // Aguarda uploads pendentes (máx 15s) antes de salvar
+    await (async () => {
+      const inicio = Date.now();
+      while (Date.now() - inicio < 15000) {
+        const pendentes = Object.values(window._inspFotos || {}).filter(f => f && f.local && f.url === null);
+        if (pendentes.length === 0) break;
+        await new Promise(r => setTimeout(r, 500));
+      }
+    })();
+    if (btn) btn.textContent = 'Salvando...';
     try {
       const ok = await salvarChecklistFirebase();
       if (ok) {
@@ -3224,7 +3232,6 @@ async function salvarChecklistFirebase() {
       .filter(i => i.fotoZoneId && window._inspFotos?.[i.fotoZoneId])
       .map(i => ({ ...window._inspFotos[i.fotoZoneId], item: i.item, grupo: i.grupo, tipo: 'reprovacao' }));
     const todasFotos   = [...fotosVeiculo, ...fotosReprovacao];
-    const fotosUrlsNow = todasFotos.map(f => f.url).filter(Boolean);
 
     const v          = MNT_CACHE.veiculos.find(x => x.placa === placa);
     const compDocId  = window._inspCompressor || null;
@@ -3249,7 +3256,7 @@ async function salvarChecklistFirebase() {
       aprovados,
       reprovados,
       fotos:            todasFotos.length,
-      fotosUrls:        fotosUrlsNow,
+      fotosUrls:        todasFotos.map(f => f.url).filter(Boolean),
       fotosVeiculoMeta: fotosVeiculo,
       fotosReprovMeta:  fotosReprovacao,
       fotosMeta:        todasFotos,
@@ -3262,23 +3269,7 @@ async function salvarChecklistFirebase() {
     const ref = await atlasFsAddDoc('checklists_diarios', payload);
     console.log('[Inspeção] Checklist salvo:', ref.id, 'placa:', placa);
 
-    // Atualiza URLs das fotos em background conforme uploads completam
-    setTimeout(async () => {
-      let t = 0;
-      while (t < 20) {
-        await new Promise(r => setTimeout(r, 1000)); t++;
-        const vA = FOTO_IDS.map(id => window._inspFotos?.[id]).filter(Boolean);
-        const rA = itensReprovados.filter(i => i.fotoZoneId && window._inspFotos?.[i.fotoZoneId]).map(i => ({...window._inspFotos[i.fotoZoneId], item:i.item, grupo:i.grupo, tipo:'reprovacao'}));
-        const tA = [...vA,...rA];
-        const uA = tA.map(f => f.url).filter(Boolean);
-        if (uA.length > fotosUrlsNow.length) {
-          try { await atlasFsSetDoc('checklists_diarios', ref.id, {fotosUrls:uA,fotosVeiculoMeta:vA,fotosReprovMeta:rA,fotosMeta:tA,fotos:tA.length},{merge:true}); console.log('[Fotos] URLs atualizadas:', uA.length); } catch(_) {}
-          break;
-        }
-      }
-    }, 500);
-
-    // OS NÃO é gerada automaticamente — líder decide ao revisar o checklist
+    // OS NÃO é gerada automaticamente — líder decide ao revisar
     if (itensReprovados.length > 0) {
       try {
         await atlasFsSetDoc('checklists_diarios', ref.id, {
@@ -3720,7 +3711,11 @@ function coletarItensChecklistInspecao() {
     const item = tituloEl ? tituloEl.textContent.trim() : 'Item ' + (idx + 1);
     const status = row.querySelector('.status-btn.reprovado.on') ? 'reprovado' : row.querySelector('.status-btn.aprovado.on') ? 'aprovado' : 'em_branco';
     const obs = row.querySelector('.inline-obs')?.value?.trim() || '';
-    return { grupo, item, status, obs };
+    const photoZone = row.querySelector('.inline-photo-zone');
+    const photoZoneId = photoZone ? photoZone.id : null;
+    const fotoMeta = photoZoneId && window._inspFotos ? (window._inspFotos[photoZoneId] || null) : null;
+    const fotoUrl = fotoMeta ? (fotoMeta.url || null) : null;
+    return { grupo, item, status, obs, fotoZoneId: photoZoneId, fotoUrl };
   });
 }
 
@@ -3848,15 +3843,15 @@ function confirmarInicioInspecao() {
 
 /* Chamado ao selecionar arquivo no inline-photo-zone */
 function onInlinePhotoChange(input, zoneId) {
-  if (!input.files || !input.files.length) return; // nenhum arquivo = não faz nada
+  if (!input.files || !input.files.length) return;
   const file = input.files[0];
   if (!file) return;
   const zone = document.getElementById(zoneId);
-  if (!zone) return;
-  zone.classList.add('filled');
-  zone.innerHTML = `📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span>`;
-  // Upload para Firebase Storage em nuvem
-  uploadInspFotoNuvem(file, zoneId);
+  if (zone) { zone.classList.add('filled'); zone.innerHTML='⏳<span style="color:var(--mu);font-size:10px">Enviando...</span>'; }
+  uploadInspFotoNuvem(file, zoneId).then(url => {
+    const z=document.getElementById(zoneId);
+    if(z){z.classList.add('filled');z.innerHTML=url?'📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span>':' 📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span><span style="font-size:8px;color:var(--mu)"> local</span>';}
+  }).catch(()=>{const z=document.getElementById(zoneId);if(z){z.classList.add('filled');z.innerHTML='📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span>';}});
 }
 
 /* Marcação de foto do veículo — só quando arquivo real */
@@ -3865,12 +3860,11 @@ function marcarFotoVeiculo(input, lblId, label) {
   const file = input.files[0];
   if (!file) return;
   const lbl = document.getElementById(lblId);
-  if (lbl) {
-    lbl.className = 'foto-thumb ok';
-    lbl.innerHTML = `📷<span>${label} ✓</span>`;
-  }
-  // Upload para Firebase Storage
-  uploadInspFotoNuvem(file, lblId);
+  if (lbl) { lbl.className='foto-thumb ok'; lbl.innerHTML='⏳<span style="font-size:9px">'+label+'</span><span style="font-size:8px;color:var(--mu)">Enviando...</span>'; }
+  uploadInspFotoNuvem(file, lblId).then(url => {
+    const el=document.getElementById(lblId);
+    if(el){el.className='foto-thumb ok';el.innerHTML=url?'📷<span style="font-size:9px;color:var(--gn)">'+label+' ✓</span>':' 📷<span style="font-size:9px">'+label+' ✓</span>';}
+  }).catch(()=>{const el=document.getElementById(lblId);if(el){el.className='foto-thumb ok';el.innerHTML='📷<span style="font-size:9px">'+label+' ✓</span>';}});
 }
 
 // ══════════════════════════════════════════════════════════
