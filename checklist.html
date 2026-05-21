@@ -658,6 +658,8 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" value="Preventiva"> Preventiva</label>
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" value="Preditiva"> Preditiva</label>
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" value="Acidente"> Acidente</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" value="Reforma"> Reforma</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" value="Garantia Agregado"> Garantia Agregado</label>
         </div>
         <div style="display:flex;gap:12px;font-size:12px;margin-top:8px">
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-l2" value="Interna" checked> Interna</label>
@@ -1007,6 +1009,8 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
                 <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="t2"> Preventiva</label>
                 <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="t2"> Preditiva</label>
                 <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="t2"> Acidente</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="t2"> Reforma</label>
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="t2"> Garantia Agregado</label>
               </div>
               <div style="display:flex;gap:12px;font-size:12px">
                 <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="l2" checked> Interna</label>
@@ -1719,16 +1723,11 @@ function abrirModalOS(chkId) {
   const kmEl = document.getElementById('mos-km');
   if (kmEl) kmEl.value = v ? (v.km || '') : '';
 
-  // Unidade / filial
+  // Unidade / filial — prioridade para a filial onde a placa está alocada no menu Frota
   const unidEl = document.getElementById('mos-unidade');
   if (unidEl) {
-    unidEl.innerHTML = '<option value="">Selecione...</option>';
-    MNT_CACHE.filiais.forEach(f => {
-      const o = document.createElement('option');
-      o.value = f.id; o.textContent = f.nome || f.sigla || f.id;
-      if (mntUpper(f.nome||f.sigla||'') === mntUpper(chk.filial||v?.filial||'')) o.selected = true;
-      unidEl.appendChild(o);
-    });
+    const filialAlocada = mntFilialAlocadaPorPlaca(chk.placa, v) || mntUpper(chk.filial || v?.filial || '');
+    mntPopularSelectUnidadeEl(unidEl, filialAlocada, 'Selecione...');
   }
 
   // Motorista
@@ -2376,6 +2375,95 @@ function mntOpt(value, label) {
   return o;
 }
 
+/* ── Helpers: filial/unidade da alocação de frota ── */
+function mntUnitSlug(v) {
+  const t = mntUpper(v);
+  if (!t) return '';
+  if (['SC','SP','PR'].includes(t)) return t;
+  if (t.includes('SANTA CATARINA')) return 'SC';
+  if (t.includes('SÃO PAULO') || t.includes('SAO PAULO')) return 'SP';
+  if (t.includes('PARANÁ') || t.includes('PARANA')) return 'PR';
+  return '';
+}
+
+function mntFindVeiculoPorPlaca(placa) {
+  const p = mntUpper(placa);
+  return MNT_CACHE.veiculos.find(v => mntUpper(v.placa) === p || mntUpper(v.id) === p) || null;
+}
+
+function mntFindAlocacaoPorVeiculo(placaOuVeiculo) {
+  const v = typeof placaOuVeiculo === 'object' && placaOuVeiculo
+    ? placaOuVeiculo
+    : mntFindVeiculoPorPlaca(placaOuVeiculo);
+  const placa = mntUpper(v?.placa || placaOuVeiculo || '');
+  const id    = mntUpper(v?.id || '');
+  const frota = mntUpper(v?.frota || '');
+
+  const direta = MNT_CACHE.alocacoes[v?.id] || MNT_CACHE.alocacoes[v?.placa] || MNT_CACHE.alocacoes[placa];
+  if (direta) return direta;
+
+  return Object.values(MNT_CACHE.alocacoes || {}).find(a => {
+    const cavaloId    = mntUpper(a.cavalo_id || a.id || '');
+    const cavaloPlaca = mntUpper(a.cavalo_placa || '');
+    const cavaloFrota = mntUpper(a.cavalo_frota || '');
+    return (placa && (cavaloId === placa || cavaloPlaca === placa || cavaloFrota === placa)) ||
+           (id && (cavaloId === id || cavaloPlaca === id || cavaloFrota === id)) ||
+           (frota && (cavaloId === frota || cavaloPlaca === frota || cavaloFrota === frota));
+  }) || null;
+}
+
+function mntFilialAlocadaPorPlaca(placa, veiculoRef) {
+  const v = veiculoRef || mntFindVeiculoPorPlaca(placa);
+  const aloc = mntFindAlocacaoPorVeiculo(v || placa);
+  return mntUpper(
+    aloc?.unidade ||
+    aloc?.filial ||
+    aloc?.unidade_nome ||
+    aloc?.unidade_slug ||
+    v?.filial ||
+    ''
+  );
+}
+
+function mntPopularSelectUnidadeEl(sel, valorPreferido, primeiraOpcao) {
+  if (!sel) return;
+  sel.innerHTML = `<option value="">${primeiraOpcao || 'Selecione...'}</option>`;
+  MNT_CACHE.filiais.forEach(f => {
+    const val   = f.sigla || f.id;
+    const label = f.sigla ? `${f.sigla} — ${f.nome}` : f.nome;
+    sel.appendChild(mntOpt(val, label));
+  });
+  if (valorPreferido) mntSelecionarUnidade(sel, valorPreferido);
+}
+
+function mntSelecionarUnidade(sel, valorPreferido) {
+  if (!sel || !valorPreferido) return false;
+  const alvo = mntUpper(valorPreferido);
+  const slug = mntUnitSlug(alvo);
+  const opts = Array.from(sel.options || []);
+
+  let opt = opts.find(o => mntUpper(o.value) === alvo || mntUpper(o.textContent) === alvo);
+  if (!opt && slug) {
+    opt = opts.find(o => mntUpper(o.value) === slug || mntUnitSlug(o.textContent) === slug || mntUnitSlug(o.value) === slug);
+  }
+  if (!opt) {
+    opt = opts.find(o => {
+      const txt = mntUpper(o.textContent);
+      return txt && alvo && (txt.includes(alvo) || alvo.includes(txt));
+    });
+  }
+  if (opt) {
+    sel.value = opt.value;
+    return true;
+  }
+
+  // Se a filial veio da alocação e ainda não existe no cadastro de filiais, mantém visível e selecionada.
+  const extra = mntOpt(alvo, alvo);
+  sel.appendChild(extra);
+  sel.value = alvo;
+  return true;
+}
+
 /* ══ CARREGAR TODOS OS CADASTROS DO FIREBASE ══ */
 async function loadCadastrosFirebase() {
   const db = atlasGetSharedDb();
@@ -2483,13 +2571,7 @@ function popularSelectUnidade() {
   // Selects com data-cadastro="unidades"
   document.querySelectorAll('select[data-cadastro="unidades"]').forEach(sel => {
     const cur = sel.value;
-    sel.innerHTML = '<option value="">Selecione...</option>';
-    MNT_CACHE.filiais.forEach(f => {
-      const val   = f.sigla || f.id;
-      const label = f.sigla ? `${f.sigla} — ${f.nome}` : f.nome;
-      sel.appendChild(mntOpt(val, label));
-    });
-    if (cur) sel.value = cur;
+    mntPopularSelectUnidadeEl(sel, cur, 'Selecione...');
   });
 }
 
@@ -2612,6 +2694,13 @@ function onPlacaChange(placa) {
       tipoEl.appendChild(mntOpt(v.tipo, v.tipo));
       tipoEl.value = v.tipo;
     }
+  }
+
+  // Unidade / filial — usa a alocação da Frota antes do cadastro base do veículo
+  const unidadeEl = document.getElementById('mnt_nova_unidade');
+  if (unidadeEl) {
+    const filialAlocada = mntFilialAlocadaPorPlaca(placa, v);
+    if (filialAlocada) mntSelecionarUnidade(unidadeEl, filialAlocada);
   }
 
   // KM / M³
