@@ -585,7 +585,215 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
         </div>
       </div>
 
-      <!-- ══════ CHECKLIST WIZARD (Inspeção Diária — abre pelo botão Iniciar Inspeção) ══════ -->
+      <!-- ══════════════════════════════════════════════════════
+     MODAL OS — Abertura de O.S a partir do Checklist
+     Suspenso, sobrepõe tudo, preenche via abrirOSdoChecklist()
+     ══════════════════════════════════════════════════════ -->
+<div id="os-modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:500;backdrop-filter:blur(2px)" onclick="fecharModalOS()"></div>
+<div id="os-modal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(96vw,900px);max-height:90vh;overflow-y:auto;background:var(--wh);border-radius:var(--r);box-shadow:0 20px 60px rgba(0,0,0,.25);z-index:501;flex-direction:column">
+
+  <!-- Header do modal -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bd2);position:sticky;top:0;background:var(--wh);z-index:2;border-radius:var(--r) var(--r) 0 0">
+    <div>
+      <div style="font-size:14px;font-weight:700;color:var(--tx)">📋 Abrir Ordem de Serviço</div>
+      <div style="font-size:11px;color:var(--mu)" id="os-modal-subtitle">Originada do checklist</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div style="background:var(--ac-bg);border:1px solid #bfdbfe;border-radius:var(--rs);padding:4px 12px;font-size:12px;font-weight:700;font-family:var(--m);color:var(--ac)" id="os-modal-num">OS-????</div>
+      <button onclick="fecharModalOS()" style="background:none;border:1px solid var(--bd);border-radius:var(--rs);padding:5px 10px;cursor:pointer;font-size:12px;color:var(--mu)">✕ Fechar</button>
+    </div>
+  </div>
+
+  <!-- Corpo do modal -->
+  <div style="padding:16px 18px;display:flex;flex-direction:column;gap:14px">
+
+    <!-- Linha 1: Identificação -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div class="fld">
+        <label>Unidade / Filial</label>
+        <select id="mos-unidade" style="width:100%"><option value="">Carregando...</option></select>
+      </div>
+      <div class="fld">
+        <label>Data de Abertura</label>
+        <input type="date" id="mos-data" style="width:100%">
+      </div>
+      <div class="fld">
+        <label>Prioridade</label>
+        <select id="mos-prioridade" style="width:100%">
+          <option value="Normal">Normal</option>
+          <option value="Alta">Alta</option>
+          <option value="Urgente">Urgente</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Linha 2: Equipamento -->
+    <div style="border-top:1px solid var(--bd2);padding-top:12px">
+      <div class="sec-title">Equipamento</div>
+      <div style="display:grid;grid-template-columns:160px 1fr 140px;gap:10px;margin-top:8px">
+        <div class="fld">
+          <label>Tipo</label>
+          <select id="mos-tipo-equip" style="width:100%">
+            <option>Cavalo</option><option>Carreta</option><option>Compressor</option><option>Carro de apoio</option>
+          </select>
+        </div>
+        <div class="fld" style="position:relative">
+          <label>Placa</label>
+          <input type="text" id="mos-placa" autocomplete="off" style="width:100%;font-family:var(--m);font-weight:700;letter-spacing:1px" readonly
+            placeholder="Placa do veículo">
+        </div>
+        <div class="fld">
+          <label>Hodômetro (km)</label>
+          <input type="number" id="mos-km" placeholder="0" style="width:100%">
+        </div>
+      </div>
+    </div>
+
+    <!-- Linha 3: Tipo OS + Local + Motorista -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div>
+        <div class="sec-title">Tipo da OS</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-top:8px">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" id="mos-corretiva" value="Corretiva" checked> Corretiva</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" value="Preventiva"> Preventiva</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" value="Preditiva"> Preditiva</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-t2" value="Acidente"> Acidente</label>
+        </div>
+        <div style="display:flex;gap:12px;font-size:12px;margin-top:8px">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-l2" value="Interna" checked> Interna</label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="mos-l2" value="Externa"> Externa</label>
+        </div>
+      </div>
+      <div class="fld">
+        <label>Motorista</label>
+        <select id="mos-motorista" style="width:100%"><option value="">Carregando...</option></select>
+      </div>
+    </div>
+
+    <!-- Linha 4: Problema + Motivo -->
+    <div style="border-top:1px solid var(--bd2);padding-top:12px">
+      <div class="sec-title">Descrição</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
+        <div class="fld">
+          <label>Problema relatado</label>
+          <textarea id="mos-problema" style="height:80px;resize:vertical;width:100%" placeholder="Descreva o problema observado..."></textarea>
+        </div>
+        <div class="fld">
+          <label>Motivo da parada</label>
+          <select id="mos-motivo" style="width:100%;height:80px">
+            <optgroup label="Caminhão / Cavalo mecânico">
+              <option>Manutenção preventiva</option><option>Manutenção corretiva</option>
+              <option>Falha no motor</option><option>Falha no câmbio</option>
+              <option>Falha na embreagem</option><option>Falha no sistema elétrico</option>
+              <option>Falha no sistema de freios</option><option>Vazamento de óleo</option>
+              <option>Vazamento de ar</option><option>Vazamento de combustível</option>
+              <option>Problema no sistema de arrefecimento</option><option>Problema na suspensão</option>
+              <option>Problema na direção</option><option>Problema em pneus</option>
+              <option>Problema em rodas</option><option>Problema em iluminação/sinalização</option>
+              <option>Pane mecânica</option><option>Pane elétrica</option>
+              <option>Revisão programada</option><option>Sinistro/avaria</option>
+              <option>Aguardando peças</option><option>Aguardando fornecedor</option><option>Aguardando aprovação</option>
+            </optgroup>
+            <optgroup label="Carreta">
+              <option>Manutenção preventiva (carreta)</option><option>Manutenção corretiva (carreta)</option>
+              <option>Problema no sistema de freios (carreta)</option><option>Problema em suspensão (carreta)</option>
+              <option>Problema em pneus (carreta)</option><option>Problema em rodas (carreta)</option>
+              <option>Problema em iluminação/sinalização (carreta)</option><option>Problema em quinta roda/pino rei</option>
+              <option>Avaria em baú/silo</option><option>Revisão programada (carreta)</option>
+            </optgroup>
+            <optgroup label="Compressor">
+              <option>Falha no compressor</option><option>Falha elétrica (compressor)</option>
+              <option>Vazamento de óleo (compressor)</option><option>Vazamento de ar (compressor)</option>
+              <option>Troca de óleo (compressor)</option><option>Revisão programada (compressor)</option>
+              <option>Ruído anormal</option><option>Vibração anormal</option>
+            </optgroup>
+            <optgroup label="Outros">
+              <option>Pressurização silo</option><option>Acidente</option><option>Outro</option>
+            </optgroup>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Linha 5: Prestador + Prazo -->
+    <div style="display:grid;grid-template-columns:1fr 160px;gap:10px">
+      <div class="fld">
+        <label>Prestador de Serviços (Oficina)</label>
+        <input type="text" id="mos-prestador" placeholder="Nome da oficina ou prestador..." style="width:100%" autocomplete="off">
+      </div>
+      <div class="fld">
+        <label>Prazo previsto</label>
+        <input type="date" id="mos-prazo" style="width:100%">
+      </div>
+    </div>
+
+    <!-- Linha 6: Serviços dinâmicos -->
+    <div style="border-top:1px solid var(--bd2);padding-top:12px">
+      <div class="dynamic-area-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:12px;font-weight:700;color:var(--tx)">Serviços</span>
+        <span style="font-size:10px;color:var(--mu)">Descreva os serviços a realizar</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:5px;padding:0 2px">
+        <span style="flex:1;font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px">Descrição do serviço</span>
+        <span style="width:52px;font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;text-align:center">Qtd</span>
+        <span style="width:80px;font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;text-align:center">Vl. Unit.</span>
+        <span style="width:80px;font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;text-align:center">Vl. Total</span>
+        <span style="width:22px"></span>
+      </div>
+      <div id="mos-servicos-list"></div>
+      <button onclick="mosAddServico()" class="add-line-btn" style="margin-top:4px">＋ Adicionar serviço</button>
+    </div>
+
+    <!-- Linha 7: Peças dinâmicas -->
+    <div>
+      <div class="dynamic-area-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:12px;font-weight:700;color:var(--tx)">Peças</span>
+        <span style="font-size:10px;color:var(--mu)">Peças necessárias para o serviço</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:5px;padding:0 2px">
+        <span style="flex:1;font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px">Descrição da peça</span>
+        <span style="width:52px;font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;text-align:center">Qtd</span>
+        <span style="width:80px;font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;text-align:center">Vl. Unit.</span>
+        <span style="width:80px;font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;text-align:center">Vl. Total</span>
+        <span style="width:22px"></span>
+      </div>
+      <div id="mos-pecas-list"></div>
+      <button onclick="mosAddPeca()" class="add-line-btn" style="margin-top:4px">＋ Adicionar peça</button>
+    </div>
+
+    <!-- Linha 8: Total + Alerta aprovação -->
+    <div style="display:flex;align-items:center;justify-content:space-between;background:var(--bg);border:1px solid var(--bd2);border-radius:var(--rs);padding:10px 14px">
+      <div style="font-size:11px;color:var(--mu)">ℹ️ &lt; R$ 300 → aprovação automática · R$ 300–R$1.000 → aprovação técnica · &gt; R$ 1.000 → Técnica + Financeira</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:11px;color:var(--mu)">Total:</span>
+        <input type="number" id="mos-custo" value="0" readonly style="width:110px;font-family:var(--m);font-weight:700;background:var(--wh);border:1px solid var(--bd);border-radius:var(--rs);padding:5px 8px;text-align:right">
+      </div>
+    </div>
+
+    <!-- Linha 9: Fotos -->
+    <div style="border-top:1px solid var(--bd2);padding-top:12px">
+      <div style="font-size:12px;font-weight:700;color:var(--tx);margin-bottom:8px">📷 Fotos dos itens danificados <span style="font-size:10px;font-weight:400;color:var(--mu)">(opcional)</span></div>
+      <div id="mos-fotos-preview" style="display:flex;gap:8px;flex-wrap:wrap;min-height:48px;align-items:center;margin-bottom:8px"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--rs);font-size:11.5px;font-weight:600;color:var(--tx);cursor:pointer">
+          📁 Carregar foto
+          <input type="file" accept="image/*" multiple style="display:none" onchange="mosAdicionarFotos(this.files)">
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--rs);font-size:11.5px;font-weight:600;color:var(--tx);cursor:pointer">
+          📷 Tirar foto
+          <input type="file" accept="image/*" capture="environment" style="display:none" onchange="mosAdicionarFotos(this.files)">
+        </label>
+        <span id="mos-fotos-count" style="font-size:11px;color:var(--mu)">Nenhuma foto adicionada</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer fixo -->
+  <div style="display:flex;gap:8px;justify-content:flex-end;padding:14px 18px;border-top:1px solid var(--bd2);position:sticky;bottom:0;background:var(--wh);border-radius:0 0 var(--r) var(--r)">
+    <button onclick="fecharModalOS()" class="btn">Cancelar</button>
+    <button onclick="salvarOSModal()" class="btn btn-ac" id="mos-btn-salvar">📤 Criar OS e enviar</button>
+  </div>
+</div>
       <div class="view" id="view-checklist-wizard">
         <div class="view-body">
 
@@ -1457,7 +1665,304 @@ function closePanel() {
   document.getElementById('side-panel').classList.remove('on');
 }
 
-// ══ PANEL LATERAL CHECKLIST (TASK 8) ══
+// ══════════════════════════════════════════════════════
+// MODAL OS — Funções completas
+// ══════════════════════════════════════════════════════
+let _mosFotos = [];
+let _mosNumOS  = null;
+
+function abrirModalOS(chkId) {
+  const chk = chkId ? CHK_DB[chkId] : null;
+  if (!chk) { toast('Dados do checklist não encontrados.', 'am'); return; }
+
+  window._osOrigemChecklistId = chkId;
+  _mosFotos = [];
+
+  // Mostra modal
+  const overlay = document.getElementById('os-modal-overlay');
+  const modal   = document.getElementById('os-modal');
+  overlay.style.display = 'block';
+  modal.style.display   = 'flex';
+  document.body.style.overflow = 'hidden';
+
+  // Subtítulo
+  const sub = document.getElementById('os-modal-subtitle');
+  if (sub) sub.textContent = 'Checklist ' + (chk.placa||'') + ' · ' + (chk.horario||chk.data||'') + ' · ' + (chk.motorista||'');
+
+  // Número OS (carrega assíncrono)
+  const numEl = document.getElementById('os-modal-num');
+  if (numEl) numEl.textContent = 'Gerando...';
+  gerarNumOS().then(num => {
+    _mosNumOS = num;
+    if (numEl) numEl.textContent = 'OS-' + String(num).padStart(4,'0');
+  }).catch(() => { _mosNumOS = null; if (numEl) numEl.textContent = 'OS-????'; });
+
+  // Data de hoje
+  const hoje = new Date().toISOString().split('T')[0];
+  const dataEl = document.getElementById('mos-data');
+  if (dataEl) dataEl.value = hoje;
+
+  // Prazo: +3 dias
+  const prazoEl = document.getElementById('mos-prazo');
+  if (prazoEl) { const p=new Date(); p.setDate(p.getDate()+3); prazoEl.value=p.toISOString().split('T')[0]; }
+
+  // Placa (readonly — vem do checklist)
+  const placaEl = document.getElementById('mos-placa');
+  if (placaEl) placaEl.value = chk.placa || '';
+
+  // Tipo equipamento via cache
+  const v = MNT_CACHE.veiculos.find(x => mntUpper(x.placa) === mntUpper(chk.placa||''));
+  const tipoEquipEl = document.getElementById('mos-tipo-equip');
+  if (tipoEquipEl && v && v.tipo) tipoEquipEl.value = v.tipo;
+
+  // KM
+  const kmEl = document.getElementById('mos-km');
+  if (kmEl) kmEl.value = v ? (v.km || '') : '';
+
+  // Unidade / filial
+  const unidEl = document.getElementById('mos-unidade');
+  if (unidEl) {
+    unidEl.innerHTML = '<option value="">Selecione...</option>';
+    MNT_CACHE.filiais.forEach(f => {
+      const o = document.createElement('option');
+      o.value = f.id; o.textContent = f.nome || f.sigla || f.id;
+      if (mntUpper(f.nome||f.sigla||'') === mntUpper(chk.filial||v?.filial||'')) o.selected = true;
+      unidEl.appendChild(o);
+    });
+  }
+
+  // Motorista
+  const motEl = document.getElementById('mos-motorista');
+  if (motEl) {
+    motEl.innerHTML = '<option value="">Selecione...</option>';
+    MNT_CACHE.motoristas.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.nome; o.textContent = m.nome;
+      if (mntUpper(m.nome) === mntUpper(chk.motorista||'')) o.selected = true;
+      motEl.appendChild(o);
+    });
+  }
+
+  // Tipo OS: Corretiva (default)
+  const radCorr = document.getElementById('mos-corretiva');
+  if (radCorr) radCorr.checked = true;
+
+  // Problema — monta dos itens reprovados
+  const itens = chk.reprovados_itens || [];
+  const linhas = itens.map(i => {
+    if (typeof i === 'string') return '• ' + i;
+    const g   = i.grupo ? '[' + i.grupo + '] ' : '';
+    const obs = i.obs   ? ' — ' + i.obs : '';
+    return '• ' + g + (i.item||'') + obs;
+  });
+  const probEl = document.getElementById('mos-problema');
+  if (probEl) probEl.value = linhas.join('\n');
+
+  // Serviços — uma linha por item reprovado
+  const servList = document.getElementById('mos-servicos-list');
+  if (servList) {
+    servList.innerHTML = '';
+    itens.forEach(i => {
+      const desc = typeof i==='string' ? i : (i.item||'');
+      mosAddServico(desc);
+    });
+    if (!itens.length) mosAddServico('');
+  }
+
+  // Peças — uma linha em branco
+  const pecaList = document.getElementById('mos-pecas-list');
+  if (pecaList) { pecaList.innerHTML = ''; mosAddPeca(''); }
+
+  // Fotos preview limpo
+  const prev = document.getElementById('mos-fotos-preview');
+  if (prev) prev.innerHTML = '';
+  const cnt = document.getElementById('mos-fotos-count');
+  if (cnt) cnt.textContent = 'Nenhuma foto adicionada';
+
+  // Total zerado
+  mosCalcTotal();
+}
+
+function fecharModalOS() {
+  document.getElementById('os-modal-overlay').style.display = 'none';
+  document.getElementById('os-modal').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+function mosAddServico(desc='') {
+  const list = document.getElementById('mos-servicos-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'dynamic-row';
+  row.innerHTML = `
+    <input type="text" class="servico-desc" placeholder="Ex: Troca de correia dentada" value="${escapeHtml(desc)}" style="flex:1">
+    <input type="number" value="1" min="1" class="qty-input" title="Quantidade" oninput="mosCalcRow(this);mosCalcTotal()">
+    <input type="number" value="0" min="0" step="0.01" class="qty-input vl-unit" style="width:80px" title="Valor Unitário" oninput="mosCalcRow(this);mosCalcTotal()">
+    <input type="number" value="0" class="qty-input vl-total" style="width:80px;background:var(--bg)" title="Valor Total" readonly>
+    <button class="remove-btn" onclick="this.closest('.dynamic-row').remove();mosCalcTotal()" title="Remover">×</button>`;
+  list.appendChild(row);
+}
+
+function mosAddPeca(desc='') {
+  const list = document.getElementById('mos-pecas-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'dynamic-row';
+  row.innerHTML = `
+    <input type="text" class="peca-desc" placeholder="Ex: Correia dentada Gates K060605" value="${escapeHtml(desc)}" style="flex:1">
+    <input type="number" value="1" min="1" class="qty-input" title="Quantidade" oninput="mosCalcRow(this);mosCalcTotal()">
+    <input type="number" value="0" min="0" step="0.01" class="qty-input vl-unit" style="width:80px" title="Valor Unitário" oninput="mosCalcRow(this);mosCalcTotal()">
+    <input type="number" value="0" class="qty-input vl-total" style="width:80px;background:var(--bg)" title="Valor Total" readonly>
+    <button class="remove-btn" onclick="this.closest('.dynamic-row').remove();mosCalcTotal()" title="Remover">×</button>`;
+  list.appendChild(row);
+}
+
+function mosCalcRow(inp) {
+  const row = inp.closest('.dynamic-row');
+  if (!row) return;
+  const qty   = parseFloat(row.querySelector('.qty-input:not(.vl-unit):not(.vl-total)')?.value) || 0;
+  const unit  = parseFloat(row.querySelector('.vl-unit')?.value) || 0;
+  const total = row.querySelector('.vl-total');
+  if (total) total.value = (qty * unit).toFixed(2);
+}
+
+function mosCalcTotal() {
+  let total = 0;
+  document.querySelectorAll('#mos-servicos-list .vl-total, #mos-pecas-list .vl-total').forEach(el => {
+    total += parseFloat(el.value) || 0;
+  });
+  const el = document.getElementById('mos-custo');
+  if (el) el.value = total.toFixed(2);
+}
+
+function mosAdicionarFotos(files) {
+  if (!files || !files.length) return;
+  const prev = document.getElementById('mos-fotos-preview');
+  const cnt  = document.getElementById('mos-fotos-count');
+  Array.from(files).forEach(f => {
+    _mosFotos.push(f);
+    if (prev) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = document.createElement('img');
+        img.src = e.target.result;
+        img.style.cssText = 'height:56px;width:56px;object-fit:cover;border-radius:6px;border:1px solid var(--bd2)';
+        prev.appendChild(img);
+      };
+      reader.readAsDataURL(f);
+    }
+  });
+  if (cnt) cnt.textContent = _mosFotos.length + ' foto(s) adicionada(s)';
+}
+
+async function salvarOSModal() {
+  const btn = document.getElementById('mos-btn-salvar');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
+
+  try {
+    const placa      = document.getElementById('mos-placa')?.value?.trim() || '';
+    const unidade    = document.getElementById('mos-unidade')?.value || '';
+    const motorista  = document.getElementById('mos-motorista')?.value || '';
+    const tipoEquip  = document.getElementById('mos-tipo-equip')?.value || '';
+    const tipoOS     = document.querySelector('input[name="mos-t2"]:checked')?.value || 'Corretiva';
+    const local      = document.querySelector('input[name="mos-l2"]:checked')?.value || 'Interna';
+    const problema   = document.getElementById('mos-problema')?.value?.trim() || '';
+    const motivo     = document.getElementById('mos-motivo')?.value || '';
+    const prestador  = document.getElementById('mos-prestador')?.value?.trim() || '';
+    const km         = document.getElementById('mos-km')?.value || '';
+    const prazo      = document.getElementById('mos-prazo')?.value || '';
+    const data       = document.getElementById('mos-data')?.value || '';
+    const prioridade = document.getElementById('mos-prioridade')?.value || 'Normal';
+    const total      = parseFloat(document.getElementById('mos-custo')?.value) || 0;
+
+    if (!placa) { toast('Placa é obrigatória.','am'); if(btn){btn.disabled=false;btn.textContent='📤 Criar OS e enviar';} return; }
+
+    // Serviços
+    const servicos = Array.from(document.querySelectorAll('#mos-servicos-list .dynamic-row')).map(row => ({
+      descricao: row.querySelector('.servico-desc')?.value?.trim() || '',
+      quantidade: parseFloat(row.querySelector('.qty-input:not(.vl-unit):not(.vl-total)')?.value) || 1,
+      vlUnit:  parseFloat(row.querySelector('.vl-unit')?.value) || 0,
+      vlTotal: parseFloat(row.querySelector('.vl-total')?.value) || 0,
+    })).filter(s => s.descricao);
+
+    // Peças
+    const pecas = Array.from(document.querySelectorAll('#mos-pecas-list .dynamic-row')).map(row => ({
+      descricao: row.querySelector('.peca-desc')?.value?.trim() || '',
+      quantidade: parseFloat(row.querySelector('.qty-input:not(.vl-unit):not(.vl-total)')?.value) || 1,
+      vlUnit:  parseFloat(row.querySelector('.vl-unit')?.value) || 0,
+      vlTotal: parseFloat(row.querySelector('.vl-total')?.value) || 0,
+    })).filter(p => p.descricao);
+
+    // Número OS
+    const num = _mosNumOS || (await gerarNumOS());
+    const osId = 'OS-' + String(num).padStart(4,'0');
+    const agora = new Date();
+
+    const v = MNT_CACHE.veiculos.find(x => mntUpper(x.placa) === mntUpper(placa));
+
+    const payload = {
+      id: osId, num,
+      veiculo:         placa,
+      frota:           v ? (v.frota || placa) : placa,
+      tipoEquipamento: tipoEquip || v?.tipo || '',
+      motorista,
+      unidade,
+      tipo:            tipoOS,
+      local,
+      prioridade,
+      problema,
+      motivo,
+      prestador,
+      km,
+      prazo,
+      dataAbertura:    data || agora.toLocaleDateString('pt-BR'),
+      servicos,
+      pecas,
+      valorTotal:      total,
+      status:          'Aberta',
+      origem:          'checklist',
+      checklist_id:    window._osOrigemChecklistId || null,
+      criadoEm:        agora,
+      atualizadoEm:    agora,
+      criadoPor:       ATLAS_CURRENT_USER.email || '—',
+    };
+
+    await atlasFsSetDoc('ordens_servico', osId, payload, { merge: true });
+    registrarNumOS(num);
+
+    // Linka ao checklist de origem
+    const chkId = window._osOrigemChecklistId;
+    if (chkId) {
+      await atlasFsSetDoc('checklists_diarios', chkId, {
+        osGerada: osId, os_gerada: osId,
+        pendente_revisao: false, revisao_status: 'os_aberta',
+        revisado_por: ATLAS_CURRENT_USER.email || '—', revisado_em: agora
+      }, { merge: true });
+      if (CHK_DB[chkId]) { CHK_DB[chkId].osGerada = osId; CHK_DB[chkId].pendente_revisao = false; }
+      window._osOrigemChecklistId = null;
+    }
+
+    fecharModalOS();
+    toast(osId + ' criada com sucesso!', 'gn');
+    await loadChecklists();
+
+  } catch(err) {
+    console.error('[salvarOSModal]', err);
+    toast('Erro ao salvar OS: ' + err.message, 'rd');
+    if (btn) { btn.disabled = false; btn.textContent = '📤 Criar OS e enviar'; }
+  }
+}
+
+// ══ MODAL OS: abrirOSdoChecklist redireciona para o modal ══
+function abrirOSdoChecklist() {
+  const chkId = _chkPanelAtivo;
+  const chk   = chkId ? CHK_DB[chkId] : null;
+  if (!chk) { toast('Dados do checklist não encontrados.', 'am'); return; }
+  closeChecklistPanel();
+  abrirModalOS(chkId);
+}
+
+
 let _chkPanelAtivo = null;
 function openChecklistPanel(chkId) {
   const chk = CHK_DB[chkId];
@@ -1530,59 +2035,7 @@ function closeChecklistPanel() {
   _chkPanelAtivo = null;
 }
 
-function abrirOSdoChecklist() {
-  const chkId = _chkPanelAtivo;
-  const chk   = chkId ? CHK_DB[chkId] : null;
-  if (!chk) { toast('Dados do checklist não encontrados.', 'am'); return; }
-  const viewOS = document.getElementById('view-nova-os');
-  if (!viewOS) { toast('Tela de abertura de OS não disponível neste perfil. Acesse o módulo de Manutenção.', 'am'); return; }
-  closeChecklistPanel();
-  goTo('nova-os', null);
-
-  // Aguarda a view renderizar completamente antes de preencher
-  setTimeout(() => {
-    // ── Placa → dispara onPlacaChange que preenche tipo, km e motorista automaticamente
-    const placaInp = document.getElementById('mnt_nova_placa_input');
-    if (placaInp) {
-      placaInp.value = chk.placa || '';
-      selecionarPlaca(chk.placa || '');
-    }
-
-    // ── Tipo de OS: radio Corretiva (name="t2")
-    const radios = document.querySelectorAll('input[name="t2"]');
-    radios.forEach(r => {
-      r.checked = r.parentElement?.textContent?.trim().toLowerCase().includes('corretiva');
-    });
-
-    // ── Problema: monta descrição dos itens reprovados
-    const itens = chk.reprovados_itens || [];
-    const linhasReprov = itens.map(i => {
-      if (typeof i === 'string') return '• ' + i;
-      const grupo = i.grupo ? '[' + i.grupo + '] ' : '';
-      const obs   = i.obs   ? ' — ' + i.obs : '';
-      return '• ' + grupo + (i.item || '') + obs;
-    });
-    const problema = 'Origem: Checklist ' + (chk.horario||'') + ' · ' + (chk.placa||'') + '\n' + linhasReprov.join('\n');
-    const problemEl = document.querySelector('#view-nova-os textarea');
-    if (problemEl) problemEl.value = problema;
-
-    // ── Motorista: preenche se não foi preenchido pelo onPlacaChange
-    const motEl = document.getElementById('mnt_nova_motorista');
-    if (motEl && !motEl.value && chk.motorista) {
-      // Tenta encontrar pelo nome no select
-      Array.from(motEl.options).forEach(opt => {
-        if (opt.text.toUpperCase().includes((chk.motorista||'').toUpperCase().split(' ')[0])) {
-          motEl.value = opt.value;
-        }
-      });
-    }
-
-    // Guarda o chkId para linkar após salvar a OS
-    window._osOrigemChecklistId = chkId;
-
-    toast('OS pré-preenchida com ' + itens.length + ' item(ns) reprovado(s). Complete e salve.', 'ac');
-  }, 250);
-}
+// abrirOSdoChecklist movida para modal — ver função acima
 
 async function confirmarVisualizacaoChecklist() {
   const chkId = _chkPanelAtivo;
