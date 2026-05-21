@@ -1794,7 +1794,7 @@ function gerarSzbMock() {
     for (let i = 0; i < v.id.length; i++) seed = (seed * 31 + v.id.charCodeAt(i)) & 0xffff;
     const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
     let dias;
-    const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+    const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
     if (isIndisp) dias = Math.floor(rnd() * 45 + 15);
     else {
       const r = rnd();
@@ -1899,7 +1899,7 @@ function getCavalosPorColuna(colId) {
         && ["SC","SP","PR"].includes(colId) && colId !== STATE.filterAlocUnit) return false;
     const szb = szbDe(v.id);
     const dias = szb ? szb.dias_sem_viagem : null;
-    const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+    const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
     const alert = isIndisp ? "gray" : classificarAlerta(dias);
     if (STATE.search.alocacao) {
       const q = STATE.search.alocacao.toLowerCase();
@@ -1928,7 +1928,7 @@ function renderCard(cavalo) {
   // dias_sem_viagem já vem calculado em processarSzbRows (data atual - última Dt. Emissao do CTRC)
   const dias = szb ? szb.dias_sem_viagem : null;
   const opsDias = szb ? (szb.dias_operados_30d != null ? szb.dias_operados_30d : Math.min(30, szb.viagens_30d || 0)) : null;
-  const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(cavalo.disponibilidade);
+  const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(cavalo.disponibilidade);
   const alert = isIndisp ? "gray" : classificarAlerta(dias);
   const iconClass = { green: "", yellow: "alert-yellow", orange: "alert-orange", red: "alert-red", gray: "unavail" }[alert];
 
@@ -2064,7 +2064,7 @@ function renderBoard() {
     if (v.categoria !== "cavalo") return;
     const szb = szbDe(v.id);
     const dias = szb ? szb.dias_sem_viagem : null;
-    const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+    const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
     stats[isIndisp ? "gray" : classificarAlerta(dias)]++;
   });
   document.getElementById("stat-green").textContent = stats.green;
@@ -2091,7 +2091,7 @@ function renderBoard() {
     cavalos.forEach(v => {
       const szb = szbDe(v.id);
       const dias = szb ? szb.dias_sem_viagem : null;
-      const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+      const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
       colStats[isIndisp ? "gray" : classificarAlerta(dias)]++;
     });
     const colEl = document.createElement("div");
@@ -2252,7 +2252,8 @@ async function moveCavalo(id, targetCol) {
   } else if (targetCol === "RESERVA") {
     newDisp = "reserva";
   } else if (targetCol === "DISPONIVEL") {
-    newDisp = "disponivel";
+    // Coluna "Em Manutenção" — grava status manutencao
+    newDisp = "manutencao";
   } else if (targetCol === "INDISPONIVEL") {
     newDisp = "indisponivel";
   } else {
@@ -3047,7 +3048,7 @@ function calcResumo() {
   STATE.veiculos.filter(v => v.categoria === "cavalo").forEach(v => {
     const szb = szbDe(v.id);
     const dias = szb ? szb.dias_sem_viagem : null;
-    const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+    const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
     alertas[isIndisp ? "gray" : classificarAlerta(dias)]++;
   });
   return { byUnit: u, total, alertas };
@@ -3192,7 +3193,7 @@ function renderDashboard() {
           const cavalosFilial = STATE.veiculos.filter(v => v.categoria === 'cavalo' && v.unidade_slug === uk);
           const parados = cavalosFilial.map(v => {
             const szb = szbDe(v.id);
-            const isIndisp = ["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade);
+            const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
             return { v, dias: szb ? szb.dias_sem_viagem : null, isIndisp };
           }).filter(x => x.isIndisp || (x.dias != null && x.dias >= STATE.thresholds.yellow));
           const totalDias = parados.reduce((s, x) => s + (x.dias || 0), 0);
