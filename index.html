@@ -600,7 +600,7 @@ const VIEWS = {
   'ficha':         {label:'Ficha Operacional',   chip:'MOBILE',     cls:'am', src:'ficha.html',                nav:null,       perfil:null},
   'compras':       {label:'Compras',             chip:'COMPRAS',    cls:'am', src:'compras.html',              nav:null,       perfil:['admin','gestor','comprador']},
   'manutencao':    {label:'Manutenção',         chip:'MANUTENÇÃO', cls:'am', src:'manutencao.html',           nav:null,       perfil:null},
-  'checklist':     {label:'Checklist',          chip:'CHECKLIST',  cls:'am', src:'manutencao.html#checklist', nav:'checklist', perfil:null},
+  'checklist':     {label:'Checklist',          chip:'CHECKLIST',  cls:'am', src:'checklist.html',              nav:'checklist', perfil:null},
   'painel':        {label:'Painel Operacional',  chip:'PAINEL',     cls:'',   src:'painel.html',               nav:null,       perfil:['admin','gestor','motorista']},
   'cpk':           {label:'CPK',                 chip:'NOVO',       cls:'gn', src:null,                        nav:null,       perfil:null},
   'config':        {label:'Cadastros',            chip:'ADMIN',      cls:'',   src:'cadastros.html',            nav:null,       perfil:['admin']},
@@ -1627,7 +1627,7 @@ function applyDynamicPermissions() {
   const telas = ATLAS_PERMS.telas || {};
   const telaMap = {
     'pd_diario':'pd-diario', 'financeiro':'financeiro', 'ficha':'ficha',
-    'compras':'compras', 'manutencao':'manutencao', 'painel':'painel',
+    'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
     'cpk':'cpk', 'cadastros':'config', 'download_base':'download-base',
     'permissoes':'config'
   };
@@ -1670,11 +1670,71 @@ function sendTabPermsToFrame(frameId) {
 const FRAME_MAP = {
   'manutencao':'fr-manutencao','financeiro':'fr-financeiro',
   'pd-diario':'fr-pd-diario','ficha':'fr-ficha','compras':'fr-compras',
-  'frota':'fr-frota','painel':'fr-painel','config':'fr-config'
+  'frota':'fr-frota','painel':'fr-painel','checklist':'fr-checklist','config':'fr-config'
 };
 Object.values(FRAME_MAP).forEach(fid => {
   const fr = document.getElementById(fid);
   if (fr) fr.addEventListener('load', () => setTimeout(() => sendTabPermsToFrame(fid), 200));
+});
+
+
+/* ── PONTE FIRESTORE PARA IFRAMES DO ATLAS ── */
+function atlasCleanForFrame(v) {
+  if (v == null) return v;
+  if (v instanceof Date) return v.toISOString();
+  if (v && typeof v.toDate === 'function') return v.toDate().toISOString();
+  if (Array.isArray(v)) return v.map(atlasCleanForFrame);
+  if (typeof v === 'object') {
+    const o = {};
+    Object.keys(v).forEach(k => { o[k] = atlasCleanForFrame(v[k]); });
+    return o;
+  }
+  return v;
+}
+
+window.addEventListener('message', async function(ev) {
+  const msg = ev.data || {};
+  if (msg.type !== 'ATLAS_FIRESTORE_REQUEST') return;
+  const requestId = msg.requestId;
+  const reply = (ok, result, error) => {
+    try { ev.source && ev.source.postMessage({ type:'ATLAS_FIRESTORE_RESPONSE', requestId, ok, result, error }, '*'); } catch(_) {}
+  };
+  const allowed = new Set(['ordens_servico','checklists_diarios','parametros_sistema']);
+  try {
+    if (!curUser) throw new Error('Usuário não autenticado no portal.');
+    if (!allowed.has(msg.collection)) throw new Error('Coleção não permitida pela ponte.');
+    if (msg.action === 'getCollection') {
+      let ref = db.collection(msg.collection);
+      if (msg.orderBy) ref = ref.orderBy(msg.orderBy, msg.orderDir || 'asc');
+      if (msg.limit) ref = ref.limit(Number(msg.limit));
+      const snap = await ref.get();
+      reply(true, { docs: snap.docs.map(d => ({ id:d.id, data: atlasCleanForFrame(d.data()) })) });
+      return;
+    }
+    if (msg.action === 'getDoc') {
+      const snap = await db.collection(msg.collection).doc(msg.docId).get();
+      reply(true, { exists: snap.exists, id: snap.id, data: snap.exists ? atlasCleanForFrame(snap.data()) : null });
+      return;
+    }
+    if (msg.action === 'setDoc') {
+      await db.collection(msg.collection).doc(msg.docId).set(msg.data || {}, { merge: !!msg.merge });
+      reply(true, { id: msg.docId });
+      return;
+    }
+    if (msg.action === 'addDoc') {
+      const ref = await db.collection(msg.collection).add(msg.data || {});
+      reply(true, { id: ref.id });
+      return;
+    }
+    if (msg.action === 'deleteDoc') {
+      await db.collection(msg.collection).doc(msg.docId).delete();
+      reply(true, { id: msg.docId });
+      return;
+    }
+    throw new Error('Ação não suportada pela ponte.');
+  } catch(e) {
+    reply(false, null, e.message || String(e));
+  }
 });
 
 /* ── MENSAGENS ENTRE MÓDULOS ── */
