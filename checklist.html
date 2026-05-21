@@ -541,23 +541,46 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
       <div class="view" id="view-checklist">
         <div class="view-body">
           <div class="page-hdr">
-            <div><h1>Checklist Diário</h1><p>19/05/2026</p></div>
+            <div><h1 id="chk-title-h1">Checklist Semanal</h1><p id="chk-title-sub">Inspeções da semana</p></div>
             <div style="display:flex;gap:6px">
-              <button class="btn btn-sm btn-ac" onclick="goTo('checklist-wizard',null)">+ Iniciar inspeção</button>
+              <button class="btn btn-sm btn-ac" id="btn-iniciar-inspecao" onclick="goTo('checklist-wizard',null)">+ Iniciar inspeção</button>
             </div>
           </div>
-          <div class="g3">
-            <div class="kpi"><div class="kpi-lbl">Realizados hoje</div><div class="kpi-val gn" id="chk-kpi-hoje">—</div></div>
-            <div class="kpi"><div class="kpi-lbl">Com reprovação</div><div class="kpi-val rd" id="chk-kpi-reprov">—</div></div>
-            <div class="kpi"><div class="kpi-lbl">Pendentes</div><div class="kpi-val am" id="chk-kpi-pend">—</div></div>
+          <!-- Abas: Checklist Semanal | Controle Semanal -->
+          <div class="tab-bar" style="margin-bottom:14px">
+            <div class="tab on" id="chk-tab-semanal" onclick="chkSwitchTab('semanal',this)">Checklist Semanal</div>
+            <div class="tab" id="chk-tab-controle" onclick="chkSwitchTab('controle',this)">Controle Semanal</div>
           </div>
-          <div class="card" style="padding:0;overflow:hidden">
-            <table>
-              <thead><tr><th>Frota</th><th>Tipo</th><th>Motorista</th><th>Horário</th><th>Aprovados</th><th>Reprovados</th><th>Fotos</th><th>OS gerada</th><th></th></tr></thead>
-              <tbody id="checklist-tbody">
-                <!-- Dados carregados dinamicamente via loadChecklists() -->
-              </tbody>
-            </table>
+
+          <!-- ABA: Checklist Semanal -->
+          <div id="chk-panel-semanal">
+            <div class="g3">
+              <div class="kpi"><div class="kpi-lbl">Realizados hoje</div><div class="kpi-val gn" id="chk-kpi-hoje">—</div></div>
+              <div class="kpi"><div class="kpi-lbl">Com reprovação</div><div class="kpi-val rd" id="chk-kpi-reprov">—</div></div>
+              <div class="kpi"><div class="kpi-lbl">Pendentes</div><div class="kpi-val am" id="chk-kpi-pend">—</div></div>
+            </div>
+            <div class="card" style="padding:0;overflow:hidden">
+              <table>
+                <thead><tr><th>Frota</th><th>Filial</th><th>Tipo</th><th>Motorista</th><th>Horário</th><th>Aprovados</th><th>Reprovados</th><th>Fotos</th><th>OS gerada</th><th></th></tr></thead>
+                <tbody id="checklist-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ABA: Controle Semanal -->
+          <div id="chk-panel-controle" style="display:none">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+              <select id="ctrl-filtro-filial" onchange="loadControle()" style="font-size:11.5px;padding:5px 8px;border:1px solid var(--bd);border-radius:var(--rs)">
+                <option value="">Todas as filiais</option>
+              </select>
+              <span style="font-size:11px;color:var(--mu)" id="ctrl-semana-label">Semana encerrada no último sábado</span>
+            </div>
+            <div class="card" style="padding:0;overflow:hidden">
+              <table>
+                <thead><tr><th>Frota/Placa</th><th>Filial</th><th>Tipo</th><th>Motorista</th><th>Status</th></tr></thead>
+                <tbody id="controle-tbody"><tr><td colspan="5" style="text-align:center;color:var(--mu);padding:14px;font-size:11px">Selecione a aba para carregar.</td></tr></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
@@ -612,6 +635,10 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
             <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px">
               <span id="wiz-prog" style="font-size:11px;color:rgba(255,255,255,.75);font-family:var(--m)">Etapa 1/4</span>
               <div style="display:flex;gap:8px">
+                <button class="btn btn-sm" onclick="goTo('checklist',null)"
+                  style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.8);border-color:rgba(255,255,255,.2);font-weight:500;padding:7px 11px;font-size:11px">
+                  ✕ Sair
+                </button>
                 <button class="btn btn-sm" id="wiz-back" onclick="wizBack()"
                   style="background:rgba(255,255,255,.15);color:#fff;border-color:rgba(255,255,255,.3);font-weight:600;padding:7px 14px;font-size:12px">
                   ← Voltar
@@ -1356,7 +1383,7 @@ const OS_DB = {};
 const CHK_DB = {};
 
 // ══ NAVEGAÇÃO ══
-const TITLES = {dashboard:'Dashboard',checklist:'Checklist Diário','checklist-wizard':'Inspeção Diária',kanban:'Painel Kanban',gestao:'Painel Geral',preventiva:'Plano Preventivo',aprovacao:'Aprovações',alertas:'Central de Alertas',paradas:'Análise de Paradas',historico:'Histórico','nova-os':'Abrir O.S',params:'Parâmetros'};
+const TITLES = {dashboard:'Dashboard',checklist:'Checklist Inspeção Semanal','checklist-wizard':'Inspeção Semanal',kanban:'Painel Kanban',gestao:'Painel Geral',preventiva:'Plano Preventivo',aprovacao:'Aprovações',alertas:'Central de Alertas',paradas:'Análise de Paradas',historico:'Histórico','nova-os':'Abrir O.S',params:'Parâmetros'};
 let _mntLastView = 'dashboard';
 
 function closeFloatingPanels() {
@@ -1507,6 +1534,8 @@ function abrirOSdoChecklist() {
   const chkId = _chkPanelAtivo;
   const chk   = chkId ? CHK_DB[chkId] : null;
   if (!chk) { toast('Dados do checklist não encontrados.', 'am'); return; }
+  const viewOS = document.getElementById('view-nova-os');
+  if (!viewOS) { toast('Tela de abertura de OS não disponível neste perfil. Acesse o módulo de Manutenção.', 'am'); return; }
   closeChecklistPanel();
   goTo('nova-os', null);
   setTimeout(() => {
@@ -2167,6 +2196,7 @@ window.addEventListener('message', function(ev) {
   }
   if (ev.data.type === 'ATLAS_TAB_PERMS') {
     applyTabPerms(ev.data.perfil, ev.data.abas || {});
+    if (ev.data.abas && ev.data.abas.checklist) aplicarPermsChecklist(ev.data.abas.checklist);
   }
   if (ev.data.type === 'ATLAS_NAV' && ev.data.view) {
     goTo(ev.data.view, null);
@@ -2729,6 +2759,126 @@ function resetFormularioOS() {
   calcValorGeral();
 }
 
+
+
+// ══ PERMISSÕES DE ABAS DO CHECKLIST ══
+function aplicarPermsChecklist(abas) {
+  // abas = objeto {checklist_semanal: bool, controle_semanal: bool}
+  if (!abas) return; // sem restrição = mostra tudo
+  const tabSemanal  = document.getElementById('chk-tab-semanal');
+  const tabControle = document.getElementById('chk-tab-controle');
+  const podeSemanal  = abas.checklist_semanal !== false;
+  const podeControle = abas.controle_semanal  !== false;
+  if (tabSemanal)  tabSemanal.style.display  = podeSemanal  ? '' : 'none';
+  if (tabControle) tabControle.style.display = podeControle ? '' : 'none';
+  // Se não pode ver a aba atual, muda para a primeira disponível
+  if (!podeSemanal && _chkAbaAtiva === 'semanal' && podeControle) {
+    chkSwitchTab('controle', tabControle);
+  }
+  if (!podeControle && _chkAbaAtiva === 'controle' && podeSemanal) {
+    chkSwitchTab('semanal', tabSemanal);
+  }
+  // Botão iniciar inspeção só para quem pode ver semanal
+  const btnIni = document.getElementById('btn-iniciar-inspecao');
+  if (btnIni) btnIni.style.display = podeSemanal ? '' : 'none';
+}
+
+// ══ ABAS DO CHECKLIST (Semanal / Controle) ══
+let _chkAbaAtiva = 'semanal';
+function chkSwitchTab(aba, el) {
+  _chkAbaAtiva = aba;
+  document.querySelectorAll('.tab-bar .tab').forEach(t => t.classList.remove('on'));
+  if (el) el.classList.add('on');
+  document.getElementById('chk-panel-semanal').style.display  = aba === 'semanal'  ? '' : 'none';
+  document.getElementById('chk-panel-controle').style.display = aba === 'controle' ? '' : 'none';
+  document.getElementById('btn-iniciar-inspecao').style.display = aba === 'semanal' ? '' : 'none';
+  if (aba === 'controle') loadControle();
+}
+
+// ══ CONTROLE SEMANAL ══
+async function loadControle() {
+  const tbody = document.getElementById('controle-tbody');
+  const filtroFilial = document.getElementById('ctrl-filtro-filial')?.value || '';
+  if (!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--mu);padding:14px;font-size:11px">Carregando...</td></tr>';
+
+  // Semana encerrada no último sábado às 23:59:59
+  const agora = new Date();
+  const diaSemana = agora.getDay(); // 0=Dom, 6=Sab
+  const diasAteSab = diaSemana === 6 ? 0 : diaSemana + 1;
+  const fimSemana = new Date(agora);
+  fimSemana.setDate(agora.getDate() - diasAteSab);
+  fimSemana.setHours(23,59,59,999);
+  const inicioSemana = new Date(fimSemana);
+  inicioSemana.setDate(fimSemana.getDate() - 6);
+  inicioSemana.setHours(0,0,0,0);
+
+  const lbl = document.getElementById('ctrl-semana-label');
+  if (lbl) lbl.textContent = 'Semana: ' + inicioSemana.toLocaleDateString('pt-BR') + ' a ' + fimSemana.toLocaleDateString('pt-BR');
+
+  try {
+    // Carrega checklists da semana
+    let rawDocs = [];
+    try { rawDocs = await atlasFsGetCollection('checklists_diarios', { orderBy:'dataAbertura', orderDir:'desc', limit:500 }); }
+    catch(_) { rawDocs = await atlasFsGetCollection('checklists_diarios', { limit:500 }); }
+
+    const docsNaSemana = rawDocs.map(d => ({id:d.id,...(d.data||{})})).filter(d => {
+      const dt = d.dataAbertura?.toDate?.() || new Date(d.dataAbertura || 0);
+      return dt >= inicioSemana && dt <= fimSemana;
+    });
+
+    const placasFeitas = new Set(docsNaSemana.map(d => mntUpper(d.placa || '')).filter(Boolean));
+
+    // Filtra veículos tipo Cavalo que não fizeram checklist
+    let veiculos = MNT_CACHE.veiculos.filter(v => (v.tipo || '').toLowerCase().includes('cavalo') || !v.tipo);
+    if (filtroFilial) veiculos = veiculos.filter(v => (v.filial||'') === filtroFilial);
+
+    const semChecklist = veiculos.filter(v => !placasFeitas.has(mntUpper(v.placa || '')));
+    const comChecklist = veiculos.filter(v =>  placasFeitas.has(mntUpper(v.placa || '')));
+
+    // Popula select de filiais
+    const selFilial = document.getElementById('ctrl-filtro-filial');
+    if (selFilial && selFilial.options.length <= 1) {
+      const filiais = [...new Set(MNT_CACHE.veiculos.map(v=>v.filial||'').filter(Boolean))].sort();
+      filiais.forEach(f => { const o=document.createElement('option'); o.value=f; o.textContent=f; selFilial.appendChild(o); });
+      if (filtroFilial) selFilial.value = filtroFilial;
+    }
+
+    if (!semChecklist.length && !comChecklist.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhum veículo cadastrado.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = [
+      ...semChecklist.map(v => {
+        const aloc = MNT_CACHE.alocacoes[v.id] || MNT_CACHE.alocacoes[v.placa] || {};
+        const mot  = aloc.motorista || v.motorista || '—';
+        return `<tr style="background:var(--rd-bg)">
+          <td class="os-n" style="color:var(--rd)">${mntUpper(v.placa||'—')}</td>
+          <td style="font-size:10.5px;color:var(--mu)">${v.filial||'—'}</td>
+          <td>${v.tipo||'—'}</td>
+          <td>${mot}</td>
+          <td><span style="background:var(--rd-bg);color:var(--rd);border:1px solid var(--rd-bd);border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:600">❌ Sem checklist</span></td>
+        </tr>`;
+      }),
+      ...comChecklist.map(v => {
+        const aloc = MNT_CACHE.alocacoes[v.id] || MNT_CACHE.alocacoes[v.placa] || {};
+        const mot  = aloc.motorista || v.motorista || '—';
+        return `<tr>
+          <td class="os-n">${mntUpper(v.placa||'—')}</td>
+          <td style="font-size:10.5px;color:var(--mu)">${v.filial||'—'}</td>
+          <td>${v.tipo||'—'}</td>
+          <td>${mot}</td>
+          <td><span style="background:var(--gn-bg);color:var(--gn);border:1px solid var(--gn-bd);border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:600">✓ Realizado</span></td>
+        </tr>`;
+      })
+    ].join('');
+
+  } catch(err) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--rd);padding:14px;font-size:11px">Erro ao carregar: ' + err.message + '</td></tr>';
+  }
+}
+
 /* ══ LOAD CHECKLISTS DO FIREBASE ══
    Busca na coleção "checklists_diarios" do Firestore.
    Fallback: mostra mensagem se vazio. */
@@ -2842,8 +2992,12 @@ async function loadChecklists() {
         ? `<span class="os-n">${osGerada}</span>`
         : `<span style="color:var(--mu)">—</span>`;
 
+      // Filial da placa do cavalo via cache de veículos
+      const vObj    = MNT_CACHE.veiculos.find(x => mntUpper(x.placa) === placa);
+      const filialV = vObj ? (vObj.filial || chk.filial || '—') : (chk.filial || '—');
       return `<tr>
         <td class="os-n">${placa}</td>
+        <td style="font-size:10.5px;color:var(--mu)">${filialV}</td>
         <td>${tipo}</td>
         <td>${motorista}</td>
         <td>${horario}</td>
@@ -2890,6 +3044,7 @@ async function openChecklistFirebase(id) {
       fotos:    chk.fotos ?? 0,
       fotosVeiculoUrls: Array.isArray(chk.fotosVeiculoMeta) ? chk.fotosVeiculoMeta.map(f=>f&&f.url).filter(Boolean) : (Array.isArray(chk.fotosUrls) ? chk.fotosUrls.filter(Boolean) : []),
       fotosReprovMeta: Array.isArray(chk.fotosReprovMeta) ? chk.fotosReprovMeta : [],
+      filial: chk.filial || (() => { const vv=MNT_CACHE.veiculos.find(x=>mntUpper(x.placa)===mntUpper(chk.placa||'')); return vv?vv.filial||'—':'—'; })(),
       osGerada: chk.osGerada || chk.os_gerada || null,
       reprovados_itens: chk.itens_reprovados || [],
       obs: chk.observacoes || '',
@@ -3262,6 +3417,7 @@ async function salvarChecklistFirebase() {
       fotosMeta:        todasFotos,
       itens:            itensChecklist,
       itens_reprovados: itensReprovados,
+      filial:           (() => { const vv=MNT_CACHE.veiculos.find(x=>mntUpper(x.placa)===mntUpper(placa)); return vv?vv.filial||'':ATLAS_CURRENT_USER.filial||''; })(),
       criadoEm:         agora,
       criadoPor:        ATLAS_CURRENT_USER.email || '—',
     };
@@ -3742,8 +3898,14 @@ function prepararFormularioInspecao() {
     // Motorista alocado: preenche e bloqueia
     if (motInput)  { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
     if (placaInput){ placaInput.value = placaAloc; placaInput.readOnly = true; placaInput.style.background = 'var(--bg)'; }
+    // Auto-confirma e inicia diretamente sem precisar clicar no botão
+    setTimeout(() => confirmarInicioInspecao(), 100);
+  } else if (!isAdmin && motorista) {
+    // Motorista sem alocação definida: preenche nome mas libera placa
+    if (motInput)  { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
+    if (placaInput){ placaInput.readOnly = false; placaInput.value = ''; placaInput.style.background = ''; }
   } else {
-    // Admin ou sem alocação: campos livres com autocomplete
+    // Admin ou LM: campos livres com autocomplete
     if (motInput)  { motInput.readOnly = false; motInput.value = motorista || ''; motInput.style.background = ''; }
     if (placaInput){ placaInput.readOnly = false; placaInput.value = placaAloc || ''; placaInput.style.background = ''; }
   }
