@@ -1452,20 +1452,63 @@ function openChecklistPanel(chkId) {
   document.getElementById('chk-reprovados').textContent = chk.reprovados;
   document.getElementById('chk-fotos').textContent = chk.fotos;
   const osEl = document.getElementById('chk-os-gerada');
-  osEl.textContent = chk.osGerada;
-  osEl.style.color = chk.osGerada !== '—' ? 'var(--ac)' : 'var(--mu)';
-  document.getElementById('chk-obs').textContent = chk.obs;
+  osEl.textContent = chk.osGerada || '—';
+  osEl.style.color = chk.osGerada ? 'var(--ac)' : 'var(--mu)';
+  document.getElementById('chk-obs').textContent = chk.obs || 'Nenhuma observação registrada.';
 
-  // Itens reprovados
+  // Fotos do veículo — 4 ângulos fixos
+  const fotosGrid = document.getElementById('chk-fotos-grid');
+  const veiculoUrls = chk.fotosVeiculoUrls || chk.fotosUrls || [];
+  const labVeic = ['Frente','Traseira','Lat. Direita','Lat. Esquerda'];
+  fotosGrid.innerHTML = labVeic.map((lb, i) => {
+    const url = veiculoUrls[i] || null;
+    return url
+      ? `<div class="sp-photo-card" style="padding:0;overflow:hidden;cursor:pointer;position:relative" onclick="window.open('${url}','_blank')">
+           <img src="${url}" alt="${lb}" style="width:100%;height:100%;object-fit:cover;border-radius:12px" onerror="this.parentElement.innerHTML='<span style=font-size:22px>📷</span><span>${lb}</span>'">
+           <span style="position:absolute;bottom:4px;left:0;right:0;text-align:center;font-size:9px;background:rgba(0,0,0,.5);color:#fff;padding:2px 0">${lb}</span>
+         </div>`
+      : `<div class="sp-photo-card"><span style="font-size:26px">📷</span><span>${lb}</span><span style="font-size:9px;color:var(--mu)">Sem foto</span></div>`;
+  }).join('');
+
+  // Itens reprovados + fotos de reprovação
   const reprovSection = document.getElementById('chk-reprov-section');
-  const reprovList = document.getElementById('chk-reprov-list');
+  const reprovList    = document.getElementById('chk-reprov-list');
+  const reprovFotosMeta = chk.fotosReprovMeta || [];
   if (chk.reprovados_itens && chk.reprovados_itens.length > 0) {
     reprovSection.style.display = 'block';
-    reprovList.innerHTML = chk.reprovados_itens.map(item =>
-      `<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 9px;background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:var(--rs);margin-bottom:5px;font-size:11.5px"><span style="color:var(--rd);flex-shrink:0">✗</span><span>${item}</span></div>`
-    ).join('');
+    reprovList.innerHTML = chk.reprovados_itens.map(item => {
+      const nome  = typeof item === 'string' ? item : (item.item || item.descricao || '');
+      const obs   = typeof item === 'object' && item.obs ? ` — <em style="color:var(--mu)">${escapeHtml(item.obs)}</em>` : '';
+      const grupo = typeof item === 'object' && item.grupo
+        ? `<span style="font-size:9.5px;color:var(--mu);font-weight:600;text-transform:uppercase;letter-spacing:.4px">${escapeHtml(item.grupo)} · </span>`
+        : '';
+      // URL da foto: pode estar em item.fotoUrl (novo) ou em fotosReprovMeta por nome de item
+      const fotoUrl = (typeof item === 'object' && item.fotoUrl)
+        || reprovFotosMeta.find(f => f && f.item === nome)?.url
+        || null;
+      const fotoHtml = fotoUrl
+        ? `<a href="${fotoUrl}" target="_blank" style="display:block;margin-top:5px">
+             <img src="${fotoUrl}" style="height:60px;border-radius:5px;object-fit:cover;border:1px solid var(--rd-bd)" alt="Foto reprovação">
+           </a>`
+        : '';
+      return `<div style="padding:7px 9px;background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:var(--rs);margin-bottom:5px;font-size:11.5px">
+        <div style="display:flex;align-items:flex-start;gap:8px">
+          <span style="color:var(--rd);flex-shrink:0;font-weight:700">✗</span>
+          <span>${grupo}${escapeHtml(nome)}${obs}</span>
+        </div>
+        ${fotoHtml}
+      </div>`;
+    }).join('');
   } else {
     reprovSection.style.display = 'none';
+  }
+
+  // Botão Abrir OS — oculta se já tem OS ou já foi revisado
+  const btnOS = document.getElementById('chk-btn-abrir-os');
+  if (btnOS) {
+    const jaRevisado = chk.revisao_status === 'revisado_sem_os' || chk.revisao_status === 'os_aberta';
+    btnOS.style.display = (chk.reprovados > 0 && !jaRevisado) ? '' : 'none';
+    if (chk.osGerada) btnOS.textContent = 'OS: ' + chk.osGerada;
   }
 
   document.getElementById('chk-overlay').classList.add('on');
@@ -2820,9 +2863,15 @@ async function openChecklistFirebase(id) {
       aprovados:  chk.aprovados ?? 0,
       reprovados: chk.reprovados ?? 0,
       fotos:    chk.fotos ?? 0,
-      osGerada: chk.osGerada || chk.os_gerada || '—',
+      fotosVeiculoUrls: Array.isArray(chk.fotosVeiculoMeta)
+        ? chk.fotosVeiculoMeta.map(f => f?.url).filter(Boolean)
+        : (Array.isArray(chk.fotosUrls) ? chk.fotosUrls.filter(Boolean) : []),
+      fotosReprovMeta: Array.isArray(chk.fotosReprovMeta) ? chk.fotosReprovMeta : [],
+      osGerada: chk.osGerada || chk.os_gerada || null,
       reprovados_itens: chk.itens_reprovados || [],
       obs: chk.observacoes || '',
+      pendente_revisao: chk.pendente_revisao || false,
+      revisao_status:   chk.revisao_status || null,
     };
     openChecklistPanel(id);
   } catch(err) {
@@ -3144,9 +3193,19 @@ async function salvarChecklistFirebase() {
 
     const aprovados  = itensChecklist.filter(i => i.status === 'aprovado').length;
     const reprovados = itensReprovados.length;
-    // Captura URLs já disponíveis — não bloqueia esperando uploads em andamento
-    const fotosVeiculo = Object.values(window._inspFotos || {});
-    const fotosUrlsNow = fotosVeiculo.map(f => f.url).filter(Boolean);
+
+    // Fotos do veículo (4 ângulos fixos)
+    const FOTO_IDS = ['foto-frente-lbl','foto-traseira-lbl','foto-latdir-lbl','foto-latesq-lbl'];
+    const fotosVeiculo = FOTO_IDS.map(id => window._inspFotos?.[id]).filter(Boolean);
+
+    // Fotos de reprovação — vinculadas a cada item via fotoZoneId
+    const fotosReprovacao = itensReprovados
+      .filter(i => i.fotoZoneId && window._inspFotos?.[i.fotoZoneId])
+      .map(i => ({ ...window._inspFotos[i.fotoZoneId], item: i.item, grupo: i.grupo, tipo: 'reprovacao' }));
+
+    // Consolida todas as fotos; URLs disponíveis agora (uploads em background)
+    const todasFotos   = [...fotosVeiculo, ...fotosReprovacao];
+    const fotosUrlsNow = todasFotos.map(f => f.url).filter(Boolean);
 
     const v          = MNT_CACHE.veiculos.find(x => x.placa === placa);
     const compDocId  = window._inspCompressor || null;
@@ -3170,9 +3229,11 @@ async function salvarChecklistFirebase() {
       status:           'realizado',
       aprovados,
       reprovados,
-      fotos:            fotosVeiculo.length,
+      fotos:            todasFotos.length,
       fotosUrls:        fotosUrlsNow,
-      fotosMeta:        fotosVeiculo,
+      fotosVeiculoMeta: fotosVeiculo,
+      fotosReprovMeta:  fotosReprovacao,
+      fotosMeta:        todasFotos,
       itens:            itensChecklist,
       itens_reprovados: itensReprovados,
       criadoEm:         agora,
@@ -3182,25 +3243,30 @@ async function salvarChecklistFirebase() {
     const ref = await atlasFsAddDoc('checklists_diarios', payload);
     console.log('[Inspeção] Checklist salvo:', ref.id, 'placa:', placa);
 
-    // Atualiza URLs das fotos em background quando uploads terminarem (não bloqueia o fluxo)
-    const fotosLocais = fotosVeiculo.filter(f => f.local && !f.url);
-    if (fotosLocais.length > 0) {
+    // Atualiza URLs das fotos em background conforme uploads completam
+    const fotasLocaisPendentes = todasFotos.filter(f => f.local && !f.url);
+    if (fotasLocaisPendentes.length > 0) {
       setTimeout(async () => {
-        // Aguarda até 15s pelos uploads pendentes
         let tentativas = 0;
-        while (tentativas < 15) {
+        while (tentativas < 20) {
           await new Promise(r => setTimeout(r, 1000));
           tentativas++;
-          const atualizadas = Object.values(window._inspFotos || {});
-          const urlsAtuais  = atualizadas.map(f => f.url).filter(Boolean);
-          if (urlsAtuais.length >= fotosUrlsNow.length + fotosLocais.filter(f => !f.url).length || urlsAtuais.length > fotosUrlsNow.length) {
+          const veicAtual  = FOTO_IDS.map(id => window._inspFotos?.[id]).filter(Boolean);
+          const reprovAtual = itensReprovados
+            .filter(i => i.fotoZoneId && window._inspFotos?.[i.fotoZoneId])
+            .map(i => ({ ...window._inspFotos[i.fotoZoneId], item: i.item, grupo: i.grupo, tipo: 'reprovacao' }));
+          const todasAtual  = [...veicAtual, ...reprovAtual];
+          const urlsAtual   = todasAtual.map(f => f.url).filter(Boolean);
+          if (urlsAtual.length > fotosUrlsNow.length) {
             try {
               await atlasFsSetDoc('checklists_diarios', ref.id, {
-                fotosUrls: urlsAtuais,
-                fotosMeta: atualizadas,
-                fotos: atualizadas.length
+                fotosUrls: urlsAtual,
+                fotosVeiculoMeta: veicAtual,
+                fotosReprovMeta: reprovAtual,
+                fotosMeta: todasAtual,
+                fotos: todasAtual.length
               }, { merge: true });
-              console.log('[Fotos] URLs atualizadas no checklist:', ref.id);
+              console.log('[Fotos] URLs atualizadas no checklist:', ref.id, '→', urlsAtual.length, 'fotos');
             } catch(_) {}
             break;
           }
@@ -3674,7 +3740,12 @@ function coletarItensChecklistInspecao() {
     const item = tituloEl ? tituloEl.textContent.trim() : 'Item ' + (idx + 1);
     const status = row.querySelector('.status-btn.reprovado.on') ? 'reprovado' : row.querySelector('.status-btn.aprovado.on') ? 'aprovado' : 'em_branco';
     const obs = row.querySelector('.inline-obs')?.value?.trim() || '';
-    return { grupo, item, status, obs };
+    // Captura a foto inline de reprovação (se existir)
+    const photoZone = row.querySelector('.inline-photo-zone');
+    const photoZoneId = photoZone ? photoZone.id : null;
+    const fotoMeta = photoZoneId && window._inspFotos ? (window._inspFotos[photoZoneId] || null) : null;
+    const fotoUrl = fotoMeta ? (fotoMeta.url || null) : null;
+    return { grupo, item, status, obs, fotoZoneId: photoZoneId, fotoUrl };
   });
 }
 
@@ -3802,27 +3873,15 @@ function confirmarInicioInspecao() {
 
 /* Chamado ao selecionar arquivo no inline-photo-zone */
 function onInlinePhotoChange(input, zoneId) {
-  if (!input.files || !input.files.length) return;
+  if (!input.files || !input.files.length) return; // nenhum arquivo = não faz nada
   const file = input.files[0];
   if (!file) return;
   const zone = document.getElementById(zoneId);
-  if (zone) {
-    zone.classList.add('filled');
-    zone.innerHTML = `⏳<span style="color:var(--mu);font-size:10px">Aguardando...</span>`;
-  }
-  // Upload não-bloqueante
-  uploadInspFotoNuvem(file, zoneId).then(url => {
-    const z = document.getElementById(zoneId);
-    if (z) {
-      z.classList.add('filled');
-      z.innerHTML = url
-        ? `📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span>`
-        : `📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span><span style="font-size:8px;color:var(--mu)">local</span>`;
-    }
-  }).catch(() => {
-    const z = document.getElementById(zoneId);
-    if (z) { z.classList.add('filled'); z.innerHTML = `📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span>`; }
-  });
+  if (!zone) return;
+  zone.classList.add('filled');
+  zone.innerHTML = `📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span>`;
+  // Upload para Firebase Storage em nuvem
+  uploadInspFotoNuvem(file, zoneId);
 }
 
 /* Marcação de foto do veículo — só quando arquivo real */
@@ -3833,71 +3892,29 @@ function marcarFotoVeiculo(input, lblId, label) {
   const lbl = document.getElementById(lblId);
   if (lbl) {
     lbl.className = 'foto-thumb ok';
-    lbl.innerHTML = `⏳<span style="font-size:9px">${label}</span><span style="font-size:8px;color:var(--mu)">Aguardando...</span>`;
+    lbl.innerHTML = `📷<span>${label} ✓</span>`;
   }
-  // Upload não-bloqueante — atualiza UI quando terminar
-  uploadInspFotoNuvem(file, lblId).then(url => {
-    const el = document.getElementById(lblId);
-    if (el) {
-      el.className = 'foto-thumb ok';
-      el.innerHTML = url
-        ? `📷<span style="font-size:9px;color:var(--gn)">${label} ✓</span>`
-        : `📷<span style="font-size:9px">${label} ✓</span><span style="font-size:7.5px;color:var(--mu)">local</span>`;
-    }
-  }).catch(() => {
-    const el = document.getElementById(lblId);
-    if (el) { el.className = 'foto-thumb ok'; el.innerHTML = `📷<span style="font-size:9px">${label} ✓</span>`; }
-  });
+  // Upload para Firebase Storage
+  uploadInspFotoNuvem(file, lblId);
 }
 
 // ══════════════════════════════════════════════════════════
-// ITEM 4 — Upload de fotos de inspeção para Supabase Storage
+// ITEM 4 — Upload de fotos de inspeção para Firebase Storage
 // ══════════════════════════════════════════════════════════
-// Usa Supabase (CORS já liberado para comix-atlas.pages.dev)
-// Firebase Storage bloquearia por CORS em domínio externo.
-// Path: inspections/{placa}/{timestamp}_{refId}.ext
+// Reutiliza o Firebase Storage do projeto (mesma config do sistema).
+// Path: inspections/{inspPlaca}/{timestamp}_{filename}
+
 
 async function uploadInspFotoNuvem(file, refId) {
   if (!window._inspFotos) window._inspFotos = {};
-  // Registra como local imediatamente — save nunca trava esperando upload
   window._inspFotos[refId] = {
-    name:     file && file.name ? file.name : 'foto',
-    size:     file && file.size ? file.size : 0,
-    type:     file && file.type ? file.type : '',
-    local:    true,
-    url:      null,
-    addedAt:  new Date().toISOString()
+    name: file && file.name ? file.name : 'foto',
+    size: file && file.size ? file.size : 0,
+    type: file && file.type ? file.type : '',
+    local: true,
+    addedAt: new Date().toISOString()
   };
-
-  try {
-    const SUPABASE_URL      = 'https://onomvgnudbgywvtgetfe.supabase.co';
-    const SUPABASE_ANON_KEY = 'sb_publishable_SpcPe4Fch43LIwK7ox-jIQ_YbbBf5_g';
-    const SUPABASE_BUCKET   = 'checklist-fotos';
-    const placa    = (window._inspPlaca || 'sem-placa').replace(/[^a-zA-Z0-9]/g, '_');
-    const ext      = file.name ? file.name.split('.').pop().toLowerCase().replace(/[^a-z0-9]/g,'') || 'jpg' : 'jpg';
-    const safeName = refId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40);
-    const path     = `inspections/${placa}/${Date.now()}_${safeName}.${ext}`;
-
-    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${path}`, {
-      method:  'POST',
-      headers: {
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-        'Content-Type':  file.type || 'image/jpeg',
-        'x-upsert':      'true'
-      },
-      body: file
-    });
-
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-
-    const url = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${path}`;
-    window._inspFotos[refId] = { ...window._inspFotos[refId], url, path, local: false };
-    console.log('[Fotos] Upload OK →', path);
-    return url;
-  } catch(err) {
-    console.warn('[Fotos] Upload falhou — foto salva localmente:', err.message);
-    return null;
-  }
+  return null;
 }
 
 
