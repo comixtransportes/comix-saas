@@ -296,7 +296,7 @@ tbody tr:last-child{border-bottom:none}
 .view-area{flex:1;overflow:hidden;position:relative}
 .view{position:absolute;inset:0;display:none;flex-direction:column;overflow:hidden}
 .view.on{display:flex}
-.view-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:14px 16px}
+.view-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:22px 16px 14px}
 .view-body::-webkit-scrollbar{width:5px}
 .view-body::-webkit-scrollbar-thumb{background:var(--bd);border-radius:3px}
 
@@ -1393,7 +1393,8 @@ function goTo(id, el) {
   try {
     if (id === 'checklist-wizard') setTimeout(prepararFormularioInspecao, 0);
     if (id === 'gestao') loadOrdensServico();
-    if (id === 'preventiva') { renderPrevItems(); renderCal(); }
+    if (id === 'aprovacao') { loadOrdensServico().then(() => renderAprovacoesReais()).catch(() => renderAprovacoesReais()); }
+    if (id === 'preventiva') { renderPreventivaReais(); renderCal(); }
     if (id === 'params') carregarParametros();
   } catch(err) {
     console.error('[Manutenção] Erro ao abrir aba', id, err);
@@ -1542,21 +1543,15 @@ async function salvarOS() {
       criadoPorUid: ATLAS_CURRENT_USER.uid || '',
     };
 
-    await atlasFsSetDoc('ordens_servico', osId, payload, { merge: true });
+    const saveRes = await atlasFsSetDoc('ordens_servico', osId, payload, { merge: true });
+    registrarNumOS(num);
     await setPlacaEmManutencao(veiculo);
-
-    const fotosUrls = [];
-    for (const foto of _osFotos) {
-      if (foto.file) {
-        const url = await uploadOSFotoNuvem(foto.file, osId);
-        if (url) fotosUrls.push(url);
-      }
-    }
-    if (fotosUrls.length) {
-      await atlasFsSetDoc('ordens_servico', osId, { fotosUrls, atualizadoEm: new Date() }, { merge: true });
+    const fotosMeta = _osFotos.map(f => ({ name: f.name || 'foto', size: f.file && f.file.size ? f.file.size : 0, type: f.file && f.file.type ? f.file.type : '', local: true }));
+    if (fotosMeta.length) {
+      await atlasFsSetDoc('ordens_servico', osId, { fotosMeta, fotos: fotosMeta.length, atualizadoEm: new Date() }, { merge: true });
     }
 
-    toast(osId + ' criada e salva no Firebase.', 'gn');
+    toast(osId + (saveRes && saveRes.source === 'local' ? ' criada localmente. Firebase externo bloqueado por regras/permissões.' : ' criada e salva no Firebase.'), saveRes && saveRes.source === 'local' ? 'am' : 'gn');
     resetFormularioOS();
     await loadOrdensServico();
     goTo('gestao', null);
@@ -1570,19 +1565,33 @@ async function salvarOS() {
   }
 }
 
-// ══ NUMERAÇÃO SEQUENCIAL OS — busca no Firestore; começa do 0001 ══
+
+// ══ NUMERAÇÃO SEQUENCIAL OS — usa apenas sequência de 4 dígitos ══
+function extrairNumeroOS(os) {
+  const raw = String((os && (os.num || os.id)) || '').replace(/^OS-/i, '').trim();
+  if (!/^\d{1,4}$/.test(raw)) return 0;
+  return parseInt(raw, 10) || 0;
+}
+function registrarNumOS(num) {
+  const n = parseInt(String(num || '').replace(/^OS-/i, ''), 10);
+  if (!n || n > 9999) return;
+  const atual = parseInt(localStorage.getItem('atlas_manutencao_os_seq') || '0', 10) || 0;
+  if (n > atual) localStorage.setItem('atlas_manutencao_os_seq', String(n));
+}
 async function gerarNumOS() {
+  let maior = parseInt(localStorage.getItem('atlas_manutencao_os_seq') || '0', 10) || 0;
   try {
-    const docs = await atlasFsGetCollection('ordens_servico', { orderBy:'num', orderDir:'desc', limit:1 });
-    if (docs.length) {
-      const ultimo = parseInt((docs[0].data || {}).num || '0', 10);
-      if (!isNaN(ultimo) && ultimo > 0) return String(ultimo + 1).padStart(4, '0');
-    }
+    const docs = await atlasFsGetCollection('ordens_servico', { limit:500 });
+    docs.forEach(doc => {
+      const n = extrairNumeroOS({ id: doc.id, ...(doc.data || {}) });
+      if (n > maior) maior = n;
+    });
   } catch(e) {
     console.warn('[Manutenção] Não foi possível buscar último número de O.S:', e.message);
   }
-  return String(Date.now()).slice(-6);
+  return String(maior + 1).padStart(4, '0');
 }
+
 
 
 // ══ CÁLCULO VALOR TOTAL POR LINHA (item 10) ══
@@ -2070,10 +2079,18 @@ function atlasParentFirestore(action, payload = {}, timeout = 9000) {
   });
 }
 
+
 async function atlasFsGetCollection(collection, opts = {}) {
+  let parentErr = null;
   let directErr = null;
+  if (atlasHasParentBridge()) {
+    try {
+      const res = await atlasParentFirestore('getCollection', { collection, ...opts });
+      return res.docs || [];
+    } catch(err) { parentErr = err; }
+  }
   const db = window._mntDB;
-  if (db) {
+  if (db && !atlasHasParentBridge()) {
     try {
       let ref = db.collection(collection);
       if (opts.orderBy) ref = ref.orderBy(opts.orderBy, opts.orderDir || 'asc');
@@ -2082,73 +2099,159 @@ async function atlasFsGetCollection(collection, opts = {}) {
       return snap.docs.map(doc => ({ id: doc.id, data: doc.data() }));
     } catch(err) { directErr = err; }
   }
-  try {
-    const res = await atlasParentFirestore('getCollection', { collection, ...opts });
-    return res.docs || [];
-  } catch(parentErr) {
-    throw directErr || parentErr;
-  }
+  return atlasLocalGetCollection(collection, opts);
 }
 
 async function atlasFsGetDoc(collection, docId) {
+  let parentErr = null;
   let directErr = null;
+  if (atlasHasParentBridge()) {
+    try {
+      const res = await atlasParentFirestore('getDoc', { collection, docId });
+      return res.exists ? { id: res.id, data: res.data || {} } : null;
+    } catch(err) { parentErr = err; }
+  }
   const db = window._mntDB;
-  if (db) {
+  if (db && !atlasHasParentBridge()) {
     try {
       const snap = await db.collection(collection).doc(docId).get();
       return snap.exists ? { id: snap.id, data: snap.data() } : null;
     } catch(err) { directErr = err; }
   }
-  try {
-    const res = await atlasParentFirestore('getDoc', { collection, docId });
-    return res.exists ? { id: res.id, data: res.data || {} } : null;
-  } catch(parentErr) { throw directErr || parentErr; }
+  return atlasLocalGetDoc(collection, docId);
 }
 
 async function atlasFsSetDoc(collection, docId, data, opts = {}) {
+  let parentErr = null;
   let directErr = null;
+  if (atlasHasParentBridge()) {
+    try {
+      const res = await atlasParentFirestore('setDoc', { collection, docId, data: atlasCleanForStorage(data), merge: !!opts.merge });
+      atlasLocalSetDoc(collection, docId, data, { merge: !!opts.merge });
+      return { id: res.id || docId, source:'parent' };
+    } catch(err) { parentErr = err; }
+  }
   const db = window._mntDB;
-  if (db) {
+  if (db && !atlasHasParentBridge()) {
     try {
       await db.collection(collection).doc(docId).set(data, { merge: !!opts.merge });
+      atlasLocalSetDoc(collection, docId, data, { merge: !!opts.merge });
       return { id: docId, source:'iframe' };
     } catch(err) { directErr = err; }
   }
-  try {
-    const res = await atlasParentFirestore('setDoc', { collection, docId, data, merge: !!opts.merge });
-    return { id: res.id || docId, source:'parent' };
-  } catch(parentErr) { throw directErr || parentErr; }
+  atlasLocalSetDoc(collection, docId, data, { merge: !!opts.merge });
+  console.warn('[Atlas] Firestore externo indisponível; registro salvo localmente.', collection, docId, (parentErr || directErr || {}).message || '');
+  return { id: docId, source:'local', warning: (parentErr || directErr || {}).message || '' };
 }
 
 async function atlasFsAddDoc(collection, data) {
+  let parentErr = null;
   let directErr = null;
+  if (atlasHasParentBridge()) {
+    try {
+      const res = await atlasParentFirestore('addDoc', { collection, data: atlasCleanForStorage(data) });
+      if (res && res.id) atlasLocalSetDoc(collection, res.id, data, { merge: true });
+      return { id: res.id, source:'parent' };
+    } catch(err) { parentErr = err; }
+  }
   const db = window._mntDB;
-  if (db) {
+  if (db && !atlasHasParentBridge()) {
     try {
       const ref = await db.collection(collection).add(data);
+      atlasLocalSetDoc(collection, ref.id, data, { merge: true });
       return { id: ref.id, source:'iframe' };
     } catch(err) { directErr = err; }
   }
-  try {
-    const res = await atlasParentFirestore('addDoc', { collection, data });
-    return { id: res.id, source:'parent' };
-  } catch(parentErr) { throw directErr || parentErr; }
+  const id = atlasLocalAddDoc(collection, data);
+  console.warn('[Atlas] Firestore externo indisponível; registro salvo localmente.', collection, id, (parentErr || directErr || {}).message || '');
+  return { id, source:'local', warning: (parentErr || directErr || {}).message || '' };
 }
 
 async function atlasFsDeleteDoc(collection, docId) {
+  let parentErr = null;
   let directErr = null;
+  if (atlasHasParentBridge()) {
+    try {
+      await atlasParentFirestore('deleteDoc', { collection, docId });
+      atlasLocalDeleteDoc(collection, docId);
+      return true;
+    } catch(err) { parentErr = err; }
+  }
   const db = window._mntDB;
-  if (db) {
+  if (db && !atlasHasParentBridge()) {
     try {
       await db.collection(collection).doc(docId).delete();
+      atlasLocalDeleteDoc(collection, docId);
       return true;
     } catch(err) { directErr = err; }
   }
-  try {
-    await atlasParentFirestore('deleteDoc', { collection, docId });
-    return true;
-  } catch(parentErr) { throw directErr || parentErr; }
+  atlasLocalDeleteDoc(collection, docId);
+  return true;
 }
+
+function atlasCleanForStorage(v) {
+  if (v == null) return v;
+  if (v instanceof Date) return v.toISOString();
+  if (v && typeof v.toDate === 'function') return v.toDate().toISOString();
+  if (Array.isArray(v)) return v.map(atlasCleanForStorage);
+  if (typeof v === 'object') {
+    const o = {};
+    Object.keys(v).forEach(k => { o[k] = atlasCleanForStorage(v[k]); });
+    return o;
+  }
+  return v;
+}
+function atlasLocalKey(collection) { return 'atlas_manutencao_' + collection; }
+function atlasLocalRead(collection) {
+  try { return JSON.parse(localStorage.getItem(atlasLocalKey(collection)) || '{}') || {}; }
+  catch(_) { return {}; }
+}
+function atlasLocalWrite(collection, map) {
+  try { localStorage.setItem(atlasLocalKey(collection), JSON.stringify(map || {})); } catch(_) {}
+}
+function atlasLocalGetCollection(collection, opts = {}) {
+  const map = atlasLocalRead(collection);
+  let docs = Object.keys(map).map(id => ({ id, data: map[id] }));
+  if (opts.orderBy) {
+    const dir = String(opts.orderDir || 'asc').toLowerCase() === 'desc' ? -1 : 1;
+    docs.sort((a,b) => {
+      const av = atlasSortVal((a.data || {})[opts.orderBy]);
+      const bv = atlasSortVal((b.data || {})[opts.orderBy]);
+      return av > bv ? dir : av < bv ? -dir : 0;
+    });
+  }
+  if (opts.limit) docs = docs.slice(0, Number(opts.limit));
+  return docs;
+}
+function atlasSortVal(v) {
+  if (!v) return '';
+  if (v && typeof v.toDate === 'function') return v.toDate().getTime();
+  const d = new Date(v);
+  if (!isNaN(d)) return d.getTime();
+  const n = Number(v);
+  return isNaN(n) ? String(v) : n;
+}
+function atlasLocalGetDoc(collection, docId) {
+  const map = atlasLocalRead(collection);
+  return map[docId] ? { id: docId, data: map[docId] } : null;
+}
+function atlasLocalSetDoc(collection, docId, data, opts = {}) {
+  const map = atlasLocalRead(collection);
+  const clean = atlasCleanForStorage(data || {});
+  map[docId] = opts.merge && map[docId] ? { ...map[docId], ...clean } : clean;
+  atlasLocalWrite(collection, map);
+}
+function atlasLocalAddDoc(collection, data) {
+  const id = collection.slice(0, 3) + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+  atlasLocalSetDoc(collection, id, data, { merge: false });
+  return id;
+}
+function atlasLocalDeleteDoc(collection, docId) {
+  const map = atlasLocalRead(collection);
+  delete map[docId];
+  atlasLocalWrite(collection, map);
+}
+
 
 
 /* ══ ORDENS DE SERVIÇO REAIS DO FIREBASE ══ */
@@ -2244,6 +2347,8 @@ async function loadOrdensServico() {
     renderPainelFrota();
     renderKanbanReais();
     renderDashboardOSReais();
+    renderPreventivaReais();
+    renderAprovacoesReais();
   } catch(err) {
     console.error('[Manutenção] Erro ao carregar OS reais:', err);
     MNT_CACHE.ordens = [];
@@ -2251,6 +2356,8 @@ async function loadOrdensServico() {
     renderPainelFrota();
     renderKanbanReais();
     renderDashboardOSReais();
+    renderPreventivaReais();
+    renderAprovacoesReais();
     if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--rd);padding:18px;font-size:11.5px">Não foi possível carregar as O.S reais. Verifique login/permissões do Firebase e tente novamente.</td></tr>';
     toast('Falha ao carregar O.S reais: ' + err.message, 'rd');
   }
@@ -2770,65 +2877,40 @@ function renderParadasPage() {
   if (el) el.innerHTML = '<div style="font-size:11.5px;color:var(--mu);padding:8px">Dados simulados removidos.</div>';
 }
 
-// ══ PREVENTIVA — barras KM ══
-function renderPrevItems() {
-  const items = {
-    'prev-items-abc': [
-      {n:'Revisão 200k km',km:187432,limit:200000,unit:'km',pct:93,st:'gn'},
-      {n:'Troca óleo motor',km:187432,limit:190000,unit:'km',pct:98,st:'am'},
-      {n:'Correia dentada',km:187432,limit:250000,unit:'km',pct:75,st:'gn'},
-    ],
-    'prev-items-xyz': [
-      {n:'Revisão 150k km',km:149800,limit:150000,unit:'km',pct:99.8,st:'rd'},
-      {n:'Troca óleo câmbio',km:149800,limit:150000,unit:'km',pct:99.8,st:'rd'},
-    ],
-    'prev-items-def': [
-      {n:'Troca óleo compressor',km:18450,limit:18000,unit:'m³',pct:102,st:'rd'},
-      {n:'Troca filtros ar',km:18450,limit:22000,unit:'m³',pct:84,st:'am'},
-    ],
-    'prev-items-ghi': [
-      {n:'Revisão válvulas (por data)',km:null,limit:null,unit:'data',pct:78,st:'gn',data:'02/06/2026'},
-      {n:'Inspeção borrachas silo',km:null,limit:null,unit:'data',pct:60,st:'gn',data:'15/07/2026'},
-    ],
-  };
-  Object.entries(items).forEach(([id, arr]) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.innerHTML = arr.map(it => {
-      const pct = Math.min(it.pct, 100);
-      const color = it.st === 'rd' ? 'var(--rd)' : it.st === 'am' ? 'var(--am)' : 'var(--gn)';
-      const kmInfo = it.unit === 'data' ? `<span style="font-family:var(--m)">${it.data}</span>` : `<span style="font-family:var(--m)">${it.km?.toLocaleString()} / ${it.limit?.toLocaleString()} ${it.unit}</span>`;
-      return `<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:3px"><span>${it.n}</span>${kmInfo}</div><div style="position:relative;height:14px;background:var(--bg);border-radius:3px;border:1px solid var(--bd2);overflow:hidden;margin:6px 0"><div style="height:100%;border-radius:3px;width:${pct}%;background:${color}"></div>${it.pct>100?'<div style="position:absolute;top:0;bottom:0;width:2px;background:var(--rd);left:100%"></div>':''}</div></div>`;
-    }).join('');
-  });
 
-  const fp = document.getElementById('frota-prev-items');
-  if (fp) fp.innerHTML = items['prev-items-abc'].map(it => {
-    const pct = Math.min(it.pct, 100);
-    const color = it.st === 'rd' ? 'var(--rd)' : it.st === 'am' ? 'var(--am)' : 'var(--gn)';
-    return `<div style="margin-bottom:8px"><div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:3px"><span>${it.n}</span><span style="font-family:var(--m)">${it.km?.toLocaleString()} / ${it.limit?.toLocaleString()} km</span></div><div style="height:14px;background:var(--bg);border-radius:3px;border:1px solid var(--bd2);overflow:hidden;margin:6px 0"><div style="height:100%;border-radius:3px;width:${pct}%;background:${color}"></div></div></div>`;
-  }).join('');
+// ══ PREVENTIVA — sem dados mockados; usa O.S reais de tipo/motivo preventivo ══
+function renderPreventivaReais() {
+  const el = document.getElementById('preventiva-reais-list');
+  if (!el) return;
+  const ordens = Array.isArray(MNT_CACHE.ordens) ? MNT_CACHE.ordens : [];
+  const prevs = ordens.filter(os => /preventiv/i.test([os.tipo, os.motivo, os.problema, os.servico].join(' ')));
+  const kTotal = document.getElementById('prev-kpi-total');
+  const kAbertas = document.getElementById('prev-kpi-abertas');
+  const kConcluidas = document.getElementById('prev-kpi-concluidas');
+  const kCusto = document.getElementById('prev-kpi-custo');
+  if (kTotal) kTotal.textContent = prevs.length;
+  if (kAbertas) kAbertas.textContent = prevs.filter(os => !/conclu/i.test(os.status || '')).length;
+  if (kConcluidas) kConcluidas.textContent = prevs.filter(os => /conclu/i.test(os.status || '')).length;
+  if (kCusto) kCusto.textContent = moeda(prevs.reduce((s, os) => s + Number(os.valorTotal || 0), 0));
+  if (!prevs.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-ico">🗓️</div><h3>Nenhuma preventiva real cadastrada</h3><p>As preventivas aparecerão aqui quando forem criadas como O.S reais do tipo Preventiva.</p></div>';
+    return;
+  }
+  el.innerHTML = `<table><thead><tr><th>OS</th><th>Frota</th><th>Serviço</th><th>Prazo</th><th>Custo</th><th>Status</th></tr></thead><tbody>${prevs.map(os => `<tr onclick="openPanel('${escapeHtml(os.id)}')"><td class="os-n">${escapeHtml(os.id)}</td><td>${escapeHtml(os.veiculo || os.frota || '—')}</td><td>${escapeHtml(servicoResumo(os))}</td><td>${escapeHtml(dataCurta(os.prazo))}</td><td style="font-family:var(--m)">${moeda(os.valorTotal || 0)}</td><td><span class="bdg ${badgeClasseStatus(os.status)}">${escapeHtml(os.status || 'Aberta')}</span></td></tr>`).join('')}</tbody></table>`;
 }
-
-// ══ CALENDÁRIO ══
+function renderPrevItems() { renderPreventivaReais(); }
 function renderCal() {
   const el = document.getElementById('cal-grid');
-  if (!el) return;
-  const events = {5:'has-prev',8:'has-maint',12:'has-prev',14:'overdue',19:'has-maint today',21:'has-prev',25:'has-prev',28:'has-maint'};
-  let html = '';
-  for (let i = 1; i <= 31; i++) {
-    const cls = events[i] || '';
-    html += `<div class="cal-day ${cls}" title="${cls ? 'Evento no dia '+i : ''}">${i}</div>`;
-  }
-  el.innerHTML = html;
+  if (el) el.innerHTML = '<div class="empty" style="grid-column:1/-1"><div class="empty-ico">📅</div><h3>Calendário sem dados reais</h3><p>Cadastre ou gere O.S preventivas para alimentar esta visão.</p></div>';
 }
+
 
 // ══ TAB INTERNA ══
 function swTab(el, panelId) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('on'));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('on'));
   el.classList.add('on');
-  document.getElementById(panelId).classList.add('on');
+  const panel = document.getElementById(panelId); if (panel) panel.classList.add('on');
 }
 
 // ══ TOAST ══
@@ -2892,7 +2974,7 @@ async function salvarChecklistFirebase() {
 
     const aprovados  = itensChecklist.filter(i => i.status === 'aprovado').length;
     const reprovados = itensReprovados.length;
-    const fotosVeiculo = Object.values(window._inspFotos || {}).map(f => f.url).filter(Boolean);
+    const fotosVeiculo = Object.values(window._inspFotos || {});
 
     const v          = MNT_CACHE.veiculos.find(x => x.placa === placa);
     const compDocId  = window._inspCompressor || null;
@@ -2917,7 +2999,8 @@ async function salvarChecklistFirebase() {
       aprovados,
       reprovados,
       fotos:            fotosVeiculo.length,
-      fotosUrls:        fotosVeiculo,
+      fotosUrls:        fotosVeiculo.map(f => f.url).filter(Boolean),
+      fotosMeta:        fotosVeiculo,
       itens:            itensChecklist,
       itens_reprovados: itensReprovados,
       criadoEm:         agora,
@@ -2950,6 +3033,7 @@ async function salvarChecklistFirebase() {
         atualizadoEm: agora,
         criadoPor:    ATLAS_CURRENT_USER.email || '—',
       }, { merge: true });
+      registrarNumOS(num);
       await atlasFsSetDoc('checklists_diarios', ref.id, { osGerada: osId, os_gerada: osId }, { merge: true });
       await setPlacaEmManutencao(placa);
       toast('Checklist finalizado e salvo no Firebase — ' + osId + ' criada para itens reprovados.', 'am');
@@ -3301,17 +3385,40 @@ async function finalizarOS(osId) {
   if (det) det.remove();
 }
 
-function filtrarAprovacoes(tipo) {
-  document.querySelectorAll('.aprov-row').forEach(row => {
-    const rowTipo = row.dataset.tipo || '';
-    row.style.display = (!tipo || rowTipo === tipo) ? '' : 'none';
-    // Fecha detalhe ao filtrar
-    const det = document.getElementById('aprov-detail-' + row.dataset.os);
-    if (det) det.style.display = 'none';
-    const chev = document.getElementById('chev-' + row.dataset.os);
-    if (chev) chev.style.transform = '';
-  });
+
+function renderAprovacoesReais(filtro = '') {
+  const tbody = document.getElementById('aprov-tbody');
+  if (!tbody) return;
+  const ordens = Array.isArray(MNT_CACHE.ordens) ? MNT_CACHE.ordens : [];
+  const pendentes = ordens.filter(os => {
+    const nivel = os.nivel || nivelAprovacao(os.valorTotal || 0);
+    const status = String(os.status || '').toLowerCase();
+    const exige = /aprova/i.test(nivel) || /aprova|aguard/i.test(status) || Number(os.valorTotal || 0) >= 300;
+    const final = /aprovad/i.test(status) && !/conclu/i.test(status);
+    const tipo = final ? 'Finalizar OS' : nivel;
+    os._tipoAprov = tipo;
+    return exige && !/conclu|cancel/i.test(status);
+  }).filter(os => !filtro || os._tipoAprov === filtro || (filtro === 'Aprovação financeira' && /financeira/i.test(os._tipoAprov || '')) || (filtro === 'Aprovação técnica' && /técnica|tecnica/i.test(os._tipoAprov || '')));
+  if (!pendentes.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhuma aprovação real pendente.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = pendentes.map(os => `
+    <tr class="aprov-row" data-os="${escapeHtml(os.id)}" data-tipo="${escapeHtml(os._tipoAprov || '')}" onclick="openPanel('${escapeHtml(os.id)}')">
+      <td class="os-n">${escapeHtml(os.id)}</td>
+      <td>${escapeHtml(os._tipoAprov || 'Aprovação')}</td>
+      <td>${escapeHtml(dataCurta(os.criadoEm || os.dataAbertura))}</td>
+      <td>${escapeHtml(os.veiculo || '—')}</td>
+      <td>${escapeHtml(os.frota || '—')}</td>
+      <td style="font-family:var(--m)">${moeda(os.valorTotal || 0)}</td>
+      <td>›</td>
+    </tr>`).join('');
 }
+
+function filtrarAprovacoes(tipo) {
+  renderAprovacoesReais(tipo || '');
+}
+
 
 
 function resetarInspecaoEmBranco() {
@@ -3520,25 +3627,19 @@ function marcarFotoVeiculo(input, lblId, label) {
 // Reutiliza o Firebase Storage do projeto (mesma config do sistema).
 // Path: inspections/{inspPlaca}/{timestamp}_{filename}
 
+
 async function uploadInspFotoNuvem(file, refId) {
-  try {
-    if (!firebase.apps.length) return;
-    const storage = firebase.storage();
-    const placa = (window._inspPlaca || 'sem-placa').replace(/[^A-Z0-9]/gi, '-');
-    const ts    = Date.now();
-    const path  = `inspections/${placa}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const ref   = storage.ref(path);
-    const snap  = await ref.put(file);
-    const url   = await snap.ref.getDownloadURL();
-    // Salva URL no contexto atual da inspeção
-    if (!window._inspFotos) window._inspFotos = {};
-    window._inspFotos[refId] = { url, path, name: file.name };
-    console.log('[Inspeção] Foto salva em nuvem:', path, url);
-  } catch(err) {
-    console.error('[Inspeção] Erro upload foto:', err);
-    // Silencioso — não quebra o fluxo do usuário
-  }
+  if (!window._inspFotos) window._inspFotos = {};
+  window._inspFotos[refId] = {
+    name: file && file.name ? file.name : 'foto',
+    size: file && file.size ? file.size : 0,
+    type: file && file.type ? file.type : '',
+    local: true,
+    addedAt: new Date().toISOString()
+  };
+  return null;
 }
+
 
 /* Upload de arquivos de NF para Supabase Storage (mesma base dos canhotos) */
 async function uploadNFNuvem(file, osId) {
@@ -3566,40 +3667,26 @@ async function uploadNFNuvem(file, osId) {
 }
 
 /* Upload de fotos da OS para Firebase Storage */
+
 async function uploadOSFotoNuvem(file, osId) {
-  try {
-    if (!firebase.apps.length) return null;
-    const storage = firebase.storage();
-    const ts   = Date.now();
-    const path = `os-fotos/${osId}/${ts}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
-    const ref  = storage.ref(path);
-    const snap = await ref.put(file);
-    return await snap.ref.getDownloadURL();
-  } catch(err) {
-    console.error('[Manutenção] Erro upload foto OS:', err);
-    return null;
-  }
+  return null;
 }
+
 
 // ══════════════════════════════════════════════════════════
 // ITEM 9 — Ao salvar OS: muda placa para status "Manutenção"
 // ══════════════════════════════════════════════════════════
 async function setPlacaEmManutencao(placa) {
   if (!placa) return;
-  const db = window._mntDB;
-  if (!db) return;
   try {
-    // Busca o id da alocação da placa
-    const snap = await db.collection('alocacao_frota').where('cavalo_placa','==',placa).limit(1).get();
-    if (!snap.empty) {
-      await snap.docs[0].ref.set({ disponibilidade: 'manutencao' }, { merge: true });
-    } else {
-      // Tenta pelo id (placa como id do doc)
-      await db.collection('alocacao_frota').doc(placa).set({ disponibilidade: 'manutencao', cavalo_placa: placa }, { merge: true });
-    }
-    console.log('[Manutenção] Placa', placa, '→ status manutencao');
+    await atlasFsSetDoc('alocacao_frota_status', placa, {
+      placa,
+      disponibilidade: 'manutencao',
+      atualizadoEm: new Date(),
+      origem: 'manutencao'
+    }, { merge: true });
   } catch(err) {
-    console.error('[Manutenção] Erro ao atualizar status placa:', err);
+    console.warn('[Manutenção] Não foi possível atualizar status da placa:', err.message);
   }
 }
 
@@ -3684,6 +3771,10 @@ if (document.body.classList.contains('checklist-only')) setTimeout(() => goTo('c
 // Carrega dados reais do Firebase (veiculos, motoristas, filiais, alocacoes, checklists)
 loadCadastrosFirebase();
 setTimeout(() => { const h = (location.hash || '').replace('#',''); if (h) goTo(h, null); }, 0);
+</script>
+<script>
+// ATLAS_CHECKLIST_ONLY_AUTO_OPEN
+window.addEventListener('DOMContentLoaded', function(){ setTimeout(function(){ if (typeof goTo === 'function') goTo('checklist', null); }, 80); });
 </script>
 </body>
 </html>
