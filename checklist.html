@@ -1510,7 +1510,7 @@ async function salvarOS() {
   if (!veiculo)  { toast('Selecione ou digite a placa do veículo.', 'am'); return; }
   if (!problema && !servicos.length && !motivo) { toast('Descreva o problema, motivo ou serviço da O.S.', 'am'); return; }
 
-  const db = window._mntDB;
+  const db = atlasGetSharedDb();
   if (!db && !atlasHasParentBridge()) { toast('Firebase não disponível. Verifique a conexão.', 'rd'); return; }
 
   try {
@@ -1674,7 +1674,7 @@ function coletarPecas() {
 async function deleteOS(osId, btn) {
   const confirmado = confirm('Confirmar exclusão da ' + osId + '?\n\nEsta ação não pode ser desfeita.');
   if (!confirmado) return;
-  const db = window._mntDB;
+  const db = atlasGetSharedDb();
   try {
     await atlasFsDeleteDoc('ordens_servico', osId);
     delete OS_DB[osId];
@@ -1716,10 +1716,32 @@ const MNT_CACHE = {
 
 /* Usuário atual (populado via Auth ou postMessage do index.html) */
 let ATLAS_CURRENT_USER = {
-  email: '', uid: '', perfil: 'admin',
+  email: '', uid: '', perfil: '',
   placa: '',    // placa do cavalo alocado a este motorista
   carretas: []  // placas de carretas alocadas
 };
+
+
+function atlasIsChecklistOnly() {
+  return !!document.body?.classList?.contains('checklist-only');
+}
+function atlasTryParent(fn) {
+  try {
+    if (window.parent && window.parent !== window) return fn(window.parent);
+  } catch(_) {}
+  return null;
+}
+function atlasGetSharedAuth() {
+  const parentAuth = atlasTryParent(p => p._mntAuth || p.auth || (p.firebase && typeof p.firebase.auth === 'function' ? p.firebase.auth() : null));
+  if (parentAuth && parentAuth.currentUser) return parentAuth;
+  return window._mntAuth || parentAuth || null;
+}
+function atlasGetSharedDb() {
+  const parentAuth = atlasTryParent(p => p._mntAuth || p.auth || (p.firebase && typeof p.firebase.auth === 'function' ? p.firebase.auth() : null));
+  const parentDb = atlasTryParent(p => p._mntDB || p.db || p.firestore || (p.firebase && typeof p.firebase.firestore === 'function' ? p.firebase.firestore() : null));
+  if (parentDb && parentAuth && parentAuth.currentUser) return parentDb;
+  return window._mntDB || parentDb || null;
+}
 
 /* Auth direto: no acesso fora do portal, aguarda o Firebase Auth antes de consultar/gravar. */
 let _atlasAuthReadyPromise = null;
@@ -1733,7 +1755,7 @@ function atlasApplyAuthUser(user) {
   };
 }
 function atlasWaitAuthReady(timeout = 6000) {
-  const auth = window._mntAuth;
+  const auth = atlasGetSharedAuth();
   if (atlasHasParentBridge && atlasHasParentBridge()) return Promise.resolve(null);
   if (!auth) return Promise.resolve(null);
   if (_atlasAuthReadyPromise) return _atlasAuthReadyPromise;
@@ -1773,8 +1795,8 @@ function mntOpt(value, label) {
 
 /* ══ CARREGAR TODOS OS CADASTROS DO FIREBASE ══ */
 async function loadCadastrosFirebase() {
-  const db = window._mntDB;
-  if (!db) { console.warn('[Manutenção] Firebase não inicializado.'); return; }
+  const db = atlasGetSharedDb();
+  if (!db && !atlasHasParentBridge()) { console.warn('[Manutenção] Firebase não inicializado.'); return; }
 
   try {
     await atlasWaitAuthReady();
@@ -1840,15 +1862,16 @@ async function loadCadastrosFirebase() {
     popularSelectFiltroChecklist();
     popularFiltroFrotaGestao();
     loadChecklists();
-    loadOrdensServico();
-    setupOSFilters();
+    if (!atlasIsChecklistOnly()) {
+      loadOrdensServico();
+      setupOSFilters();
+      // Pré-calcula número da próxima OS e exibe no campo
+      gerarNumOS().then(num => {
+        const el = document.getElementById('nova-os-num');
+        if (el) el.value = 'OS-' + num;
+      });
+    }
     resolveAlocacaoUsuario();
-
-    // Pré-calcula número da próxima OS e exibe no campo
-    gerarNumOS().then(num => {
-      const el = document.getElementById('nova-os-num');
-      if (el) el.value = 'OS-' + num;
-    });
 
   } catch(err) {
     console.error('[Manutenção] Erro ao carregar Firebase:', err);
@@ -1939,11 +1962,9 @@ function popularSelectFiltroChecklist() {
 
 /* ── Usuários (aprovadores, responsáveis) ── */
 function popularSelectUsuarios() {
-  const db = window._mntDB;
-  if (!db) return;
-  db.collection('usuarios').get().then(snap => {
-    MNT_CACHE.usuarios = snap.docs.map(d => {
-      const dd = d.data();
+  atlasFsGetCollection('usuarios').then(docs => {
+    MNT_CACHE.usuarios = docs.map(d => {
+      const dd = d.data || {};
       return {
         id:     d.id,
         email:  dd.email || '',
@@ -2130,6 +2151,21 @@ function atlasCloudUnavailable(collection, parentErr, directErr) {
 }
 
 
+function atlasNormalizeWhere(opts = {}) {
+  if (!opts.where) return [];
+  if (Array.isArray(opts.where[0])) return opts.where;
+  return [opts.where];
+}
+function atlasApplyQueryOptions(ref, opts = {}) {
+  atlasNormalizeWhere(opts).forEach(w => {
+    if (Array.isArray(w) && w.length >= 3) ref = ref.where(w[0], w[1], w[2]);
+  });
+  if (opts.orderBy) ref = ref.orderBy(opts.orderBy, opts.orderDir || 'asc');
+  if (opts.limit) ref = ref.limit(Number(opts.limit));
+  return ref;
+}
+
+
 async function atlasFsGetCollection(collection, opts = {}) {
   let parentErr = null;
   let directErr = null;
@@ -2139,13 +2175,11 @@ async function atlasFsGetCollection(collection, opts = {}) {
       return res.docs || [];
     } catch(err) { parentErr = err; }
   }
-  const db = window._mntDB;
+  const db = atlasGetSharedDb();
   if (db) {
     try {
       await atlasWaitAuthReady();
-      let ref = db.collection(collection);
-      if (opts.orderBy) ref = ref.orderBy(opts.orderBy, opts.orderDir || 'asc');
-      if (opts.limit) ref = ref.limit(Number(opts.limit));
+      let ref = atlasApplyQueryOptions(db.collection(collection), opts);
       const snap = await ref.get();
       return snap.docs.map(doc => ({ id: doc.id, data: doc.data() }));
     } catch(err) { directErr = err; }
@@ -2163,7 +2197,7 @@ async function atlasFsGetDoc(collection, docId) {
       return res.exists ? { id: res.id, data: res.data || {} } : null;
     } catch(err) { parentErr = err; }
   }
-  const db = window._mntDB;
+  const db = atlasGetSharedDb();
   if (db) {
     try {
       await atlasWaitAuthReady();
@@ -2185,7 +2219,7 @@ async function atlasFsSetDoc(collection, docId, data, opts = {}) {
       return { id: res.id || docId, source:'parent' };
     } catch(err) { parentErr = err; }
   }
-  const db = window._mntDB;
+  const db = atlasGetSharedDb();
   if (db) {
     try {
       await atlasWaitAuthReady();
@@ -2210,7 +2244,7 @@ async function atlasFsAddDoc(collection, data) {
       return { id: res.id, source:'parent' };
     } catch(err) { parentErr = err; }
   }
-  const db = window._mntDB;
+  const db = atlasGetSharedDb();
   if (db) {
     try {
       await atlasWaitAuthReady();
@@ -2235,7 +2269,7 @@ async function atlasFsDeleteDoc(collection, docId) {
       return true;
     } catch(err) { parentErr = err; }
   }
-  const db = window._mntDB;
+  const db = atlasGetSharedDb();
   if (db) {
     try {
       await atlasWaitAuthReady();
@@ -2272,6 +2306,16 @@ function atlasLocalWrite(collection, map) {
 function atlasLocalGetCollection(collection, opts = {}) {
   const map = atlasLocalRead(collection);
   let docs = Object.keys(map).map(id => ({ id, data: map[id] }));
+  atlasNormalizeWhere(opts).forEach(w => {
+    if (!Array.isArray(w) || w.length < 3) return;
+    const [field, op, value] = w;
+    docs = docs.filter(doc => {
+      const cur = (doc.data || {})[field];
+      if (op === '==') return String(cur ?? '') === String(value ?? '');
+      if (op === 'in' && Array.isArray(value)) return value.map(String).includes(String(cur ?? ''));
+      return true;
+    });
+  });
   if (opts.orderBy) {
     const dir = String(opts.orderDir || 'asc').toLowerCase() === 'desc' ? -1 : 1;
     docs.sort((a,b) => {
@@ -2389,6 +2433,7 @@ function normalizarOS(id, d) {
   };
 }
 async function loadOrdensServico() {
+  if (atlasIsChecklistOnly()) { MNT_CACHE.ordens = []; return; }
   const tbody = document.getElementById('gestao-tbody');
   if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Carregando O.S reais...</td></tr>';
   try {
@@ -2419,7 +2464,7 @@ async function loadOrdensServico() {
     renderPreventivaReais();
     renderAprovacoesReais();
     if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--rd);padding:18px;font-size:11.5px">Não foi possível carregar as O.S reais. Verifique login/permissões do Firebase e tente novamente.</td></tr>';
-    toast('Falha ao carregar O.S reais: ' + err.message, 'rd');
+    if (!atlasIsChecklistOnly()) toast('Falha ao carregar O.S reais: ' + err.message, 'rd');
   }
 }
 function setupOSFilters() {
@@ -2613,13 +2658,44 @@ async function loadChecklists() {
   tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:14px;font-size:11px">Carregando...</td></tr>';
 
   try {
-    const isAdmin = ['admin','lr','lm'].includes(ATLAS_CURRENT_USER.perfil);
-    let rawDocs;
-    try {
-      rawDocs = await atlasFsGetCollection('checklists_diarios', { orderBy:'dataAbertura', orderDir:'desc', limit:100 });
-    } catch(eOrder) {
-      rawDocs = await atlasFsGetCollection('checklists_diarios', { limit:100 });
+    await atlasWaitAuthReady();
+    const isAdmin = ['admin','lr','lm'].includes(String(ATLAS_CURRENT_USER.perfil || '').toLowerCase());
+    const emailAtual = ATLAS_CURRENT_USER.email || atlasGetSharedAuth()?.currentUser?.email || '';
+    if (emailAtual && !ATLAS_CURRENT_USER.email) ATLAS_CURRENT_USER.email = emailAtual;
+
+    let rawDocs = [];
+    const placasPermitidas = [ATLAS_CURRENT_USER.placa, ...(ATLAS_CURRENT_USER.carretas || [])].filter(Boolean).map(mntUpper);
+
+    if (isAdmin) {
+      try {
+        rawDocs = await atlasFsGetCollection('checklists_diarios', { orderBy:'dataAbertura', orderDir:'desc', limit:100 });
+      } catch(eOrder) {
+        rawDocs = await atlasFsGetCollection('checklists_diarios', { limit:100 });
+      }
+    } else {
+      const byId = {};
+      async function addDocs(opts) {
+        try {
+          const arr = await atlasFsGetCollection('checklists_diarios', opts);
+          arr.forEach(d => { byId[d.id] = d; });
+        } catch(err) {
+          console.warn('[Checklist] Consulta restrita falhou:', err.message);
+        }
+      }
+      if (placasPermitidas.length) {
+        for (const placa of placasPermitidas) await addDocs({ where:['placa','==',placa], limit:80 });
+      }
+      if (emailAtual) {
+        await addDocs({ where:['motorista_email','==',emailAtual], limit:80 });
+        await addDocs({ where:['criadoPor','==',emailAtual], limit:80 });
+      }
+      rawDocs = Object.values(byId);
+      if (!rawDocs.length && !emailAtual && !placasPermitidas.length) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Aguardando identificação do usuário para carregar os checklists.</td></tr>';
+        return;
+      }
     }
+
     let docs = rawDocs.map(d => ({ id: d.id, ...(d.data || {}) }));
 
     docs.sort((a, b) => {
@@ -2629,13 +2705,12 @@ async function loadChecklists() {
     });
 
     if (!isAdmin) {
-      const placasPermitidas = [ATLAS_CURRENT_USER.placa, ...(ATLAS_CURRENT_USER.carretas || [])].filter(Boolean);
       if (placasPermitidas.length > 0) {
-        docs = docs.filter(d => placasPermitidas.includes(mntUpper(d.placa || '')));
-      } else {
+        docs = docs.filter(d => placasPermitidas.includes(mntUpper(d.placa || '')) || mntUpper(d.motorista_email || d.criadoPor || '') === mntUpper(emailAtual));
+      } else if (emailAtual) {
         docs = docs.filter(d => {
-          const emailDoc = mntUpper(d.motorista_email || d.motorista || '');
-          return emailDoc === mntUpper(ATLAS_CURRENT_USER.email);
+          const emailDoc = mntUpper(d.motorista_email || d.criadoPor || d.motorista || '');
+          return emailDoc === mntUpper(emailAtual);
         });
       }
     }
@@ -2705,6 +2780,9 @@ async function loadChecklists() {
   } catch(err) {
     console.error('[Manutenção] Erro ao carregar checklists:', err);
     tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhum checklist disponível para este perfil.</td></tr>';
+    ['chk-kpi-hoje','chk-kpi-reprov','chk-kpi-pend'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.textContent = '—';
+    });
   }
 }
 
@@ -2738,7 +2816,7 @@ async function openChecklistFirebase(id) {
 async function deleteChecklistFirebase(id, btn) {
   const confirmado = confirm('Confirmar exclusão do checklist?\n\nEsta ação não pode ser desfeita.');
   if (!confirmado) return;
-  const db = window._mntDB;
+  const db = atlasGetSharedDb();
   try {
     await atlasFsDeleteDoc('checklists_diarios', id);
     const row = btn.closest('tr');
@@ -3078,40 +3156,48 @@ async function salvarChecklistFirebase() {
     const ref = await atlasFsAddDoc('checklists_diarios', payload);
     console.log('[Inspeção] Checklist salvo:', ref.id, 'placa:', placa);
 
-    // Cria OS automaticamente para itens reprovados
+    // Cria OS automaticamente para itens reprovados sem impedir a finalização do checklist.
     if (itensReprovados.length > 0) {
-      const num  = await gerarNumOS();
-      const osId = 'OS-' + num;
-      await atlasFsSetDoc('ordens_servico', osId, {
-        num, id: osId,
-        veiculo:      placa,
-        frota:        v ? (v.frota || placa) : placa,
-        tipoEquipamento: v ? (v.tipo || 'Cavalo') : 'Cavalo',
-        motorista,
-        origem:       'checklist',
-        checklist_id: ref.id,
-        problema:     itensReprovados.map(i => i.item + (i.obs ? ' — ' + i.obs : '')).join('; '),
-        servicos:     itensReprovados.map(i => ({ descricao: i.item, obs: i.obs, grupo: i.grupo, quantidade: 1, vlUnit: 0, vlTotal: 0 })),
-        pecas:        [],
-        tipo:         'Corretiva',
-        local:        'Interna',
-        status:       'Aberta',
-        valorTotal:   0,
-        criadoEm:     agora,
-        atualizadoEm: agora,
-        criadoPor:    ATLAS_CURRENT_USER.email || '—',
-      }, { merge: true });
-      registrarNumOS(num);
-      await atlasFsSetDoc('checklists_diarios', ref.id, { osGerada: osId, os_gerada: osId }, { merge: true });
-      await setPlacaEmManutencao(placa);
-      toast('Checklist finalizado e salvo no Firebase — ' + osId + ' criada para itens reprovados.', 'am');
+      try {
+        const num  = await gerarNumOS();
+        const osId = 'OS-' + num;
+        await atlasFsSetDoc('ordens_servico', osId, {
+          num, id: osId,
+          veiculo:      placa,
+          frota:        v ? (v.frota || placa) : placa,
+          tipoEquipamento: v ? (v.tipo || 'Cavalo') : 'Cavalo',
+          motorista,
+          origem:       'checklist',
+          checklist_id: ref.id,
+          problema:     itensReprovados.map(i => i.item + (i.obs ? ' — ' + i.obs : '')).join('; '),
+          servicos:     itensReprovados.map(i => ({ descricao: i.item, obs: i.obs, grupo: i.grupo, quantidade: 1, vlUnit: 0, vlTotal: 0 })),
+          pecas:        [],
+          tipo:         'Corretiva',
+          local:        'Interna',
+          status:       'Aberta',
+          valorTotal:   0,
+          criadoEm:     agora,
+          atualizadoEm: agora,
+          criadoPor:    ATLAS_CURRENT_USER.email || '—',
+        }, { merge: true });
+        registrarNumOS(num);
+        await atlasFsSetDoc('checklists_diarios', ref.id, { osGerada: osId, os_gerada: osId }, { merge: true });
+        await setPlacaEmManutencao(placa);
+        toast('Checklist finalizado e salvo no Firebase — ' + osId + ' criada para itens reprovados.', 'am');
+      } catch(osErr) {
+        console.warn('[Inspeção] Checklist salvo, mas a O.S não pôde ser gerada:', osErr.message);
+        try {
+          await atlasFsSetDoc('checklists_diarios', ref.id, { osGerada: 'Pendente por permissão', os_gerada: 'Pendente por permissão' }, { merge: true });
+        } catch(_) {}
+        toast('Checklist salvo. A O.S não foi gerada por falta de permissão em ordens_servico.', 'am');
+      }
     } else {
       toast('Checklist finalizado e salvo com sucesso!', 'gn');
     }
 
-    // Recarrega listas reais
+    // Recarrega apenas os dados necessários da tela de checklist.
     await loadChecklists();
-    await loadOrdensServico();
+    if (!atlasIsChecklistOnly()) await loadOrdensServico();
     return true;
 
   } catch(err) {
@@ -3435,7 +3521,7 @@ async function finalizarOS(osId) {
     if (file) nfUrl = await uploadNFNuvem(file, osId);
 
     // Persiste finalização no Firestore
-    if (db) {
+    if (db || atlasHasParentBridge()) {
       await atlasFsSetDoc('ordens_servico', osId, {
         status: 'Concluída',
         finalizadoEm: new Date().toISOString(),
