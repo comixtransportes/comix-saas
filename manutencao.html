@@ -5,6 +5,28 @@
 <meta name="viewport" content="width=1280, minimum-scale=0.1, maximum-scale=5, user-scalable=yes">
 <title>Atlas — Manutenção de Frotas</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Firebase SDK — mesma versão do cadastros.html -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script>
+/* ══ FIREBASE — Atlas Manutenção ══
+   Mesma config do cadastros.html / index.html.
+   firebase.apps.length > 0 evita "duplicate app" se já inicializado. */
+(function(){
+  const cfg = {
+    apiKey:            "AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",
+    authDomain:        "comix-relatorios.firebaseapp.com",
+    projectId:         "comix-relatorios",
+    storageBucket:     "comix-relatorios.firebasestorage.app",
+    messagingSenderId: "586258388438",
+    appId:             "1:586258388438:web:3b9da22e650e88ddcf4077"
+  };
+  if (!firebase.apps.length) firebase.initializeApp(cfg);
+  window._mntDB   = firebase.firestore();
+  window._mntAuth = firebase.auth();
+})();
+</script>
 <style>
 /* ══ VARIÁVEIS — espelho exato do index.html ══ */
 :root{
@@ -405,9 +427,9 @@ tbody tr:last-child{border-bottom:none}
           </div>
           <!-- Filtros — ordem: [Filtros] [Parâmetros] [Exportar], sem título "Filtros" -->
           <div class="pd-filter-bar" style="justify-content:flex-start">
-            <div class="pd-filter-group"><label>Período</label><input type="date" value="2026-05-01"><span style="font-size:10px;color:var(--mu)">até</span><input type="date" value="2026-05-31"></div>
-            <div class="pd-filter-group"><label>Unidade</label><select id="mnt_filial_dashboard" data-cadastro="unidades" data-all-label="Todas"><option>Todas</option><option>SC — Caçador</option><option>SP — São Paulo</option><option>PR — Cascavel</option></select></div>
-            <button class="btn btn-sm btn-ac">Aplicar</button>
+            <div class="pd-filter-group"><label>Período</label><input type="date" id="mnt_dt_ini" value="2026-05-01"><span style="font-size:10px;color:var(--mu)">até</span><input type="date" id="mnt_dt_fim" value="2026-05-31"></div>
+            <div class="pd-filter-group"><label>Unidade</label><select id="mnt_filial_dashboard" data-cadastro="unidades" data-all-label="Todas"><option value="">Todas</option></select></div>
+            <button class="btn btn-sm btn-ac" onclick="aplicarFiltrosDashboard()">Aplicar</button>
             <button class="btn btn-sm param-btn" onclick="goTo('params',null)">⚙ Parâmetros</button>
             <button class="btn btn-sm"><span>📊</span> Exportar</button>
           </div>
@@ -618,7 +640,7 @@ tbody tr:last-child{border-bottom:none}
 
           <!-- TASK 4: Filtros e parâmetros alinhados à direita -->
           <div class="filter-row-right">
-            <div class="pd-filter-group"><label>Filial</label><select id="mnt_os_filial" data-cadastro="filiais"><option>Todas</option><option>SC</option><option>SP</option><option>PR</option></select></div>
+            <div class="pd-filter-group"><label>Filial</label><select id="mnt_os_filial" data-cadastro="filiais"><option value="">Todas</option></select></div>
             <button class="btn btn-sm param-btn" onclick="goTo('params',null)">⚙ Parâmetros</button>
           </div>
 
@@ -632,30 +654,24 @@ tbody tr:last-child{border-bottom:none}
                 <div class="fld" style="flex:.7"><label>Prioridade</label><select><option>Normal</option><option>Alta</option><option>Urgente</option></select></div>
               </div>
 
-              <!-- Campo Unidade — integrado ao cadastro de unidades -->
+              <!-- Campo Unidade — populado dinamicamente pelo Firebase (coleção filiais) -->
               <div class="fld">
                 <label>Unidade</label>
                 <select id="mnt_nova_unidade" data-cadastro="unidades">
-                  <option>SC — Caçador</option>
-                  <option>SP — São Paulo</option>
-                  <option>PR — Cascavel</option>
+                  <option value="">Carregando...</option>
                 </select>
               </div>
 
               <div class="sec-title">Equipamento</div>
               <div class="fld-row">
-                <div class="fld"><label>Tipo</label><select id="mnt_nova_tipo"><option>Cavalo</option><option>Carreta</option><option>Compressor</option></select></div>
-                <!-- Placa puxa dados da coleção "veiculos" do Cadastros -->
+                <div class="fld"><label>Tipo</label><select id="mnt_nova_tipo"><option>Cavalo</option><option>Carreta</option><option>Compressor</option><option>Carro de apoio</option></select></div>
+                <!-- Placa — populada dinamicamente pelo Firebase (coleção veiculos) -->
                 <div class="fld"><label>Placa / ID</label>
                   <select id="mnt_nova_veiculo" data-cadastro="veiculos" onchange="onPlacaChange(this.value)">
-                    <option value="">Selecione…</option>
-                    <option value="ABC-1234">ABC-1234</option>
-                    <option value="XYZ-9876">XYZ-9876</option>
-                    <option value="GHI-4321">GHI-4321</option>
-                    <option value="JKL-8877">JKL-8877</option>
+                    <option value="">Carregando...</option>
                   </select>
                 </div>
-                <div class="fld"><label>KM / M³</label><input type="number" id="mnt_nova_km" value=""></div>
+                <div class="fld"><label>KM / M³</label><input type="number" id="mnt_nova_km" value="" placeholder="0"></div>
               </div>
               <div class="sec-title">Tipo e local</div>
               <div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-bottom:9px">
@@ -669,14 +685,11 @@ tbody tr:last-child{border-bottom:none}
                 <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="radio" name="l2"> Externa</label>
               </div>
               <div class="sec-title">Motorista</div>
-              <!-- Preenchido automaticamente pela placa; editável com alerta de divergência -->
+              <!-- Preenchido automaticamente pela placa (alocacao_frota); editável com alerta de divergência -->
               <div class="fld">
                 <label>Motorista</label>
                 <select id="mnt_nova_motorista" data-cadastro="motoristas" onchange="onMotoristaChange(this.value)">
-                  <option value="">Selecione…</option>
-                  <option value="João Carlos Mendes">João Carlos Mendes</option>
-                  <option value="Ricardo Santos">Ricardo Santos</option>
-                  <option value="Pedro Alves">Pedro Alves</option>
+                  <option value="">Carregando...</option>
                 </select>
               </div>
               <div id="motorista-alerta" style="display:none;background:var(--am-bg);border:1px solid var(--am-bd);border-radius:var(--rs);padding:6px 10px;font-size:10.5px;color:var(--am);margin-top:-6px;margin-bottom:8px">
@@ -962,7 +975,7 @@ tbody tr:last-child{border-bottom:none}
             <div class="pd-filter-title">Filtros</div>
             <button class="btn btn-sm param-btn" onclick="goTo('params',null)">⚙ Parâmetros</button>
             <div class="pd-filter-group"><label>Período</label><input type="date" value="2026-05-01"><span style="font-size:10px;color:var(--mu)">até</span><input type="date" value="2026-05-31"></div>
-            <div class="pd-filter-group"><label>Filial</label><select data-cadastro="filiais"><option>Todas</option><option>SC</option><option>SP</option><option>PR</option></select></div>
+            <div class="pd-filter-group"><label>Filial</label><select data-cadastro="filiais"><option value="">Todas</option></select></div>
             <button class="btn btn-sm btn-ac">Aplicar</button>
           </div>
           <div class="card">
@@ -1036,12 +1049,12 @@ tbody tr:last-child{border-bottom:none}
               <div style="background:var(--bg);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px;border:1px solid var(--bd2)">
                 <div style="font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Aprovação técnica</div>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd2)"><div><div style="font-size:12px;font-weight:500">Ativar aprovação técnica</div></div><div class="toggle on" onclick="this.classList.toggle('on')"></div></div>
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd2)"><div style="font-size:12px;font-weight:500">Responsável</div><select id="mnt_resp_tecnico" data-cadastro="usuarios" style="padding:3px 6px;font-size:11px;border:1.5px solid var(--bd);border-radius:var(--rs);font-family:var(--f)"><option>Maicon Ferreira</option><option>João Silva</option></select></div>
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd2)"><div style="font-size:12px;font-weight:500">Responsável</div><select id="mnt_resp_tecnico" data-cadastro="usuarios" style="padding:3px 6px;font-size:11px;border:1.5px solid var(--bd);border-radius:var(--rs);font-family:var(--f)"><option value="">Selecione...</option></select></div>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0"><div><div style="font-size:12px;font-weight:500">Aprovação automática abaixo de</div></div><div style="display:flex;align-items:center;gap:5px"><span style="font-size:11px">R$</span><input type="number" value="300" style="width:65px;text-align:center;padding:3px 5px;border:1px solid var(--bd);border-radius:var(--rs);font-family:var(--m);font-size:11px"></div></div>
               </div>
               <div style="background:var(--bg);border-radius:var(--rs);padding:10px 12px;border:1px solid var(--bd2)">
                 <div style="font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.7px;margin-bottom:8px">Aprovação financeira</div>
-                <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd2)"><div style="font-size:12px;font-weight:500">Responsável</div><select id="mnt_resp_financeiro" data-cadastro="usuarios" style="padding:3px 6px;font-size:11px;border:1.5px solid var(--bd);border-radius:var(--rs);font-family:var(--f)"><option>Diretor Operacional</option><option>Diretor Geral</option></select></div>
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--bd2)"><div style="font-size:12px;font-weight:500">Responsável</div><select id="mnt_resp_financeiro" data-cadastro="usuarios" style="padding:3px 6px;font-size:11px;border:1.5px solid var(--bd);border-radius:var(--rs);font-family:var(--f)"><option value="">Selecione...</option></select></div>
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0"><div><div style="font-size:12px;font-weight:500">Exigir aprovação financeira acima de</div></div><div style="display:flex;align-items:center;gap:5px"><span style="font-size:11px">R$</span><input type="number" value="1000" style="width:65px;text-align:center;padding:3px 5px;border:1px solid var(--bd);border-radius:var(--rs);font-family:var(--m);font-size:11px"></div></div>
               </div>
             </div>
@@ -1177,7 +1190,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="side-panel" id="prev-panel">
   <div class="sp-hdr"><div><div style="font-weight:700;font-size:13px">📅 Programar Manutenção Preventiva</div><div style="font-size:10.5px;color:var(--mu)">Por veículo, KM ou M³</div></div><button class="btn btn-sm" onclick="closePrevModal()">✕</button></div>
   <div class="sp-body">
-    <div class="fld"><label>Frota / Equipamento</label><select id="mnt_prev_veiculo" data-cadastro="veiculos"><option>ABC-1234 — Cavalo Scania R450</option><option>XYZ-9876 — Cavalo Volvo FH</option><option>DEF-5678 — Compressor Pulvitec</option><option>GHI-4321 — Carreta Silo Randon</option></select></div>
+    <div class="fld"><label>Frota / Equipamento</label><select id="mnt_prev_veiculo" data-cadastro="veiculos"><option value="">Carregando...</option></select></div>
     <div class="fld"><label>Tipo de serviço preventivo</label><select><option>Revisão completa (KM)</option><option>Troca óleo motor</option><option>Troca correia dentada</option><option>Revisão freios</option><option>Outro</option></select></div>
     <div class="sec-title">Trigger de ativação</div>
     <div style="display:flex;gap:8px;margin-bottom:10px;font-size:12px">
@@ -1335,38 +1348,70 @@ function closePrevModal() {
 }
 function openPrevDetalhe(placa) { toast('Detalhes preventiva: ' + placa, 'ac'); }
 
-// ══ NOVA OS — SALVAR ══
-function salvarOS() {
-  const unidade = document.getElementById('mnt_nova_unidade')?.value || '';
-  const veiculo = document.getElementById('mnt_nova_veiculo')?.value || '';
-  const prestador = document.getElementById('mnt_nova_prestador')?.value || '';
-  const servicos = coletarServicos();
-  const pecas = coletarPecas();
-  const total = parseFloat(document.getElementById('nova-os-custo')?.value) || 0;
-  // Gerar número sequencial com 4 dígitos
-  gerarNumOS().then(num => {
+// ══ NOVA OS — SALVAR NO FIREBASE ══
+async function salvarOS() {
+  const unidade    = document.getElementById('mnt_nova_unidade')?.value || '';
+  const veiculo    = document.getElementById('mnt_nova_veiculo')?.value || '';
+  const motorista  = document.getElementById('mnt_nova_motorista')?.value || '';
+  const prestador  = document.getElementById('mnt_nova_prestador')?.value || '';
+  const tipo       = document.querySelector('[name="t2"]:checked')?.parentElement?.textContent?.trim() || 'Corretiva';
+  const local      = document.querySelector('[name="l2"]:checked')?.parentElement?.textContent?.trim() || 'Interna';
+  const prazo      = document.querySelector('#view-nova-os input[type="date"]')?.value || '';
+  const problema   = document.querySelector('#view-nova-os textarea')?.value || '';
+  const total      = parseFloat(document.getElementById('nova-os-custo')?.value) || 0;
+  const servicos   = coletarServicos();
+  const pecas      = coletarPecas();
+
+  if (!veiculo) { toast('Selecione a placa do veículo.', 'am'); return; }
+
+  try {
+    const num = await gerarNumOS();
     const osId = 'OS-' + num;
-    // TODO: Integrar com Firestore — coleção: ordens_servico
-    console.log('[Atlas OS] Nova OS:', { id: osId, unidade, veiculo, prestador, servicos, pecas, valorTotal: total });
-    toast(osId + ' criada e enviada para aprovação!', 'gn');
-  });
+    const db = window._mntDB;
+
+    const payload = {
+      num,
+      id: osId,
+      unidade, veiculo, motorista, prestador,
+      tipo, local, prazo, problema,
+      servicos, pecas,
+      valorTotal: total,
+      status: 'Aberta',
+      criadoEm: firebase.firestore.Timestamp.now(),
+      criadoPor: ATLAS_CURRENT_USER.email || '—',
+    };
+
+    if (db) {
+      await db.collection('ordens_servico').doc(osId).set(payload);
+      toast(osId + ' criada e salva no sistema!', 'gn');
+    } else {
+      console.log('[Atlas OS] Modo offline:', payload);
+      toast(osId + ' criada (modo offline).', 'am');
+    }
+  } catch(err) {
+    toast('Erro ao salvar OS: ' + err.message, 'rd');
+  }
 }
 
-// ══ NUMERAÇÃO SEQUENCIAL OS (item 8) ══
+// ══ NUMERAÇÃO SEQUENCIAL OS — busca no Firestore ══
 async function gerarNumOS() {
-  // Tenta buscar o maior número existente no Firestore
+  const db = window._mntDB;
   try {
-    if (window.firebase?.firestore) {
-      const db = window.firebase.firestore();
-      const snap = await db.collection('ordens_servico').orderBy('num', 'desc').limit(1).get();
+    if (db) {
+      const snap = await db.collection('ordens_servico')
+        .orderBy('num', 'desc')
+        .limit(1)
+        .get();
       if (!snap.empty) {
-        const ultimo = snap.docs[0].data().num || 0;
-        return String(parseInt(ultimo) + 1).padStart(4, '0');
+        const ultimo = parseInt(snap.docs[0].data().num || '0', 10);
+        return String(ultimo + 1).padStart(4, '0');
       }
     }
   } catch(e) { /* fallback */ }
-  // Fallback: usa o maior num do OS_DB local
-  const nums = Object.keys(OS_DB).map(k => parseInt(k.replace('OS-','')||0)).filter(n=>!isNaN(n));
+  // Fallback: usa maiores ids do OS_DB local
+  const nums = Object.keys(OS_DB)
+    .map(k => parseInt((k.replace('OS-','') || '0'), 10))
+    .filter(n => !isNaN(n));
   const maior = nums.length ? Math.max(...nums) : 341;
   return String(maior + 1).padStart(4, '0');
 }
@@ -1464,35 +1509,275 @@ function deleteChecklist(chkId, btn) {
   toast('Checklist ' + chkId + ' excluído.', 'rd');
 }
 
-// ══ PLACA → DADOS AUTO (item 9.2 / 9.3) ══
-// Mapa: placa → { motorista, tipo, km }
-const FROTA_MAP = {
-  'ABC-1234': { motorista: 'João Carlos Mendes', tipo: 'Cavalo', km: 187432 },
-  'XYZ-9876': { motorista: 'Pedro Alves',        tipo: 'Cavalo', km: 149800 },
-  'GHI-4321': { motorista: 'Ricardo Santos',     tipo: 'Carreta', km: 0 },
-  'JKL-8877': { motorista: 'Pedro Alves',        tipo: 'Cavalo', km: 210000 },
-};
-let _motoristaDaFrota = ''; // guarda o motorista cadastrado para a placa selecionada
 
+// ══════════════════════════════════════════════════════════════
+// INTEGRAÇÃO FIREBASE — ATLAS MANUTENÇÃO
+// Todas as fontes de dados vêm do Firestore (mesma config do cadastros.html)
+// Coleções: veiculos | motoristas | filiais | usuarios | alocacao_frota | checklists_diarios | ordens_servico
+// ══════════════════════════════════════════════════════════════
+
+/* Cache local — populado na inicialização via loadCadastrosFirebase() */
+const MNT_CACHE = {
+  veiculos:   [],   // { id, placa, frota, tipo, modelo, filial, km }
+  motoristas: [],   // { id, nome, filial }
+  filiais:    [],   // { id, sigla, nome, estado }
+  usuarios:   [],   // { id, email, nome, perfil, uid }
+  alocacoes:  {},   // mapa cavalo_id → { motorista, carreta1_id, carreta2_id, ... }
+};
+
+/* Usuário atual (populado via Auth ou postMessage do index.html) */
+let ATLAS_CURRENT_USER = {
+  email: '', uid: '', perfil: 'admin',
+  placa: '',    // placa do cavalo alocado a este motorista
+  carretas: []  // placas de carretas alocadas
+};
+
+/* Motorista cadastrado para a placa selecionada na OS (para alerta de divergência) */
+let _motoristaDaFrota = '';
+
+/* ── Helper: normaliza texto ── */
+function mntUpper(v) { return String(v || '').trim().toLocaleUpperCase('pt-BR'); }
+
+/* ── Helper: opção de select ── */
+function mntOpt(value, label) {
+  const o = document.createElement('option');
+  o.value = value; o.textContent = label;
+  return o;
+}
+
+/* ══ CARREGAR TODOS OS CADASTROS DO FIREBASE ══ */
+async function loadCadastrosFirebase() {
+  const db = window._mntDB;
+  if (!db) { console.warn('[Manutenção] Firebase não inicializado.'); return; }
+
+  try {
+    const [snapV, snapM, snapF, snapA] = await Promise.all([
+      db.collection('veiculos').get(),
+      db.collection('motoristas').get(),
+      db.collection('filiais').get(),
+      db.collection('alocacao_frota').get(),
+    ]);
+
+    MNT_CACHE.veiculos = snapV.docs.map(d => {
+      const dd = d.data();
+      return {
+        id: d.id,
+        placa:   mntUpper(dd.placa || d.id),
+        frota:   mntUpper(dd.frota),
+        tipo:    normalizeTipo(dd.tipo),
+        modelo:  mntUpper(dd.modelo),
+        filial:  mntUpper(dd.filial),
+        km:      dd.km || dd.hodometro || 0,
+      };
+    }).sort((a,b) => a.frota.localeCompare(b.frota, 'pt-BR') || a.placa.localeCompare(b.placa, 'pt-BR'));
+
+    MNT_CACHE.motoristas = snapM.docs.map(d => {
+      const dd = d.data();
+      return { id: d.id, nome: mntUpper(dd.nome || d.id), filial: mntUpper(dd.filial) };
+    }).sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+    MNT_CACHE.filiais = snapF.docs.map(d => {
+      const dd = d.data();
+      return {
+        id:     d.id,
+        sigla:  mntUpper(dd.sigla),
+        nome:   mntUpper(dd.nome || d.id),
+        estado: mntUpper(dd.estado),
+      };
+    }).sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+    // Monta mapa de alocações: cavalo_id → doc
+    snapA.docs.forEach(d => {
+      const dd = d.data();
+      MNT_CACHE.alocacoes[d.id] = { ...dd, cavalo_id: d.id };
+    });
+
+    // Enriquece veículos com motorista da alocação
+    MNT_CACHE.veiculos.forEach(v => {
+      const aloc = MNT_CACHE.alocacoes[v.id] || MNT_CACHE.alocacoes[v.placa];
+      if (aloc && aloc.motorista) v.motorista = mntUpper(aloc.motorista);
+    });
+
+    console.log(`[Manutenção] Firebase carregado: ${MNT_CACHE.veiculos.length} veículos, ${MNT_CACHE.motoristas.length} motoristas, ${MNT_CACHE.filiais.length} filiais`);
+
+    // Popula todos os selects agora que os dados chegaram
+    popularSelectsOS();
+    popularSelectFiltroChecklist();
+    loadChecklists();
+    resolveAlocacaoUsuario();
+
+  } catch(err) {
+    console.error('[Manutenção] Erro ao carregar Firebase:', err);
+    toast('Erro ao carregar cadastros: ' + err.message, 'rd');
+  }
+}
+
+function normalizeTipo(tipo) {
+  const t = String(tipo || 'Cavalo').trim();
+  if (/carreta/i.test(t)) return 'Carreta';
+  if (/carro\s*de\s*apoio/i.test(t)) return 'Carro de apoio';
+  if (/compressor/i.test(t)) return 'Compressor';
+  return 'Cavalo';
+}
+
+/* ══ POPULAR SELECTS DA TELA "ABRIR O.S" ══ */
+function popularSelectsOS() {
+  popularSelectUnidade();
+  popularSelectVeiculo();
+  popularSelectMotorista();
+  popularSelectUsuarios();
+  popularSelectVeiculoPreventiva();
+}
+
+function popularSelectUnidade() {
+  // Selects com data-cadastro="unidades"
+  document.querySelectorAll('select[data-cadastro="unidades"]').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Selecione...</option>';
+    MNT_CACHE.filiais.forEach(f => {
+      const val   = f.sigla || f.id;
+      const label = f.sigla ? `${f.sigla} — ${f.nome}` : f.nome;
+      sel.appendChild(mntOpt(val, label));
+    });
+    if (cur) sel.value = cur;
+  });
+}
+
+function popularSelectVeiculo() {
+  const sel = document.getElementById('mnt_nova_veiculo');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">Selecione...</option>';
+  MNT_CACHE.veiculos.forEach(v => {
+    const label = v.frota ? `${v.placa} — ${v.frota}` : v.placa;
+    sel.appendChild(mntOpt(v.placa, label));
+  });
+  if (cur) sel.value = cur;
+}
+
+function popularSelectMotorista() {
+  // Todos os selects com data-cadastro="motoristas"
+  document.querySelectorAll('select[data-cadastro="motoristas"]').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Selecione...</option>';
+    MNT_CACHE.motoristas.forEach(m => {
+      sel.appendChild(mntOpt(m.nome, m.nome));
+    });
+    if (cur) sel.value = cur;
+  });
+}
+
+function popularSelectFiltroChecklist() {
+  // Select de filial no checklist (se existir)
+  document.querySelectorAll('select[data-cadastro="filiais"]').forEach(sel => {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Todas</option>';
+    MNT_CACHE.filiais.forEach(f => {
+      const val   = f.sigla || f.id;
+      const label = f.sigla ? `${f.sigla} — ${f.nome}` : f.nome;
+      sel.appendChild(mntOpt(val, label));
+    });
+    if (cur) sel.value = cur;
+  });
+  // Select filial dashboard
+  const dash = document.getElementById('mnt_filial_dashboard');
+  if (dash) {
+    const cur = dash.value;
+    dash.innerHTML = '<option value="">Todas</option>';
+    MNT_CACHE.filiais.forEach(f => {
+      const val   = f.sigla || f.id;
+      const label = f.sigla ? `${f.sigla} — ${f.nome}` : f.nome;
+      dash.appendChild(mntOpt(val, label));
+    });
+    if (cur) dash.value = cur;
+  }
+}
+
+/* ── Usuários (aprovadores, responsáveis) ── */
+function popularSelectUsuarios() {
+  const db = window._mntDB;
+  if (!db) return;
+  db.collection('usuarios').get().then(snap => {
+    MNT_CACHE.usuarios = snap.docs.map(d => {
+      const dd = d.data();
+      return {
+        id:     d.id,
+        email:  dd.email || '',
+        nome:   mntUpper(dd.nome || dd.email || d.id),
+        perfil: dd.perfil || dd.tipo || ''
+      };
+    }).sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+    document.querySelectorAll('select[data-cadastro="usuarios"]').forEach(sel => {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Selecione...</option>';
+      MNT_CACHE.usuarios.forEach(u => {
+        sel.appendChild(mntOpt(u.email || u.id, u.nome || u.email));
+      });
+      if (cur) sel.value = cur;
+    });
+  }).catch(err => console.warn('[Manutenção] Usuários:', err.message));
+}
+
+/* ── Select de veículo no modal Preventiva ── */
+function popularSelectVeiculoPreventiva() {
+  const sel = document.getElementById('mnt_prev_veiculo');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">Selecione...</option>';
+  MNT_CACHE.veiculos.forEach(v => {
+    const label = v.frota
+      ? `${v.placa} — ${v.frota}${v.modelo ? ' · ' + v.modelo : ''}`
+      : v.placa;
+    sel.appendChild(mntOpt(v.placa, label));
+  });
+  if (cur) sel.value = cur;
+}
+
+/* ── Aplicar filtros do dashboard ── */
+function aplicarFiltrosDashboard() {
+  const unidade = document.getElementById('mnt_filial_dashboard')?.value || '';
+  const dtIni   = document.getElementById('mnt_dt_ini')?.value || '';
+  const dtFim   = document.getElementById('mnt_dt_fim')?.value || '';
+  // TODO: recarregar KPIs e gráficos filtrando por unidade e período
+  console.log('[Manutenção] Filtro dashboard:', { unidade, dtIni, dtFim });
+  toast('Filtro aplicado' + (unidade ? ': ' + unidade : ' — Todas as unidades'), 'ac');
+}
+
+/* ══ PLACA → DADOS AUTO (item 9.2 / 9.3) ══ */
 function onPlacaChange(placa) {
-  const dados = FROTA_MAP[placa];
-  if (!dados) { _motoristaDaFrota = ''; return; }
-  _motoristaDaFrota = dados.motorista;
+  if (!placa) { _motoristaDaFrota = ''; return; }
+
+  // Busca o veículo no cache
+  const v = MNT_CACHE.veiculos.find(x => x.placa === placa);
+  if (!v) { _motoristaDaFrota = ''; toast('Veículo não encontrado no cadastro.', 'am'); return; }
+
+  // Motorista da frota (da alocação ou do próprio cadastro do veículo)
+  _motoristaDaFrota = v.motorista || '';
+
   // Tipo
   const tipoEl = document.getElementById('mnt_nova_tipo');
-  if (tipoEl) {
-    for (let o of tipoEl.options) { if (o.value === dados.tipo) { tipoEl.value = dados.tipo; break; } }
+  if (tipoEl && v.tipo) {
+    tipoEl.value = v.tipo;
+    // Se não encontrar opção exata, adiciona
+    if (tipoEl.value !== v.tipo) {
+      tipoEl.appendChild(mntOpt(v.tipo, v.tipo));
+      tipoEl.value = v.tipo;
+    }
   }
-  // KM
+
+  // KM / M³
   const kmEl = document.getElementById('mnt_nova_km');
-  if (kmEl && dados.km) kmEl.value = dados.km;
-  // Motorista
+  if (kmEl) kmEl.value = v.km || '';
+
+  // Motorista — preenche automaticamente
   const motEl = document.getElementById('mnt_nova_motorista');
-  if (motEl) {
-    motEl.value = dados.motorista;
+  if (motEl && _motoristaDaFrota) {
+    motEl.value = _motoristaDaFrota;
     document.getElementById('motorista-alerta').style.display = 'none';
   }
-  toast('Dados da frota carregados: ' + placa, 'ac');
+
+  toast('Dados carregados: ' + placa + (v.frota ? ' · Frota ' + v.frota : ''), 'ac');
 }
 
 function onMotoristaChange(motorista) {
@@ -1505,17 +1790,47 @@ function onMotoristaChange(motorista) {
   }
 }
 
-// ══ CHECKLIST DIÁRIO — carregamento com controle de usuário (item 4) ══
-// ATLAS_CURRENT_USER: populado via postMessage do index.html
-let ATLAS_CURRENT_USER = { email: '', perfil: 'admin', placa: '', carretas: [] };
+/* ══ ALOCAÇÃO DO USUÁRIO LOGADO ══
+   Depois que o ATLAS_CURRENT_USER chega via postMessage (com email/uid),
+   busca em alocacao_frota qual cavalo e carretas este motorista está alocado. */
+async function resolveAlocacaoUsuario() {
+  if (!ATLAS_CURRENT_USER.email && !ATLAS_CURRENT_USER.uid) return;
 
+  // Identifica a placa do cavalo alocado a este motorista
+  let placaCavalo = '';
+  let carretas    = [];
+
+  Object.values(MNT_CACHE.alocacoes).forEach(aloc => {
+    const nomeAloc = mntUpper(aloc.motorista || '');
+    const emailUser = mntUpper(ATLAS_CURRENT_USER.email);
+    const nomeUser  = mntUpper(ATLAS_CURRENT_USER.nome || '');
+
+    const match = nomeAloc && (nomeAloc === emailUser || nomeAloc === nomeUser ||
+      emailUser.startsWith(nomeAloc.split(' ')[0]));
+
+    if (match) {
+      placaCavalo = mntUpper(aloc.cavalo_id || '');
+      if (aloc.carreta1_id) carretas.push(mntUpper(aloc.carreta1_id));
+      if (aloc.carreta2_id) carretas.push(mntUpper(aloc.carreta2_id));
+    }
+  });
+
+  if (placaCavalo) {
+    ATLAS_CURRENT_USER.placa    = placaCavalo;
+    ATLAS_CURRENT_USER.carretas = carretas;
+    loadChecklists(); // recarrega com dados de alocação corretos
+  }
+}
+
+// ══ CHECKLIST DIÁRIO — carregamento com controle de usuário ══
 window.addEventListener('message', function(ev) {
   if (!ev.data || typeof ev.data !== 'object') return;
   if (ev.data.type === 'ATLAS_USER') {
     ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...ev.data };
+    // Com o usuário identificado, resolve a alocação dele
+    resolveAlocacaoUsuario();
     loadChecklists();
   }
-  // Permissões por abas (item 13)
   if (ev.data.type === 'ATLAS_TAB_PERMS') {
     applyTabPerms(ev.data.perfil, ev.data.abas || {});
   }
@@ -1524,99 +1839,195 @@ window.addEventListener('message', function(ev) {
 // Pede permissões ao carregar
 window.parent.postMessage({ type: 'ATLAS_REQUEST_TAB_PERMS' }, '*');
 
-function loadChecklists() {
+/* ══ LOAD CHECKLISTS DO FIREBASE ══
+   Busca na coleção "checklists_diarios" do Firestore.
+   Fallback: mostra mensagem se vazio. */
+async function loadChecklists() {
   const tbody = document.getElementById('checklist-tbody');
   if (!tbody) return;
 
-  const isAdmin = ATLAS_CURRENT_USER.perfil === 'admin' || ATLAS_CURRENT_USER.perfil === 'lr' || ATLAS_CURRENT_USER.perfil === 'lm';
-  // Filtra checklists: motorista só vê os da própria alocação
-  const entries = Object.entries(CHK_DB).filter(([id, chk]) => {
-    if (isAdmin) return true;
-    const placasPermitidas = [ATLAS_CURRENT_USER.placa, ...(ATLAS_CURRENT_USER.carretas || [])].filter(Boolean);
-    return placasPermitidas.includes(chk.placa);
-  });
+  tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:14px;font-size:11px">Carregando...</td></tr>';
 
-  if (entries.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px">Nenhum checklist encontrado para este usuário.</td></tr>';
+  const db = window._mntDB;
+  if (!db) {
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:14px">Firebase não disponível.</td></tr>';
     return;
   }
 
-  tbody.innerHTML = entries.map(([id, chk]) => {
-    const osHtml = chk.osGerada && chk.osGerada !== '—'
-      ? `<span class="os-n">${chk.osGerada}</span>`
-      : `<span style="color:var(--mu)">—</span>`;
-    const isPendente = !chk.horario || chk.horario === 'Pendente';
-    if (isPendente) {
-      return `<tr style="opacity:.6"><td class="os-n">${chk.placa}</td><td>${chk.tipo}</td><td>—</td><td style="color:var(--am)">Pendente</td><td>—</td><td>—</td><td>—</td><td>—</td><td><button class="btn btn-xs btn-ac" onclick="iniciarInspecao('${chk.placa}')">Iniciar</button></td></tr>`;
+  try {
+    const isAdmin = ['admin','lr','lm'].includes(ATLAS_CURRENT_USER.perfil);
+
+    // Data de hoje em formato YYYY-MM-DD para filtro
+    const hoje = new Date();
+    const dataHoje = hoje.toISOString().split('T')[0];
+
+    let query = db.collection('checklists_diarios')
+      .orderBy('dataAbertura', 'desc')
+      .limit(100);
+
+    const snap = await query.get();
+    let docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Se motorista, filtra apenas suas placas
+    if (!isAdmin) {
+      const placasPermitidas = [ATLAS_CURRENT_USER.placa, ...(ATLAS_CURRENT_USER.carretas || [])].filter(Boolean);
+      if (placasPermitidas.length > 0) {
+        docs = docs.filter(d => placasPermitidas.includes(mntUpper(d.placa || '')));
+      } else {
+        // Motorista sem alocação definida: mostra só os próprios
+        docs = docs.filter(d => {
+          const emailDoc = mntUpper(d.motorista_email || d.motorista || '');
+          return emailDoc === mntUpper(ATLAS_CURRENT_USER.email);
+        });
+      }
     }
-    return `<tr>
-      <td class="os-n">${chk.placa}</td>
-      <td>${chk.tipo}</td>
-      <td>${chk.motorista}</td>
-      <td>${chk.horario}</td>
-      <td style="color:var(--gn);font-weight:700">${chk.aprovados}</td>
-      <td style="color:${chk.reprovados>0?'var(--rd)':'var(--mu)'};font-weight:700">${chk.reprovados}</td>
-      <td style="color:var(--ac);font-family:var(--m)">${chk.fotos} fotos</td>
-      <td>${osHtml}</td>
-      <td style="display:flex;gap:4px">
-        <button class="btn btn-xs" onclick="openChecklistPanel('${id}')">Ver</button>
-        <button class="btn btn-xs btn-rd" onclick="deleteChecklist('${id}',this)">Excluir</button>
-      </td>
-    </tr>`;
-  }).join('');
+
+    if (docs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhum checklist registrado hoje.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = docs.map(chk => {
+      const placa       = mntUpper(chk.placa || '—');
+      const tipo        = chk.tipo || '—';
+      const motorista   = chk.motorista || chk.motorista_nome || '—';
+      const aprovados   = chk.aprovados ?? '—';
+      const reprovados  = chk.reprovados ?? '—';
+      const fotos       = chk.fotos ?? 0;
+      const osGerada    = chk.osGerada || chk.os_gerada || '—';
+      const horario     = chk.horario || (chk.dataAbertura?.toDate ? chk.dataAbertura.toDate().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '—');
+      const isPendente  = chk.status === 'pendente' || !chk.horario;
+      const id          = chk.id;
+
+      if (isPendente) {
+        return `<tr style="opacity:.65">
+          <td class="os-n">${placa}</td><td>${tipo}</td><td>—</td>
+          <td style="color:var(--am)">Pendente</td>
+          <td>—</td><td>—</td><td>—</td><td>—</td>
+          <td><button class="btn btn-xs btn-ac" onclick="iniciarInspecao('${placa}')">Iniciar</button></td>
+        </tr>`;
+      }
+
+      const osHtml = osGerada !== '—'
+        ? `<span class="os-n">${osGerada}</span>`
+        : `<span style="color:var(--mu)">—</span>`;
+
+      return `<tr>
+        <td class="os-n">${placa}</td>
+        <td>${tipo}</td>
+        <td>${motorista}</td>
+        <td>${horario}</td>
+        <td style="color:var(--gn);font-weight:700">${aprovados}</td>
+        <td style="color:${Number(reprovados)>0?'var(--rd)':'var(--mu)'};font-weight:700">${reprovados}</td>
+        <td style="color:var(--ac);font-family:var(--m)">${fotos} fotos</td>
+        <td>${osHtml}</td>
+        <td style="display:flex;gap:4px">
+          <button class="btn btn-xs" onclick="openChecklistFirebase('${id}')">Ver</button>
+          <button class="btn btn-xs btn-rd" onclick="deleteChecklistFirebase('${id}',this)">Excluir</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+  } catch(err) {
+    console.error('[Manutenção] Erro ao carregar checklists:', err);
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--rd);padding:14px;font-size:11px">Erro ao carregar: ${err.message}</td></tr>`;
+  }
 }
 
-// ══ INICIAR INSPEÇÃO — registra data/hora no momento da abertura (item 6) ══
+/* ── Abrir checklist do Firebase ── */
+async function openChecklistFirebase(id) {
+  const db = window._mntDB;
+  if (!db) { openChecklistPanel(id); return; } // fallback local
+  try {
+    const snap = await db.collection('checklists_diarios').doc(id).get();
+    if (!snap.exists) { toast('Checklist não encontrado.', 'am'); return; }
+    const chk = { id: snap.id, ...snap.data() };
+    // Adapta para o formato esperado por openChecklistPanel
+    CHK_DB[id] = {
+      placa:    mntUpper(chk.placa || ''),
+      tipo:     chk.tipo || '—',
+      motorista: chk.motorista || chk.motorista_nome || '—',
+      horario:  chk.horario || '—',
+      data:     chk.data || (chk.dataAbertura?.toDate ? chk.dataAbertura.toDate().toLocaleDateString('pt-BR') : '—'),
+      filial:   chk.filial || '—',
+      aprovados:  chk.aprovados ?? 0,
+      reprovados: chk.reprovados ?? 0,
+      fotos:    chk.fotos ?? 0,
+      osGerada: chk.osGerada || chk.os_gerada || '—',
+      reprovados_itens: chk.itens_reprovados || [],
+      obs: chk.observacoes || '',
+    };
+    openChecklistPanel(id);
+  } catch(err) {
+    toast('Erro ao abrir checklist: ' + err.message, 'rd');
+  }
+}
+
+/* ── Excluir checklist do Firebase ── */
+async function deleteChecklistFirebase(id, btn) {
+  const confirmado = confirm('Confirmar exclusão do checklist?\n\nEsta ação não pode ser desfeita.');
+  if (!confirmado) return;
+  const db = window._mntDB;
+  try {
+    if (db) await db.collection('checklists_diarios').doc(id).delete();
+    const row = btn.closest('tr');
+    if (row) row.remove();
+    toast('Checklist excluído.', 'rd');
+  } catch(err) {
+    toast('Erro ao excluir: ' + err.message, 'rd');
+  }
+}
+
+/* ── Iniciar inspeção — data/hora real de abertura ── */
 function iniciarInspecao(placa) {
-  const agora = new Date();
+  const agora   = new Date();
   const dataStr = agora.toLocaleDateString('pt-BR');
   const horaStr = agora.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
 
-  // Atualiza campos da tela de inspeção (item 6 e 7)
   const plateNumEl = document.getElementById('insp-plate-num');
   if (plateNumEl && placa) plateNumEl.textContent = placa.replace('-','');
+
+  // Busca motorista do cache real
+  const v = MNT_CACHE.veiculos.find(x => x.placa === placa);
+  const motoristaNome = v?.motorista || ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '—';
+
   const driverLine = document.getElementById('insp-driver-line');
-  const motorista = FROTA_MAP[placa]?.motorista || ATLAS_CURRENT_USER.email || '—';
-  if (driverLine) driverLine.innerHTML = 'Motorista: ' + motorista + ' · <span id="insp-date-display">' + dataStr + ' ' + horaStr + '</span>';
+  if (driverLine) {
+    driverLine.innerHTML = 'Motorista: ' + motoristaNome
+      + ' · <span id="insp-date-display">' + dataStr + ' ' + horaStr + '</span>';
+  }
+
+  // Guarda placa e timestamp no contexto do wizard
+  window._inspPlaca = placa;
+  window._inspTs    = agora.toISOString();
 
   goTo('checklist-wizard', null);
 }
 
-// ══ PERMISSÕES POR ABAS (item 13) ══
+// ══ PERMISSÕES POR ABAS ══
 function applyTabPerms(perfil, abas) {
-  if (perfil === 'admin') return; // admin vê tudo
+  if (perfil === 'admin') return;
   const mntAbas = abas.manutencao || {};
-  if (Object.keys(mntAbas).length === 0) return; // sem restrição definida
+  if (Object.keys(mntAbas).length === 0) return;
 
-  // Mapa: data-view → chave de permissão
   const abaMap = {
-    'dashboard': 'dashboard',
-    'checklist': 'checklist',
-    'nova-os': 'nova_os',
-    'gestao': 'gestao_os',
-    'kanban': 'kanban',
-    'preventiva': 'preventiva',
-    'frota': 'por_frota',
-    'aprovacao': 'aprovacoes',
-    'alertas': 'alertas',
-    'paradas': 'paradas',
-    'historico': 'historico'
+    'dashboard':'dashboard','checklist':'checklist','nova-os':'nova_os',
+    'gestao':'gestao_os','kanban':'kanban','preventiva':'preventiva',
+    'frota':'por_frota','aprovacao':'aprovacoes','alertas':'alertas',
+    'paradas':'paradas','historico':'historico'
   };
   let primeiraPermitida = null;
   document.querySelectorAll('.module-tab[data-view]').forEach(tab => {
-    const view = tab.dataset.view;
+    const view    = tab.dataset.view;
     const permKey = abaMap[view];
     const temPerm = !permKey || mntAbas[permKey] !== false;
     if (!temPerm) {
       tab.style.display = 'none';
-      // Oculta a view correspondente se estiver ativa
-      const viewEl = document.getElementById('view-' + view);
-      if (viewEl) viewEl.classList.remove('on');
+      document.getElementById('view-' + view)?.classList.remove('on');
     } else {
       if (!primeiraPermitida) primeiraPermitida = view;
     }
   });
-  // Se a view ativa não for permitida, navega para a primeira permitida
   const ativa = document.querySelector('.module-tab.on');
   if (ativa && ativa.style.display === 'none' && primeiraPermitida) {
     goTo(primeiraPermitida, null);
@@ -1794,24 +2205,13 @@ function ensureReprovaInline(row) {
   }
 }
 
-// ══ INDEX.HTML INTEGRATION — expor para iframe ══
-// TASK 1: Integração com index.html já feita via VIEWS['manutencao'].src = 'manutencao.html'
-// O index.html precisa ter src: 'manutencao.html' no VIEWS['manutencao']
-// Receber contexto do usuário via postMessage (opcional, para personalização futura)
-window.addEventListener('message', function(ev) {
-  if (!ev.data || typeof ev.data !== 'object') return;
-  if (ev.data.type === 'ATLAS_USER') {
-    // Recebe: { type: 'ATLAS_USER', email, perfil }
-    // Usar para personalizar a tela (futuro)
-  }
-});
-
 // ══ INIT ══
 renderParadas();
 renderParadasPage();
 renderPrevItems();
 renderCal();
-loadChecklists(); // carrega tabela de checklist (dados limpos de testes)
+// Carrega dados reais do Firebase (veiculos, motoristas, filiais, alocacoes, checklists)
+loadCadastrosFirebase();
 </script>
 </body>
 </html>
