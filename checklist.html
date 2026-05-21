@@ -409,9 +409,12 @@ td .btn-icon-sm + .btn-icon-sm{margin-left:3px}
 .placa-sugg-item{padding:7px 11px;font-size:12px;font-family:var(--m);cursor:pointer;border-bottom:1px solid var(--bd2);display:flex;align-items:center;gap:8px;transition:background .1s}
 .placa-sugg-item:last-child{border-bottom:none}
 .placa-sugg-item:hover,.placa-sugg-item.selected{background:var(--ac-bg);color:var(--ac)}
+.toast{position:fixed;right:18px;bottom:18px;z-index:9999;background:var(--wh);border:1px solid var(--bd2);border-left:4px solid var(--ac);border-radius:var(--rs);box-shadow:var(--shd-l);padding:10px 12px;max-width:360px;font-size:11.5px;color:var(--tx);transform:translateY(140%);transition:transform .2s ease}
 .toast.on{transform:translateY(0)}
 .toast.gn{border-left-color:var(--gn)}
 .toast.rd{border-left-color:var(--rd)}
+.toast.am{border-left-color:var(--am)}
+.toast.ac{border-left-color:var(--ac)}
 
 /* Ajustes v2 — parâmetros e módulo Checklist independente */
 body.checklist-only .mod-hdr{display:none!important}
@@ -1718,6 +1721,43 @@ let ATLAS_CURRENT_USER = {
   carretas: []  // placas de carretas alocadas
 };
 
+/* Auth direto: no acesso fora do portal, aguarda o Firebase Auth antes de consultar/gravar. */
+let _atlasAuthReadyPromise = null;
+function atlasApplyAuthUser(user) {
+  if (!user) return;
+  ATLAS_CURRENT_USER = {
+    ...ATLAS_CURRENT_USER,
+    email: user.email || ATLAS_CURRENT_USER.email || '',
+    uid: user.uid || ATLAS_CURRENT_USER.uid || '',
+    nome: ATLAS_CURRENT_USER.nome || user.displayName || user.email || ''
+  };
+}
+function atlasWaitAuthReady(timeout = 6000) {
+  const auth = window._mntAuth;
+  if (atlasHasParentBridge && atlasHasParentBridge()) return Promise.resolve(null);
+  if (!auth) return Promise.resolve(null);
+  if (_atlasAuthReadyPromise) return _atlasAuthReadyPromise;
+  _atlasAuthReadyPromise = new Promise(resolve => {
+    let done = false;
+    let unsub = null;
+    const finish = user => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { if (typeof unsub === 'function') unsub(); } catch(_) {}
+      atlasApplyAuthUser(user || auth.currentUser || null);
+      resolve(user || auth.currentUser || null);
+    };
+    const timer = setTimeout(() => finish(auth.currentUser || null), timeout);
+    try {
+      unsub = auth.onAuthStateChanged(user => finish(user), () => finish(auth.currentUser || null));
+    } catch(_) {
+      finish(auth.currentUser || null);
+    }
+  });
+  return _atlasAuthReadyPromise;
+}
+
 /* Motorista cadastrado para a placa selecionada na OS (para alerta de divergência) */
 let _motoristaDaFrota = '';
 
@@ -1737,16 +1777,17 @@ async function loadCadastrosFirebase() {
   if (!db) { console.warn('[Manutenção] Firebase não inicializado.'); return; }
 
   try {
-    const [snapV, snapM, snapF, snapA, snapC] = await Promise.all([
-      db.collection('veiculos').get(),
-      db.collection('motoristas').get(),
-      db.collection('filiais').get(),
-      db.collection('alocacao_frota').get(),
-      db.collection('compressores').get(),   // ← carrega compressores reais
+    await atlasWaitAuthReady();
+    const [docsV, docsM, docsF, docsA, docsC] = await Promise.all([
+      atlasFsGetCollection('veiculos'),
+      atlasFsGetCollection('motoristas'),
+      atlasFsGetCollection('filiais'),
+      atlasFsGetCollection('alocacao_frota'),
+      atlasFsGetCollection('compressores'),   // ← carrega compressores reais
     ]);
 
-    MNT_CACHE.veiculos = snapV.docs.map(d => {
-      const dd = d.data();
+    MNT_CACHE.veiculos = docsV.map(d => {
+      const dd = d.data || {};
       return {
         id:     d.id,
         placa:  mntUpper(dd.placa || d.id),
@@ -1759,20 +1800,20 @@ async function loadCadastrosFirebase() {
       };
     }).sort((a,b) => a.frota.localeCompare(b.frota, 'pt-BR') || a.placa.localeCompare(b.placa, 'pt-BR'));
 
-    MNT_CACHE.motoristas = snapM.docs.map(d => {
-      const dd = d.data();
+    MNT_CACHE.motoristas = docsM.map(d => {
+      const dd = d.data || {};
       return { id: d.id, nome: mntUpper(dd.nome || d.id), filial: mntUpper(dd.filial) };
     }).sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 
-    MNT_CACHE.filiais = snapF.docs.map(d => {
-      const dd = d.data();
+    MNT_CACHE.filiais = docsF.map(d => {
+      const dd = d.data || {};
       return { id: d.id, sigla: mntUpper(dd.sigla), nome: mntUpper(dd.nome || d.id), estado: mntUpper(dd.estado) };
     }).sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 
     // Mapa de compressores: id → { identificacao, serie, ... }
     MNT_CACHE.compressores = {};
-    snapC.docs.forEach(d => {
-      const dd = d.data();
+    docsC.forEach(d => {
+      const dd = d.data || {};
       MNT_CACHE.compressores[d.id] = {
         id:           d.id,
         identificacao: mntUpper(dd.identificacao || dd.id_compressor || d.id),
@@ -1781,8 +1822,8 @@ async function loadCadastrosFirebase() {
     });
 
     // Monta mapa de alocações: cavalo_id → doc
-    snapA.docs.forEach(d => {
-      const dd = d.data();
+    docsA.forEach(d => {
+      const dd = d.data || {};
       MNT_CACHE.alocacoes[d.id] = { ...dd, cavalo_id: d.id };
     });
 
@@ -2099,8 +2140,9 @@ async function atlasFsGetCollection(collection, opts = {}) {
     } catch(err) { parentErr = err; }
   }
   const db = window._mntDB;
-  if (db && !atlasHasParentBridge()) {
+  if (db) {
     try {
+      await atlasWaitAuthReady();
       let ref = db.collection(collection);
       if (opts.orderBy) ref = ref.orderBy(opts.orderBy, opts.orderDir || 'asc');
       if (opts.limit) ref = ref.limit(Number(opts.limit));
@@ -2122,8 +2164,9 @@ async function atlasFsGetDoc(collection, docId) {
     } catch(err) { parentErr = err; }
   }
   const db = window._mntDB;
-  if (db && !atlasHasParentBridge()) {
+  if (db) {
     try {
+      await atlasWaitAuthReady();
       const snap = await db.collection(collection).doc(docId).get();
       return snap.exists ? { id: snap.id, data: snap.data() } : null;
     } catch(err) { directErr = err; }
@@ -2143,8 +2186,9 @@ async function atlasFsSetDoc(collection, docId, data, opts = {}) {
     } catch(err) { parentErr = err; }
   }
   const db = window._mntDB;
-  if (db && !atlasHasParentBridge()) {
+  if (db) {
     try {
+      await atlasWaitAuthReady();
       await db.collection(collection).doc(docId).set(data, { merge: !!opts.merge });
       atlasLocalSetDoc(collection, docId, data, { merge: !!opts.merge });
       return { id: docId, source:'iframe' };
@@ -2167,8 +2211,9 @@ async function atlasFsAddDoc(collection, data) {
     } catch(err) { parentErr = err; }
   }
   const db = window._mntDB;
-  if (db && !atlasHasParentBridge()) {
+  if (db) {
     try {
+      await atlasWaitAuthReady();
       const ref = await db.collection(collection).add(data);
       atlasLocalSetDoc(collection, ref.id, data, { merge: true });
       return { id: ref.id, source:'iframe' };
@@ -2191,8 +2236,9 @@ async function atlasFsDeleteDoc(collection, docId) {
     } catch(err) { parentErr = err; }
   }
   const db = window._mntDB;
-  if (db && !atlasHasParentBridge()) {
+  if (db) {
     try {
+      await atlasWaitAuthReady();
       await db.collection(collection).doc(docId).delete();
       atlasLocalDeleteDoc(collection, docId);
       return true;
@@ -2930,6 +2976,7 @@ function swTab(el, panelId) {
 // ══ TOAST ══
 function toast(msg, type = 'ac') {
   const t = document.getElementById('toast-el');
+  if (!t) { console.warn('[Toast]', msg); return; }
   t.textContent = msg;
   t.className = 'toast ' + type + ' on';
   setTimeout(() => t.classList.remove('on'), 3200);
@@ -2962,10 +3009,17 @@ async function wizNext() {
   if (wizCurrent < WIZ_STEPS - 1) {
     wizStep(wizCurrent + 1);
   } else {
-    const ok = await salvarChecklistFirebase();
-    if (ok) {
-      resetarInspecaoEmBranco();
-      goTo('checklist', null);
+    const btn = document.getElementById('wiz-next');
+    const oldText = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
+    try {
+      const ok = await salvarChecklistFirebase();
+      if (ok) {
+        resetarInspecaoEmBranco();
+        goTo('checklist', null);
+      }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = oldText || '✓ Finalizar'; }
     }
   }
 }
@@ -3783,7 +3837,7 @@ renderCal();
 carregarParametros();
 if (document.body.classList.contains('checklist-only')) setTimeout(() => goTo('checklist', null), 0);
 // Carrega dados reais do Firebase (veiculos, motoristas, filiais, alocacoes, checklists)
-loadCadastrosFirebase();
+atlasWaitAuthReady().then(() => loadCadastrosFirebase());
 setTimeout(() => { const h = (location.hash || '').replace('#',''); if (h) goTo(h, null); }, 0);
 </script>
 <script>
