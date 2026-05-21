@@ -24,9 +24,8 @@
     appId:             "1:586258388438:web:3b9da22e650e88ddcf4077"
   };
   if (!firebase.apps.length) firebase.initializeApp(cfg);
-  window._mntDB      = firebase.firestore();
-  window._mntAuth    = firebase.auth();
-  window._mntStorage = firebase.storage();
+  window._mntDB   = firebase.firestore();
+  window._mntAuth = firebase.auth();
 })();
 </script>
 <style>
@@ -1316,8 +1315,8 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
     <div style="font-size:11.5px;color:var(--mu);line-height:1.6;margin-bottom:12px" id="chk-obs">Nenhuma observação registrada.</div>
   </div>
   <div class="sp-footer">
-    <button class="btn btn-sm btn-ac" onclick="abrirOSDoChecklist()">+ Abrir OS</button>
-    <button class="btn btn-sm btn-gn" onclick="closeChecklistPanel()">✓ Confirmar visualização</button>
+    <button class="btn btn-sm btn-ac" id="chk-btn-abrir-os" onclick="abrirOSdoChecklist()">+ Abrir OS</button>
+    <button class="btn btn-sm btn-gn" onclick="confirmarVisualizacaoChecklist()">✓ Confirmar visualização</button>
   </div>
 </div>
 
@@ -1432,116 +1431,12 @@ function closePanel() {
 }
 
 // ══ PANEL LATERAL CHECKLIST (TASK 8) ══
-function normalizarItemReprovadoChecklist(item) {
-  if (item == null) return { grupo:'', item:'Item reprovado', status:'reprovado', obs:'', fotoUrl:'' };
-  if (typeof item === 'string') return { grupo:'', item, status:'reprovado', obs:'', fotoUrl:'' };
-  if (typeof item === 'object') {
-    return {
-      grupo: String(item.grupo || item.categoria || item.secao || '').trim(),
-      item: String(item.item || item.descricao || item.nome || item.titulo || 'Item reprovado').trim(),
-      status: String(item.status || 'reprovado').trim(),
-      obs: String(item.obs || item.observacao || item.observações || '').trim(),
-      fotoUrl: String(item.fotoUrl || item.url || item.foto_url || '').trim()
-    };
-  }
-  return { grupo:'', item:String(item), status:'reprovado', obs:'', fotoUrl:'' };
-}
-function htmlItemReprovadoChecklist(item) {
-  const it = normalizarItemReprovadoChecklist(item);
-  const linha1 = [it.grupo, it.item].filter(Boolean).join(' — ') || 'Item reprovado';
-  const obs = it.obs ? `<div style="font-size:10.5px;color:var(--mu);margin-top:2px">${escapeHtml(it.obs)}</div>` : '';
-  return `<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 9px;background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:var(--rs);margin-bottom:5px;font-size:11.5px">
-    <span style="color:var(--rd);flex-shrink:0">✗</span>
-    <span><strong>${escapeHtml(linha1)}</strong>${obs}</span>
-  </div>`;
-}
-function normalizarFotosChecklist(chk) {
-  const metas = Array.isArray(chk.fotosMeta) ? chk.fotosMeta : [];
-  const urls = Array.isArray(chk.fotosUrls) ? chk.fotosUrls : [];
-  const porUrl = urls.map((url, i) => ({ url, label:'Foto ' + (i + 1), name:'foto_' + (i + 1) }));
-  const todas = metas.length ? metas : porUrl;
-  return todas.map((f, idx) => {
-    if (typeof f === 'string') return { url:f, label:'Foto ' + (idx + 1), name:'foto_' + (idx + 1) };
-    return {
-      url: String(f.url || f.downloadURL || f.publicUrl || ''),
-      path: String(f.path || ''),
-      label: String(f.label || f.refId || f.name || ('Foto ' + (idx + 1))),
-      name: String(f.name || ''),
-      status: String(f.status || (f.url ? 'ok' : '')),
-      storage: String(f.storage || ''),
-      uploadedAt: String(f.uploadedAt || f.addedAt || '')
-    };
-  });
-}
-function renderFotosChecklist(chk) {
-  const grid = document.getElementById('chk-fotos-grid');
-  if (!grid) return;
-  const fotos = normalizarFotosChecklist(chk).filter(f => f.url);
-  if (!fotos.length) {
-    grid.innerHTML = '<div style="grid-column:1/-1;padding:12px;border:1px dashed var(--bd);border-radius:var(--rs);font-size:11px;color:var(--mu);text-align:center">Nenhuma foto acessível encontrada neste checklist.</div>';
-    return;
-  }
-  grid.innerHTML = fotos.map((f, idx) => {
-    const label = escapeHtml(f.label || ('Foto ' + (idx + 1)));
-    const url = escapeHtml(f.url);
-    return `<a class="sp-photo-card" href="${url}" target="_blank" rel="noopener" title="Abrir foto">
-      <img src="${url}" alt="${label}" style="width:100%;height:100%;object-fit:cover;display:block">
-      <span style="position:absolute;left:8px;bottom:7px;background:rgba(255,255,255,.88);border-radius:8px;padding:2px 6px">${label}</span>
-    </a>`;
-  }).join('');
-}
-function abrirOSDoChecklist() {
-  const chkId = document.getElementById('chk-id')?.textContent || '';
-  const chk = CHK_DB[chkId];
-  if (!chk) { toast('Checklist não encontrado para abertura da O.S.', 'am'); return; }
-  window._osOrigemChecklistId = chkId;
-  closeChecklistPanel();
-  goTo('nova-os', null);
-  setTimeout(() => preencherOSComChecklist(chkId), 80);
-}
-function preencherOSComChecklist(chkId) {
-  const chk = CHK_DB[chkId];
-  if (!chk) return;
-  const placa = mntUpper(chk.placa || '');
-  const v = MNT_CACHE.veiculos.find(x => x.placa === placa) || {};
-  const placaInput = document.getElementById('mnt_nova_placa_input');
-  if (placaInput) placaInput.value = placa;
-  const tipoSel = document.getElementById('mnt_nova_tipo');
-  if (tipoSel) tipoSel.value = chk.tipo || v.tipo || 'Cavalo';
-  const unidadeSel = document.getElementById('mnt_nova_unidade');
-  if (unidadeSel && chk.filial && chk.filial !== '—') unidadeSel.value = chk.filial;
-  const motSel = document.getElementById('mnt_nova_motorista');
-  if (motSel && chk.motorista && chk.motorista !== '—') {
-    const opt = Array.from(motSel.options).find(o => mntUpper(o.value) === mntUpper(chk.motorista) || mntUpper(o.textContent) === mntUpper(chk.motorista));
-    if (opt) motSel.value = opt.value;
-  }
-  const itens = Array.isArray(chk.reprovados_itens) ? chk.reprovados_itens.map(normalizarItemReprovadoChecklist) : [];
-  const problema = itens.length
-    ? itens.map(i => [i.grupo, i.item, i.obs].filter(Boolean).join(' — ')).join('; ')
-    : 'Checklist com reprovação aguardando avaliação do líder.';
-  const txt = document.querySelector('#view-nova-os textarea');
-  if (txt) txt.value = 'Origem: checklist ' + chkId + '\n' + problema;
-  const list = document.getElementById('servicos-list');
-  if (list && itens.length) {
-    list.innerHTML = '';
-    itens.forEach(i => {
-      const row = document.createElement('div');
-      row.className = 'dynamic-row';
-      row.innerHTML = '<input type="text" placeholder="Descrição do serviço" class="servico-desc">'
-        + '<input type="number" value="1" min="1" class="qty-input" title="Quantidade" oninput="calcRowTotal(this)">'
-        + '<input type="number" value="0" min="0" step="0.01" class="qty-input vl-unit" style="width:80px" title="Valor Unitário" oninput="calcRowTotal(this)">'
-        + '<input type="number" value="0" class="qty-input vl-total" style="width:80px;background:var(--bg)" title="Valor Total" readonly>'
-        + '<button class="remove-btn" onclick="removeRow(this)" title="Remover">×</button>';
-      const desc = row.querySelector('.servico-desc');
-      if (desc) desc.value = [i.grupo, i.item, i.obs].filter(Boolean).join(' — ');
-      list.appendChild(row);
-    });
-  }
-  toast('Rascunho da O.S preenchido a partir do checklist. Revise e salve somente se a manutenção for necessária.', 'ac');
-}
+let _chkPanelAtivo = null;
+
 function openChecklistPanel(chkId) {
   const chk = CHK_DB[chkId];
   if (!chk) return;
+  _chkPanelAtivo = chkId;
 
   document.getElementById('chk-id').textContent = chkId;
   const badge = document.getElementById('chk-badge');
@@ -1560,21 +1455,53 @@ function openChecklistPanel(chkId) {
   document.getElementById('chk-reprovados').textContent = chk.reprovados;
   document.getElementById('chk-fotos').textContent = chk.fotos;
   const osEl = document.getElementById('chk-os-gerada');
-  osEl.textContent = chk.osGerada;
-  osEl.style.color = chk.osGerada !== '—' ? 'var(--ac)' : 'var(--mu)';
-  document.getElementById('chk-obs').textContent = chk.obs;
+  osEl.textContent = chk.osGerada || '—';
+  osEl.style.color = chk.osGerada ? 'var(--ac)' : 'var(--mu)';
+  document.getElementById('chk-obs').textContent = chk.obs || 'Nenhuma observação registrada.';
+
+  // Fotos — renderiza URLs reais ou placeholders
+  const fotosGrid = document.getElementById('chk-fotos-grid');
+  const urls = chk.fotosUrls || [];
+  const labels = ['Frente', 'Traseira', 'Lat. Direita', 'Lat. Esquerda'];
+  if (urls.length > 0) {
+    fotosGrid.innerHTML = urls.map((url, i) => {
+      const label = labels[i] || ('Foto ' + (i + 1));
+      return url
+        ? `<div class="sp-photo-card" style="padding:0;overflow:hidden;cursor:pointer" onclick="window.open('${url}','_blank')">
+             <img src="${url}" alt="${label}" style="width:100%;height:100%;object-fit:cover;border-radius:var(--rs)" onerror="this.parentElement.innerHTML='<span style=font-size:22px>📷</span><span>${label}</span>'">
+             <span style="position:absolute;bottom:4px;left:0;right:0;text-align:center;font-size:9.5px;background:rgba(0,0,0,.45);color:#fff;padding:2px 0">${label}</span>
+           </div>`
+        : `<div class="sp-photo-card"><span style="font-size:26px">📷</span><span>${label}</span></div>`;
+    }).join('');
+    // Ajusta posição relativa para label absoluto funcionar
+    fotosGrid.querySelectorAll('.sp-photo-card').forEach(c => { if (c.querySelector('img')) c.style.position = 'relative'; });
+  } else {
+    fotosGrid.innerHTML = labels.map(l => `<div class="sp-photo-card"><span style="font-size:26px">📷</span><span>${l}</span><span style="font-size:9px;color:var(--mu)">Pré-visualização</span></div>`).join('');
+  }
+
+  // Botão Abrir OS — oculta se já tem OS ou se já foi revisado sem OS
+  const btnOS = document.getElementById('chk-btn-abrir-os');
+  if (btnOS) {
+    const jaRevisado = chk.revisao_status === 'revisado_sem_os' || chk.revisao_status === 'os_aberta';
+    btnOS.style.display = (chk.reprovados > 0 && !jaRevisado) ? '' : 'none';
+    if (chk.osGerada) btnOS.textContent = 'OS: ' + chk.osGerada;
+  }
 
   // Itens reprovados
   const reprovSection = document.getElementById('chk-reprov-section');
   const reprovList = document.getElementById('chk-reprov-list');
   if (chk.reprovados_itens && chk.reprovados_itens.length > 0) {
     reprovSection.style.display = 'block';
-    reprovList.innerHTML = chk.reprovados_itens.map(htmlItemReprovadoChecklist).join('');
+    reprovList.innerHTML = chk.reprovados_itens.map(item => {
+      // item pode ser string (legado) ou objeto {grupo, item, status, obs}
+      const nome = typeof item === 'string' ? item : (item.item || item.descricao || JSON.stringify(item));
+      const obs  = typeof item === 'object' && item.obs ? ` — <em style="color:var(--mu)">${escapeHtml(item.obs)}</em>` : '';
+      const grupo = typeof item === 'object' && item.grupo ? `<span style="font-size:9.5px;color:var(--mu);font-weight:600;text-transform:uppercase;letter-spacing:.4px">${escapeHtml(item.grupo)} · </span>` : '';
+      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 9px;background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:var(--rs);margin-bottom:5px;font-size:11.5px"><span style="color:var(--rd);flex-shrink:0;font-weight:700">✗</span><span>${grupo}${escapeHtml(nome)}${obs}</span></div>`;
+    }).join('');
   } else {
     reprovSection.style.display = 'none';
   }
-
-  renderFotosChecklist(chk);
 
   document.getElementById('chk-overlay').classList.add('on');
   document.getElementById('chk-panel').classList.add('on');
@@ -1582,6 +1509,68 @@ function openChecklistPanel(chkId) {
 function closeChecklistPanel() {
   document.getElementById('chk-overlay').classList.remove('on');
   document.getElementById('chk-panel').classList.remove('on');
+  _chkPanelAtivo = null;
+}
+
+// Líder clica em "Abrir OS" — pré-preenche o formulário de OS com dados do checklist
+function abrirOSdoChecklist() {
+  const chkId = _chkPanelAtivo;
+  const chk   = chkId ? CHK_DB[chkId] : null;
+  if (!chk) { toast('Dados do checklist não encontrados.', 'am'); return; }
+
+  closeChecklistPanel();
+  goTo('nova-os', null);
+
+  // Aguarda a view renderizar e preenche os campos
+  setTimeout(() => {
+    // Placa / veículo
+    const placaInp = document.getElementById('mnt_nova_placa_input');
+    if (placaInp) { placaInp.value = chk.placa || ''; onPlacaInput(chk.placa || ''); selecionarPlaca(chk.placa || ''); }
+
+    // Tipo
+    const tipoSel = document.getElementById('mnt_nova_tipo');
+    if (tipoSel) tipoSel.value = 'Corretiva';
+
+    // Problema — concatena itens reprovados
+    const itens = chk.reprovados_itens || [];
+    const problema = itens.map(i => {
+      if (typeof i === 'string') return i;
+      return (i.item || '') + (i.obs ? ' — ' + i.obs : '');
+    }).join('\n');
+
+    const problemEl = document.getElementById('mnt_nova_problema') || document.querySelector('textarea[placeholder*="problema"], textarea[placeholder*="Descreva"]');
+    if (problemEl) problemEl.value = 'Checklist ' + chkId + ':\n' + problema;
+
+    // Origem — marca como vinda do checklist (campo oculto ou observação)
+    const obsEl = document.querySelector('#view-nova-os textarea[id*="obs"], #view-nova-os textarea[placeholder*="bservação"]');
+    if (obsEl && !obsEl.value) obsEl.value = 'OS originada do checklist ' + chkId + ' — motorista: ' + chk.motorista;
+
+    // Guarda o chkId para linkagem após salvar
+    window._osOrigemChecklistId = chkId;
+
+    toast('Formulário pré-preenchido com dados da inspeção.', 'ac');
+  }, 200);
+}
+
+// Líder confirma visualização sem abrir OS — marca checklist como revisado
+async function confirmarVisualizacaoChecklist() {
+  const chkId = _chkPanelAtivo;
+  closeChecklistPanel();
+  if (!chkId) return;
+  try {
+    await atlasFsSetDoc('checklists_diarios', chkId, {
+      revisao_status:   'revisado_sem_os',
+      revisado_por:     ATLAS_CURRENT_USER.email || '—',
+      revisado_em:      new Date(),
+      pendente_revisao: false
+    }, { merge: true });
+    // Atualiza cache local
+    if (CHK_DB[chkId]) { CHK_DB[chkId].revisao_status = 'revisado_sem_os'; CHK_DB[chkId].pendente_revisao = false; }
+    toast('Checklist marcado como revisado — nenhuma OS gerada.', 'gn');
+    await loadChecklists();
+  } catch(err) {
+    toast('Erro ao confirmar revisão: ' + err.message, 'rd');
+  }
 }
 
 // ══ MODAL PREVENTIVA ══
@@ -1626,7 +1615,6 @@ async function salvarOS() {
     const osId  = 'OS-' + num;
     const agora = new Date();
     const v     = MNT_CACHE.veiculos.find(x => x.placa === veiculo) || {};
-    const origemChecklistId = window._osOrigemChecklistId || '';
 
     const payload = {
       num,
@@ -1648,8 +1636,7 @@ async function salvarOS() {
       pecas,
       valorTotal: total,
       status: 'Aberta',
-      origem: origemChecklistId ? 'checklist_lider' : 'manual',
-      checklist_id: origemChecklistId || null,
+      origem: 'manual',
       criadoEm: agora,
       atualizadoEm: agora,
       criadoPor: ATLAS_CURRENT_USER.email || '—',
@@ -1663,15 +1650,25 @@ async function salvarOS() {
     if (fotosMeta.length) {
       await atlasFsSetDoc('ordens_servico', osId, { fotosMeta, fotos: fotosMeta.length, atualizadoEm: new Date() }, { merge: true });
     }
-    if (origemChecklistId) {
-      await atlasFsSetDoc('checklists_diarios', origemChecklistId, {
-        osGerada: osId,
-        os_gerada: osId,
-        avaliacao_lider: 'os_aberta',
-        alerta_lider: false,
-        atualizadoEm: new Date()
-      }, { merge: true });
-      window._osOrigemChecklistId = '';
+
+    // Se OS foi originada de um checklist, linka de volta e marca checklist como revisado
+    const chkOrigem = window._osOrigemChecklistId || null;
+    if (chkOrigem) {
+      try {
+        await atlasFsSetDoc('ordens_servico', osId, { origem: 'checklist', checklist_id: chkOrigem }, { merge: true });
+        await atlasFsSetDoc('checklists_diarios', chkOrigem, {
+          osGerada:        osId,
+          os_gerada:       osId,
+          pendente_revisao: false,
+          revisao_status:  'os_aberta',
+          revisado_por:    ATLAS_CURRENT_USER.email || '—',
+          revisado_em:     new Date()
+        }, { merge: true });
+        if (CHK_DB[chkOrigem]) { CHK_DB[chkOrigem].osGerada = osId; CHK_DB[chkOrigem].pendente_revisao = false; }
+        window._osOrigemChecklistId = null;
+      } catch(linkErr) {
+        console.warn('[salvarOS] Erro ao linkar OS ao checklist:', linkErr.message);
+      }
     }
 
     toast(osId + (saveRes && saveRes.source === 'local' ? ' criada localmente. Firebase externo bloqueado por regras/permissões.' : ' criada e salva no Firebase.'), saveRes && saveRes.source === 'local' ? 'am' : 'gn');
@@ -2940,12 +2937,13 @@ async function openChecklistFirebase(id) {
       aprovados:  chk.aprovados ?? 0,
       reprovados: chk.reprovados ?? 0,
       fotos:    chk.fotos ?? 0,
-      osGerada: chk.osGerada || chk.os_gerada || '—',
+      fotosUrls: Array.isArray(chk.fotosUrls) ? chk.fotosUrls.filter(Boolean) : [],
+      fotosMeta: Array.isArray(chk.fotosMeta) ? chk.fotosMeta : [],
+      osGerada: chk.osGerada || chk.os_gerada || null,
       reprovados_itens: chk.itens_reprovados || [],
-      fotosMeta: chk.fotosMeta || [],
-      fotosUrls: chk.fotosUrls || [],
-      avaliacao_lider: chk.avaliacao_lider || '',
       obs: chk.observacoes || '',
+      pendente_revisao: chk.pendente_revisao || false,
+      revisao_status:   chk.revisao_status || null,
     };
     openChecklistPanel(id);
   } catch(err) {
@@ -3055,7 +3053,6 @@ function iniciarInspecao(placa, motoristaNomeParam) {
   window._inspPlaca     = placa;
   window._inspTs        = agora.toISOString();
   window._inspFotos     = {};
-  window._inspFotoUploads = {};
   window._inspMotorista = motoristaNome;
 
   // Exibe hero e checklist
@@ -3268,7 +3265,7 @@ async function salvarChecklistFirebase() {
 
     const aprovados  = itensChecklist.filter(i => i.status === 'aprovado').length;
     const reprovados = itensReprovados.length;
-    const fotosVeiculo = await aguardarUploadsFotosInspecao();
+    const fotosVeiculo = Object.values(window._inspFotos || {});
 
     const v          = MNT_CACHE.veiculos.find(x => x.placa === placa);
     const compDocId  = window._inspCompressor || null;
@@ -3297,10 +3294,6 @@ async function salvarChecklistFirebase() {
       fotosMeta:        fotosVeiculo,
       itens:            itensChecklist,
       itens_reprovados: itensReprovados,
-      osGerada:         '—',
-      os_gerada:        '—',
-      avaliacao_lider:  reprovados > 0 ? 'pendente' : 'nao_necessaria',
-      alerta_lider:     reprovados > 0,
       criadoEm:         agora,
       criadoPor:        ATLAS_CURRENT_USER.email || '—',
     };
@@ -3308,17 +3301,18 @@ async function salvarChecklistFirebase() {
     const ref = await atlasFsAddDoc('checklists_diarios', payload);
     console.log('[Inspeção] Checklist salvo:', ref.id, 'placa:', placa);
 
-    // Não abre O.S automaticamente. A reprovação vira alerta/rascunho para o líder avaliar.
+    // Com itens reprovados: salva pendência para o líder revisar — NÃO abre OS automaticamente
     if (itensReprovados.length > 0) {
-      await atlasFsSetDoc('checklists_diarios', ref.id, {
-        osGerada: '—',
-        os_gerada: '—',
-        avaliacao_lider: 'pendente',
-        alerta_lider: true,
-        resumo_reprovacoes: itensReprovados.map(i => [i.grupo, i.item, i.obs].filter(Boolean).join(' — ')).join('; '),
-        atualizadoEm: agora
-      }, { merge: true });
-      toast('Checklist salvo com reprovação. Aguardando avaliação do líder para abertura da O.S.', 'am');
+      try {
+        await atlasFsSetDoc('checklists_diarios', ref.id, {
+          osGerada:        null,
+          os_gerada:       null,
+          pendente_revisao: true,
+          revisao_status:  'aguardando_lider',
+          revisao_msg:     itensReprovados.length + ' item(ns) reprovado(s) — aguardando avaliação do líder de unidade.'
+        }, { merge: true });
+      } catch(_) {}
+      toast('Inspeção finalizada — ' + itensReprovados.length + ' reprovado(s). Líder será notificado para avaliar.', 'am');
     } else {
       toast('Checklist finalizado e salvo com sucesso!', 'gn');
     }
@@ -3707,7 +3701,6 @@ function resetarInspecaoEmBranco() {
   window._inspPlaca = '';
   window._inspTs = '';
   window._inspFotos = {};
-  window._inspFotoUploads = {};
   window._inspMotorista = '';
   window._inspCompressor = null;
   window._inspCarreta1 = null;
@@ -3878,151 +3871,80 @@ function confirmarInicioInspecao() {
 // ══════════════════════════════════════════════════════════
 
 /* Chamado ao selecionar arquivo no inline-photo-zone */
-async function onInlinePhotoChange(input, zoneId) {
+function onInlinePhotoChange(input, zoneId) {
   if (!input.files || !input.files.length) return; // nenhum arquivo = não faz nada
   const file = input.files[0];
   if (!file) return;
   const zone = document.getElementById(zoneId);
   if (!zone) return;
   zone.classList.add('filled');
-  zone.innerHTML = `⏳<span style="color:var(--ac);font-size:10px;font-weight:700">Enviando foto...</span>`;
-  try {
-    await uploadInspFotoNuvem(file, zoneId, 'Reprovação');
-    zone.innerHTML = `📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto salva na nuvem ✓</span>`;
-  } catch(err) {
-    zone.innerHTML = `⚠️<span style="color:var(--rd);font-size:10px;font-weight:700">Falha no upload</span>`;
-    toast('Falha ao enviar foto da reprovação: ' + err.message, 'rd');
-  }
+  zone.innerHTML = `📷<span style="color:var(--gn);font-size:10px;font-weight:700">Foto adicionada ✓</span>`;
+  // Upload para Firebase Storage em nuvem
+  uploadInspFotoNuvem(file, zoneId);
 }
 
 /* Marcação de foto do veículo — só quando arquivo real */
-async function marcarFotoVeiculo(input, lblId, label) {
+function marcarFotoVeiculo(input, lblId, label) {
   if (!input.files || !input.files.length) return;
   const file = input.files[0];
   if (!file) return;
   const lbl = document.getElementById(lblId);
   if (lbl) {
     lbl.className = 'foto-thumb ok';
-    lbl.innerHTML = `⏳<span>${label}</span><span style="font-size:9px">Enviando...</span>`;
+    lbl.innerHTML = `📷<span>${label} ✓</span>`;
   }
-  try {
-    await uploadInspFotoNuvem(file, lblId, label);
-    if (lbl) {
-      lbl.className = 'foto-thumb ok';
-      lbl.innerHTML = `📷<span>${label} ✓</span>`;
-    }
-  } catch(err) {
-    if (lbl) {
-      lbl.className = 'foto-thumb nok';
-      lbl.innerHTML = `⚠️<span>${label}</span><span style="font-size:9px">Falhou</span>`;
-    }
-    toast('Falha ao enviar foto "' + label + '": ' + err.message, 'rd');
-  }
+  // Upload para Firebase Storage
+  uploadInspFotoNuvem(file, lblId);
 }
 
 // ══════════════════════════════════════════════════════════
 // ITEM 4 — Upload de fotos de inspeção para Firebase Storage
 // ══════════════════════════════════════════════════════════
 // Reutiliza o Firebase Storage do projeto (mesma config do sistema).
-// Path: inspections/{placa}/{timestamp}_{filename}
+// Path: inspections/{inspPlaca}/{timestamp}_{filename}
 
-function atlasGetSharedStorage() {
-  const parentStorage = atlasTryParent(p => p._mntStorage || p.storage || (p.firebase && typeof p.firebase.storage === 'function' ? p.firebase.storage() : null));
-  if (window._mntStorage) return window._mntStorage;
-  if (parentStorage) return parentStorage;
-  if (window.firebase && typeof firebase.storage === 'function') return firebase.storage();
-  return null;
-}
-function safeStorageName(v, fallback = 'foto') {
-  return String(v || fallback)
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9._-]/g, '_')
-    .replace(/_+/g, '_')
-    .slice(0, 120) || fallback;
-}
-async function uploadInspFotoNuvem(file, refId, label = '') {
-  if (!file) throw new Error('Arquivo de foto não informado.');
+
+async function uploadInspFotoNuvem(file, refId) {
   if (!window._inspFotos) window._inspFotos = {};
-  if (!window._inspFotoUploads) window._inspFotoUploads = {};
-
-  const storage = atlasGetSharedStorage();
-  if (!storage || typeof storage.ref !== 'function') {
-    throw new Error('Firebase Storage indisponível nesta sessão.');
-  }
-
-  const placa = safeStorageName(mntUpper(window._inspPlaca || 'sem_placa'), 'sem_placa');
-  const ts = new Date().toISOString().replace(/[:.]/g, '-');
-  const nomeOriginal = safeStorageName(file.name || (refId + '.jpg'), 'foto.jpg');
-  const refLimpo = safeStorageName(refId || 'foto', 'foto');
-  const path = `inspections/${placa}/${ts}_${refLimpo}_${nomeOriginal}`;
-
+  // Salva metadado imediatamente (garante que não perde referência)
   window._inspFotos[refId] = {
-    refId,
-    label: label || refId,
-    name: file.name || nomeOriginal,
-    size: file.size || 0,
-    type: file.type || 'image/jpeg',
-    status: 'uploading',
-    local: false,
-    path,
+    name: file && file.name ? file.name : 'foto',
+    size: file && file.size ? file.size : 0,
+    type: file && file.type ? file.type : '',
+    local: true,
+    url: null,
     addedAt: new Date().toISOString()
   };
 
-  const uploadPromise = (async () => {
-    const snap = await storage.ref(path).put(file, {
-      contentType: file.type || 'image/jpeg',
-      customMetadata: {
-        origem: 'checklist_inspecao',
-        placa: window._inspPlaca || '',
-        refId: String(refId || ''),
-        label: String(label || '')
-      }
-    });
-    const url = await snap.ref.getDownloadURL();
-    const meta = {
-      refId,
-      label: label || refId,
-      name: file.name || nomeOriginal,
-      size: file.size || 0,
-      type: file.type || 'image/jpeg',
+  // Upload para Firebase Storage
+  try {
+    const storage = window._mntStorage || (window.parent && window.parent !== window ? (() => { try { return window.parent._mntStorage || null; } catch(_){ return null; } })() : null);
+    if (!storage) {
+      console.warn('[Fotos] Firebase Storage não disponível — foto salva apenas localmente.');
+      return null;
+    }
+    const placa = (window._inspPlaca || 'sem-placa').replace(/[^a-zA-Z0-9]/g, '_');
+    const ts    = Date.now();
+    const ext   = file.name ? file.name.split('.').pop() : 'jpg';
+    const path  = `inspections/${placa}/${ts}_${refId}.${ext}`;
+    const ref   = storage.ref(path);
+    const snap  = await ref.put(file);
+    const url   = await snap.ref.getDownloadURL();
+    // Atualiza com URL real
+    window._inspFotos[refId] = {
+      ...window._inspFotos[refId],
       url,
       path,
-      storage: 'firebase',
-      local: false,
-      status: 'ok',
-      uploadedAt: new Date().toISOString()
+      local: false
     };
-    window._inspFotos[refId] = meta;
-    return meta;
-  })().catch(err => {
-    window._inspFotos[refId] = {
-      ...(window._inspFotos[refId] || {}),
-      refId,
-      label: label || refId,
-      name: file.name || nomeOriginal,
-      size: file.size || 0,
-      type: file.type || 'image/jpeg',
-      path,
-      local: false,
-      status: 'erro',
-      erro: err.message || String(err)
-    };
-    throw err;
-  });
-
-  window._inspFotoUploads[refId] = uploadPromise;
-  return uploadPromise;
-}
-async function aguardarUploadsFotosInspecao() {
-  const pendentes = Object.values(window._inspFotoUploads || {});
-  if (pendentes.length) await Promise.all(pendentes);
-  const fotos = Object.values(window._inspFotos || {});
-  const falhas = fotos.filter(f => f && f.status === 'erro');
-  if (falhas.length) {
-    throw new Error(falhas.length + ' foto(s) não subiram para o Storage. Reenvie antes de finalizar.');
+    console.log('[Fotos] Upload OK:', path, url);
+    return url;
+  } catch(err) {
+    console.error('[Fotos] Erro no upload para Storage:', err.message);
+    return null;
   }
-  return fotos.filter(f => f && f.url);
 }
+
 
 /* Upload de arquivos de NF para Supabase Storage (mesma base dos canhotos) */
 async function uploadNFNuvem(file, osId) {
