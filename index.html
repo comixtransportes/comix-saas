@@ -350,7 +350,7 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 
     <nav class="sb-nav">
       <div class="nav-lbl">Principal</div>
-      <button class="nav-item on" data-v="pd-diario" onclick="go('pd-diario',this)">
+      <button class="nav-item" data-v="pd-diario" onclick="go('pd-diario',this)">
         <div class="ni-ico"><svg width="19" height="19" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.9"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg></div>
         <div class="ni-text"><strong>PD Diário</strong><small>Relatório de frota</small></div>
       </button>
@@ -634,11 +634,11 @@ function showApp() {
   document.getElementById('sb-av').textContent    = e.charAt(0).toUpperCase();
   document.getElementById('sb-email').textContent = e;
   document.getElementById('sb-role').textContent  = curPerfil;
-  applyPerfil();
-  // Dispara navegação inicial — go() a guarda em _pendingNav até loadPermissions() terminar
+  applyPerfil(); // Camada 1: esconde imediatamente pelo perfil hardcoded
+  // go() detecta _permsLoaded=false e guarda em _pendingNav (não carrega iframe ainda)
   const _ih = location.hash.replace('#','');
   go(_ih && VIEWS[_ih] ? _ih : 'pd-diario');
-  loadPermissions(); // aplica perms e faz flush do _pendingNav ao terminar
+  loadPermissions(); // Busca Firestore -> applyMenuPermissions() -> abre _pendingNav
   /* Pré-carrega todas as bases sincronizadas (SZB, SE1, SE2, SE5) da nuvem.
      Faz com que o PD e o Financeiro encontrem os dados prontos ao abrir,
      mesmo quando o usuário não carregou nada nesta sessão. Não bloqueia. */
@@ -699,22 +699,15 @@ document.getElementById('lc-email').addEventListener('keydown',e=>{if(e.key==='E
 function go(viewId, el) {
   const v = VIEWS[viewId];
   if (!v) return;
-  /* Verifica permissão hardcoded (VIEWS.perfil) */
-  if (v.perfil && !v.perfil.includes(curPerfil)) return;
-  /* Verifica permissão dinâmica do Firestore (ATLAS_PERMS), exceto admin */
-  if (curPerfil !== 'admin') {
-    const dynTelaMap = {
-      'pd-diario':'pd_diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
-      'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
-      'cpk':'cpk', 'config':'cadastros', 'download-base':'download_base'
-    };
-    const permKey = dynTelaMap[viewId];
-    if (permKey) {
-      if (!_permsLoaded) { _pendingNav = viewId; return; } // aguarda permissões
-      const telas = ATLAS_PERMS.telas || {};
-      if (Object.keys(telas).length > 0 && !telas[permKey]) return; // bloqueado
-    }
+
+  // Aguarda permissões do Firestore antes de navegar (exceto admin)
+  if (!_permsLoaded && curPerfil !== 'admin') {
+    _pendingNav = viewId;
+    return;
   }
+
+  // Verifica permissão: combina VIEWS.perfil (hardcoded) + ATLAS_PERMS (Firestore)
+  if (!canSeeView(viewId)) return;
 
   /* Ativa nav */
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('on'));
@@ -1621,65 +1614,90 @@ function toast(msg,tp=''){
   clearTimeout(_tt);_tt=setTimeout(()=>t.classList.remove('on'),3500);
 }
 
-/* ── PERMISSÕES DINÂMICAS ── */
-let ATLAS_PERMS = {}; // Carregado do Firestore após login
-let _permsLoaded = false; // true após loadPermissions() concluir (sucesso ou falha)
-let _pendingNav  = null;  // view aguardando permissões para navegar
+/* ══════════════════════════════════════════════════════════
+   PERMISSÕES — duas camadas combinadas
+   1. VIEWS.perfil  — whitelist hardcoded por tipo de usuário
+   2. ATLAS_PERMS   — configuração salva no Firestore pelo admin
+   Um item de menu só aparece se AMBAS as camadas permitirem.
+══════════════════════════════════════════════════════════ */
+let ATLAS_PERMS  = {};    // permissoes carregadas do Firestore
+let _permsLoaded = false; // true apos loadPermissions() concluir (sucesso ou falha)
+let _pendingNav  = null;  // viewId aguardando as permissoes para navegar
+
+/* Mapa permKey (chave no Firestore) -> viewId (chave no VIEWS/HTML) */
+const TELA_MAP = {
+  'pd_diario'    : 'pd-diario',
+  'frota'        : 'frota',
+  'financeiro'   : 'financeiro',
+  'ficha'        : 'ficha',
+  'compras'      : 'compras',
+  'manutencao'   : 'manutencao',
+  'checklist'    : 'checklist',
+  'painel'       : 'painel',
+  'cpk'          : 'cpk',
+  'cadastros'    : 'config',
+  'download_base': 'download-base',
+};
+/* Inverso: viewId -> permKey */
+const TELA_MAP_INV = Object.fromEntries(Object.entries(TELA_MAP).map(([k,v])=>[v,k]));
+
+/* Retorna true se o perfil atual pode ver a view.
+   Combina as duas camadas: hardcoded (VIEWS.perfil) + Firestore (ATLAS_PERMS). */
+function canSeeView(viewId) {
+  const v = VIEWS[viewId];
+  if (!v) return false;
+  if (curPerfil === 'admin') return true;
+
+  // Camada 1: VIEWS.perfil (null = liberado para todos)
+  if (v.perfil && !v.perfil.includes(curPerfil)) return false;
+
+  // Camada 2: ATLAS_PERMS.telas do Firestore (só aplica se tiver dados salvos)
+  const telas = ATLAS_PERMS.telas || {};
+  if (Object.keys(telas).length > 0) {
+    const permKey = TELA_MAP_INV[viewId];
+    if (permKey && !telas[permKey]) return false;
+  }
+
+  return true;
+}
 
 async function loadPermissions() {
   try {
     const snap = await db.collection('permissoes').doc(curPerfil).get();
     if (snap.exists) ATLAS_PERMS = snap.data().permissoes || {};
-  } catch(e) { /* usa padrão hardcoded se Firestore falhar */ }
+  } catch(e) { /* Firestore indisponível: usa só o VIEWS.perfil hardcoded */ }
   _permsLoaded = true;
-  applyDynamicPermissions(); // sempre aplica (esconde/mostra botões)
-  // Flush da navegação que ficou aguardando
+  applyMenuPermissions();
+  // Flush: abre a navegação que ficou aguardando as permissões
   if (_pendingNav) { const v = _pendingNav; _pendingNav = null; go(v); }
 }
 
 /* ── Helper: verifica se é tipo LU ── */
 function isLU(perfil) {
-  return perfil === 'lu' || perfil === 'lu_sc' || perfil === 'lu_pr' || perfil === 'lu_sp';
+  return ['lu','lu_sc','lu_pr','lu_sp'].includes(perfil);
 }
 
-function applyDynamicPermissions() {
-  const telas = ATLAS_PERMS.telas || {};
-  const hasDynPerms = curPerfil !== 'admin' && Object.keys(telas).length > 0;
-  const telaMap = {
-    'pd_diario':'pd-diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
-    'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
-    'cpk':'cpk', 'cadastros':'config', 'download_base':'download-base',
-    'permissoes':'config'
-  };
-
-  // Esconde OU mostra cada botão do menu (bidireccional)
-  Object.entries(telaMap).forEach(([permKey, viewId]) => {
+/* Aplica visibilidade dos botões do menu (combina as duas camadas) */
+function applyMenuPermissions() {
+  Object.keys(VIEWS).forEach(viewId => {
     const btn = document.querySelector(`[data-v="${viewId}"]`);
     if (!btn) return;
-    if (!hasDynPerms) { btn.style.display = ''; return; } // sem perms: respeita só applyPerfil
-    btn.style.display = telas[permKey] ? '' : 'none';
+    btn.style.display = canSeeView(viewId) ? '' : 'none';
   });
 
-  // Se a view atualmente aberta foi bloqueada, redireciona para a primeira permitida
-  if (hasDynPerms) {
-    const curHash = location.hash.replace('#','');
-    const curPermKey = Object.keys(telaMap).find(k => telaMap[k] === curHash);
-    if (curPermKey && !telas[curPermKey]) {
-      // Fecha view ativa
-      document.querySelectorAll('.view').forEach(p => p.classList.remove('on'));
-      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('on'));
-      // Abre primeira view permitida na ordem do menu
-      const fallbackOrder = ['ficha','checklist','manutencao','painel','compras','cpk','dashboard'];
-      for (const vid of fallbackOrder) {
-        const pk = Object.keys(telaMap).find(k => telaMap[k] === vid);
-        if ((!pk || telas[pk]) && VIEWS[vid]) {
-          const btn = document.querySelector(`[data-v="${vid}"]`);
-          if (btn && btn.style.display !== 'none') { go(vid); break; }
-        }
-      }
-    }
+  // Se a view aberta foi bloqueada, redireciona para a primeira permitida
+  const curHash = location.hash.replace('#','');
+  if (curHash && VIEWS[curHash] && !canSeeView(curHash)) {
+    document.querySelectorAll('.view').forEach(p => p.classList.remove('on'));
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('on'));
+    const ordem = ['ficha','checklist','manutencao','painel','compras','cpk','frota','pd-diario'];
+    const fallback = ordem.find(vid => canSeeView(vid) && VIEWS[vid]);
+    if (fallback) go(fallback); else location.hash = '';
   }
 }
+
+/* Alias para compatibilidade */
+function applyDynamicPermissions() { applyMenuPermissions(); }
 
 /* ── VARIÁVEL DE ALTURA REAL (para uso futuro, não interfere no shell) ── */
 (function(){
