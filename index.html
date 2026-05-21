@@ -635,12 +635,10 @@ function showApp() {
   document.getElementById('sb-email').textContent = e;
   document.getElementById('sb-role').textContent  = curPerfil;
   applyPerfil();
-  // Abre a view inicial antes das permissoes dinamicas carregarem (evita tela em branco)
-  const _initHash = location.hash.replace('#','');
-  const _initView = _initHash && VIEWS[_initHash] ? _initHash : 'pd-diario';
-  go(_initView);
-  // Carrega permissoes do Firestore e reaplica (applyDynamicPermissions cuida do redirecionamento)
-  loadPermissions();
+  // Dispara navegação inicial — go() a guarda em _pendingNav até loadPermissions() terminar
+  const _ih = location.hash.replace('#','');
+  go(_ih && VIEWS[_ih] ? _ih : 'pd-diario');
+  loadPermissions(); // aplica perms e faz flush do _pendingNav ao terminar
   /* Pré-carrega todas as bases sincronizadas (SZB, SE1, SE2, SE5) da nuvem.
      Faz com que o PD e o Financeiro encontrem os dados prontos ao abrir,
      mesmo quando o usuário não carregou nada nesta sessão. Não bloqueia. */
@@ -712,11 +710,9 @@ function go(viewId, el) {
     };
     const permKey = dynTelaMap[viewId];
     if (permKey) {
-      // Permissões ainda não carregaram: guarda a navegação para depois
-      if (!_permsLoaded) { _pendingNav = viewId; return; }
-      // Permissões carregadas: bloqueia se não autorizado
+      if (!_permsLoaded) { _pendingNav = viewId; return; } // aguarda permissões
       const telas = ATLAS_PERMS.telas || {};
-      if (Object.keys(telas).length > 0 && !telas[permKey]) return;
+      if (Object.keys(telas).length > 0 && !telas[permKey]) return; // bloqueado
     }
   }
 
@@ -1627,19 +1623,17 @@ function toast(msg,tp=''){
 
 /* ── PERMISSÕES DINÂMICAS ── */
 let ATLAS_PERMS = {}; // Carregado do Firestore após login
-let _permsLoaded = false; // Flag: permissões do Firestore já foram carregadas
-let _pendingNav = null;   // View pendente enquanto permissões carregam
+let _permsLoaded = false; // true após loadPermissions() concluir (sucesso ou falha)
+let _pendingNav  = null;  // view aguardando permissões para navegar
 
 async function loadPermissions() {
   try {
     const snap = await db.collection('permissoes').doc(curPerfil).get();
-    if (snap.exists) {
-      ATLAS_PERMS = snap.data().permissoes || {};
-    }
-  } catch(e) { /* usa padrão se falhar */ }
+    if (snap.exists) ATLAS_PERMS = snap.data().permissoes || {};
+  } catch(e) { /* usa padrão hardcoded se Firestore falhar */ }
   _permsLoaded = true;
-  applyDynamicPermissions();
-  // Se havia uma navegação pendente, tenta agora que as permissões estão prontas
+  applyDynamicPermissions(); // sempre aplica (esconde/mostra botões)
+  // Flush da navegação que ficou aguardando
   if (_pendingNav) { const v = _pendingNav; _pendingNav = null; go(v); }
 }
 
@@ -1650,7 +1644,7 @@ function isLU(perfil) {
 
 function applyDynamicPermissions() {
   const telas = ATLAS_PERMS.telas || {};
-  const hasDynPerms = Object.keys(telas).length > 0;
+  const hasDynPerms = curPerfil !== 'admin' && Object.keys(telas).length > 0;
   const telaMap = {
     'pd_diario':'pd-diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
     'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
@@ -1658,33 +1652,31 @@ function applyDynamicPermissions() {
     'permissoes':'config'
   };
 
-  /* Esconde/mostra cada botao do menu com base nas permissoes do Firestore */
+  // Esconde OU mostra cada botão do menu (bidireccional)
   Object.entries(telaMap).forEach(([permKey, viewId]) => {
     const btn = document.querySelector(`[data-v="${viewId}"]`);
     if (!btn) return;
-    if (curPerfil === 'admin') { btn.style.display = ''; return; }
-    if (!hasDynPerms) return;
+    if (!hasDynPerms) { btn.style.display = ''; return; } // sem perms: respeita só applyPerfil
     btn.style.display = telas[permKey] ? '' : 'none';
   });
 
-  /* Se a view ativa foi bloqueada, navega para a primeira permitida */
-  if (curPerfil !== 'admin' && hasDynPerms) {
-    const currentHash = location.hash.replace('#','');
-    const currentPermKey = Object.keys(telaMap).find(k => telaMap[k] === currentHash);
-    const currentAllowed = !currentPermKey || !!telas[currentPermKey];
-    if (!currentAllowed) {
+  // Se a view atualmente aberta foi bloqueada, redireciona para a primeira permitida
+  if (hasDynPerms) {
+    const curHash = location.hash.replace('#','');
+    const curPermKey = Object.keys(telaMap).find(k => telaMap[k] === curHash);
+    if (curPermKey && !telas[curPermKey]) {
+      // Fecha view ativa
       document.querySelectorAll('.view').forEach(p => p.classList.remove('on'));
       document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('on'));
-      const viewOrder = ['ficha','checklist','dashboard','manutencao','painel','compras','cpk'];
-      let navigated = false;
-      for (const vid of viewOrder) {
+      // Abre primeira view permitida na ordem do menu
+      const fallbackOrder = ['ficha','checklist','manutencao','painel','compras','cpk','dashboard'];
+      for (const vid of fallbackOrder) {
         const pk = Object.keys(telaMap).find(k => telaMap[k] === vid);
         if ((!pk || telas[pk]) && VIEWS[vid]) {
           const btn = document.querySelector(`[data-v="${vid}"]`);
-          if (btn && btn.style.display !== 'none') { go(vid); navigated = true; break; }
+          if (btn && btn.style.display !== 'none') { go(vid); break; }
         }
       }
-      if (!navigated) location.hash = '';
     }
   }
 }
