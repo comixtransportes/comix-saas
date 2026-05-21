@@ -2079,6 +2079,15 @@ function atlasParentFirestore(action, payload = {}, timeout = 9000) {
   });
 }
 
+function atlasRequiresCloud(collection) {
+  return ['checklists_diarios','ordens_servico'].includes(collection);
+}
+
+function atlasCloudUnavailable(collection, parentErr, directErr) {
+  const err = parentErr || directErr;
+  return new Error('Firestore indisponível para ' + collection + (err && err.message ? ': ' + err.message : ''));
+}
+
 
 async function atlasFsGetCollection(collection, opts = {}) {
   let parentErr = null;
@@ -2099,6 +2108,7 @@ async function atlasFsGetCollection(collection, opts = {}) {
       return snap.docs.map(doc => ({ id: doc.id, data: doc.data() }));
     } catch(err) { directErr = err; }
   }
+  if (atlasRequiresCloud(collection)) throw atlasCloudUnavailable(collection, parentErr, directErr);
   return atlasLocalGetCollection(collection, opts);
 }
 
@@ -2118,6 +2128,7 @@ async function atlasFsGetDoc(collection, docId) {
       return snap.exists ? { id: snap.id, data: snap.data() } : null;
     } catch(err) { directErr = err; }
   }
+  if (atlasRequiresCloud(collection)) throw atlasCloudUnavailable(collection, parentErr, directErr);
   return atlasLocalGetDoc(collection, docId);
 }
 
@@ -2139,6 +2150,7 @@ async function atlasFsSetDoc(collection, docId, data, opts = {}) {
       return { id: docId, source:'iframe' };
     } catch(err) { directErr = err; }
   }
+  if (atlasRequiresCloud(collection)) throw atlasCloudUnavailable(collection, parentErr, directErr);
   atlasLocalSetDoc(collection, docId, data, { merge: !!opts.merge });
   console.warn('[Atlas] Firestore externo indisponível; registro salvo localmente.', collection, docId, (parentErr || directErr || {}).message || '');
   return { id: docId, source:'local', warning: (parentErr || directErr || {}).message || '' };
@@ -2162,6 +2174,7 @@ async function atlasFsAddDoc(collection, data) {
       return { id: ref.id, source:'iframe' };
     } catch(err) { directErr = err; }
   }
+  if (atlasRequiresCloud(collection)) throw atlasCloudUnavailable(collection, parentErr, directErr);
   const id = atlasLocalAddDoc(collection, data);
   console.warn('[Atlas] Firestore externo indisponível; registro salvo localmente.', collection, id, (parentErr || directErr || {}).message || '');
   return { id, source:'local', warning: (parentErr || directErr || {}).message || '' };
@@ -2185,6 +2198,7 @@ async function atlasFsDeleteDoc(collection, docId) {
       return true;
     } catch(err) { directErr = err; }
   }
+  if (atlasRequiresCloud(collection)) throw atlasCloudUnavailable(collection, parentErr, directErr);
   atlasLocalDeleteDoc(collection, docId);
   return true;
 }
