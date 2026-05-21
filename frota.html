@@ -188,7 +188,7 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 .col-RESERVA .column-icon{background:linear-gradient(135deg,#6b7280,#4b5563)}
 .col-EM-REFORMA .column-icon{background:linear-gradient(135deg,#f59e0b,#d97706)}
 .col-A-REFORMAR .column-icon{background:linear-gradient(135deg,#f97316,#ea580c)}
-.col-DISPONIVEL .column-icon{background:linear-gradient(135deg,#22c55e,#16a34a)}
+.col-DISPONIVEL .column-icon,.col-MANUT .column-icon{background:linear-gradient(135deg,#1a56db,#1e40af)}
 .col-INDISPONIVEL .column-icon{background:linear-gradient(135deg,#ef4444,#dc2626)}
 .col-RESERVA{border-color:var(--gray-l)}
 .col-EM-REFORMA{border-style:dashed;border-color:#fcd34d}
@@ -394,6 +394,7 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 }
 .status-tag.operando{background:var(--green-l);color:var(--green)}
 .status-tag.disponivel{background:var(--blue-l);color:var(--blue)}
+.status-tag.manutencao{background:#dbeafe;color:#1a56db}
 .status-tag.indisponivel{background:var(--red-l);color:var(--red)}
 .status-tag.reforma{background:var(--orange-l);color:var(--orange)}
 .status-tag.em_reforma{background:#fef3c7;color:#854f0b}
@@ -1500,6 +1501,7 @@ function normalizeVeiculo(v) {
   const stRaw = String(v.status || "").toUpperCase();
   let disp = "operando";
   if (stRaw.includes("INDISPON")) disp = "indisponivel";
+  else if (stRaw.includes("MANUT") || stRaw.includes("MANUTENÇÃO") || stRaw.includes("MANUTENCAO")) disp = "manutencao";
   else if (stRaw.includes("EM REFORMA")) disp = "em_reforma";
   else if (stRaw.includes("A REFORMAR") || stRaw.includes("REFORMAR")) disp = "a_reformar";
   else if (stRaw.includes("REFORMA")) disp = "em_reforma";
@@ -1836,7 +1838,7 @@ function classificarAlerta(dias) {
   return "green";
 }
 const ALERT_LABEL = { gray: "Sem dado", green: "OK", yellow: "Atenção", orange: "Alerta", red: "Crítico" };
-const UNIT_LABEL = { SC: "Santa Catarina", SP: "São Paulo", PR: "Paraná", RESERVA: "Reservas", DISPONIVEL: "Disponíveis", INDISPONIVEL: "Indisponíveis", EM_REFORMA: "Em reforma", A_REFORMAR: "A reformar" };
+const UNIT_LABEL = { SC: "Santa Catarina", SP: "São Paulo", PR: "Paraná", RESERVA: "Reservas / Disponíveis", DISPONIVEL: "Em Manutenção", INDISPONIVEL: "Indisponíveis", EM_REFORMA: "Em reforma", A_REFORMAR: "A reformar" };
 
 function iconForVeiculo(v) {
   if (v.categoria === "apoio") return ico("ico-carro", 24);
@@ -1864,8 +1866,8 @@ const COLUMNS = [
   { id: "SC", title: "Santa Catarina", cls: "col-SC", iconId: "ico-pin" },
   { id: "SP", title: "São Paulo", cls: "col-SP", iconId: "ico-pin" },
   { id: "PR", title: "Paraná", cls: "col-PR", iconId: "ico-pin" },
-  { id: "RESERVA", title: "Reservas", cls: "col-RESERVA", iconId: "ico-pin" },
-  { id: "DISPONIVEL", title: "Disponíveis", cls: "col-DISPONIVEL", iconId: "ico-cavalo" },
+  { id: "RESERVA", title: "Reservas / Disponíveis", cls: "col-RESERVA", iconId: "ico-pin" },
+  { id: "DISPONIVEL", title: "Em Manutenção", cls: "col-DISPONIVEL col-MANUT", iconId: "ico-wrench" },
   { id: "INDISPONIVEL", title: "Indisponíveis", cls: "col-INDISPONIVEL", iconId: "ico-cavalo" },
   { id: "EM_REFORMA", title: "Em reforma", cls: "col-EM-REFORMA", iconId: "ico-carreta" },
   { id: "A_REFORMAR", title: "A reformar", cls: "col-A-REFORMAR", iconId: "ico-carreta" },
@@ -1882,14 +1884,14 @@ function getCavalosPorColuna(colId) {
     if (colId === "A_REFORMAR") return isCarreta && (d === "a_reformar" || d === "indisponivel");
 
     // Colunas de cavalos disponíveis / indisponíveis
-    if (colId === "DISPONIVEL") { return isCavalo && (d === "disponivel" || (!d && true)); }
+    if (colId === "DISPONIVEL") { return isCavalo && d === "manutencao"; }
     if (colId === "INDISPONIVEL") return isCavalo && d === "indisponivel";
 
     // Demais colunas: apenas cavalos
     if (!isCavalo) return false;
     if (colId === "RESERVA") return d === "reserva" || d === "disponivel";
     // SC/SP/PR: operando + na unidade correta
-    if (["em_reforma","a_reformar","indisponivel","reserva","disponivel"].includes(d)) return false;
+    if (["em_reforma","a_reformar","indisponivel","reserva","disponivel","manutencao"].includes(d)) return false;
     return v.unidade_slug === colId;
   }).filter(v => {
     // Filtro de filial (afeta apenas colunas operacionais; reformas/reservas sempre visíveis)
@@ -1948,7 +1950,7 @@ function renderCard(cavalo) {
     ? '<div class="card-days '+alert+'">'+(dias === 0 ? 'Hoje' : dias+'d')+'</div>'
     : '<div class="card-days gray">—</div>';
 
-  const dispLabel = { operando:'operando', disponivel:'disponivel', indisponivel:'indisponivel',
+  const dispLabel = { operando:'operando', disponivel:'disponível', manutencao:'manutenção', indisponivel:'indisponível',
                       em_reforma:'em reforma', a_reformar:'a reformar', reserva:'reserva' };
   const statusTag = '<span class="status-tag '+cavalo.disponibilidade+'">'+(dispLabel[cavalo.disponibilidade]||cavalo.disponibilidade)+'</span>';
 
@@ -2650,6 +2652,7 @@ function renderGeral() {
   const STATUS_OPTS = [
     {v:"operando",l:"Operando"},
     {v:"disponivel",l:"Disponível"},
+    {v:"manutencao",l:"Manutenção"},
     {v:"reserva",l:"Reserva"},
     {v:"em_reforma",l:"Em reforma"},
     {v:"a_reformar",l:"A reformar"},
