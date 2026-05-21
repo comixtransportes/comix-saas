@@ -1312,7 +1312,7 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
     <div style="font-size:11.5px;color:var(--mu);line-height:1.6;margin-bottom:12px" id="chk-obs">Nenhuma observação registrada.</div>
   </div>
   <div class="sp-footer">
-    <button class="btn btn-sm btn-ac" id="chk-btn-abrir-os" onclick="abrirOSdoChecklist()">+ Abrir OS</button>
+    <button class="btn btn-sm btn-ac" onclick="goTo('nova-os',null);closeChecklistPanel()">+ Abrir OS</button>
     <button class="btn btn-sm btn-gn" onclick="closeChecklistPanel()">✓ Confirmar visualização</button>
   </div>
 </div>
@@ -1458,75 +1458,19 @@ function openChecklistPanel(chkId) {
   const reprovList = document.getElementById('chk-reprov-list');
   if (chk.reprovados_itens && chk.reprovados_itens.length > 0) {
     reprovSection.style.display = 'block';
-    reprovList.innerHTML = chk.reprovados_itens.map(item => {
-      // item pode ser string ou objeto {item, grupo, obs, status}
-      const nome = typeof item === 'string' ? item : (item.item || item.descricao || JSON.stringify(item));
-      const obs  = typeof item === 'object' && item.obs ? ' — ' + item.obs : '';
-      const grupo = typeof item === 'object' && item.grupo ? `<span style="font-size:10px;color:var(--mu);margin-left:4px">[${item.grupo}]</span>` : '';
-      return `<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 9px;background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:var(--rs);margin-bottom:5px;font-size:11.5px"><span style="color:var(--rd);flex-shrink:0">✗</span><span>${escapeHtml(nome)}${escapeHtml(obs)}${grupo}</span></div>`;
-    }).join('');
+    reprovList.innerHTML = chk.reprovados_itens.map(item =>
+      `<div style="display:flex;align-items:flex-start;gap:8px;padding:7px 9px;background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:var(--rs);margin-bottom:5px;font-size:11.5px"><span style="color:var(--rd);flex-shrink:0">✗</span><span>${item}</span></div>`
+    ).join('');
   } else {
     reprovSection.style.display = 'none';
   }
 
-
-  // Fotos reais
-  const fotosGrid = document.getElementById('chk-fotos-grid');
-  if (fotosGrid) {
-    const urls = chk.fotosUrls || [];
-    const labels = ['Frente','Traseira','Lat. Direita','Lat. Esquerda'];
-    if (urls.length > 0) {
-      let html = urls.map((url, i) => {
-        const label = labels[i] || ('Foto ' + (i + 1));
-        return url ? '<div class="sp-photo-card" style="overflow:hidden;cursor:pointer;padding:0" onclick="window.open('' + escapeHtml(url) + '')"><img src="' + escapeHtml(url) + '" style="width:100%;height:100%;object-fit:cover;border-radius:12px"><span style="position:absolute;bottom:6px;left:8px;background:rgba(0,0,0,.5);color:#fff;font-size:9px;padding:2px 6px;border-radius:8px">' + label + '</span></div>' : '<div class="sp-photo-card"><span style="font-size:26px">📷</span><span>' + label + '</span></div>';
-      }).join('');
-      for (let i = urls.length; i < 4; i++) html += '<div class="sp-photo-card"><span style="font-size:26px">📷</span><span>' + labels[i] + '</span></div>';
-      fotosGrid.innerHTML = html;
-    } else {
-      fotosGrid.innerHTML = labels.map(l => '<div class="sp-photo-card"><span style="font-size:26px">📷</span><span>' + l + '</span></div>').join('');
-    }
-  }
   document.getElementById('chk-overlay').classList.add('on');
   document.getElementById('chk-panel').classList.add('on');
 }
 function closeChecklistPanel() {
   document.getElementById('chk-overlay').classList.remove('on');
   document.getElementById('chk-panel').classList.remove('on');
-}
-
-/* Abre a tela de nova OS pré-preenchida com os dados do checklist atual */
-function abrirOSdoChecklist() {
-  const chkId = document.getElementById('chk-id')?.textContent || '';
-  const chk = chkId ? CHK_DB[chkId] : null;
-  closeChecklistPanel();
-  goTo('nova-os', null);
-  if (!chk) return;
-  // Pré-preenche campos da nova OS com dados do checklist
-  setTimeout(() => {
-    const placaInput = document.getElementById('mnt_nova_placa_input');
-    if (placaInput) {
-      placaInput.value = chk.placa || '';
-      onPlacaChange(chk.placa || '');
-    }
-    // Pré-preenche o problema com os itens reprovados
-    if (chk.reprovados_itens && chk.reprovados_itens.length > 0) {
-      const textarea = document.querySelector('#view-nova-os textarea');
-      if (textarea) {
-        const itens = chk.reprovados_itens.map(item => {
-          const nome = typeof item === 'string' ? item : (item.item || item.descricao || '');
-          const obs  = typeof item === 'object' && item.obs ? ' — ' + item.obs : '';
-          return nome + obs;
-        }).filter(Boolean).join('\n');
-        textarea.value = 'Reprovações do checklist ' + chkId + ':\n' + itens;
-      }
-      // Pré-seleciona motivo corretivo
-      const motivo = document.getElementById('mnt_motivo_parada');
-      if (motivo) motivo.value = 'Manutenção corretiva';
-    }
-    // Guarda referência ao checklist de origem para vincular ao salvar
-    window._osDaChecklist = chkId;
-    toast('Formulário pré-preenchido com dados do checklist. Revise e clique em "Criar e enviar".', 'ac');
-  }, 200);
 }
 
 // ══ MODAL PREVENTIVA ══
@@ -1592,8 +1536,7 @@ async function salvarOS() {
       pecas,
       valorTotal: total,
       status: 'Aberta',
-      origem: window._osDaChecklist ? 'checklist' : 'manual',
-      checklist_id: window._osDaChecklist || null,
+      origem: 'manual',
       criadoEm: agora,
       atualizadoEm: agora,
       criadoPor: ATLAS_CURRENT_USER.email || '—',
@@ -1602,12 +1545,7 @@ async function salvarOS() {
 
     const saveRes = await atlasFsSetDoc('ordens_servico', osId, payload, { merge: true });
     registrarNumOS(num);
-    // Se a OS veio de um checklist, vincula o número da OS ao checklist
-    if (window._osDaChecklist) {
-      await atlasFsSetDoc('checklists_diarios', window._osDaChecklist, { osGerada: osId, os_gerada: osId }, { merge: true });
-      await setPlacaEmManutencao(veiculo);
-      window._osDaChecklist = null; // limpa referência
-    }
+    await setPlacaEmManutencao(veiculo);
     const fotosMeta = _osFotos.map(f => ({ name: f.name || 'foto', size: f.file && f.file.size ? f.file.size : 0, type: f.file && f.file.type ? f.file.type : '', local: true }));
     if (fotosMeta.length) {
       await atlasFsSetDoc('ordens_servico', osId, { fotosMeta, fotos: fotosMeta.length, atualizadoEm: new Date() }, { merge: true });
@@ -2716,23 +2654,6 @@ async function openChecklistFirebase(id) {
     const snap = await atlasFsGetDoc('checklists_diarios', id);
     if (!snap) { openChecklistPanel(id); return; }
     const chk = { id: snap.id, ...(snap.data || {}) };
-
-    // Normaliza itens reprovados — pode ser array de objetos ou strings
-    let itensReprovados = [];
-    if (Array.isArray(chk.itens_reprovados) && chk.itens_reprovados.length) {
-      itensReprovados = chk.itens_reprovados;
-    } else if (Array.isArray(chk.itens) && chk.itens.length) {
-      itensReprovados = chk.itens.filter(i => i && i.status === 'reprovado');
-    }
-
-    // Normaliza fotos — pode ser array de URLs ou mapa de objetos
-    let fotosUrls = [];
-    if (Array.isArray(chk.fotosUrls) && chk.fotosUrls.length) {
-      fotosUrls = chk.fotosUrls.filter(Boolean);
-    } else if (Array.isArray(chk.fotosMeta)) {
-      fotosUrls = chk.fotosMeta.map(f => f && f.url).filter(Boolean);
-    }
-
     CHK_DB[id] = {
       placa:    mntUpper(chk.placa || ''),
       tipo:     chk.tipo || '—',
@@ -2742,10 +2663,9 @@ async function openChecklistFirebase(id) {
       filial:   chk.filial || '—',
       aprovados:  chk.aprovados ?? 0,
       reprovados: chk.reprovados ?? 0,
-      fotos:    chk.fotos ?? fotosUrls.length,
+      fotos:    chk.fotos ?? 0,
       osGerada: chk.osGerada || chk.os_gerada || '—',
-      reprovados_itens: itensReprovados,
-      fotosUrls: fotosUrls,
+      reprovados_itens: chk.itens_reprovados || [],
       obs: chk.observacoes || '',
     };
     openChecklistPanel(id);
@@ -2758,10 +2678,12 @@ async function openChecklistFirebase(id) {
 async function deleteChecklistFirebase(id, btn) {
   const confirmado = confirm('Confirmar exclusão do checklist?\n\nEsta ação não pode ser desfeita.');
   if (!confirmado) return;
+  const db = window._mntDB;
   try {
     await atlasFsDeleteDoc('checklists_diarios', id);
+    const row = btn.closest('tr');
+    if (row) row.remove();
     toast('Checklist excluído.', 'rd');
-    await loadChecklists(); // Recarrega lista e KPIs
   } catch(err) {
     toast('Erro ao excluir: ' + err.message, 'rd');
   }
@@ -3022,24 +2944,14 @@ function wizStep(n) {
   const back = document.getElementById('wiz-back');
   if (back) back.style.display = '';
 }
-let _wizSaving = false;
 async function wizNext() {
   if (wizCurrent < WIZ_STEPS - 1) {
     wizStep(wizCurrent + 1);
   } else {
-    if (_wizSaving) return; // Evita múltiplos cliques no finalizar
-    _wizSaving = true;
-    const btn = document.getElementById('wiz-next');
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Salvando...'; }
-    try {
-      const ok = await salvarChecklistFirebase();
-      if (ok) {
-        resetarInspecaoEmBranco();
-        goTo('checklist', null);
-      }
-    } finally {
-      _wizSaving = false;
-      if (btn) { btn.disabled = false; btn.textContent = '✓ Finalizar'; }
+    const ok = await salvarChecklistFirebase();
+    if (ok) {
+      resetarInspecaoEmBranco();
+      goTo('checklist', null);
     }
   }
 }
@@ -3098,10 +3010,33 @@ async function salvarChecklistFirebase() {
     const ref = await atlasFsAddDoc('checklists_diarios', payload);
     console.log('[Inspeção] Checklist salvo:', ref.id, 'placa:', placa);
 
-    // NÃO gera OS automaticamente — OS deve ser aberta manualmente após análise
-    // O botão "+ Abrir OS" no painel lateral pré-preenche o formulário com as reprovações
+    // Cria OS automaticamente para itens reprovados
     if (itensReprovados.length > 0) {
-      toast('Checklist salvo com ' + itensReprovados.length + ' item(ns) reprovado(s). Clique em "Ver" e depois "+ Abrir OS" para registrar a O.S.', 'am');
+      const num  = await gerarNumOS();
+      const osId = 'OS-' + num;
+      await atlasFsSetDoc('ordens_servico', osId, {
+        num, id: osId,
+        veiculo:      placa,
+        frota:        v ? (v.frota || placa) : placa,
+        tipoEquipamento: v ? (v.tipo || 'Cavalo') : 'Cavalo',
+        motorista,
+        origem:       'checklist',
+        checklist_id: ref.id,
+        problema:     itensReprovados.map(i => i.item + (i.obs ? ' — ' + i.obs : '')).join('; '),
+        servicos:     itensReprovados.map(i => ({ descricao: i.item, obs: i.obs, grupo: i.grupo, quantidade: 1, vlUnit: 0, vlTotal: 0 })),
+        pecas:        [],
+        tipo:         'Corretiva',
+        local:        'Interna',
+        status:       'Aberta',
+        valorTotal:   0,
+        criadoEm:     agora,
+        atualizadoEm: agora,
+        criadoPor:    ATLAS_CURRENT_USER.email || '—',
+      }, { merge: true });
+      registrarNumOS(num);
+      await atlasFsSetDoc('checklists_diarios', ref.id, { osGerada: osId, os_gerada: osId }, { merge: true });
+      await setPlacaEmManutencao(placa);
+      toast('Checklist finalizado e salvo no Firebase — ' + osId + ' criada para itens reprovados.', 'am');
     } else {
       toast('Checklist finalizado e salvo com sucesso!', 'gn');
     }
