@@ -549,9 +549,9 @@ td .btn-icon-sm + .btn-icon-sm{margin-left:3px}
             </div>
           </div>
           <div class="g3">
-            <div class="kpi"><div class="kpi-lbl">Realizados hoje</div><div class="kpi-val gn">14</div></div>
-            <div class="kpi"><div class="kpi-lbl">Com reprovação</div><div class="kpi-val rd">3</div></div>
-            <div class="kpi"><div class="kpi-lbl">Pendentes</div><div class="kpi-val am">7</div></div>
+            <div class="kpi"><div class="kpi-lbl">Realizados hoje</div><div class="kpi-val gn" id="chk-kpi-hoje">—</div></div>
+            <div class="kpi"><div class="kpi-lbl">Com reprovação</div><div class="kpi-val rd" id="chk-kpi-reprov">—</div></div>
+            <div class="kpi"><div class="kpi-lbl">Pendentes</div><div class="kpi-val am" id="chk-kpi-pend">—</div></div>
           </div>
           <div class="card" style="padding:0;overflow:hidden">
             <table>
@@ -640,11 +640,11 @@ td .btn-icon-sm + .btn-icon-sm{margin-left:3px}
 
           <!-- Cavalo -->
           <div class="cl-panel on" id="cl-0">
-            <div style="font-weight:700;font-size:13px;margin-bottom:10px">🚛 Cavalo Mecânico — ABC-1234</div>
+            <div style="font-weight:700;font-size:13px;margin-bottom:10px" id="insp-titulo-cavalo">🚛 Cavalo Mecânico — —</div>
             <div class="sec-title">Motor e fluidos</div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível óleo motor</div><div style="font-size:10.5px;color:var(--mu)">Vareta — mínimo/máximo</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado" onclick="setStatus(this,'aprovado')">✓</button><button class="status-btn reprovado" title="Reprovado" onclick="setStatus(this,'reprovado')">✗</button></div></div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível água arrefecimento</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado" onclick="setStatus(this,'aprovado')">✓</button><button class="status-btn reprovado" title="Reprovado" onclick="setStatus(this,'reprovado')">✗</button></div></div>
-            <div class="cl-item reprovado"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível fluido de freio</div><div style="font-size:10.5px;color:var(--rd)">Reprovado — foto + observação obrigatórias</div></div><div class="status-actions"><button class="status-btn aprovado" title="Aprovado" onclick="setStatus(this,'aprovado')">✓</button><button class="status-btn reprovado on" title="Reprovado" onclick="setStatus(this,'reprovado')">✗</button></div><div class="reprova-inline"><div class="inline-photo-zone" id="ipz-fluido-freio"><label style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer">📸<span>Toque para foto da reprovação</span><input type="file" accept="image/*" style="display:none" onchange="onInlinePhotoChange(this,'ipz-fluido-freio')"></label></div><textarea class="inline-obs" placeholder="Observação obrigatória...">Fluido abaixo do nível mínimo. Possível micro-vazamento circuito traseiro.</textarea></div></div>
+            <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível fluido de freio</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado" onclick="setStatus(this,'aprovado')">✓</button><button class="status-btn reprovado" title="Reprovado" onclick="setStatus(this,'reprovado')">✗</button></div></div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Nível óleo câmbio</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado" onclick="setStatus(this,'aprovado')">✓</button><button class="status-btn reprovado" title="Reprovado" onclick="setStatus(this,'reprovado')">✗</button></div></div>
             <div class="sec-title">Pneus e freios</div>
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Pressão Pneus</div><div style="font-size:10.5px;color:var(--mu)">Mínimo 100 psi</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado" onclick="setStatus(this,'aprovado')">✓</button><button class="status-btn reprovado" title="Reprovado" onclick="setStatus(this,'reprovado')">✗</button></div></div>
@@ -736,7 +736,7 @@ td .btn-icon-sm + .btn-icon-sm{margin-left:3px}
             <div class="card">
               <div class="card-hdr"><div class="card-title">Identificação</div></div>
               <div class="fld-row">
-                <div class="fld" style="flex:.6"><label>Número OS</label><input value="OS-0342" readonly style="background:var(--bg);font-family:var(--m);font-weight:700"></div>
+                <div class="fld" style="flex:.6"><label>Número OS</label><input id="nova-os-num" value="Carregando..." readonly style="background:var(--bg);font-family:var(--m);font-weight:700"></div>
                 <div class="fld"><label>Data abertura</label><input type="date" value="2026-05-19"></div>
                 <div class="fld" style="flex:.7"><label>Prioridade</label><select><option>Normal</option><option>Alta</option><option>Urgente</option></select></div>
               </div>
@@ -1637,47 +1637,54 @@ async function salvarOS() {
 
   if (!veiculo) { toast('Selecione ou digite a placa do veículo.', 'am'); return; }
 
+  const db = window._mntDB;
+  if (!db) { toast('Firebase não disponível. Verifique a conexão.', 'rd'); return; }
+
   try {
-    const num = await gerarNumOS();
-    const osId = 'OS-' + num;
-    const db = window._mntDB;
+    const num   = await gerarNumOS();
+    const osId  = 'OS-' + num;
+    const agora = new Date();
 
     const payload = {
       num,
-      id: osId,
-      unidade, veiculo, motorista, prestador,
-      tipo, local, prazo, problema, motivo,
-      servicos, pecas,
-      valorTotal: total,
-      status: 'Aberta',
-      criadoEm: firebase.firestore.Timestamp.now(),
-      criadoPor: ATLAS_CURRENT_USER.email || '—',
+      id:          osId,
+      unidade,     veiculo,   motorista, prestador,
+      tipo,        local,     prazo,     problema,  motivo,
+      servicos,    pecas,
+      valorTotal:  total,
+      status:      'Aberta',
+      criadoEm:    agora,
+      criadoPor:   ATLAS_CURRENT_USER.email || '—',
     };
 
-    if (db) {
-      await db.collection('ordens_servico').doc(osId).set(payload);
-      setPlacaEmManutencao(veiculo);
+    await db.collection('ordens_servico').doc(osId).set(payload);
+    console.log('[Atlas OS] Salvo:', osId);
 
-      // Upload de fotos da OS para Firebase Storage
-      const fotosUrls = [];
-      for (const foto of _osFotos) {
-        if (foto.file) {
-          const url = await uploadOSFotoNuvem(foto.file, osId);
-          if (url) fotosUrls.push(url);
-        }
-      }
-      if (fotosUrls.length) {
-        await db.collection('ordens_servico').doc(osId).set({ fotosUrls }, { merge: true });
-      }
+    // Muda status da placa para Manutenção
+    setPlacaEmManutencao(veiculo);
 
-      toast(osId + ' criada e salva no sistema!', 'gn');
-    } else {
-      console.log('[Atlas OS] Modo offline:', payload);
-      toast(osId + ' criada (modo offline).', 'am');
+    // Upload de fotos da OS
+    const fotosUrls = [];
+    for (const foto of _osFotos) {
+      if (foto.file) {
+        const url = await uploadOSFotoNuvem(foto.file, osId);
+        if (url) fotosUrls.push(url);
+      }
     }
+    if (fotosUrls.length) {
+      await db.collection('ordens_servico').doc(osId).set({ fotosUrls }, { merge: true });
+    }
+
+    toast(osId + ' criada e salva no sistema!', 'gn');
+
+    // Atualiza número OS no formulário para a próxima
+    const proxNum = await gerarNumOS();
+    const numEl = document.getElementById('nova-os-num');
+    if (numEl) numEl.value = 'OS-' + proxNum;
+
   } catch(err) {
-    console.error('[salvarOS]', err);
-    toast('Erro ao salvar OS: ' + err.message, 'rd');
+    console.error('[salvarOS] ERRO:', err);
+    toast('Erro ao salvar OS: ' + err.message + ' — verifique console.', 'rd');
   }
 }
 
@@ -1837,23 +1844,25 @@ async function loadCadastrosFirebase() {
   if (!db) { console.warn('[Manutenção] Firebase não inicializado.'); return; }
 
   try {
-    const [snapV, snapM, snapF, snapA] = await Promise.all([
+    const [snapV, snapM, snapF, snapA, snapC] = await Promise.all([
       db.collection('veiculos').get(),
       db.collection('motoristas').get(),
       db.collection('filiais').get(),
       db.collection('alocacao_frota').get(),
+      db.collection('compressores').get(),   // ← carrega compressores reais
     ]);
 
     MNT_CACHE.veiculos = snapV.docs.map(d => {
       const dd = d.data();
       return {
-        id: d.id,
-        placa:   mntUpper(dd.placa || d.id),
-        frota:   mntUpper(dd.frota),
-        tipo:    normalizeTipo(dd.tipo),
-        modelo:  mntUpper(dd.modelo),
-        filial:  mntUpper(dd.filial),
-        km:      dd.km || dd.hodometro || 0,
+        id:     d.id,
+        placa:  mntUpper(dd.placa || d.id),
+        frota:  mntUpper(dd.frota),
+        tipo:   normalizeTipo(dd.tipo),
+        modelo: mntUpper(dd.modelo),
+        ano:    dd.ano || '',
+        filial: mntUpper(dd.filial),
+        km:     dd.km || dd.hodometro || 0,
       };
     }).sort((a,b) => a.frota.localeCompare(b.frota, 'pt-BR') || a.placa.localeCompare(b.placa, 'pt-BR'));
 
@@ -1864,13 +1873,19 @@ async function loadCadastrosFirebase() {
 
     MNT_CACHE.filiais = snapF.docs.map(d => {
       const dd = d.data();
-      return {
-        id:     d.id,
-        sigla:  mntUpper(dd.sigla),
-        nome:   mntUpper(dd.nome || d.id),
-        estado: mntUpper(dd.estado),
-      };
+      return { id: d.id, sigla: mntUpper(dd.sigla), nome: mntUpper(dd.nome || d.id), estado: mntUpper(dd.estado) };
     }).sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+    // Mapa de compressores: id → { identificacao, serie, ... }
+    MNT_CACHE.compressores = {};
+    snapC.docs.forEach(d => {
+      const dd = d.data();
+      MNT_CACHE.compressores[d.id] = {
+        id:           d.id,
+        identificacao: mntUpper(dd.identificacao || dd.id_compressor || d.id),
+        serie:         dd.serie || '',
+      };
+    });
 
     // Monta mapa de alocações: cavalo_id → doc
     snapA.docs.forEach(d => {
@@ -1884,14 +1899,20 @@ async function loadCadastrosFirebase() {
       if (aloc && aloc.motorista) v.motorista = mntUpper(aloc.motorista);
     });
 
-    console.log(`[Manutenção] Firebase carregado: ${MNT_CACHE.veiculos.length} veículos, ${MNT_CACHE.motoristas.length} motoristas, ${MNT_CACHE.filiais.length} filiais`);
+    console.log(`[Manutenção] Firebase: ${MNT_CACHE.veiculos.length} veículos, ${MNT_CACHE.motoristas.length} motoristas, ${Object.keys(MNT_CACHE.compressores).length} compressores`);
 
-    // Popula todos os selects agora que os dados chegaram
+    // Popula selects e carrega dados das abas
     popularSelectsOS();
     popularSelectFiltroChecklist();
     popularFiltroFrotaGestao();
     loadChecklists();
     resolveAlocacaoUsuario();
+
+    // Pré-calcula número da próxima OS e exibe no campo
+    gerarNumOS().then(num => {
+      const el = document.getElementById('nova-os-num');
+      if (el) el.value = 'OS-' + num;
+    });
 
   } catch(err) {
     console.error('[Manutenção] Erro ao carregar Firebase:', err);
@@ -2186,8 +2207,26 @@ async function loadChecklists() {
 
     if (docs.length === 0) {
       tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhum checklist registrado.</td></tr>';
+      // Zera KPIs
+      ['chk-kpi-hoje','chk-kpi-reprov','chk-kpi-pend'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.textContent = '0';
+      });
       return;
     }
+
+    // Calcula KPIs reais
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    const docsHoje    = docs.filter(d => d.data === hoje || (d.dataAbertura?.toDate?.() || new Date(d.dataAbertura||0)).toLocaleDateString('pt-BR') === hoje);
+    const comReprov   = docsHoje.filter(d => (d.reprovados || 0) > 0).length;
+    const realizados  = docsHoje.filter(d => d.status === 'realizado').length;
+    const pendentes   = docs.filter(d => d.status === 'pendente' || !d.horario).length;
+
+    const kpiHoje  = document.getElementById('chk-kpi-hoje');
+    const kpiRep   = document.getElementById('chk-kpi-reprov');
+    const kpiPend  = document.getElementById('chk-kpi-pend');
+    if (kpiHoje) kpiHoje.textContent = realizados;
+    if (kpiRep)  kpiRep.textContent  = comReprov;
+    if (kpiPend) kpiPend.textContent = pendentes;
 
     tbody.innerHTML = docs.map(chk => {
       const placa       = mntUpper(chk.placa || '—');
@@ -2321,18 +2360,20 @@ function iniciarInspecao(placa, motoristaNomeParam) {
   });
   const aloc = alocKey ? MNT_CACHE.alocacoes[alocKey] : null;
 
-  // Compressor
-  const compId = aloc && aloc.compressor_id ? aloc.compressor_id : null;
-  window._inspCompressor = compId;
+  // Compressor — usa identificacao real, não o id do doc Firestore
+  const compDocId = aloc && aloc.compressor_id ? aloc.compressor_id : null;
+  window._inspCompressor = compDocId;
   const tituloComp = document.getElementById('insp-titulo-compressor');
   if (tituloComp) {
-    if (compId) {
-      // Busca toneladas do ano no SZB se disponível
+    if (compDocId) {
+      // Busca identificacao no cache de compressores
+      const compCache = MNT_CACHE.compressores && MNT_CACHE.compressores[compDocId];
+      const compLabel = compCache ? compCache.identificacao : compDocId;
       const szbData = window._mntSZB ? (window._mntSZB[alocKey] || window._mntSZB[placa] || null) : null;
       const tonLabel = szbData && szbData.viagens_30d != null
         ? ' · ' + szbData.viagens_30d + ' viagens (30d)'
         : '';
-      tituloComp.textContent = '💨 Compressor — ' + compId + tonLabel;
+      tituloComp.textContent = '💨 Compressor — ' + compLabel + tonLabel;
     } else {
       tituloComp.textContent = '💨 Compressor — (não alocado)';
     }
@@ -2575,81 +2616,91 @@ function wizNext() {
 
 async function salvarChecklistFirebase() {
   const db = window._mntDB;
-  if (!db) { console.warn('[Inspeção] Firebase não disponível — checklist não salvo.'); return; }
+  if (!db) {
+    console.warn('[Inspeção] Firebase não disponível — checklist não salvo.');
+    toast('Firebase indisponível — verifique a conexão.', 'am');
+    return;
+  }
   try {
     const placa     = window._inspPlaca || '—';
     const motorista = window._inspMotorista || ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '—';
     const agora     = new Date();
 
-    // Coleta itens reprovados por painel
+    // Coleta itens reprovados (título real do item)
     const itensReprovados = [];
-    document.querySelectorAll('.cl-item.reprovado').forEach(row => {
-      const titulo = row.querySelector('div[style*="font-weight:500"]')?.textContent?.trim() || '';
-      const obs    = row.querySelector('.inline-obs')?.value?.trim() || '';
-      itensReprovados.push({ item: titulo, obs });
+    document.querySelectorAll('#insp-checklist-content .cl-item.reprovado').forEach(row => {
+      const tituloEl = row.querySelector('.cl-item-title') || row.querySelector('div[style*="font-weight:500"]');
+      const titulo   = tituloEl ? tituloEl.textContent.trim() : '';
+      const obs      = row.querySelector('.inline-obs')?.value?.trim() || '';
+      if (titulo) itensReprovados.push({ item: titulo, obs });
     });
 
-    // Conta aprovados/reprovados apenas nos painéis visíveis (excluindo os pulados)
     const aprovados  = document.querySelectorAll('#insp-checklist-content .status-btn.aprovado.on').length;
     const reprovados = document.querySelectorAll('#insp-checklist-content .status-btn.reprovado.on').length;
-
-    // URLs das fotos (Firebase Storage)
     const fotosVeiculo = Object.values(window._inspFotos || {}).map(f => f.url).filter(Boolean);
 
-    const v = MNT_CACHE.veiculos.find(x => x.placa === placa);
+    const v          = MNT_CACHE.veiculos.find(x => x.placa === placa);
+    const compDocId  = window._inspCompressor || null;
+    const compCache  = compDocId && MNT_CACHE.compressores ? MNT_CACHE.compressores[compDocId] : null;
+    const compLabel  = compCache ? compCache.identificacao : compDocId;
 
     const payload = {
       placa,
       motorista,
       motorista_email:  ATLAS_CURRENT_USER.email || '—',
-      dataAbertura:     firebase.firestore.Timestamp.fromDate(new Date(window._inspTs || agora)),
+      dataAbertura:     new Date(window._inspTs || agora),
       horario:          agora.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}),
       data:             agora.toLocaleDateString('pt-BR'),
-      tipo:             v ? v.tipo || 'Cavalo' : 'Cavalo',
-      frota:            v ? v.frota || '—' : '—',
-      modelo:           v ? v.modelo || '—' : '—',
-      compressor_id:    window._inspCompressor || null,
-      carreta1_id:      window._inspCarreta1   || null,
-      carreta2_id:      window._inspCarreta2   || null,
+      tipo:             v ? (v.tipo || 'Cavalo') : 'Cavalo',
+      frota:            v ? (v.frota || '—') : '—',
+      modelo:           v ? (v.modelo || '—') : '—',
+      compressor_id:    compDocId,
+      compressor_label: compLabel,
+      carreta1_id:      window._inspCarreta1 || null,
+      carreta2_id:      window._inspCarreta2 || null,
       status:           'realizado',
       aprovados,
       reprovados,
       fotos:            fotosVeiculo.length,
       fotosUrls:        fotosVeiculo,
       itens_reprovados: itensReprovados,
-      criadoEm:         firebase.firestore.Timestamp.now(),
+      criadoEm:         agora,
     };
 
     const ref = await db.collection('checklists_diarios').add(payload);
-    console.log('[Inspeção] Checklist salvo no Firestore:', placa, '→', ref.id);
+    console.log('[Inspeção] Checklist salvo:', ref.id, 'placa:', placa);
 
-    // Se há itens reprovados, cria OS automaticamente
+    // Cria OS automaticamente para itens reprovados
     if (itensReprovados.length > 0) {
-      const num   = await gerarNumOS();
-      const osId  = 'OS-' + num;
-      const osPayload = {
+      const num  = await gerarNumOS();
+      const osId = 'OS-' + num;
+      await db.collection('ordens_servico').doc(osId).set({
         num, id: osId,
-        veiculo:    placa,
+        veiculo:      placa,
         motorista,
-        origem:     'checklist',
+        origem:       'checklist',
         checklist_id: ref.id,
-        problema:   itensReprovados.map(i => i.item).join('; '),
-        servicos:   itensReprovados.map(i => ({ descricao: i.item, obs: i.obs, quantidade: 1, vlUnit: 0, vlTotal: 0 })),
-        pecas:      [],
-        tipo:       'Corretiva',
-        local:      'Interna',
-        status:     'Aberta',
-        valorTotal: 0,
-        criadoEm:   firebase.firestore.Timestamp.now(),
-        criadoPor:  ATLAS_CURRENT_USER.email || '—',
-      };
-      await db.collection('ordens_servico').doc(osId).set(osPayload);
+        problema:     itensReprovados.map(i => i.item).join('; '),
+        servicos:     itensReprovados.map(i => ({ descricao: i.item, obs: i.obs, quantidade: 1, vlUnit: 0, vlTotal: 0 })),
+        pecas:        [],
+        tipo:         'Corretiva',
+        local:        'Interna',
+        status:       'Aberta',
+        valorTotal:   0,
+        criadoEm:     agora,
+        criadoPor:    ATLAS_CURRENT_USER.email || '—',
+      });
       setPlacaEmManutencao(placa);
-      toast('Checklist finalizado — ' + osId + ' criada automaticamente para itens reprovados.', 'am');
+      toast('Checklist finalizado — ' + osId + ' criada para itens reprovados.', 'am');
+    } else {
+      toast('Checklist finalizado e salvo com sucesso!', 'gn');
     }
 
+    // Recarrega lista de checklists
+    loadChecklists();
+
   } catch(err) {
-    console.error('[Inspeção] Erro ao salvar checklist:', err);
+    console.error('[Inspeção] ERRO ao salvar checklist:', err);
     toast('Erro ao salvar checklist: ' + err.message, 'rd');
   }
 }
@@ -2680,9 +2731,22 @@ function setStatus(btn, tipo) {
   btn.classList.add('on');
   if (tipo === 'reprovado') {
     row.classList.add('reprovado');
+    // Mostra mensagem de orientação se não existir
+    let hint = row.querySelector('.reprova-hint');
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.className = 'reprova-hint';
+      hint.style.cssText = 'font-size:10.5px;color:var(--rd);margin-top:3px';
+      hint.textContent = 'Reprovado — foto + observação obrigatórias';
+      row.querySelector('div[style*="flex:1"]').appendChild(hint);
+    }
+    hint.style.display = '';
     ensureReprovaInline(row);
   } else {
     row.classList.remove('reprovado');
+    // Remove mensagem de orientação
+    const hint = row.querySelector('.reprova-hint');
+    if (hint) hint.style.display = 'none';
   }
 }
 function ensureReprovaInline(row) {
