@@ -1754,9 +1754,10 @@ function atlasApplyAuthUser(user) {
     nome: ATLAS_CURRENT_USER.nome || user.displayName || user.email || ''
   };
 }
-function atlasWaitAuthReady(timeout = 6000) {
+function atlasWaitAuthReady(timeout = 8000) {
   const auth = atlasGetSharedAuth();
-  if (atlasHasParentBridge && atlasHasParentBridge()) return Promise.resolve(null);
+  // Se tem ponte real com parent autenticado, não precisa esperar auth local
+  if (atlasHasParentBridge()) return Promise.resolve(null);
   if (!auth) return Promise.resolve(null);
   if (_atlasAuthReadyPromise) return _atlasAuthReadyPromise;
   _atlasAuthReadyPromise = new Promise(resolve => {
@@ -2114,7 +2115,16 @@ let _atlasFsSeq = 1;
 const _atlasFsPending = {};
 
 function atlasHasParentBridge() {
-  return !!(window.parent && window.parent !== window);
+  // Verifica se realmente está dentro de um iframe do Atlas (não apenas window.parent existir)
+  try {
+    if (!window.parent || window.parent === window) return false;
+    // Tenta acessar uma propriedade do parent; se lançar SecurityError, é cross-origin
+    const parentHasAtlas = !!(window.parent._mntDB || window.parent._mntAuth || window.parent.firebase);
+    return parentHasAtlas;
+  } catch(e) {
+    // Cross-origin: não é nossa ponte Atlas
+    return false;
+  }
 }
 
 window.addEventListener('message', function(ev) {
@@ -2464,7 +2474,10 @@ async function loadOrdensServico() {
     renderPreventivaReais();
     renderAprovacoesReais();
     if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--rd);padding:18px;font-size:11.5px">Não foi possível carregar as O.S reais. Verifique login/permissões do Firebase e tente novamente.</td></tr>';
-    if (!atlasIsChecklistOnly()) toast('Falha ao carregar O.S reais: ' + err.message, 'rd');
+    if (!atlasIsChecklistOnly()) {
+      const isAuthErr = err.message && (err.message.includes('permission') || err.message.includes('Missing or insufficient') || err.message.includes('unauthenticated'));
+      toast('Falha ao carregar O.S reais: ' + (isAuthErr ? 'Firestore indisponível para ordens_servico: Missing or insufficient permissions.' : err.message), 'rd');
+    }
   }
 }
 function setupOSFilters() {
@@ -2779,7 +2792,12 @@ async function loadChecklists() {
 
   } catch(err) {
     console.error('[Manutenção] Erro ao carregar checklists:', err);
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhum checklist disponível para este perfil.</td></tr>';
+    const isAuthErr = err.message && (err.message.includes('permission') || err.message.includes('Missing or insufficient') || err.message.includes('unauthenticated'));
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">${
+      isAuthErr
+        ? '⚠️ Sem permissão de acesso — faça login para visualizar os checklists.'
+        : 'Erro ao carregar checklists: ' + (err.message || 'verifique a conexão.')
+    }</td></tr>`;
     ['chk-kpi-hoje','chk-kpi-reprov','chk-kpi-pend'].forEach(id => {
       const el = document.getElementById(id); if (el) el.textContent = '—';
     });
@@ -3107,6 +3125,12 @@ async function salvarChecklistFirebase() {
   if (!db && !atlasHasParentBridge()) {
     console.warn('[Inspeção] Firebase não disponível — checklist não salvo.');
     toast('Firebase indisponível — verifique a conexão.', 'am');
+    return false;
+  }
+  // Verifica autenticação antes de tentar gravar
+  const auth = atlasGetSharedAuth();
+  if (!atlasHasParentBridge() && auth && !auth.currentUser) {
+    toast('Você precisa estar logado para salvar a inspeção.', 'rd');
     return false;
   }
   try {
@@ -3924,6 +3948,20 @@ carregarParametros();
 if (document.body.classList.contains('checklist-only')) setTimeout(() => goTo('checklist', null), 0);
 // Carrega dados reais do Firebase (veiculos, motoristas, filiais, alocacoes, checklists)
 atlasWaitAuthReady().then(() => loadCadastrosFirebase());
+// Recarrega automaticamente quando o usuário fizer login/logout
+(function() {
+  const auth = window._mntAuth;
+  if (auth && typeof auth.onAuthStateChanged === 'function') {
+    auth.onAuthStateChanged(function(user) {
+      if (user) {
+        // Usuário logou: aplica e recarrega
+        atlasApplyAuthUser(user);
+        _atlasAuthReadyPromise = null; // reseta para próxima chamada pegar o usuário correto
+        loadCadastrosFirebase();
+      }
+    });
+  }
+})();
 setTimeout(() => { const h = (location.hash || '').replace('#',''); if (h) goTo(h, null); }, 0);
 </script>
 <script>
