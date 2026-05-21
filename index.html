@@ -635,7 +635,12 @@ function showApp() {
   document.getElementById('sb-email').textContent = e;
   document.getElementById('sb-role').textContent  = curPerfil;
   applyPerfil();
-  loadPermissions();
+  loadPermissions().then(() => {
+    // Revalida a view ativa após as permissões do Firestore serem carregadas
+    const hash = location.hash.replace('#','');
+    const initialView = hash && VIEWS[hash] ? hash : 'pd-diario';
+    go(initialView);
+  });
   /* Pré-carrega todas as bases sincronizadas (SZB, SE1, SE2, SE5) da nuvem.
      Faz com que o PD e o Financeiro encontrem os dados prontos ao abrir,
      mesmo quando o usuário não carregou nada nesta sessão. Não bloqueia. */
@@ -643,8 +648,7 @@ function showApp() {
   /* Watchers em tempo real: quando alguém em qualquer lugar sobe uma base
      nova pelo Download Base, esta sessão recebe e propaga aos iframes. */
   try{ atlasWatchAllBases(); }catch(_){}
-  /* Abre PD Diário como padrão */
-  go('pd-diario');
+  /* view inicial tratada no .then() de loadPermissions() acima */
 }
 
 function showLogin() {
@@ -697,8 +701,18 @@ document.getElementById('lc-email').addEventListener('keydown',e=>{if(e.key==='E
 function go(viewId, el) {
   const v = VIEWS[viewId];
   if (!v) return;
-  /* Verifica permissão */
+  /* Verifica permissão hardcoded (VIEWS.perfil) */
   if (v.perfil && !v.perfil.includes(curPerfil)) return;
+  /* Verifica permissão dinâmica do Firestore (ATLAS_PERMS), exceto admin */
+  if (curPerfil !== 'admin' && Object.keys(ATLAS_PERMS.telas || {}).length > 0) {
+    const dynTelaMap = {
+      'pd-diario':'pd_diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
+      'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
+      'cpk':'cpk', 'config':'cadastros', 'download-base':'download_base'
+    };
+    const permKey = dynTelaMap[viewId];
+    if (permKey && !ATLAS_PERMS.telas[permKey]) return;
+  }
 
   /* Ativa nav */
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('on'));
@@ -1626,7 +1640,7 @@ function isLU(perfil) {
 function applyDynamicPermissions() {
   const telas = ATLAS_PERMS.telas || {};
   const telaMap = {
-    'pd_diario':'pd-diario', 'financeiro':'financeiro', 'ficha':'ficha',
+    'pd_diario':'pd-diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
     'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
     'cpk':'cpk', 'cadastros':'config', 'download_base':'download-base',
     'permissoes':'config'
