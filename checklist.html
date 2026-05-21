@@ -1538,18 +1538,50 @@ function abrirOSdoChecklist() {
   if (!viewOS) { toast('Tela de abertura de OS não disponível neste perfil. Acesse o módulo de Manutenção.', 'am'); return; }
   closeChecklistPanel();
   goTo('nova-os', null);
+
+  // Aguarda a view renderizar completamente antes de preencher
   setTimeout(() => {
+    // ── Placa → dispara onPlacaChange que preenche tipo, km e motorista automaticamente
     const placaInp = document.getElementById('mnt_nova_placa_input');
-    if (placaInp) { placaInp.value = chk.placa||''; selecionarPlaca(chk.placa||''); }
-    const tipoSel = document.getElementById('mnt_nova_tipo');
-    if (tipoSel) tipoSel.value = 'Corretiva';
+    if (placaInp) {
+      placaInp.value = chk.placa || '';
+      selecionarPlaca(chk.placa || '');
+    }
+
+    // ── Tipo de OS: radio Corretiva (name="t2")
+    const radios = document.querySelectorAll('input[name="t2"]');
+    radios.forEach(r => {
+      r.checked = r.parentElement?.textContent?.trim().toLowerCase().includes('corretiva');
+    });
+
+    // ── Problema: monta descrição dos itens reprovados
     const itens = chk.reprovados_itens || [];
-    const problema = itens.map(i => typeof i==='string' ? i : (i.item||'')+(i.obs?' — '+i.obs:'')).join('\n');
-    const problemEl = document.getElementById('mnt_nova_problema') || document.querySelector('#view-nova-os textarea');
-    if (problemEl) problemEl.value = 'Checklist '+chkId+':\n'+problema;
+    const linhasReprov = itens.map(i => {
+      if (typeof i === 'string') return '• ' + i;
+      const grupo = i.grupo ? '[' + i.grupo + '] ' : '';
+      const obs   = i.obs   ? ' — ' + i.obs : '';
+      return '• ' + grupo + (i.item || '') + obs;
+    });
+    const problema = 'Origem: Checklist ' + (chk.horario||'') + ' · ' + (chk.placa||'') + '\n' + linhasReprov.join('\n');
+    const problemEl = document.querySelector('#view-nova-os textarea');
+    if (problemEl) problemEl.value = problema;
+
+    // ── Motorista: preenche se não foi preenchido pelo onPlacaChange
+    const motEl = document.getElementById('mnt_nova_motorista');
+    if (motEl && !motEl.value && chk.motorista) {
+      // Tenta encontrar pelo nome no select
+      Array.from(motEl.options).forEach(opt => {
+        if (opt.text.toUpperCase().includes((chk.motorista||'').toUpperCase().split(' ')[0])) {
+          motEl.value = opt.value;
+        }
+      });
+    }
+
+    // Guarda o chkId para linkar após salvar a OS
     window._osOrigemChecklistId = chkId;
-    toast('Formulário pré-preenchido com dados da inspeção.', 'ac');
-  }, 200);
+
+    toast('OS pré-preenchida com ' + itens.length + ' item(ns) reprovado(s). Complete e salve.', 'ac');
+  }, 250);
 }
 
 async function confirmarVisualizacaoChecklist() {
