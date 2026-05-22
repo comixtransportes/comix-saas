@@ -520,7 +520,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     <div class="fp">👤<select id="filt_mot" onchange="renderPanel()"><option value="">Todos</option></select></div>
     <div class="fp">📍<select id="filt_fil" onchange="renderPanel()"><option value="">Todas as unidades</option><option>São Paulo</option><option>Florianópolis</option><option>Curitiba</option></select></div>
     <div class="fd">📅<input type="date" id="filt_de" onchange="renderPanel()">–<input type="date" id="filt_ate" onchange="renderPanel()"></div>
-    <div class="fp">📄<input type="text" id="filt_ctrc" placeholder="CTRC..." oninput="renderPanel()" style="border:none;background:none;outline:none;font-size:13px;width:90px;color:var(--black)"></div>
+    <div class="fp">📄<input type="text" id="filt_ctrc" placeholder="CTRC..." oninput="debouncedRenderPanel()" style="border:none;background:none;outline:none;font-size:13px;width:90px;color:var(--black)"></div>
     <div class="fp" style="cursor:pointer" onclick="toggleFiltCanhoto(this)">
       <span id="filt_canhoto_lbl" style="font-size:12px;font-weight:700;color:var(--gray);white-space:nowrap;user-select:none">🧾 Com canhoto</span>
       <input type="hidden" id="filt_canhoto" value="">
@@ -2124,7 +2124,20 @@ window.toggleFiltCanhoto = function(wrap) {
   renderPanel();
 };
 
+// Debounce para o filtro CTRC — evita race condition com chamadas assíncronas ao Firestore
+(function(){
+  var _ctrcTimer = null;
+  var _renderToken = 0;
+  window.debouncedRenderPanel = function() {
+    clearTimeout(_ctrcTimer);
+    _ctrcTimer = setTimeout(function(){ window.renderPanel(); }, 300);
+  };
+  window._getRenderToken = function(){ return ++_renderToken; };
+  window._lastRenderToken = function(){ return _renderToken; };
+})();
+
 window.renderPanel = async function() {
+  var myToken = window._getRenderToken();
   try {
     const f={
       placa:document.getElementById("filt_placa")?.value||"",
@@ -2135,7 +2148,10 @@ window.renderPanel = async function() {
       de:document.getElementById("filt_de")?.value||"",
       ate:document.getElementById("filt_ate")?.value||"",
     };
-    panelDocs=await window._FB.buscarRelatorios(f);
+    const result=await window._FB.buscarRelatorios(f);
+    // Se uma chamada mais recente já foi disparada, ignora esta resposta
+    if(myToken !== window._lastRenderToken()) return;
+    panelDocs=result;
     const totKm=panelDocs.reduce((a,r)=>a+(r.km_rod||0),0);
     const totDsl=panelDocs.reduce((a,r)=>a+(r.dsl_l||0),0);
     const totEnt=panelDocs.reduce((a,r)=>a+(r.entregas?.length||0),0);
