@@ -501,7 +501,10 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 
       <!-- CPK -->
       <div class="view" id="view-cpk">
-        <div class="ph"><div class="ph-ico">⛽</div><div class="ph-bdg">Próximo módulo</div><h2>CPK — Custo por KM</h2><p>Módulo em planejamento. Integrará combustível, manutenção e pneus para análise de eficiência.</p></div>
+        <div class="fr-wrap">
+          <div class="fr-loading" id="fl-cpk"><div class="fr-spin"></div><div class="fr-txt">Carregando CPK…</div></div>
+          <iframe id="fr-cpk" title="CPK — Custo por KM"></iframe>
+        </div>
       </div>
 
       <!-- CONFIGURAÇÕES — iframe fixo, sem scroll externo -->
@@ -602,7 +605,7 @@ const VIEWS = {
   'manutencao':    {label:'Manutenção',         chip:'MANUTENÇÃO', cls:'am', src:'manutencao.html',           nav:null,       perfil:null},
   'checklist':     {label:'Checklist',          chip:'CHECKLIST',  cls:'am', src:'checklist.html',              nav:'checklist', perfil:null},
   'painel':        {label:'Painel Operacional',  chip:'PAINEL',     cls:'',   src:'painel.html',               nav:null,       perfil:['admin','gestor','motorista']},
-  'cpk':           {label:'CPK',                 chip:'NOVO',       cls:'gn', src:null,                        nav:null,       perfil:null},
+  'cpk':           {label:'CPK',                 chip:'CUSTO/KM',   cls:'gn', src:'cpk.html',                   nav:null,       perfil:null},
   'config':        {label:'Cadastros',            chip:'ADMIN',      cls:'',   src:'cadastros.html',            nav:null,       perfil:['admin']},
   'download-base': {label:'Download Base',       chip:'DADOS',      cls:'pu', src:null,                        nav:null,       perfil:['admin','gestor']},
 };
@@ -775,7 +778,7 @@ function frLoaded(viewId) {
 /* Registra handlers de load programaticamente — evita ReferenceError quando
    o iframe dispara o evento antes do <script> ter sido executado. */
 (function attachIframeLoadHandlers(){
-  const ids = ['pd-diario','frota','painel','financeiro','ficha','compras','manutencao','checklist','config'];
+  const ids = ['pd-diario','frota','painel','financeiro','ficha','compras','manutencao','checklist','config','cpk'];
   ids.forEach(id => {
     const fr = document.getElementById('fr-'+id);
     if(fr) fr.addEventListener('load', () => frLoaded(id));
@@ -1754,7 +1757,8 @@ function sendTabPermsToFrame(frameId) {
 const FRAME_MAP = {
   'manutencao':'fr-manutencao','financeiro':'fr-financeiro',
   'pd-diario':'fr-pd-diario','ficha':'fr-ficha','compras':'fr-compras',
-  'frota':'fr-frota','painel':'fr-painel','checklist':'fr-checklist','config':'fr-config'
+  'frota':'fr-frota','painel':'fr-painel','checklist':'fr-checklist','config':'fr-config',
+  'cpk':'fr-cpk'
 };
 Object.values(FRAME_MAP).forEach(fid => {
   const fr = document.getElementById(fid);
@@ -1783,7 +1787,7 @@ window.addEventListener('message', async function(ev) {
   const reply = (ok, result, error) => {
     try { ev.source && ev.source.postMessage({ type:'ATLAS_FIRESTORE_RESPONSE', requestId, ok, result, error }, '*'); } catch(_) {}
   };
-  const allowed = new Set(['ordens_servico','checklists_diarios','parametros_sistema','alocacao_frota_status']);
+  const allowed = new Set(['ordens_servico','checklists_diarios','parametros_sistema','alocacao_frota_status','cpk_parametros','cpk_km_rotas','cpk_lancamentos','cpk_metas','cpk_diagnostico','veiculos']);
   try {
     if (!curUser) throw new Error('Usuário não autenticado no portal.');
     if (!allowed.has(msg.collection)) throw new Error('Coleção não permitida pela ponte.');
