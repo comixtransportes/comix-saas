@@ -418,8 +418,8 @@ html{
 <div id="scr-main">
   <div class="bar">
     <button class="tab on" onclick="showTab('vg')">Visão Geral</button>
-    <button class="tab"    onclick="showTab('cl')">Clientes</button>
-    <button class="tab"    onclick="showTab('cc')">Clientes Consolidado</button>
+    <button class="tab"    onclick="showTab('cl')">Rotas</button>
+    <button class="tab"    onclick="showTab('cc')">Clientes</button>
     <button class="tab"    onclick="showTab('fr')">Frota</button>
     <button class="tab"    onclick="showTab('hi')">Histórico</button>
     <div class="bar-r">
@@ -623,10 +623,10 @@ html{
       <div class="pane-scroll">
         <div class="charts-row">
           <div class="cc"><div class="ct">Top 10 — Faturamento (Consolidado)</div><div style="height:180px"><canvas id="c-ccf"></canvas></div></div>
-          <div class="cc"><div class="ct" id="ct-hist-cc">Pareto — Faturamento por Cliente Dev (Top 10)</div><div style="height:180px"><canvas id="c-ccb"></canvas></div></div>
+          <div class="cc"><div class="ct" id="ct-hist-cc">Atual vs Mês Anterior (R$)</div><div style="height:180px"><canvas id="c-ccb"></canvas></div></div>
         </div>
         <div class="tw">
-          <div class="th3"><div><span class="tt">Clientes Consolidado</span><span class="tc" id="cnt-cc"></span></div><input class="ts" type="text" placeholder="Buscar remetente…" oninput="filt('tbl-cc',this.value)"></div>
+          <div class="th3"><div><span class="tt">Clientes</span><span class="tc" id="cnt-cc"></span></div><input class="ts" type="text" placeholder="Buscar remetente…" oninput="filt('tbl-cc',this.value)"></div>
           <div class="to"><table class="dt" id="tbl-cc"></table></div>
         </div>
       </div>
@@ -2145,59 +2145,42 @@ function _buildCcTable(uid, mes, diaSel) {
     [{data:t10cc.map(r=>r.f),backgroundColor:t10cc.map(r=>r.frt==='CIF'?'rgba(26,86,219,.65)':'rgba(234,88,12,.65)'),borderRadius:2}],
     {ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0}});
 
-  // ── Pareto ──
-  const gRem=grp(d,r=>r.cli_dev||r.r_nome);
-  const remRows=Object.entries(gRem).map(([rem,arr])=>({rem,f:arr.reduce((a,r)=>a+r.fat,0)}))
+  // ── Linha Dupla: Top 10 clientes (mês atual) vs faturamento no mês anterior ──
+  const gRemAtual=grp(d,r=>r.cli_dev||r.r_nome);
+  const top10Atual=Object.entries(gRemAtual).map(([rem,arr])=>({rem,f:arr.reduce((a,r)=>a+r.fat,0)}))
     .sort((a,b)=>b.f-a.f).slice(0,10);
-  const fatTotal=remRows.reduce((a,r)=>a+r.f,0);
-  const paretoLabels=remRows.map(r=>r.rem.length>16?r.rem.slice(0,15)+'…':r.rem);
-  const paretoFats=remRows.map(r=>r.f);
-  let acum=0;
-  const paretoPct=remRows.map(r=>{ acum+=fatTotal>0?r.f/fatTotal*100:0; return parseFloat(acum.toFixed(1)); });
+  // Mês anterior
+  const [_mesAno,_mesN]=mes.split('-').map(Number);
+  const _mesAntN=_mesN===1?12:_mesN-1;
+  const _mesAntAno=_mesN===1?_mesAno-1:_mesAno;
+  const _mesAntStr=`${_mesAntAno}-${String(_mesAntN).padStart(2,'0')}`;
+  const dAnt=filterByOp(uid).filter(r=>r.mes===_mesAntStr);
+  const gRemAnt=grp(dAnt,r=>r.cli_dev||r.r_nome);
+  const dupLabels=top10Atual.map(r=>r.rem.length>16?r.rem.slice(0,15)+'…':r.rem);
+  const dupAtual=top10Atual.map(r=>r.f);
+  const dupAnt=top10Atual.map(r=>{ const arr=gRemAnt[r.rem]||[]; return arr.reduce((a,x)=>a+x.fat,0); });
 
   if(CHS['c-ccb']) CHS['c-ccb'].destroy();
   const elP=document.getElementById('c-ccb'); if(elP){
     CHS['c-ccb']=new Chart(elP,{
+      type:'line',
       data:{
-        labels:paretoLabels,
+        labels:dupLabels,
         datasets:[
-          {type:'bar',label:'Faturamento',data:paretoFats,backgroundColor:'rgba(26,86,219,.65)',borderRadius:2,yAxisID:'yFat',order:2},
-          {type:'line',label:'% Acumulado',data:paretoPct,borderColor:'#f59e0b',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#f59e0b',tension:0,yAxisID:'yPct',order:1},
+          {label:'Atual',data:dupAtual,borderColor:'#1a56db',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#1a56db',tension:.3},
+          {label:'Mês Anterior',data:dupAnt,borderColor:'#9ca3af',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#9ca3af',tension:.3,borderDash:[4,3]},
         ]
       },
-      plugins:[{
-        id:'pareto80',
-        afterDraw(chart){
-          const yPct=chart.scales['yPct']; const xScale=chart.scales['x'];
-          if(!yPct||!xScale) return;
-          const y80=yPct.getPixelForValue(80);
-          const ctx2=chart.ctx;
-          ctx2.save();
-          ctx2.beginPath();
-          ctx2.moveTo(xScale.left,y80); ctx2.lineTo(xScale.right,y80);
-          ctx2.strokeStyle='rgba(200,30,30,.55)'; ctx2.lineWidth=1;
-          ctx2.setLineDash([5,4]); ctx2.stroke();
-          ctx2.setLineDash([]);
-          ctx2.fillStyle='rgba(200,30,30,.8)'; ctx2.font='bold 9px IBM Plex Sans,sans-serif';
-          ctx2.textAlign='left'; ctx2.fillText('80%',xScale.right+4,y80+3);
-          ctx2.restore();
-        }
-      }],
       options:{
         responsive:true,maintainAspectRatio:false,
         plugins:{
-          legend:{display:true,labels:{color:CT,font:{size:11,family:"IBM Plex Sans,sans-serif"}}},
+          legend:{display:true,labels:{color:CT,font:{size:10,family:'IBM Plex Sans,sans-serif'}}},
           datalabels:{display:false},
-          tooltip:{...TTP,callbacks:{label:ctx=>{
-            if(ctx.dataset.label==='Faturamento') return `Fat.: R$\u00a0${Math.round(ctx.parsed.y||0).toLocaleString('pt-BR')}`;
-            if(ctx.dataset.label==='% Acumulado') return `Acumulado: ${(ctx.parsed.y||0).toFixed(1)}%`;
-            return ctx.dataset.label+': '+ctx.parsed.y;
-          }}}
+          tooltip:{...TTP,callbacks:{label:ctx=>`${ctx.dataset.label}: R$\u00a0${Math.round(ctx.parsed.y||0).toLocaleString('pt-BR')}`}}
         },
         scales:{
           x:{ticks:{color:CT,font:{size:9},maxRotation:45},grid:{color:CG,lineWidth:.5}},
-          yFat:{position:'left',ticks:{color:CT,font:{size:9},callback:v=>'R$'+N(v)},grid:{color:CG,lineWidth:.5},beginAtZero:true},
-          yPct:{position:'right',min:0,max:100,ticks:{color:'#f59e0b',font:{size:9},callback:v=>v+'%'},grid:{display:false}}
+          y:{ticks:{color:CT,font:{size:9},callback:v=>'R$'+N(v)},grid:{color:CG,lineWidth:.5},beginAtZero:true}
         }
       }
     });
@@ -2222,7 +2205,7 @@ function bldTcc(id, data, diaSel, diaLbl, ft) {
   const colsDia = ['PROD (T) DIA', 'FAT (R$) DIA'];
 
   const cols = [
-    {h:'Cliente Dev',      fn:r=>`<span class="nm">${r.rem}</span>`, n:false, dia:false},
+    {h:'Cliente',      fn:r=>`<span class="nm">${r.rem}</span>`, n:false, dia:false},
     {h:'Frete',            fn:r=>`<span class="bdg ${r.frt==='CIF'?'bg':'ba'}">${r.frt}</span>`, n:false, dia:false},
     {h:'Viagens',          fn:r=>N(r.v),        n:true,  dia:false},
     {h:'Prod.(T) Real.',   fn:r=>D1(r.p),        n:true,  dia:false},
@@ -2441,7 +2424,7 @@ function filt(id,q){
 // TABS
 // ═══════════════════════════════════════════════════════
 function showTab(id){
-  const mp={vg:'Visão Geral',cl:'Clientes',cc:'Clientes Consolidado',fr:'Frota',hi:'Histórico'};
+  const mp={vg:'Visão Geral',cl:'Rotas',cc:'Clientes',fr:'Frota',hi:'Histórico'};
   document.querySelectorAll('.tab').forEach(b=>{b.classList.toggle('on',b.textContent.trim()===mp[id]);});
   document.querySelectorAll('.pane').forEach(p=>{p.classList.toggle('on',p.id==='p-'+id);});
 }
