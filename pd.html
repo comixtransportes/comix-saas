@@ -611,7 +611,7 @@ html{
       <div class="pane-scroll">
         <div class="charts-row">
           <div class="cc"><div class="ct">Top 10 — Faturamento (Consolidado)</div><div style="height:180px"><canvas id="c-ccf"></canvas></div></div>
-          <div class="cc"><div class="ct" id="ct-hist-cc">Pareto — Faturamento por Remetente (Top 10)</div><div style="height:180px"><canvas id="c-ccb"></canvas></div></div>
+          <div class="cc"><div class="ct" id="ct-hist-cc">Pareto — Faturamento por Cliente Dev (Top 10)</div><div style="height:180px"><canvas id="c-ccb"></canvas></div></div>
         </div>
         <div class="tw">
           <div class="th3"><div><span class="tt">Clientes Consolidado</span><span class="tc" id="cnt-cc"></span></div><input class="ts" type="text" placeholder="Buscar remetente…" oninput="filt('tbl-cc',this.value)"></div>
@@ -1150,6 +1150,7 @@ function enrich(recs){
       mes:   mesStr(row['Dt. Emissao']),
       r_nome:(row['Nome Remeten']||'').trim(),
       d_nome:(row['Nome Destina']||'').trim(),
+      cli_dev:(row['Nome Cli Dev']||'').trim(),
       frete: (row['Tipo Frete'] ||'').trim(),
       orig:  (row['Local Coleta']||'').trim(),
       ufo:   (row['Uf Origem']  ||'').trim(),
@@ -2109,12 +2110,12 @@ function buildCc(uid, mes) {
 function _buildCcTable(uid, mes, diaSel) {
   const d=filterByOp(uid).filter(r=>r.mes===mes);
 
-  // Agrupamento: Remetente + Frete
-  const g=grp(d,r=>r.r_nome+'§'+r.frete);
+  // Agrupamento: Cliente Dev + Frete
+  const g=grp(d,r=>(r.cli_dev||r.r_nome)+'§'+r.frete);
 
-  // Dados do dia selecionado por remetente+frete
+  // Dados do dia selecionado por cliente_dev+frete
   const dDia = diaSel ? filterByOp(uid).filter(r=>r.data===diaSel) : [];
-  const gDia = grp(dDia, r=>r.r_nome+'§'+r.frete);
+  const gDia = grp(dDia, r=>(r.cli_dev||r.r_nome)+'§'+r.frete);
 
   const rows=Object.entries(g).map(([k,arr])=>{
     const[rem,frt]=k.split('§');
@@ -2133,7 +2134,7 @@ function _buildCcTable(uid, mes, diaSel) {
     {ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0}});
 
   // ── Pareto ──
-  const gRem=grp(d,r=>r.r_nome);
+  const gRem=grp(d,r=>r.cli_dev||r.r_nome);
   const remRows=Object.entries(gRem).map(([rem,arr])=>({rem,f:arr.reduce((a,r)=>a+r.fat,0)}))
     .sort((a,b)=>b.f-a.f).slice(0,10);
   const fatTotal=remRows.reduce((a,r)=>a+r.f,0);
@@ -2209,7 +2210,7 @@ function bldTcc(id, data, diaSel, diaLbl, ft) {
   const colsDia = ['PROD (T) DIA', 'FAT (R$) DIA'];
 
   const cols = [
-    {h:'Remetente',        fn:r=>`<span class="nm">${r.rem}</span>`, n:false, dia:false},
+    {h:'Cliente Dev',      fn:r=>`<span class="nm">${r.rem}</span>`, n:false, dia:false},
     {h:'Frete',            fn:r=>`<span class="bdg ${r.frt==='CIF'?'bg':'ba'}">${r.frt}</span>`, n:false, dia:false},
     {h:'Viagens',          fn:r=>N(r.v),        n:true,  dia:false},
     {h:'Prod.(T) Real.',   fn:r=>D1(r.p),        n:true,  dia:false},
