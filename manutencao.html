@@ -887,7 +887,7 @@ body.checklist-only .view-area{height:100%;}
           <div id="prev-tab-planos" class="tab-panel">
             <div class="card" style="padding:0;overflow:hidden">
               <div class="card-hdr" style="padding:10px 14px">
-                <div><div class="card-title">Planos de manutenção preventiva</div><div class="card-sub">Cada plano define itens, periodicidade KM/dias e placas aplicáveis</div></div>
+                <div><div class="card-title">Planos de manutenção preventiva</div><div class="card-sub">Cada plano define itens, periodicidade KM/dias e modelos aplicáveis</div></div>
               </div>
               <div id="prev-planos-body">
                 <div class="empty" style="padding:30px"><div class="empty-ico">📋</div><h3>Carregando planos...</h3></div>
@@ -1120,7 +1120,7 @@ body.checklist-only .view-area{height:100%;}
   <div class="sp-hdr">
     <div>
       <div style="font-weight:700;font-size:13px" id="prev-modal-titulo">📋 Novo Plano Preventivo</div>
-      <div style="font-size:10.5px;color:var(--mu)">Defina itens, periodicidade e placas aplicáveis</div>
+      <div style="font-size:10.5px;color:var(--mu)">Defina itens, periodicidade e modelos aplicáveis</div>
     </div>
     <button class="btn btn-sm" onclick="fecharModalPlano()">✕ Fechar</button>
   </div>
@@ -1136,7 +1136,7 @@ body.checklist-only .view-area{height:100%;}
     <div class="fld-row">
       <div class="fld">
         <label>Tipo de equipamento</label>
-        <select id="prev-plano-tipo">
+        <select id="prev-plano-tipo" onchange="atualizarModelosNoModal()">
           <option value="">Todos</option>
           <option value="Cavalo">Cavalo</option>
           <option value="Carreta">Carreta</option>
@@ -1175,11 +1175,12 @@ body.checklist-only .view-area{height:100%;}
     <div id="prev-itens-list" style="margin-bottom:6px"></div>
     <button class="btn btn-sm btn-ac" style="margin-bottom:12px" onclick="adicionarItemPlano()">+ Adicionar item</button>
 
-    <div class="sec-title">Placas aplicáveis</div>
-    <div style="font-size:10.5px;color:var(--mu);margin-bottom:6px">Deixe vazio para aplicar a todos os veículos do tipo selecionado</div>
-    <div id="prev-placas-check" style="display:flex;flex-wrap:wrap;gap:6px;max-height:140px;overflow-y:auto;padding:8px;background:var(--bg);border:1px solid var(--bd2);border-radius:var(--rs)">
-      <div style="font-size:11px;color:var(--mu)">Carregando veículos...</div>
+    <div class="sec-title">Modelos aplicáveis</div>
+    <div style="font-size:10.5px;color:var(--mu);margin-bottom:8px">Deixe vazio para aplicar a todos os modelos do tipo selecionado</div>
+    <div id="prev-modelos-linhas" style="display:flex;flex-direction:column;gap:7px;margin-bottom:8px">
+      <!-- linhas de modelo inseridas dinamicamente -->
     </div>
+    <button class="btn btn-sm" style="border-style:dashed;color:var(--ac);border-color:var(--ac);background:var(--ac-bg);width:100%;justify-content:center" onclick="adicionarLinhaModelo()">+ Adicionar modelo</button>
 
     <div class="sec-title">Observações</div>
     <div class="fld"><textarea id="prev-plano-obs" style="height:52px;resize:none" placeholder="Instruções, especificações técnicas, fornecedor preferencial..."></textarea></div>
@@ -1207,8 +1208,9 @@ const TITLES = {dashboard:'Dashboard',kanban:'Painel Kanban',gestao:'Painel Gera
 let _mntLastView = 'dashboard';
 
 function closeFloatingPanels() {
-  document.querySelectorAll('.panel-overlay.on').forEach(el => el.classList.remove('on'));
-  document.querySelectorAll('.side-panel.on').forEach(el => el.classList.remove('on'));
+  // Fecha apenas o painel de OS — não o modal de plano preventivo
+  document.getElementById('overlay')?.classList.remove('on');
+  document.getElementById('side-panel')?.classList.remove('on');
 }
 
 function goTo(id, el) {
@@ -1255,14 +1257,6 @@ function closePanel() {
   document.getElementById('overlay').classList.remove('on');
   document.getElementById('side-panel').classList.remove('on');
   _currentOsId = null;
-}
-function openPrevModal() {
-  document.getElementById('prev-overlay')?.classList.add('on');
-  document.getElementById('prev-panel')?.classList.add('on');
-}
-function closePrevModal() {
-  document.getElementById('prev-overlay')?.classList.remove('on');
-  document.getElementById('prev-panel')?.classList.remove('on');
 }
 function openPrevDetalhe(placa) { toast('Detalhes preventiva: ' + placa, 'ac'); }
 
@@ -1709,13 +1703,9 @@ function popularSelectUsuarios() {
 
 /* ── Select de veículo no modal Preventiva ── */
 function popularSelectVeiculoPreventiva() {
-  // O select antigo (mnt_prev_veiculo) não existe mais; popula filtros do novo sistema
+  // Popula filtros do sistema preventivo com veículos carregados
   popularFiltroPlacasAlertas && popularFiltroPlacasAlertas();
   popularSelectCronograma && popularSelectCronograma();
-  // Popular chips de placas no modal (se estiver aberto)
-  const tipoAtual = document.getElementById('prev-plano-tipo')?.value || '';
-  const selecionadas = Array.from(document.querySelectorAll('#prev-placas-check .prev-placa-chip.on input')).map(i => i.value);
-  renderPlacasModal && renderPlacasModal(selecionadas, tipoAtual);
 }
 
 /* ── Aplicar filtros do dashboard ── */
@@ -2751,10 +2741,10 @@ function gerarTodosAlertas() {
 
   veiculos.forEach(v => {
     _prevPlanos.forEach(plano => {
-      // Verifica se o plano se aplica a este veículo
+      // Verifica se o plano se aplica a este veículo (por tipo E modelo)
       const tipoOk = !plano.tipo || plano.tipo === v.tipo;
-      const placaOk = !plano.placas || !plano.placas.length || plano.placas.includes(v.placa);
-      if (!tipoOk || !placaOk) return;
+      const modeloOk = !plano.modelos || !plano.modelos.length || plano.modelos.includes(v.modelo);
+      if (!tipoOk || !modeloOk) return;
 
       // Acha última OS preventiva desta placa para este plano
       const osHistorico = (MNT_CACHE.ordens || []).filter(o =>
@@ -2885,13 +2875,13 @@ function renderPlanos() {
       p.gatilhoDias && p.diasIntervalo ? `A cada ${p.diasIntervalo} dias` : '',
       p.gatilhoM3 && p.m3Intervalo ? `A cada ${p.m3Intervalo} m³` : '',
     ].filter(Boolean).join(' · ') || '—';
-    const placasTxt = Array.isArray(p.placas) && p.placas.length ? p.placas.slice(0,4).join(', ') + (p.placas.length > 4 ? '…' : '') : 'Todas (' + (p.tipo||'todos tipos') + ')';
+    const modelosTxt = Array.isArray(p.modelos) && p.modelos.length ? p.modelos.slice(0,4).join(', ') + (p.modelos.length > 4 ? '…' : '') : 'Todos os modelos (' + (p.tipo||'todos') + ')';
     const alertasMes = gerarTodosAlertas().filter(a => (a.plano.id||'') === (p.id||'')).length;
     return `<div class="prev-plano-row" onclick="abrirModalPlano(${JSON.stringify(p.id||'')})">
       <div style="width:36px;height:36px;border-radius:8px;background:var(--ac-bg);border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">📋</div>
       <div class="prev-alerta-info">
         <div class="prev-plano-nome">${escapeHtml(p.nome||'Sem nome')}</div>
-        <div class="prev-plano-meta">${escapeHtml(gatilhos)} · ${escapeHtml(itensTxt)} · ${escapeHtml(placasTxt)}</div>
+        <div class="prev-plano-meta">${escapeHtml(gatilhos)} · ${escapeHtml(itensTxt)} · ${escapeHtml(modelosTxt)}</div>
       </div>
       ${alertasMes ? `<span class="bdg bdg-am">${alertasMes} alerta(s)</span>` : '<span class="bdg bdg-gn">OK</span>'}
       <span style="color:var(--mu);font-size:16px;margin-left:4px">›</span>
@@ -2924,8 +2914,8 @@ function renderCronograma() {
   veiculos.forEach(v => {
     _prevPlanos.forEach(plano => {
       const tipoOk = !plano.tipo || plano.tipo === v.tipo;
-      const placaOk = !plano.placas || !plano.placas.length || plano.placas.includes(v.placa);
-      if (!tipoOk || !placaOk) return;
+      const modeloOk = !plano.modelos || !plano.modelos.length || plano.modelos.includes(v.modelo);
+      if (!tipoOk || !modeloOk) return;
       if (!plano.gatilhoDias && !plano.gatilhoKm) return;
 
       const osHistorico = (MNT_CACHE.ordens || []).filter(o =>
@@ -3043,8 +3033,8 @@ function abrirModalPlano(id) {
   // Itens
   renderItensModal(plano ? (plano.itens||[]) : []);
 
-  // Placas
-  renderPlacasModal(plano ? (plano.placas||[]) : [], plano ? (plano.tipo||'') : '');
+  // Modelos
+  renderModelosModal(plano ? (plano.modelos||[]) : []);
 
   // Botão excluir
   const btnEx = document.getElementById('prev-btn-excluir');
@@ -3110,18 +3100,48 @@ function onCatChange(sel) {
   if (inp) inp.value = '';
 }
 
-function renderPlacasModal(selecionadas, tipo) {
-  const el = document.getElementById('prev-placas-check');
-  if (!el) return;
+// ── Modelos — lista única de modelos distintos do cache ──
+function getModelosDisponiveis(tipo) {
   let veiculos = MNT_CACHE.veiculos || [];
   if (tipo) veiculos = veiculos.filter(v => v.tipo === tipo);
-  if (!veiculos.length) { el.innerHTML = '<div style="font-size:11px;color:var(--mu)">Nenhum veículo do tipo selecionado.</div>'; return; }
-  el.innerHTML = veiculos.map(v => {
-    const on = selecionadas.includes(v.placa);
-    return `<label class="prev-placa-chip ${on?'on':''}" onclick="this.classList.toggle('on')">
-      <input type="checkbox" value="${escapeHtml(v.placa)}" ${on?'checked':''}> ${escapeHtml(v.placa)}
-    </label>`;
-  }).join('');
+  // Deduplica por modelo (ignora vazios)
+  const mapa = {};
+  veiculos.forEach(v => {
+    const mod = (v.modelo || '').trim();
+    if (!mod) return;
+    if (!mapa[mod]) mapa[mod] = { modelo: mod, tipo: v.tipo, count: 0 };
+    mapa[mod].count++;
+  });
+  return Object.values(mapa).sort((a,b) => a.modelo.localeCompare(b.modelo, 'pt-BR'));
+}
+
+function renderModelosModal(modelosSelecionados) {
+  const el = document.getElementById('prev-modelos-linhas');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!modelosSelecionados || !modelosSelecionados.length) {
+    adicionarLinhaModelo('');
+  } else {
+    modelosSelecionados.forEach(m => adicionarLinhaModelo(m));
+  }
+}
+
+function adicionarLinhaModelo(valorInicial) {
+  const el = document.getElementById('prev-modelos-linhas');
+  if (!el) return;
+  const tipo = document.getElementById('prev-plano-tipo')?.value || '';
+  const modelos = getModelosDisponiveis(tipo);
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:6px;align-items:center';
+  const selectId = 'prev-modelo-sel-' + Date.now() + Math.random().toString(36).slice(2,5);
+  row.innerHTML = `
+    <select id="${selectId}" style="flex:1;padding:6px 8px;font-size:12px;border:1.5px solid var(--bd);border-radius:var(--rs);font-family:var(--f);color:var(--tx);background:var(--wh)">
+      <option value="">— Selecione um modelo —</option>
+      ${modelos.map(m => `<option value="${escapeHtml(m.modelo)}" ${m.modelo===(valorInicial||'')?'selected':''}>${escapeHtml(m.modelo)} <span style="color:var(--mu)">(${escapeHtml(m.tipo||'')})</span></option>`).join('')}
+      ${(valorInicial && !modelos.find(m=>m.modelo===valorInicial)) ? `<option value="${escapeHtml(valorInicial)}" selected>${escapeHtml(valorInicial)}</option>` : ''}
+    </select>
+    <button class="btn btn-xs btn-rd" title="Remover" onclick="this.parentElement.remove()" style="flex-shrink:0">✕</button>`;
+  el.appendChild(row);
 }
 
 // ── Salvar plano ──
@@ -3140,7 +3160,8 @@ async function salvarPlano() {
     cat:  row.querySelector('.prev-item-cat')?.value || ''
   })).filter(i => i.desc);
 
-  const placas = Array.from(document.querySelectorAll('#prev-placas-check .prev-placa-chip.on input')).map(i => i.value).filter(Boolean);
+  const modelos = Array.from(document.querySelectorAll('#prev-modelos-linhas select'))
+    .map(s => s.value.trim()).filter(Boolean);
 
   const payload = {
     nome,
@@ -3153,7 +3174,7 @@ async function salvarPlano() {
     gatilhoM3, m3Intervalo: gatilhoM3 ? parseInt(document.getElementById('prev-m3-intervalo')?.value||0) : 0,
                m3Alerta:   gatilhoM3 ? parseInt(document.getElementById('prev-m3-alerta')?.value||100) : 0,
     itens,
-    placas,
+    modelos,
     obs: document.getElementById('prev-plano-obs')?.value?.trim() || '',
     ativo: true,
     atualizadoEm: new Date(),
@@ -3208,6 +3229,13 @@ function exportarPreventivaCSV() {
 function renderPreventivaReais() { renderHistoricoOS(); atualizarKPIs(); }
 function renderPrevItems() {}
 function renderCal() {}
+function atualizarModelosNoModal() {
+  // Recria as linhas com o novo tipo, preservando seleções existentes
+  const existentes = Array.from(document.querySelectorAll('#prev-modelos-linhas select'))
+    .map(s => s.value.trim()).filter(Boolean);
+  renderModelosModal(existentes);
+}
+
 function openPrevModal() { abrirModalPlano(null); }
 function closePrevModal() { fecharModalPlano(); }
 function openPrevDetalhe(placa) { toast('Selecione o plano no cronograma preventivo.', 'ac'); }
