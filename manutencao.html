@@ -1116,7 +1116,7 @@ body.checklist-only .view-area{height:100%;}
 
 <!-- ══ MODAL — PLANO PREVENTIVO ══ -->
 <div class="panel-overlay" id="prev-overlay" onclick="fecharModalPlano()"></div>
-<div class="side-panel" id="prev-panel" style="width:560px;right:-580px">
+<div class="side-panel" id="prev-panel" style="width:560px">
   <div class="sp-hdr">
     <div>
       <div style="font-weight:700;font-size:13px" id="prev-modal-titulo">📋 Novo Plano Preventivo</div>
@@ -1585,6 +1585,8 @@ async function loadCadastrosFirebase() {
     loadOrdensServico();
     setupOSFilters();
     resolveAlocacaoUsuario();
+    // Carrega planos preventivos (precisam dos veículos para gerar alertas)
+    carregarPlanos();
 
     // Pré-calcula número da próxima OS e exibe no campo
     gerarNumOS().then(num => {
@@ -2839,7 +2841,7 @@ function renderAlertas() {
       <div class="prev-alerta-badge">
         <span class="bdg bdg-${a.status==='critico'?'rd':a.status==='proximo'?'am':'gn'}">${escapeHtml(a.label)}</span>
       </div>
-      <button class="btn btn-xs btn-ac" style="flex-shrink:0" onclick="gerarOSdoAlerta(${JSON.stringify(escapeHtml(a.veiculo.placa))},${JSON.stringify(escapeHtml(a.plano.id||''))})">Abrir OS</button>
+      <button class="btn btn-xs btn-ac" style="flex-shrink:0" onclick="gerarOSdoAlerta(${JSON.stringify(a.veiculo.placa)},${JSON.stringify(a.plano.id||'')})">Abrir OS</button>
     </div>`;
   }).join('');
 }
@@ -2885,7 +2887,7 @@ function renderPlanos() {
     ].filter(Boolean).join(' · ') || '—';
     const placasTxt = Array.isArray(p.placas) && p.placas.length ? p.placas.slice(0,4).join(', ') + (p.placas.length > 4 ? '…' : '') : 'Todas (' + (p.tipo||'todos tipos') + ')';
     const alertasMes = gerarTodosAlertas().filter(a => (a.plano.id||'') === (p.id||'')).length;
-    return `<div class="prev-plano-row" onclick="abrirModalPlano(${JSON.stringify(escapeHtml(p.id||''))})">
+    return `<div class="prev-plano-row" onclick="abrirModalPlano(${JSON.stringify(p.id||'')})">
       <div style="width:36px;height:36px;border-radius:8px;background:var(--ac-bg);border:1px solid #bfdbfe;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0">📋</div>
       <div class="prev-alerta-info">
         <div class="prev-plano-nome">${escapeHtml(p.nome||'Sem nome')}</div>
@@ -3076,21 +3078,24 @@ function renderItensModal(itens) {
   });
 }
 
+let _prevItemIdx = 0;
 function adicionarItemPlano() { adicionarItemPlanoComValor('', 'Preventiva geral'); }
 
 function adicionarItemPlanoComValor(desc, cat) {
   const el = document.getElementById('prev-itens-list');
   if (!el) return;
+  const idx = _prevItemIdx++;
   const row = document.createElement('div');
   row.className = 'prev-item-row';
   const cats = Object.keys(PREV_CATS);
+  const sugestoes = (PREV_CATS[cat] || PREV_CATS['Preventiva geral'] || []);
   row.innerHTML = `
     <select class="prev-item-cat" onchange="onCatChange(this)" style="width:130px">
       ${cats.map(c => `<option value="${escapeHtml(c)}" ${c===cat?'selected':''}>${escapeHtml(c)}</option>`).join('')}
     </select>
-    <input type="text" class="prev-item-desc" placeholder="Descrição do item" value="${escapeHtml(desc)}" list="prev-itens-dl-${el.children.length}">
-    <datalist id="prev-itens-dl-${el.children.length}">
-      ${(PREV_CATS[cat]||[]).map(s=>`<option value="${escapeHtml(s)}">`).join('')}
+    <input type="text" class="prev-item-desc" placeholder="Descrição do item" value="${escapeHtml(desc)}" list="prev-itens-dl-${idx}">
+    <datalist id="prev-itens-dl-${idx}">
+      ${sugestoes.map(s=>`<option value="${escapeHtml(s)}">`).join('')}
     </datalist>
     <button class="btn btn-xs btn-rd" onclick="this.parentElement.remove()">✕</button>`;
   el.appendChild(row);
