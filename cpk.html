@@ -1,0 +1,2359 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280, minimum-scale=0.1, maximum-scale=10, user-scalable=yes, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>COMIX — CPK · Custo por KM</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<style id="atlas-iframe-head">
+/* Oculta header standalone quando aberto no iframe */
+#scr-login-cpk { display: none !important; }
+.cpk-hdr { display: none !important; }
+</style>
+<script>
+if (window.self === window.top) {
+  var _s = document.getElementById("atlas-iframe-head");
+  if (_s) _s.parentNode.removeChild(_s);
+}
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+:root {
+  --bg:#f0f2f5;--wh:#fff;--sf:#f7f8fa;--bd:#d1d9e6;--bd2:#e4e9f2;
+  --tx:#192135;--mu:#6b7a96;
+  --ac:#1a56db;--ac-h:#1746b8;--ac-bg:#eff4ff;
+  --gn:#057a55;--gn-bg:#ecfdf5;--gn-bd:#a7f3d0;
+  --am:#b45309;--am-bg:#fffbeb;--am-bd:#fcd34d;
+  --rd:#c81e1e;--rd-bg:#fee2e2;--rd-bd:#fca5a5;
+  --pu:#6d28d9;--pu-bg:#ede9fe;--pu-bd:#c4b5fd;
+  --cy:#0e7490;--cy-bg:#ecfeff;--cy-bd:#a5f3fc;
+  --hd:#1e2d45;--ht:#e8edf5;
+  --f:'IBM Plex Sans',sans-serif;--m:'IBM Plex Mono',monospace;
+  --shd:0 1px 3px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.06);
+  --r:6px;--rs:4px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-size:13px;background:var(--bg)}
+
+/* ── LOGIN STANDALONE ── */
+#scr-login-cpk{position:fixed;inset:0;z-index:1000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px}
+.lc{background:var(--wh);border:1px solid var(--bd2);border-radius:12px;padding:32px 28px;width:100%;max-width:360px;box-shadow:0 8px 40px rgba(0,0,0,.14)}
+.lc-brand{display:flex;align-items:center;gap:10px;margin-bottom:20px}
+.lc-mark{width:36px;height:36px;border-radius:8px;background:var(--hd);color:#4a9eff;font-family:var(--m);font-size:12px;font-weight:600;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.lc-brand strong{font-size:14px;font-weight:700;color:var(--tx);display:block}
+.lc-brand span{font-size:10px;color:var(--mu);font-family:var(--m)}
+.lc-field{margin-bottom:10px}
+.lc-field label{display:block;font-size:10px;font-weight:600;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+.lc-field input{width:100%;padding:9px 11px;font-size:13px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);outline:none;color:var(--tx)}
+.lc-field input:focus{border-color:var(--ac)}
+.lc-err{font-size:11px;font-weight:600;color:var(--rd);background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:var(--rs);padding:7px 10px;margin-bottom:10px;display:none}
+.lc-err.on{display:block}
+.lc-btn{width:100%;padding:10px;background:var(--hd);color:var(--ht);border:none;border-radius:var(--rs);font-size:13px;font-weight:600;font-family:var(--f);cursor:pointer}
+.lc-btn:disabled{opacity:.55;cursor:not-allowed}
+
+/* ── HEADER CPK (standalone) ── */
+.cpk-hdr{background:var(--hd);color:var(--ht);display:flex;align-items:center;padding:0 14px;height:40px;flex-shrink:0;border-bottom:1px solid #152236;gap:10px}
+.cpk-hdr .logo{font-size:13px;font-weight:700;letter-spacing:.3px}
+.cpk-hdr .logo em{color:#4a9eff;font-style:normal}
+.cpk-chip{font-size:9px;font-family:var(--m);font-weight:700;padding:2px 7px;border-radius:3px;background:rgba(5,122,85,.2);border:1px solid rgba(52,211,153,.2);color:#34d399}
+
+/* ── APP SHELL ── */
+#scr-cpk{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* ── LOADING ── */
+#cpk-global-loader{position:fixed;inset:0;background:var(--hd);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;z-index:999;transition:opacity .35s}
+#cpk-global-loader.hidden{opacity:0;pointer-events:none}
+.cpk-spin{width:28px;height:28px;border:2px solid #1e3a5f;border-top-color:#4a9eff;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.cpk-load-txt{font-size:11px;color:#5a7a9a;font-family:var(--m)}
+
+/* ── TABBAR ── */
+.cpk-tabbar{background:var(--wh);border-bottom:1px solid var(--bd);display:flex;align-items:stretch;height:36px;flex-shrink:0;overflow-x:auto;scrollbar-width:none}
+.cpk-tabbar::-webkit-scrollbar{display:none}
+.cpk-tab{font-family:var(--f);font-size:11.5px;font-weight:500;padding:0 14px;height:36px;cursor:pointer;color:var(--mu);border:none;background:none;border-bottom:2px solid transparent;white-space:nowrap;flex-shrink:0}
+.cpk-tab:hover{color:var(--tx)}
+.cpk-tab.on{color:var(--ac);border-bottom-color:var(--ac);font-weight:600}
+.tabbar-right{margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:12px;flex-shrink:0}
+.sync-badge{font-size:9px;font-family:var(--m);padding:2px 8px;border-radius:3px;white-space:nowrap;border:1px solid;background:var(--am-bg);color:var(--am);border-color:var(--am-bd)}
+.sync-badge.ok{background:var(--gn-bg);color:var(--gn);border-color:var(--gn-bd)}
+.sync-badge.err{background:var(--rd-bg);color:var(--rd);border-color:var(--rd-bd)}
+
+/* ── FILTROS GLOBAIS ── */
+.cpk-filters{background:var(--wh);border-bottom:1px solid var(--bd);padding:7px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;flex-shrink:0}
+.cpk-filters select,.cpk-filters input[type=text],.cpk-filters input[type=date],.cpk-filters input[type=month]{
+  border:1px solid var(--bd);border-radius:var(--rs);padding:4px 8px;font-size:11.5px;font-family:var(--f);color:var(--tx);outline:none;background:var(--wh);height:28px}
+.cpk-filters select:focus,.cpk-filters input:focus{border-color:var(--ac)}
+.fl-lbl{font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+.fl-sep{width:1px;height:20px;background:var(--bd2);flex-shrink:0}
+.btn-apply{padding:4px 12px;background:var(--ac);color:#fff;border:none;border-radius:var(--rs);font-size:11.5px;font-weight:600;font-family:var(--f);cursor:pointer;height:28px;white-space:nowrap}
+.btn-apply:hover{background:var(--ac-h)}
+.btn-sec{padding:4px 10px;background:transparent;color:var(--mu);border:1px solid var(--bd);border-radius:var(--rs);font-size:11px;font-family:var(--f);cursor:pointer;height:28px}
+.btn-sec:hover{border-color:var(--ac);color:var(--ac)}
+
+/* ── CONTENT AREA ── */
+.cpk-content{flex:1;overflow:hidden;position:relative}
+.cpk-pane{display:none;flex-direction:column;position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding:12px 14px;gap:10px}
+.cpk-pane.on{display:flex}
+
+/* ── CARDS ── */
+.cpk-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px;flex-shrink:0}
+.cpk-card{background:var(--wh);border:1px solid var(--bd2);border-radius:var(--r);padding:10px 13px}
+.cpk-card .ck-lbl{font-size:9.5px;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;font-weight:600;display:flex;align-items:center;gap:5px;margin-bottom:4px}
+.cpk-card .ck-val{font-family:var(--m);font-size:18px;font-weight:500;line-height:1.1;color:var(--tx)}
+.cpk-card .ck-sub{font-size:10px;color:var(--mu);margin-top:2px}
+.cpk-card .ck-ori{font-size:9px;font-family:var(--m);padding:1px 5px;border-radius:2px;margin-top:3px;display:inline-block}
+.cpk-card .ck-ori.auto{background:var(--gn-bg);color:var(--gn)}
+.cpk-card .ck-ori.manual{background:var(--am-bg);color:var(--am)}
+.cpk-card .ck-ori.est{background:var(--pu-bg);color:var(--pu)}
+.cpk-card .ck-ori.nd{background:var(--bg);color:var(--mu);border:1px solid var(--bd)}
+.cpk-card.alert-gn{border-color:var(--gn-bd);background:var(--gn-bg)}
+.cpk-card.alert-am{border-color:var(--am-bd);background:var(--am-bg)}
+.cpk-card.alert-rd{border-color:var(--rd-bd);background:var(--rd-bg)}
+
+/* ── SEÇÃO ── */
+.cpk-sec{flex-shrink:0}
+.cpk-sec-hdr{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.cpk-sec-hdr h2{font-size:11px;font-weight:700;color:var(--tx);white-space:nowrap}
+.cpk-sec-line{flex:1;height:1px;background:var(--bd2)}
+.cpk-sec-hdr .cpk-sec-meta{font-size:10px;color:var(--mu)}
+
+/* ── GRÁFICOS ── */
+.cpk-charts{display:grid;grid-template-columns:1fr 1fr;gap:10px;flex-shrink:0}
+.cpk-charts.cols3{grid-template-columns:1fr 1fr 1fr}
+@media(max-width:900px){.cpk-charts{grid-template-columns:1fr}.cpk-charts.cols3{grid-template-columns:1fr}}
+.chart-box{background:var(--wh);border:1px solid var(--bd2);border-radius:var(--r);padding:10px 12px}
+.chart-box .ct{font-size:9px;font-weight:700;color:var(--mu);letter-spacing:.7px;text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between}
+.chart-box canvas{max-height:220px}
+
+/* ── TABELA ── */
+.cpk-tw{background:var(--wh);border:1px solid var(--bd2);border-radius:var(--r);overflow:hidden;display:flex;flex-direction:column;flex-shrink:0}
+.cpk-tw.grow{flex:1;min-height:200px}
+.cpk-th3{display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-bottom:1px solid var(--bd2);background:var(--sf);flex-shrink:0;gap:8px}
+.cpk-tt{font-size:11.5px;font-weight:600}
+.cpk-tc{font-size:10px;color:var(--mu)}
+.cpk-ts{border:1px solid var(--bd);border-radius:var(--rs);padding:3px 8px;font-family:var(--f);font-size:11.5px;outline:none;width:180px;height:26px}
+.cpk-ts:focus{border-color:var(--ac)}
+.cpk-to{overflow-x:auto;overflow-y:auto;max-height:400px}
+.cpk-to.grow{max-height:none;flex:1}
+table.dt{width:100%;border-collapse:collapse}
+table.dt thead{position:sticky;top:0;z-index:2}
+table.dt th{background:var(--hd);color:var(--ht);padding:4px 7px;font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;text-align:left;white-space:nowrap;cursor:pointer;user-select:none;border-right:1px solid #253652}
+table.dt th:last-child{border-right:none}
+table.dt th.sorted-asc::after{content:' ↑'}
+table.dt th.sorted-desc::after{content:' ↓'}
+table.dt td{padding:3px 7px;border-bottom:1px solid var(--bd2);font-size:11px;white-space:nowrap;vertical-align:middle}
+table.dt td.mono{font-family:var(--m)}
+table.dt td.r{text-align:right;font-family:var(--m)}
+table.dt tr:last-child td{border-bottom:none}
+table.dt tr:hover td{background:var(--ac-bg)}
+table.dt .bdg{display:inline-block;padding:1px 6px;border-radius:2px;font-size:9.5px;font-weight:600;font-family:var(--m);white-space:nowrap}
+.bdg-gn{background:var(--gn-bg);color:var(--gn)}
+.bdg-am{background:var(--am-bg);color:var(--am)}
+.bdg-rd{background:var(--rd-bg);color:var(--rd)}
+.bdg-mu{background:var(--bg);color:var(--mu);border:1px solid var(--bd)}
+.bdg-pu{background:var(--pu-bg);color:var(--pu)}
+.bdg-ac{background:var(--ac-bg);color:var(--ac)}
+
+/* ── AVISO DADOS INSUFICIENTES ── */
+.cpk-nd{display:flex;align-items:center;gap:8px;padding:12px 14px;background:var(--am-bg);border:1px solid var(--am-bd);border-radius:var(--r);font-size:12px;color:var(--am);flex-shrink:0}
+.cpk-nd-icon{font-size:18px;flex-shrink:0}
+.cpk-info{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--ac-bg);border:1px solid #bfdbfe;border-radius:var(--r);font-size:11.5px;color:var(--ac);flex-shrink:0}
+.cpk-err{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:var(--r);font-size:11.5px;color:var(--rd);flex-shrink:0}
+
+/* ── FORM / PARAMS ── */
+.cpk-form{background:var(--wh);border:1px solid var(--bd2);border-radius:var(--r);padding:14px 16px}
+.cpk-form h3{font-size:12px;font-weight:700;color:var(--tx);margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--bd2)}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.form-field{display:flex;flex-direction:column;gap:3px}
+.form-field label{font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px}
+.form-field input,.form-field select,.form-field textarea{
+  border:1px solid var(--bd);border-radius:var(--rs);padding:7px 9px;font-size:12.5px;font-family:var(--f);outline:none;color:var(--tx);background:var(--wh)}
+.form-field input:focus,.form-field select:focus,.form-field textarea:focus{border-color:var(--ac)}
+.form-field textarea{resize:vertical;min-height:60px;font-size:11.5px}
+.form-actions{display:flex;gap:8px;margin-top:12px;align-items:center}
+.btn-save{padding:8px 18px;background:var(--gn);color:#fff;border:none;border-radius:var(--rs);font-size:12px;font-weight:600;font-family:var(--f);cursor:pointer}
+.btn-save:hover{background:#046644}
+.btn-save:disabled{opacity:.5;cursor:not-allowed}
+.btn-cancel{padding:7px 14px;background:transparent;color:var(--mu);border:1px solid var(--bd);border-radius:var(--rs);font-size:12px;font-family:var(--f);cursor:pointer}
+.btn-cancel:hover{border-color:var(--rd);color:var(--rd)}
+.btn-icon{width:26px;height:26px;border:1px solid var(--bd);border-radius:var(--rs);background:var(--wh);color:var(--mu);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:13px}
+.btn-icon:hover{border-color:var(--ac);color:var(--ac)}
+
+/* ── MODAL ── */
+.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;align-items:center;justify-content:center;padding:16px}
+.modal-backdrop.open{display:flex}
+.modal{background:var(--wh);border-radius:10px;width:100%;max-width:580px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.modal-hdr{padding:14px 18px;border-bottom:1px solid var(--bd2);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.modal-hdr h3{font-size:13px;font-weight:700;color:var(--tx)}
+.modal-close{width:26px;height:26px;border:none;background:none;cursor:pointer;color:var(--mu);font-size:16px;border-radius:var(--rs);display:flex;align-items:center;justify-content:center}
+.modal-close:hover{background:var(--bg);color:var(--tx)}
+.modal-body{padding:16px 18px;overflow-y:auto;flex:1}
+.modal-foot{padding:12px 18px;border-top:1px solid var(--bd2);display:flex;gap:8px;justify-content:flex-end;flex-shrink:0}
+
+/* ── DIAGNÓSTICO ── */
+.diag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;flex-shrink:0}
+.diag-item{background:var(--wh);border:1px solid var(--bd2);border-radius:var(--r);padding:10px 13px;display:flex;flex-direction:column;gap:3px}
+.diag-item.ok{border-color:var(--gn-bd);background:var(--gn-bg)}
+.diag-item.warn{border-color:var(--am-bd);background:var(--am-bg)}
+.diag-item.err{border-color:var(--rd-bd);background:var(--rd-bg)}
+.diag-lbl{font-size:9.5px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px}
+.diag-val{font-family:var(--m);font-size:16px;font-weight:600;color:var(--tx)}
+.diag-sub{font-size:10px;color:var(--mu)}
+
+/* ── RANKING ── */
+.rank-list{list-style:none;display:flex;flex-direction:column;gap:2px}
+.rank-item{display:flex;align-items:center;gap:8px;padding:5px 10px;border-radius:var(--rs);background:var(--wh);border:1px solid var(--bd2);font-size:11.5px}
+.rank-pos{font-family:var(--m);font-size:10px;font-weight:700;width:18px;text-align:right;color:var(--mu);flex-shrink:0}
+.rank-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rank-val{font-family:var(--m);font-size:11px;font-weight:600;flex-shrink:0}
+.rank-bar-wrap{width:80px;flex-shrink:0;height:4px;background:var(--bd2);border-radius:2px;overflow:hidden}
+.rank-bar{height:4px;border-radius:2px;background:var(--ac)}
+
+/* ── TOAST ── */
+#cpk-toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--hd);color:var(--ht);padding:8px 18px;border-radius:20px;font-size:12px;font-weight:500;z-index:800;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap}
+#cpk-toast.show{opacity:1}
+
+/* ── SCROLLBAR ── */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#c5cfe0;border-radius:2px}
+
+/* ── DETALHES ── */
+.detail-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--bd2)}
+.detail-row:last-child{border-bottom:none}
+.detail-lbl{font-size:11.5px;color:var(--mu)}
+.detail-val{font-family:var(--m);font-size:12px;font-weight:500}
+.detail-section{font-size:10px;font-weight:700;color:var(--tx);text-transform:uppercase;letter-spacing:.5px;padding:8px 0 4px;border-bottom:1px solid var(--bd)}
+</style>
+</head>
+<body>
+
+<!-- LOGIN STANDALONE -->
+<div id="scr-login-cpk">
+  <div class="lc">
+    <div class="lc-brand">
+      <div class="lc-mark">CPK</div>
+      <div><strong>COMIX Atlas</strong><span>CPK · Custo por KM</span></div>
+    </div>
+    <div id="cpk-lc-err" class="lc-err"></div>
+    <div class="lc-field"><label>E-mail</label><input type="email" id="cpk-email" placeholder="seu@email.com"></div>
+    <div class="lc-field"><label>Senha</label><input type="password" id="cpk-senha" placeholder="••••••••"></div>
+    <button class="lc-btn" id="cpk-lc-btn" onclick="cpkDoLogin()">Entrar</button>
+  </div>
+</div>
+
+<!-- LOADER GLOBAL -->
+<div id="cpk-global-loader">
+  <div class="cpk-spin"></div>
+  <div class="cpk-load-txt" id="cpk-load-msg">Iniciando CPK…</div>
+</div>
+
+<!-- APP -->
+<div id="scr-cpk" style="display:none">
+  <!-- Header standalone -->
+  <div class="cpk-hdr">
+    <span class="logo">COMIX <em>CPK</em></span>
+    <span class="cpk-chip">CUSTO/KM</span>
+    <span style="flex:1"></span>
+    <span id="cpk-hdr-user" style="font-size:10px;color:#5a7a9a;font-family:var(--m)"></span>
+  </div>
+
+  <!-- TABBAR -->
+  <div class="cpk-tabbar" id="cpk-tabbar">
+    <button class="cpk-tab on" data-tab="vg" onclick="cpkGoTab('vg',this)">Visão Geral</button>
+    <button class="cpk-tab" data-tab="placa" onclick="cpkGoTab('placa',this)">Por Placa / Frota</button>
+    <button class="cpk-tab" data-tab="rota" onclick="cpkGoTab('rota',this)">Por Rota / Viagem</button>
+    <button class="cpk-tab" data-tab="cliente" onclick="cpkGoTab('cliente',this)">Por Cliente</button>
+    <button class="cpk-tab" data-tab="custos" onclick="cpkGoTab('custos',this)">Custos</button>
+    <button class="cpk-tab" data-tab="rankings" onclick="cpkGoTab('rankings',this)">Rankings</button>
+    <button class="cpk-tab" data-tab="params" onclick="cpkGoTab('params',this)">Parâmetros</button>
+    <button class="cpk-tab" data-tab="diag" onclick="cpkGoTab('diag',this)">Diagnóstico</button>
+    <div class="tabbar-right">
+      <span class="sync-badge" id="cpk-sync-badge">Aguardando dados…</span>
+      <button class="btn-sec" onclick="cpkReload()">↻ Atualizar</button>
+    </div>
+  </div>
+
+  <!-- FILTROS GLOBAIS -->
+  <div class="cpk-filters" id="cpk-filters">
+    <span class="fl-lbl">Período</span>
+    <input type="month" id="f-mes" value="">
+    <span class="fl-sep"></span>
+    <span class="fl-lbl">Unidade</span>
+    <select id="f-unidade">
+      <option value="">Todas</option>
+      <option value="SC">SC</option>
+      <option value="PR">PR</option>
+      <option value="SP">SP</option>
+    </select>
+    <span class="fl-sep"></span>
+    <span class="fl-lbl">Vínculo</span>
+    <select id="f-vinculo">
+      <option value="">Todos</option>
+      <option value="CP">Frota Própria</option>
+      <option value="CA">Agregado</option>
+    </select>
+    <span class="fl-sep"></span>
+    <input type="text" id="f-placa" placeholder="Placa…" style="width:90px">
+    <input type="text" id="f-cliente" placeholder="Cliente…" style="width:120px">
+    <input type="text" id="f-rota" placeholder="Rota…" style="width:100px">
+    <button class="btn-apply" onclick="cpkApplyFilters()">Aplicar</button>
+    <button class="btn-sec" onclick="cpkClearFilters()">Limpar</button>
+  </div>
+
+  <!-- CONTENT -->
+  <div class="cpk-content">
+
+    <!-- PANE: VISÃO GERAL -->
+    <div class="cpk-pane on" id="pane-vg">
+      <div id="vg-alerts"></div>
+      <!-- Cards KPI -->
+      <div class="cpk-cards" id="vg-cards"></div>
+      <!-- Gráficos -->
+      <div class="cpk-charts" id="vg-charts">
+        <div class="chart-box"><div class="ct"><span>CPK TOTAL × Período</span></div><canvas id="ch-cpk-periodo"></canvas></div>
+        <div class="chart-box"><div class="ct"><span>Receita/km vs CPK/km</span></div><canvas id="ch-receita-cpk"></canvas></div>
+        <div class="chart-box"><div class="ct"><span>Composição de Custos</span></div><canvas id="ch-composicao"></canvas></div>
+        <div class="chart-box"><div class="ct"><span>CPK por Unidade</span></div><canvas id="ch-unidade"></canvas></div>
+      </div>
+      <!-- Top piores e melhores -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div class="cpk-tw">
+          <div class="cpk-th3"><span class="cpk-tt">🔴 Top 10 Piores Placas (Margem/km)</span></div>
+          <div class="cpk-to"><table class="dt" id="tbl-top-piores"><thead><tr><th>Placa</th><th>Frota</th><th>Unid.</th><th>Margem/km</th><th>Status</th></tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="cpk-tw">
+          <div class="cpk-th3"><span class="cpk-tt">🟢 Top 10 Melhores Placas (Margem/km)</span></div>
+          <div class="cpk-to"><table class="dt" id="tbl-top-melhores"><thead><tr><th>Placa</th><th>Frota</th><th>Unid.</th><th>Margem/km</th><th>Status</th></tr></thead><tbody></tbody></table></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANE: PLACA / FROTA -->
+    <div class="cpk-pane" id="pane-placa">
+      <div class="cpk-tw grow">
+        <div class="cpk-th3">
+          <span class="cpk-tt">CPK por Placa / Frota</span>
+          <span class="cpk-tc" id="placa-count"></span>
+          <input type="text" class="cpk-ts" id="placa-search" placeholder="Buscar placa, frota, motorista…" oninput="cpkFilterTable('placa')">
+        </div>
+        <div class="cpk-to grow" id="placa-table-wrap">
+          <table class="dt" id="tbl-placa">
+            <thead><tr>
+              <th onclick="cpkSort('placa','placa')">Placa</th>
+              <th onclick="cpkSort('placa','frota')">Frota</th>
+              <th onclick="cpkSort('placa','motorista')">Motorista</th>
+              <th onclick="cpkSort('placa','unidade')">Unid.</th>
+              <th onclick="cpkSort('placa','vinculo')">Vínculo</th>
+              <th onclick="cpkSort('placa','viagens')">Viagens</th>
+              <th onclick="cpkSort('placa','km_total')">KM Total</th>
+              <th onclick="cpkSort('placa','faturamento')">Faturamento</th>
+              <th onclick="cpkSort('placa','receita_km')">Rec./km</th>
+              <th onclick="cpkSort('placa','cpk_comb')">CPK Comb.</th>
+              <th onclick="cpkSort('placa','cpk_manut')">CPK Manut.</th>
+              <th onclick="cpkSort('placa','cpk_outros')">CPK Outros</th>
+              <th onclick="cpkSort('placa','cpk_total')">CPK Total</th>
+              <th onclick="cpkSort('placa','margem_km')">Marg./km</th>
+              <th onclick="cpkSort('placa','margem_pct')">Marg.%</th>
+              <th>Status</th>
+              <th>Ação</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANE: ROTA / VIAGEM -->
+    <div class="cpk-pane" id="pane-rota">
+      <!-- Sub tabs -->
+      <div style="display:flex;gap:0;background:var(--wh);border:1px solid var(--bd2);border-radius:var(--r);overflow:hidden;flex-shrink:0">
+        <button class="cpk-tab on" data-subtab="rota" onclick="cpkGoSubTab('rota','por-rota',this)">Por Rota</button>
+        <button class="cpk-tab" data-subtab="viagem" onclick="cpkGoSubTab('rota','por-viagem',this)">Por Viagem</button>
+      </div>
+      <div id="subtab-rota-por-rota">
+        <div class="cpk-tw">
+          <div class="cpk-th3">
+            <span class="cpk-tt">CPK por Rota</span>
+            <span class="cpk-tc" id="rota-count"></span>
+            <input type="text" class="cpk-ts" id="rota-search" placeholder="Buscar rota, origem, destino…" oninput="cpkFilterTable('rota')">
+          </div>
+          <div class="cpk-to" id="rota-table-wrap">
+            <table class="dt" id="tbl-rota">
+              <thead><tr>
+                <th>Rota</th><th>Origem</th><th>UF</th><th>Destino</th><th>UF</th>
+                <th>Cliente</th><th>T.Frete</th><th>Unid.</th>
+                <th onclick="cpkSort('rota','viagens')">Viagens</th>
+                <th onclick="cpkSort('rota','km_medio')">KM Médio</th>
+                <th onclick="cpkSort('rota','km_total')">KM Total</th>
+                <th onclick="cpkSort('rota','faturamento')">Faturamento</th>
+                <th onclick="cpkSort('rota','receita_km')">Rec./km</th>
+                <th onclick="cpkSort('rota','cpk_total')">CPK</th>
+                <th onclick="cpkSort('rota','margem_km')">Marg./km</th>
+                <th onclick="cpkSort('rota','margem_pct')">Marg.%</th>
+                <th>KM?</th><th>Ação</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div id="subtab-rota-por-viagem" style="display:none">
+        <div class="cpk-tw">
+          <div class="cpk-th3">
+            <span class="cpk-tt">Detalhamento por Viagem</span>
+            <span class="cpk-tc" id="viagem-count"></span>
+            <input type="text" class="cpk-ts" id="viagem-search" placeholder="Buscar placa, cliente, rota…" oninput="cpkFilterTable('viagem')">
+          </div>
+          <div class="cpk-to" id="viagem-table-wrap">
+            <table class="dt" id="tbl-viagem">
+              <thead><tr>
+                <th>Data</th><th>Placa</th><th>Motorista</th><th>Cliente</th>
+                <th>Rota</th><th>Origem</th><th>Destino</th>
+                <th>KM</th><th>Faturamento</th><th>Custo Est.</th>
+                <th>CPK</th><th>Rec./km</th><th>Marg./km</th><th>Status</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANE: CLIENTE -->
+    <div class="cpk-pane" id="pane-cliente">
+      <div class="cpk-tw">
+        <div class="cpk-th3">
+          <span class="cpk-tt">CPK por Cliente</span>
+          <span class="cpk-tc" id="cli-count"></span>
+          <input type="text" class="cpk-ts" id="cli-search" placeholder="Buscar cliente…" oninput="cpkFilterTable('cliente')">
+        </div>
+        <div class="cpk-to" id="cli-table-wrap">
+          <table class="dt" id="tbl-cliente">
+            <thead><tr>
+              <th onclick="cpkSort('cliente','nome')">Cliente</th>
+              <th>T.Frete</th><th>Unid.</th>
+              <th onclick="cpkSort('cliente','viagens')">Viagens</th>
+              <th onclick="cpkSort('cliente','km_total')">KM Total</th>
+              <th onclick="cpkSort('cliente','faturamento')">Faturamento</th>
+              <th onclick="cpkSort('cliente','receita_km')">Rec./km</th>
+              <th onclick="cpkSort('cliente','cpk_total')">CPK Total</th>
+              <th onclick="cpkSort('cliente','margem_km')">Marg./km</th>
+              <th onclick="cpkSort('cliente','margem_pct')">Marg.%</th>
+              <th onclick="cpkSort('cliente','markup')">Markup</th>
+              <th>Alertas</th>
+              <th>Ação</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANE: CUSTOS -->
+    <div class="cpk-pane" id="pane-custos">
+      <div id="custos-form-area"></div>
+      <div class="cpk-tw" id="custos-table-wrap">
+        <div class="cpk-th3">
+          <span class="cpk-tt">Lançamentos de Custos</span>
+          <span class="cpk-tc" id="custos-count"></span>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="text" class="cpk-ts" id="custos-search" placeholder="Filtrar…" style="width:150px" oninput="cpkFilterTable('custos')">
+            <button class="btn-save" id="btn-novo-custo" onclick="cpkOpenCustoForm()" style="display:none;padding:4px 12px;font-size:11px">+ Lançamento</button>
+          </div>
+        </div>
+        <div class="cpk-to" id="custos-tbl-wrap">
+          <table class="dt" id="tbl-custos">
+            <thead><tr>
+              <th>Mês</th><th>Unidade</th><th>Placa</th><th>Frota</th>
+              <th>Categoria</th><th>Valor</th><th>Forma Rateio</th>
+              <th>Origem</th><th>Obs.</th><th>Por</th>
+              <th id="custos-acoes-th" style="display:none">Ação</th>
+            </tr></thead>
+            <tbody id="tbl-custos-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PANE: RANKINGS -->
+    <div class="cpk-pane" id="pane-rankings">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px" id="rankings-grid"></div>
+    </div>
+
+    <!-- PANE: PARÂMETROS -->
+    <div class="cpk-pane" id="pane-params">
+      <div id="params-content"></div>
+    </div>
+
+    <!-- PANE: DIAGNÓSTICO -->
+    <div class="cpk-pane" id="pane-diag">
+      <div class="diag-grid" id="diag-grid"></div>
+      <div class="cpk-tw" id="diag-issues-wrap" style="margin-top:0">
+        <div class="cpk-th3"><span class="cpk-tt">Pendências e Divergências</span></div>
+        <div class="cpk-to" id="diag-issues-list" style="padding:8px 12px;max-height:300px"></div>
+      </div>
+    </div>
+
+  </div><!-- /cpk-content -->
+</div><!-- /scr-cpk -->
+
+<!-- MODAL DETALHE -->
+<div class="modal-backdrop" id="modal-detalhe">
+  <div class="modal">
+    <div class="modal-hdr"><h3 id="modal-detalhe-title">Detalhe</h3><button class="modal-close" onclick="cpkCloseModal('modal-detalhe')">✕</button></div>
+    <div class="modal-body" id="modal-detalhe-body"></div>
+    <div class="modal-foot"><button class="btn-cancel" onclick="cpkCloseModal('modal-detalhe')">Fechar</button></div>
+  </div>
+</div>
+
+<!-- MODAL KM ROTA -->
+<div class="modal-backdrop" id="modal-km-rota">
+  <div class="modal">
+    <div class="modal-hdr"><h3>Cadastrar KM da Rota</h3><button class="modal-close" onclick="cpkCloseModal('modal-km-rota')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
+        <div class="form-field"><label>Rota</label><input type="text" id="km-rota-rota" readonly></div>
+        <div class="form-field"><label>Origem</label><input type="text" id="km-rota-origem" readonly></div>
+        <div class="form-field"><label>UF Origem</label><input type="text" id="km-rota-uf-orig" readonly></div>
+        <div class="form-field"><label>Destino</label><input type="text" id="km-rota-destino" readonly></div>
+        <div class="form-field"><label>UF Destino</label><input type="text" id="km-rota-uf-dest" readonly></div>
+        <div class="form-field"><label>Cliente</label><input type="text" id="km-rota-cliente"></div>
+        <div class="form-field"><label>Tipo Frete</label><input type="text" id="km-rota-tipo"></div>
+        <div class="form-field"><label>KM Padrão *</label><input type="number" id="km-rota-km" min="1" step="0.1" placeholder="Ex: 850"></div>
+        <div class="form-field" style="grid-column:1/-1"><label>Observação</label><textarea id="km-rota-obs" rows="2"></textarea></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="cpkCloseModal('modal-km-rota')">Cancelar</button>
+      <button class="btn-save" onclick="cpkSaveKmRota()">Salvar KM</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL CUSTO MANUAL -->
+<div class="modal-backdrop" id="modal-custo">
+  <div class="modal">
+    <div class="modal-hdr"><h3 id="modal-custo-title">Lançamento de Custo</h3><button class="modal-close" onclick="cpkCloseModal('modal-custo')">✕</button></div>
+    <div class="modal-body">
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
+        <div class="form-field"><label>Mês *</label><input type="month" id="c-mes"></div>
+        <div class="form-field"><label>Unidade *</label>
+          <select id="c-unidade"><option value="">— Selecione —</option><option>SC</option><option>PR</option><option>SP</option><option value="GERAL">Geral</option></select></div>
+        <div class="form-field"><label>Placa (opcional)</label><input type="text" id="c-placa" placeholder="Ex: SXR5A03"></div>
+        <div class="form-field"><label>Frota (opcional)</label><input type="text" id="c-frota" placeholder="Ex: CP127"></div>
+        <div class="form-field"><label>Categoria *</label>
+          <select id="c-categoria">
+            <option value="">— Selecione —</option>
+            <option>Combustível</option><option>Manutenção</option><option>Pneus</option>
+            <option>Seguro</option><option>Rastreador</option><option>Licenciamento</option>
+            <option>Depreciação</option><option>Lavagem</option><option>Pedágio</option>
+            <option>Custo Motorista</option><option>Óleo/Arla</option><option>Multas</option>
+            <option>Administrativo</option><option>Outros</option>
+          </select></div>
+        <div class="form-field"><label>Valor (R$) *</label><input type="number" id="c-valor" min="0" step="0.01" placeholder="0.00"></div>
+        <div class="form-field"><label>Forma de Rateio</label>
+          <select id="c-rateio"><option value="placa">Por Placa</option><option value="km">Por KM</option><option value="faturamento">Por Faturamento</option><option value="viagem">Por Viagem</option><option value="fixo">Valor Fixo</option></select></div>
+        <div class="form-field"><label>Origem do Dado</label>
+          <select id="c-origem"><option value="manual">Manual</option><option value="se2">SE2</option><option value="se5">SE5</option><option value="os">OS</option><option value="estimado">Estimado</option></select></div>
+        <div class="form-field" style="grid-column:1/-1"><label>Observação</label><textarea id="c-obs" rows="2"></textarea></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <input type="hidden" id="c-edit-id">
+      <button class="btn-cancel" onclick="cpkCloseModal('modal-custo')">Cancelar</button>
+      <button class="btn-save" id="c-save-btn" onclick="cpkSaveCusto()">Salvar Lançamento</button>
+    </div>
+  </div>
+</div>
+
+<div id="cpk-toast"></div>
+
+<!-- ═══════════════════════════════════════════════════════ SCRIPT ═══ -->
+<script>
+'use strict';
+
+/* ══════════════════════════════════════════════════════════════════
+   COMIX Atlas — CPK v1.0
+   Módulo isolado: Custo por KM
+   Funciona: (a) dentro do iframe Atlas recebendo dados do parent
+             (b) standalone com login Firebase
+══════════════════════════════════════════════════════════════════ */
+
+// ─── FIREBASE CONFIG (mesma do Atlas) ───
+const CPK_FB_CONFIG = {
+  apiKey:"AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",
+  authDomain:"comix-relatorios.firebaseapp.com",
+  projectId:"comix-relatorios",
+  storageBucket:"comix-relatorios.firebasestorage.app",
+  messagingSenderId:"586258388438",
+  appId:"1:586258388438:web:3b9da22e650e88ddcf4077"
+};
+
+// ─── STATE GLOBAL ───
+const CPK = {
+  user: null,
+  perfil: 'motorista',
+  isAdmin: false,
+  // Dados brutos
+  szb: null,          // rows do SZB
+  frota: [],          // veículos do Firestore
+  custos: [],         // cpk_lancamentos
+  params: {},         // cpk_parametros
+  kmRotas: [],        // cpk_km_rotas
+  metas: {},          // cpk_metas
+  // Dados calculados
+  szbAtivo: [],       // SZB sem cancelados + período filtrado
+  aggPlaca: [],       // agregado por placa
+  aggRota: [],        // agregado por rota
+  aggCliente: [],     // agregado por cliente
+  aggUnidade: [],     // agregado por unidade
+  aggCategoria: {},   // por categoria de custo
+  viagens: [],        // registros individuais
+  // Diagnóstico
+  diag: {},
+  // Charts refs
+  charts: {},
+  // Sort state
+  sorts: {},
+  // Filter applied data
+  filteredPlaca: [],
+  filteredRota: [],
+  filteredCliente: [],
+  filteredViagem: [],
+  filteredCustos: [],
+  // Flags
+  loaded: false,
+  szbLoaded: false,
+  frotaLoaded: false,
+  custosLoaded: false
+};
+
+// ─── FIREBASE ───
+let _cpkFb = null;
+let _cpkDb = null;
+let _cpkAuth = null;
+
+function cpkGetFirebase() {
+  try {
+    if (_cpkFb) return _cpkFb;
+    // Tenta reuso do parent (iframe)
+    if (window.parent && window.parent !== window && window.parent.firebase) {
+      _cpkFb = window.parent.firebase;
+      _cpkDb = _cpkFb.firestore();
+      _cpkAuth = _cpkFb.auth();
+      return _cpkFb;
+    }
+    // Standalone: inicializa próprio
+    if (typeof firebase !== 'undefined') {
+      try { _cpkFb = firebase.app('cpk'); } catch(e) {
+        _cpkFb = firebase.initializeApp(CPK_FB_CONFIG, 'cpk');
+      }
+      _cpkDb = _cpkFb.firestore();
+      _cpkAuth = _cpkFb.auth();
+      return _cpkFb;
+    }
+  } catch(e) { console.warn('[CPK] Firebase init:', e.message); }
+  return null;
+}
+
+// ─── LOGIN STANDALONE ───
+async function cpkDoLogin() {
+  const email = document.getElementById('cpk-email').value.trim();
+  const senha = document.getElementById('cpk-senha').value;
+  const btn = document.getElementById('cpk-lc-btn');
+  const err = document.getElementById('cpk-lc-err');
+  err.classList.remove('on');
+  if (!email||!senha) { err.textContent='Preencha e-mail e senha.'; err.classList.add('on'); return; }
+  btn.disabled=true; btn.textContent='Entrando…';
+  try {
+    cpkGetFirebase();
+    if (!_cpkAuth) throw new Error('Firebase não disponível.');
+    await _cpkAuth.signInWithEmailAndPassword(email, senha);
+  } catch(e) {
+    btn.disabled=false; btn.textContent='Entrar';
+    const msgs = {'auth/user-not-found':'E-mail não encontrado.','auth/wrong-password':'Senha incorreta.','auth/invalid-credential':'E-mail ou senha incorretos.'};
+    err.textContent = msgs[e.code] || 'Erro ao autenticar.';
+    err.classList.add('on');
+  }
+}
+['cpk-senha'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('keydown', e => { if(e.key==='Enter') cpkDoLogin(); });
+});
+
+// ─── ENTRADA: ATLAS (iframe) ou standalone ───
+function cpkInit() {
+  const isIframe = window.self !== window.top;
+
+  if (isIframe) {
+    // Recebe usuário do parent via postMessage ou acesso direto
+    cpkLoaderMsg('Conectando ao Atlas…');
+    window.parent.postMessage({type:'ATLAS_REQUEST_TAB_PERMS'}, '*');
+    // Tenta dados imediatos
+    setTimeout(() => {
+      if (!CPK.szbLoaded) cpkRequestAtlasBase('szb');
+    }, 200);
+    setTimeout(() => {
+      if (!CPK.szbLoaded) cpkRequestAtlasBase('szb');
+    }, 1200);
+  } else {
+    // Standalone: aguarda auth
+    cpkGetFirebase();
+    if (_cpkAuth) {
+      _cpkAuth.onAuthStateChanged(user => {
+        if (user) {
+          document.getElementById('scr-login-cpk').style.display = 'none';
+          _cpkDb.collection('usuarios').doc(user.uid).get().then(snap => {
+            const data = snap.exists ? snap.data() : {};
+            CPK.user = user;
+            CPK.perfil = data.perfil || data.tipo || 'motorista';
+            CPK.isAdmin = CPK.perfil === 'admin';
+            cpkAfterAuth(user, CPK.perfil);
+          }).catch(() => {
+            CPK.user = user; CPK.perfil = 'motorista';
+            cpkAfterAuth(user, 'motorista');
+          });
+        } else {
+          cpkLoaderHide();
+          document.getElementById('scr-login-cpk').style.display = 'flex';
+        }
+      });
+    } else {
+      cpkLoaderHide();
+      document.getElementById('scr-login-cpk').style.display = 'flex';
+    }
+  }
+}
+
+function cpkAfterAuth(user, perfil) {
+  CPK.user = user; CPK.perfil = perfil; CPK.isAdmin = perfil === 'admin';
+  document.getElementById('scr-cpk').style.display = 'flex';
+  document.getElementById('cpk-hdr-user').textContent = user.email || '';
+  const isIframe = window.self !== window.top;
+  if (!isIframe) {
+    // Standalone: a header fica visível
+    document.querySelectorAll('.cpk-hdr').forEach(h => h.style.display='flex');
+  }
+  cpkApplyUIPermissions();
+  cpkSetDefaultFilters();
+  cpkLoadAll();
+}
+
+function cpkApplyUIPermissions() {
+  const isAdmin = CPK.isAdmin;
+  const btnNovoCusto = document.getElementById('btn-novo-custo');
+  if (btnNovoCusto) btnNovoCusto.style.display = isAdmin ? 'inline-flex' : 'none';
+  const custosAcoesHeader = document.getElementById('custos-acoes-th');
+  if (custosAcoesHeader) custosAcoesHeader.style.display = isAdmin ? '' : 'none';
+}
+
+function cpkSetDefaultFilters() {
+  const now = new Date();
+  const mes = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+  document.getElementById('f-mes').value = mes;
+}
+
+// ─── POSTMESSAGE ───
+window.addEventListener('message', function(ev) {
+  const d = ev.data || {};
+
+  // Usuário logado (do Atlas)
+  if (d.type === 'ATLAS_USER') {
+    CPK.perfil = d.perfil || 'motorista';
+    CPK.isAdmin = CPK.perfil === 'admin';
+    CPK.user = { email: d.email, uid: d.uid, displayName: d.nome };
+    document.getElementById('scr-cpk').style.display = 'flex';
+    document.getElementById('cpk-hdr-user').textContent = d.email || '';
+    cpkApplyUIPermissions();
+    cpkSetDefaultFilters();
+    if (!CPK.loaded) cpkLoadAll();
+    cpkLoaderHide();
+    return;
+  }
+
+  // Permissões de abas
+  if (d.type === 'ATLAS_TAB_PERMS') {
+    CPK.perfil = d.perfil || CPK.perfil;
+    CPK.isAdmin = CPK.perfil === 'admin';
+    cpkApplyUIPermissions();
+    return;
+  }
+
+  // Dados da base
+  if (d.type === 'ATLAS_DATA_RESPONSE' && d.table === 'szb' && d.payload) {
+    cpkApplySZB(d.payload);
+    return;
+  }
+  if (d.type === 'ATLAS_DATA_READY' && d.table === 'szb') {
+    setTimeout(cpkTryParentSZB, 80);
+    return;
+  }
+  if (d.type === 'ATLAS_DATA_READY') {
+    // qualquer base pronta — re-tenta SZB
+    if (!CPK.szbLoaded) setTimeout(cpkTryParentSZB, 100);
+    return;
+  }
+});
+
+function cpkRequestAtlasBase(table) {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table}, '*');
+    }
+  } catch(e) {}
+}
+
+function cpkTryParentSZB() {
+  try {
+    const d = window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
+    if (d && Array.isArray(d.rows) && d.rows.length) {
+      cpkApplySZB(d);
+      return true;
+    }
+  } catch(e) {}
+  return false;
+}
+
+// ─── LOADER ───
+function cpkLoaderMsg(msg) {
+  const el = document.getElementById('cpk-load-msg');
+  if (el) el.textContent = msg;
+}
+function cpkLoaderHide() {
+  const el = document.getElementById('cpk-global-loader');
+  if (el) { el.classList.add('hidden'); setTimeout(() => { if(el.parentNode) el.parentNode.removeChild(el); }, 400); }
+}
+function cpkSyncBadge(txt, cls) {
+  const el = document.getElementById('cpk-sync-badge');
+  if (el) { el.textContent = txt; el.className = 'sync-badge ' + (cls||''); }
+}
+
+// ─── LOAD ALL ───
+async function cpkLoadAll() {
+  CPK.loaded = true;
+  cpkLoaderMsg('Buscando parâmetros CPK…');
+  await Promise.all([
+    cpkLoadParams(),
+    cpkLoadKmRotas(),
+    cpkLoadCustos()
+  ]);
+  cpkLoaderMsg('Buscando veículos da Frota…');
+  await cpkLoadFrota();
+  cpkLoaderMsg('Aguardando SZB…');
+  // SZB pode já ter chegado via postMessage
+  if (!CPK.szbLoaded) {
+    if (!cpkTryParentSZB()) {
+      cpkRequestAtlasBase('szb');
+    }
+  }
+  // Mesmo sem SZB: renderiza o que tiver
+  setTimeout(() => {
+    if (!CPK.szbLoaded) {
+      cpkSyncBadge('SZB não disponível', 'err');
+      cpkRenderAll();
+      cpkLoaderHide();
+    }
+  }, 4000);
+}
+
+function cpkReload() {
+  CPK.szbLoaded = false;
+  cpkRequestAtlasBase('szb');
+  cpkSyncBadge('Atualizando…', '');
+  cpkLoadAll();
+  cpkToast('Atualizando dados…');
+}
+
+// ─── FIRESTORE (via ponte do Atlas ou direto no standalone) ───
+async function cpkFirestoreGet(collection, query) {
+  if (window.self !== window.top) {
+    return cpkFirestoreViaPonte(collection, 'getCollection', query);
+  }
+  if (!_cpkDb) cpkGetFirebase();
+  if (!_cpkDb) return null;
+  try {
+    let ref = _cpkDb.collection(collection);
+    if (query && query.where) { for (const w of query.where) ref = ref.where(...w); }
+    if (query && query.orderBy) ref = ref.orderBy(query.orderBy, query.orderDir||'asc');
+    const snap = await ref.get();
+    return snap.docs.map(d => ({id:d.id, data:d.data()}));
+  } catch(e) { console.warn('[CPK] Firestore get', collection, e.message); return null; }
+}
+
+async function cpkFirestoreSet(collection, docId, data) {
+  if (window.self !== window.top) {
+    return cpkFirestoreViaPonte(collection, 'setDoc', {docId, data, merge:true});
+  }
+  if (!_cpkDb) cpkGetFirebase();
+  if (!_cpkDb) throw new Error('Firebase não disponível.');
+  await _cpkDb.collection(collection).doc(docId).set(data, {merge:true});
+}
+
+async function cpkFirestoreAdd(collection, data) {
+  if (window.self !== window.top) {
+    return cpkFirestoreViaPonte(collection, 'addDoc', {data});
+  }
+  if (!_cpkDb) cpkGetFirebase();
+  if (!_cpkDb) throw new Error('Firebase não disponível.');
+  const ref = await _cpkDb.collection(collection).add(data);
+  return {id: ref.id};
+}
+
+async function cpkFirestoreDelete(collection, docId) {
+  if (window.self !== window.top) {
+    return cpkFirestoreViaPonte(collection, 'deleteDoc', {docId});
+  }
+  if (!_cpkDb) cpkGetFirebase();
+  if (!_cpkDb) throw new Error('Firebase não disponível.');
+  await _cpkDb.collection(collection).doc(docId).delete();
+}
+
+let _cpkBridgeCallbacks = {};
+let _cpkBridgeId = 0;
+function cpkFirestoreViaPonte(collection, action, extra) {
+  return new Promise((resolve, reject) => {
+    const requestId = 'cpk-' + (++_cpkBridgeId);
+    _cpkBridgeCallbacks[requestId] = {resolve, reject};
+    try {
+      window.parent.postMessage({
+        type:'ATLAS_FIRESTORE_REQUEST', requestId, collection, action,
+        ...(extra||{})
+      }, '*');
+    } catch(e) { reject(e); }
+    setTimeout(() => {
+      if (_cpkBridgeCallbacks[requestId]) {
+        delete _cpkBridgeCallbacks[requestId];
+        reject(new Error('Timeout na ponte Firestore.'));
+      }
+    }, 10000);
+  });
+}
+window.addEventListener('message', function(ev) {
+  const d = ev.data || {};
+  if (d.type !== 'ATLAS_FIRESTORE_RESPONSE') return;
+  const cb = _cpkBridgeCallbacks[d.requestId];
+  if (!cb) return;
+  delete _cpkBridgeCallbacks[d.requestId];
+  if (d.ok) cb.resolve(d.result);
+  else cb.reject(new Error(d.error || 'Erro Firestore'));
+});
+
+// ─── LOAD: PARAMS ───
+async function cpkLoadParams() {
+  try {
+    const docs = await cpkFirestoreGet('cpk_parametros');
+    if (docs && docs.length) {
+      CPK.params = docs[0].data || {};
+    }
+  } catch(e) {
+    console.warn('[CPK] Params:', e.message);
+    CPK.params = {};
+  }
+  // Defaults
+  if (!CPK.params.diesel_padrao) CPK.params.diesel_padrao = 5.50;
+  if (!CPK.params.rendimento_padrao) CPK.params.rendimento_padrao = 2.5;
+  if (!CPK.params.meta_cpk) CPK.params.meta_cpk = 5.0;
+  if (!CPK.params.meta_margem_km) CPK.params.meta_margem_km = 0;
+  if (!CPK.params.alerta_atencao) CPK.params.alerta_atencao = 4.5;
+  if (!CPK.params.alerta_critico) CPK.params.alerta_critico = 5.5;
+}
+
+// ─── LOAD: KM ROTAS ───
+async function cpkLoadKmRotas() {
+  try {
+    const docs = await cpkFirestoreGet('cpk_km_rotas');
+    CPK.kmRotas = docs ? docs.map(d => ({...d.data, _id: d.id})) : [];
+  } catch(e) {
+    console.warn('[CPK] KmRotas:', e.message);
+    CPK.kmRotas = [];
+  }
+}
+
+// ─── LOAD: CUSTOS ───
+async function cpkLoadCustos() {
+  try {
+    const docs = await cpkFirestoreGet('cpk_lancamentos');
+    CPK.custos = docs ? docs.map(d => ({...d.data, _id: d.id})) : [];
+    CPK.custosLoaded = true;
+  } catch(e) {
+    console.warn('[CPK] Custos:', e.message);
+    CPK.custos = []; CPK.custosLoaded = true;
+  }
+}
+
+// ─── LOAD: FROTA (Firestore via ponte) ───
+async function cpkLoadFrota() {
+  try {
+    const result = await cpkFirestoreGet('veiculos');
+    if (result) {
+      CPK.frota = result.map(d => {
+        const v = d.data || {};
+        return {
+          id: d.id,
+          placa: cpkNormPlaca(v.placa || ''),
+          frota: (v.frota || '').toUpperCase(),
+          motorista: v.motorista || '',
+          unidade: v.unidade_slug || cpkInferirUnidadeFreota(v),
+          vinculo: (v.vinculo||'FROTA').toUpperCase() === 'AGREGADO' ? 'CA' : 'CP',
+          modelo: v.modelo || '',
+          categoria: v.categoria || '',
+          disponibilidade: v.disponibilidade || '',
+          ano: v.ano || ''
+        };
+      });
+      CPK.frotaLoaded = true;
+    }
+  } catch(e) {
+    console.warn('[CPK] Frota Firestore:', e.message);
+    // Fallback: tenta via ponte com coleção alternativa
+    CPK.frota = []; CPK.frotaLoaded = true;
+  }
+}
+
+function cpkInferirUnidadeFreota(v) {
+  const u = (v.unidade||'').toUpperCase();
+  if (u.includes('CATARIN')||u==='SC') return 'SC';
+  if (u.includes('PARAN')||u==='PR') return 'PR';
+  if (u.includes('PAULO')||u==='SP') return 'SP';
+  return '';
+}
+
+// ─── APPLY SZB ───
+function cpkApplySZB(payload) {
+  if (!payload || !Array.isArray(payload.rows) || !payload.rows.length) {
+    cpkSyncBadge('SZB vazio', 'err');
+    return;
+  }
+  CPK.szb = cpkNormalizeSZB(payload.rows);
+  CPK.szbLoaded = true;
+  const ts = payload.ts ? new Date(payload.ts) : null;
+  cpkSyncBadge(
+    '✓ SZB: ' + CPK.szb.length.toLocaleString('pt-BR') + ' reg.' + (ts ? ' · ' + ts.toLocaleDateString('pt-BR') : ''),
+    'ok'
+  );
+  cpkRenderAll();
+  cpkLoaderHide();
+}
+
+// ─── NORMALIZE SZB ───
+function cpkNormalizeSZB(rows) {
+  const out = [];
+  for (const r of rows) {
+    if (!r) continue;
+    // Ignora cancelados
+    const cancel = r['Dt Cancel'] || r['DT CANCEL'] || r['dt_cancel'] || '';
+    if (cancel && cancel !== '' && cancel !== '0' && cancel !== 'undefined') continue;
+    // Normaliza campos
+    const placa = cpkNormPlaca(cpkStr(r['Placa Veicul'] || r['PLACA VEICUL'] || r['placa_veicul'] || ''));
+    const frota = cpkStr(r['Frota'] || r['FROTA'] || r['frota'] || '').toUpperCase();
+    const motorista = cpkStr(r['Nome Motoris'] || r['NOME MOTORIS'] || r['nome_motoris'] || '');
+    const dtEmissao = cpkNormDate(r['Dt. Emissao'] || r['DT. EMISSAO'] || r['dt_emissao'] || '');
+    const valorTotal = cpkNum(r['Valor Total'] || r['VALOR TOTAL'] || r['valor_total'] || 0);
+    const operacao = cpkStr(r['Operacao'] || r['OPERACAO'] || r['operacao'] || '');
+    const rota = cpkStr(r['Rota'] || r['ROTA'] || r['rota'] || '');
+    const tipoFrete = cpkStr(r['Tipo Frete'] || r['TIPO FRETE'] || r['tipo_frete'] || '');
+    const localColeta = cpkStr(r['Local Coleta'] || r['LOCAL COLETA'] || '');
+    const ufOrigem = cpkStr(r['Uf Origem'] || r['UF ORIGEM'] || '');
+    const localEntreg = cpkStr(r['Local Entreg'] || r['LOCAL ENTREG'] || '');
+    const ufDestino = cpkStr(r['Uf Destino'] || r['UF DESTINO'] || '');
+    const nomeDestin = cpkStr(r['Nome Destina'] || r['NOME DESTINA'] || '');
+    const nomeRemeten = cpkStr(r['Nome Remeten'] || r['NOME REMETEN'] || '');
+    const nomeCliDev = cpkStr(r['Nome Cli Dev'] || r['NOME CLI DEV'] || '');
+    const cliente = nomeDestin || nomeCliDev || nomeRemeten;
+
+    // Busca KM (provavelmente não existe no SZB mas tenta)
+    const kmKeys = ['KM','Km','Quilometragem','Distancia','Distância','KM Rota','Km Rota','KM_ROTA','Quilometragem Rota'];
+    let km = 0;
+    for (const k of kmKeys) { const v = r[k]; if (v && cpkNum(v) > 0) { km = cpkNum(v); break; } }
+
+    // Unidade via Operacao
+    const unidade = cpkInferirUnidade(operacao, frota, placa);
+    // Vínculo via Frota (CP=próprio, CA=agregado)
+    const vinculo = frota.startsWith('CP') ? 'CP' : frota.startsWith('CA') ? 'CA' : cpkInferirVinculo(placa);
+
+    // Rota chave (para lookup de KM)
+    const rotaKey = cpkBuildRotaKey({rota, localColeta, ufOrigem, localEntreg, ufDestino, cliente, tipoFrete, unidade});
+
+    out.push({
+      placa, frota, motorista, dtEmissao, valorTotal, operacao, rota, tipoFrete,
+      localColeta, ufOrigem, localEntreg, ufDestino, cliente, unidade, vinculo,
+      km, rotaKey, _raw: r
+    });
+  }
+  return out;
+}
+
+function cpkNormPlaca(s) {
+  return String(s||'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+}
+function cpkStr(v) { return String(v==null?'':v).trim(); }
+function cpkNum(v) {
+  if (typeof v === 'number') return isNaN(v) ? 0 : v;
+  const n = parseFloat(String(v||'').replace(',','.'));
+  return isNaN(n) ? 0 : n;
+}
+function cpkNormDate(v) {
+  if (!v || v === '' || v === '0') return '';
+  if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
+  if (typeof v === 'number' && isFinite(v)) {
+    const d = new Date(Date.UTC(1899,11,30) + Math.round(v)*86400000);
+    return d.toISOString().slice(0,10);
+  }
+  const s = String(v).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[0];
+  const br = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (br) { const y = br[3].length===2?'20'+br[3]:br[3]; return y+'-'+String(br[2]).padStart(2,'0')+'-'+String(br[1]).padStart(2,'0'); }
+  return s.slice(0,10);
+}
+function cpkFmt(v, prefix='R$ ', dec=2) {
+  if (v == null || isNaN(v)) return '—';
+  return prefix + v.toLocaleString('pt-BR', {minimumFractionDigits:dec, maximumFractionDigits:dec});
+}
+function cpkFmtKm(v) {
+  if (!v || isNaN(v) || v === 0) return '—';
+  return v.toLocaleString('pt-BR', {minimumFractionDigits:0, maximumFractionDigits:0}) + ' km';
+}
+
+function cpkInferirUnidade(operacao, frota, placa) {
+  const op = String(operacao||'').trim();
+  if (op === '17' || op === '0117') return 'SC';
+  if (op === '18' || op === '0118') return 'PR';
+  if (op === '03' || op === '0003') return 'SP';
+  if (op.includes('SC') || op.includes('CATARIN')) return 'SC';
+  if (op.includes('PR') || op.includes('PARAN')) return 'PR';
+  if (op.includes('SP') || op.includes('PAULO')) return 'SP';
+  // Tenta pelo cadastro de frota
+  const frotaNum = String(frota||'').toUpperCase();
+  const veic = CPK.frota.find(v => v.frota === frotaNum || v.placa === placa);
+  if (veic) return veic.unidade || '';
+  return '';
+}
+
+function cpkInferirVinculo(placa) {
+  const veic = CPK.frota.find(v => v.placa === placa);
+  if (veic) return veic.vinculo;
+  return '';
+}
+
+function cpkBuildRotaKey({rota, localColeta, ufOrigem, localEntreg, ufDestino, cliente, tipoFrete, unidade}) {
+  if (rota) return rota.toUpperCase();
+  return [localColeta, ufOrigem, localEntreg, ufDestino, tipoFrete].filter(Boolean).join('|').toUpperCase();
+}
+
+// ─── RESOLVE KM ───
+function cpkResolveKm(row) {
+  // 1. KM direto do SZB
+  if (row.km > 0) return {km: row.km, fonte: 'szb'};
+  // 2. Tabela cpk_km_rotas
+  const kmRota = cpkLookupKmRota(row);
+  if (kmRota > 0) return {km: kmRota, fonte: 'rota'};
+  // 3. Lançamento manual de KM por placa/mês
+  const mes = (row.dtEmissao || '').slice(0,7);
+  const kmManual = CPK.custos.find(c =>
+    c.categoria === '_km_manual' &&
+    c.placa === row.placa &&
+    (c.mes === mes || !c.mes)
+  );
+  if (kmManual && kmManual.km > 0) return {km: kmManual.km, fonte: 'manual'};
+  return {km: 0, fonte: 'pendente'};
+}
+
+function cpkLookupKmRota(row) {
+  if (!CPK.kmRotas.length) return 0;
+  const chave = row.rotaKey;
+  // Match exato por rota
+  let match = CPK.kmRotas.find(k => k.rota && k.rota.toUpperCase() === chave);
+  if (!match) {
+    // Match por origem + destino + tipo
+    match = CPK.kmRotas.find(k => {
+      const ko = cpkNormStr(k.origem) === cpkNormStr(row.localColeta);
+      const kd = cpkNormStr(k.destino) === cpkNormStr(row.localEntreg);
+      const kt = !k.tipo_frete || cpkNormStr(k.tipo_frete) === cpkNormStr(row.tipoFrete);
+      return ko && kd && kt;
+    });
+  }
+  return match ? cpkNum(match.km) : 0;
+}
+
+function cpkNormStr(s) { return String(s||'').trim().toUpperCase().replace(/\s+/g,' '); }
+
+// ─── CALCULAR CPK ───
+function cpkCalculate(filtros) {
+  const rows = CPK.szbAtivo;
+  if (!rows.length) return;
+
+  // Mapa de custos lançados por placa+mês
+  const custosMap = {}; // 'placa|mes' -> {categoria: valor}
+  const custosGerais = []; // sem placa
+  for (const c of CPK.custos) {
+    if (c.categoria === '_km_manual') continue;
+    if (c.placa) {
+      const key = (cpkNormPlaca(c.placa)+'|'+(c.mes||'')).toUpperCase();
+      if (!custosMap[key]) custosMap[key] = {};
+      const cat = cpkNormCategoria(c.categoria);
+      custosMap[key][cat] = (custosMap[key][cat]||0) + cpkNum(c.valor);
+    } else {
+      custosGerais.push(c);
+    }
+  }
+
+  // Agrega por placa
+  const aggP = {};
+  const aggR = {};
+  const aggC = {};
+  const aggU = {};
+
+  let totalViagens = 0, totalFat = 0, totalKm = 0;
+  let semKm = 0, semKmFat = 0;
+  const viagens = [];
+
+  for (const row of rows) {
+    const {km, fonte} = cpkResolveKm(row);
+    const mes = (row.dtEmissao||'').slice(0,7);
+    const costsKey = (row.placa+'|'+mes).toUpperCase();
+
+    // Custos do lançamento para esta placa/mês
+    const lancCustos = custosMap[costsKey] || {};
+    const custComb = lancCustos.combustivel || 0;
+    const custManut = lancCustos.manutencao || 0;
+    const custPneus = lancCustos.pneus || 0;
+    const custSeg = lancCustos.seguro || 0;
+    const custRast = lancCustos.rastreador || 0;
+    const custLic = (lancCustos.licenciamento||0) + (lancCustos.ipva||0);
+    const custDep = lancCustos.depreciacao || 0;
+    const custLav = lancCustos.lavagem || 0;
+    const custPed = lancCustos.pedagio || 0;
+    const custMotorista = lancCustos.custo_motorista || 0;
+    const custOleo = lancCustos.oleo_arla || 0;
+    const custMul = lancCustos.multas || 0;
+    const custAdm = lancCustos.administrativo || 0;
+    const custOutros = lancCustos.outros || 0;
+
+    // Se não há custo de combustível registrado, estima
+    let custCombFinal = custComb;
+    if (custComb === 0 && km > 0) {
+      const rend = CPK.params.rendimento_padrao || 2.5;
+      const diesel = CPK.params.diesel_padrao || 5.50;
+      const litros = km / rend;
+      custCombFinal = litros * diesel;
+    }
+
+    const custTotal = custCombFinal + custManut + custPneus + custSeg + custRast +
+      custLic + custDep + custLav + custPed + custMotorista + custOleo + custMul + custAdm + custOutros;
+
+    const fat = row.valorTotal;
+    const kmR = km > 0 ? km : 0;
+
+    totalViagens++;
+    totalFat += fat;
+    if (kmR > 0) totalKm += kmR; else { semKm++; semKmFat += fat; }
+
+    viagens.push({...row, km: kmR, fonte_km: fonte,
+      custo_total: custTotal, custo_combustivel: custCombFinal,
+      custo_manutencao: custManut, custo_pneus: custPneus,
+      custo_outros: custSeg+custRast+custLic+custDep+custLav+custPed+custMotorista+custOleo+custMul+custAdm+custOutros
+    });
+
+    // Agrega por placa
+    if (!aggP[row.placa]) aggP[row.placa] = cpkNewAgg(row.placa, row.frota, row.motorista, row.unidade, row.vinculo);
+    cpkAccumAgg(aggP[row.placa], fat, kmR, custCombFinal, custManut, custPneus, custTotal - custCombFinal - custManut - custPneus, fonte);
+
+    // Agrega por rota
+    const rotaId = row.rotaKey || (row.localColeta+'|'+row.localEntreg);
+    if (!aggR[rotaId]) aggR[rotaId] = cpkNewRotaAgg(row);
+    cpkAccumAgg(aggR[rotaId], fat, kmR, custCombFinal, custManut, custPneus, custTotal - custCombFinal - custManut - custPneus, fonte);
+    aggR[rotaId].viagens++;
+
+    // Agrega por cliente
+    const cliKey = cpkNormStr(row.cliente) || 'S/N';
+    if (!aggC[cliKey]) aggC[cliKey] = {nome: row.cliente||'S/N', tipo_frete: row.tipoFrete, unidade: row.unidade, viagens:0, km_total:0, faturamento:0, custo_total:0, custo_comb:0, custo_manut:0, custo_pneus:0, custo_outros:0, sem_km:0};
+    cpkAccumAgg(aggC[cliKey], fat, kmR, custCombFinal, custManut, custPneus, custTotal-custCombFinal-custManut-custPneus, fonte);
+    aggC[cliKey].viagens++;
+    if (kmR === 0) aggC[cliKey].sem_km = (aggC[cliKey].sem_km||0) + 1;
+
+    // Agrega por unidade
+    const u = row.unidade || 'ND';
+    if (!aggU[u]) aggU[u] = {unidade: u, viagens:0, km_total:0, faturamento:0, custo_total:0, custo_comb:0, sem_km:0};
+    cpkAccumAgg(aggU[u], fat, kmR, custCombFinal, custManut, custPneus, 0, fonte);
+    aggU[u].viagens++;
+    if (kmR === 0) aggU[u].sem_km = (aggU[u].sem_km||0) + 1;
+  }
+
+  // Finaliza KPIs de cada agregado
+  CPK.aggPlaca = Object.values(aggP).map(cpkFinalize);
+  CPK.aggRota = Object.values(aggR).map(cpkFinalizeRota);
+  CPK.aggCliente = Object.values(aggC).map(cpkFinalize);
+  CPK.aggUnidade = Object.values(aggU).map(cpkFinalize);
+  CPK.viagens = viagens;
+
+  // Totais gerais
+  CPK.totais = {
+    viagens: totalViagens, faturamento: totalFat,
+    km_total: totalKm, sem_km: semKm, sem_km_fat: semKmFat,
+    pct_sem_km: totalViagens ? (semKm/totalViagens*100) : 0,
+    pct_fat_sem_km: totalFat ? (semKmFat/totalFat*100) : 0
+  };
+
+  // Composição de custos geral
+  const totCusto = CPK.aggPlaca.reduce((s,p) => s + p.custo_total, 0);
+  CPK.aggCategoria = {
+    combustivel: CPK.custos.filter(c=>c.categoria==='Combustível').reduce((s,c)=>s+cpkNum(c.valor),0),
+    manutencao: CPK.custos.filter(c=>c.categoria==='Manutenção').reduce((s,c)=>s+cpkNum(c.valor),0),
+    pneus: CPK.custos.filter(c=>c.categoria==='Pneus').reduce((s,c)=>s+cpkNum(c.valor),0),
+    seguro: CPK.custos.filter(c=>c.categoria==='Seguro').reduce((s,c)=>s+cpkNum(c.valor),0),
+    rastreador: CPK.custos.filter(c=>c.categoria==='Rastreador').reduce((s,c)=>s+cpkNum(c.valor),0),
+    outros: CPK.custos.filter(c=>!['Combustível','Manutenção','Pneus','Seguro','Rastreador'].includes(c.categoria)).reduce((s,c)=>s+cpkNum(c.valor),0)
+  };
+
+  // Diagnóstico
+  const placasSZB = [...new Set(rows.map(r=>r.placa).filter(Boolean))];
+  const placasFrota = new Set(CPK.frota.map(v=>v.placa));
+  CPK.diag = {
+    total_registros: (CPK.szb||[]).length,
+    ativos: rows.length,
+    cancelados: (CPK.szb||[]).length - rows.length,
+    sem_placa: rows.filter(r=>!r.placa).length,
+    sem_km: semKm,
+    pct_sem_km: CPK.totais.pct_sem_km,
+    fat_sem_km: semKmFat,
+    pct_fat_sem_km: CPK.totais.pct_fat_sem_km,
+    placas_nao_cadastradas: placasSZB.filter(p=>!placasFrota.has(p)),
+    rotas_sem_km: Object.values(aggR).filter(r=>r.sem_km && r.sem_km > 0).map(r=>r.rotaKey||r.rota||'?'),
+    custos_sem_placa: CPK.custos.filter(c=>!c.placa && c.categoria !== '_km_manual').length,
+    bases: {szb: CPK.szbLoaded, frota: CPK.frotaLoaded, custos: CPK.custosLoaded}
+  };
+}
+
+function cpkNewAgg(placa, frota, motorista, unidade, vinculo) {
+  return {placa, frota, motorista, unidade, vinculo, viagens:0, km_total:0, faturamento:0,
+    custo_total:0, custo_comb:0, custo_manut:0, custo_pneus:0, custo_outros:0, sem_km:0};
+}
+function cpkNewRotaAgg(row) {
+  return {rotaKey: row.rotaKey, rota: row.rota, localColeta: row.localColeta, ufOrigem: row.ufOrigem,
+    localEntreg: row.localEntreg, ufDestino: row.ufDestino, cliente: row.cliente,
+    tipoFrete: row.tipoFrete, unidade: row.unidade, viagens:0, km_total:0, faturamento:0,
+    custo_total:0, custo_comb:0, custo_manut:0, custo_pneus:0, custo_outros:0, sem_km:0};
+}
+function cpkAccumAgg(agg, fat, km, comb, manut, pneus, outros, fonte) {
+  agg.faturamento += fat;
+  agg.km_total += km;
+  agg.custo_total += comb + manut + pneus + outros;
+  agg.custo_comb += comb;
+  agg.custo_manut += manut;
+  agg.custo_pneus += pneus;
+  agg.custo_outros += outros;
+  if (km === 0) agg.sem_km = (agg.sem_km||0) + 1;
+}
+function cpkFinalize(agg) {
+  const km = agg.km_total;
+  const fat = agg.faturamento;
+  const custo = agg.custo_total;
+  agg.cpk_total = km > 0 ? custo/km : null;
+  agg.cpk_comb = km > 0 ? agg.custo_comb/km : null;
+  agg.cpk_manut = km > 0 ? agg.custo_manut/km : null;
+  agg.cpk_pneus = km > 0 ? agg.custo_pneus/km : null;
+  agg.cpk_outros = km > 0 ? agg.custo_outros/km : null;
+  agg.receita_km = km > 0 ? fat/km : null;
+  agg.margem_km = (km > 0 && agg.receita_km != null && agg.cpk_total != null) ? agg.receita_km - agg.cpk_total : null;
+  agg.margem_pct = fat > 0 ? ((fat - custo) / fat * 100) : null;
+  agg.markup = (agg.cpk_total && agg.cpk_total > 0 && agg.receita_km) ? ((agg.receita_km / agg.cpk_total) - 1) * 100 : null;
+  agg.status = cpkStatusPlaca(agg.cpk_total);
+  return agg;
+}
+function cpkFinalizeRota(agg) {
+  cpkFinalize(agg);
+  agg.km_medio = agg.viagens > 0 && agg.km_total > 0 ? agg.km_total / agg.viagens : null;
+  agg.tem_km = (agg.km_total > 0);
+  return agg;
+}
+function cpkStatusPlaca(cpk) {
+  if (cpk == null) return 'sem-km';
+  const params = CPK.params;
+  const meta = cpkNum(params.meta_cpk || 5.0);
+  const atencao = cpkNum(params.alerta_atencao || 4.5);
+  const critico = cpkNum(params.alerta_critico || 5.5);
+  if (cpk <= atencao) return 'saudavel';
+  if (cpk <= critico) return 'atencao';
+  return 'critico';
+}
+function cpkNormCategoria(s) {
+  const map = {
+    'combustível':'combustivel','manutenção':'manutencao','custo motorista':'custo_motorista',
+    'óleo/arla':'oleo_arla','ipva / licenciamento':'licenciamento','ipva':'ipva',
+    'rastreamento':'rastreador','rastreador':'rastreador',
+    'depreciação':'depreciacao','pedagio':'pedagio','pedágio':'pedagio',
+    'lavagem':'lavagem','seguro':'seguro','multas':'multas','administrativo':'administrativo','outros':'outros'
+  };
+  const k = String(s||'').toLowerCase().trim();
+  return map[k] || k.replace(/[^a-z]/g,'_');
+}
+
+// ─── FILTROS ───
+function cpkGetFiltros() {
+  return {
+    mes: document.getElementById('f-mes').value || '',
+    unidade: document.getElementById('f-unidade').value || '',
+    vinculo: document.getElementById('f-vinculo').value || '',
+    placa: cpkNormPlaca(document.getElementById('f-placa').value || ''),
+    cliente: cpkNormStr(document.getElementById('f-cliente').value || ''),
+    rota: cpkNormStr(document.getElementById('f-rota').value || '')
+  };
+}
+
+function cpkApplyFilters() {
+  const f = cpkGetFiltros();
+  if (!CPK.szb) { cpkToast('SZB não carregado.'); return; }
+  CPK.szbAtivo = CPK.szb.filter(r => {
+    if (f.mes && r.dtEmissao && !r.dtEmissao.startsWith(f.mes)) return false;
+    if (f.unidade && r.unidade !== f.unidade) return false;
+    if (f.vinculo && r.vinculo !== f.vinculo) return false;
+    if (f.placa && r.placa !== f.placa) return false;
+    if (f.cliente && !cpkNormStr(r.cliente).includes(f.cliente)) return false;
+    if (f.rota && !cpkNormStr(r.rota).includes(f.rota) && !cpkNormStr(r.rotaKey).includes(f.rota)) return false;
+    return true;
+  });
+  cpkCalculate(f);
+  cpkRenderAll();
+}
+
+function cpkClearFilters() {
+  document.getElementById('f-unidade').value = '';
+  document.getElementById('f-vinculo').value = '';
+  document.getElementById('f-placa').value = '';
+  document.getElementById('f-cliente').value = '';
+  document.getElementById('f-rota').value = '';
+  cpkApplyFilters();
+}
+
+// ─── RENDER ALL ───
+function cpkRenderAll() {
+  const f = cpkGetFiltros();
+  if (CPK.szb && !CPK.szbAtivo.length) {
+    // Aplica filtro inicial (mês atual)
+    CPK.szbAtivo = CPK.szb.filter(r => !f.mes || (r.dtEmissao && r.dtEmissao.startsWith(f.mes)));
+    cpkCalculate(f);
+  }
+  cpkRenderDashboard();
+  cpkRenderPlateAnalysis();
+  cpkRenderRouteAnalysis();
+  cpkRenderClientAnalysis();
+  cpkRenderCosts();
+  cpkRenderRankings();
+  cpkRenderDiagnostics();
+}
+
+// ─── RENDER: DASHBOARD ───
+function cpkRenderDashboard() {
+  const el = document.getElementById('vg-cards');
+  if (!el) return;
+  const t = CPK.totais || {};
+  const szb = CPK.szbAtivo || [];
+  const params = CPK.params || {};
+
+  // CPK geral (média ponderada por KM)
+  const totalKm = t.km_total || 0;
+  const totalFat = t.faturamento || 0;
+  const totalCusto = CPK.aggPlaca ? CPK.aggPlaca.reduce((s,p) => s+(p.custo_total||0), 0) : 0;
+  const cpkGeral = totalKm > 0 ? totalCusto/totalKm : null;
+  const recKm = totalKm > 0 ? totalFat/totalKm : null;
+  const margKm = (cpkGeral != null && recKm != null) ? recKm - cpkGeral : null;
+  const margPct = totalFat > 0 ? ((totalFat - totalCusto) / totalFat * 100) : null;
+  const markup = (cpkGeral && cpkGeral > 0 && recKm) ? ((recKm/cpkGeral)-1)*100 : null;
+
+  const status = cpkStatusPlaca(cpkGeral);
+  const statusClass = {saudavel:'alert-gn', atencao:'alert-am', critico:'alert-rd', 'sem-km':''}[status] || '';
+
+  const placasCriticas = (CPK.aggPlaca||[]).filter(p => p.status === 'critico').length;
+  const rotasCriticas = (CPK.aggRota||[]).filter(r => r.status === 'critico').length;
+  const clientesCriticos = (CPK.aggCliente||[]).filter(c => c.margem_pct != null && c.margem_pct < 0).length;
+
+  const cpkCombGeral = totalKm > 0 ? (CPK.aggPlaca||[]).reduce((s,p)=>s+(p.custo_comb||0),0)/totalKm : null;
+  const cpkManutGeral = totalKm > 0 ? (CPK.aggPlaca||[]).reduce((s,p)=>s+(p.custo_manut||0),0)/totalKm : null;
+  const cpkPneusGeral = totalKm > 0 ? (CPK.aggPlaca||[]).reduce((s,p)=>s+(p.custo_pneus||0),0)/totalKm : null;
+
+  function card(lbl, val, sub, ori, cls='') {
+    const oriHtml = ori ? `<span class="ck-ori ${ori}">${{auto:'Automático',manual:'Manual',est:'Estimado',nd:'Indisponível'}[ori]||ori}</span>` : '';
+    return `<div class="cpk-card ${cls}">
+      <div class="ck-lbl">${lbl}</div>
+      <div class="ck-val">${val}</div>
+      <div class="ck-sub">${sub||''}</div>
+      ${oriHtml}
+    </div>`;
+  }
+
+  el.innerHTML = [
+    card('CPK Total', cpkGeral != null ? cpkFmt(cpkGeral,'R$ ',4)+'/km' : '⚠ Dados insuf.', `Meta: ${cpkFmt(params.meta_cpk||5,'R$ ',2)}/km`, szb.length?'auto':'nd', statusClass),
+    card('CPK Combustível', cpkCombGeral != null ? cpkFmt(cpkCombGeral,'R$ ',4)+'/km' : '⚠', '', CPK.custos.some(c=>c.categoria==='Combustível')?'manual':'est'),
+    card('CPK Manutenção', cpkManutGeral != null ? cpkFmt(cpkManutGeral,'R$ ',4)+'/km' : '—', '', CPK.custos.some(c=>c.categoria==='Manutenção')?'manual':'nd'),
+    card('CPK Pneus', cpkPneusGeral != null ? cpkFmt(cpkPneusGeral,'R$ ',4)+'/km' : '—', '', CPK.custos.some(c=>c.categoria==='Pneus')?'manual':'nd'),
+    card('Receita/km', recKm != null ? cpkFmt(recKm,'R$ ',4)+'/km' : '—', '', totalKm>0?'auto':'nd'),
+    card('Margem/km', margKm != null ? cpkFmt(margKm,'R$ ',4)+'/km' : '—', '', totalKm>0?'auto':'nd', margKm != null ? (margKm >= 0 ? 'alert-gn':'alert-rd') : ''),
+    card('Margem %', margPct != null ? margPct.toFixed(1)+'%' : '—', '', totalFat>0?'auto':'nd', margPct != null ? (margPct >= 10 ? 'alert-gn' : margPct >= 0 ? '' : 'alert-rd') : ''),
+    card('Markup', markup != null ? markup.toFixed(1)+'%' : '—', '', null),
+    card('KM Total', cpkFmtKm(totalKm), szb.length+' viagens', 'auto'),
+    card('Faturamento', cpkFmt(totalFat), '', 'auto'),
+    card('Custo Total', cpkFmt(totalCusto), CPK.custos.length>0?'':'Estimado', totalCusto>0?(CPK.custos.length>0?'manual':'est'):'nd'),
+    card('Viagens s/ KM', (t.sem_km||0)+' ('+((t.pct_sem_km||0).toFixed(0))+'%)', cpkFmt(t.sem_km_fat||0)+' s/ KM', 'auto', t.sem_km>0?'alert-am':''),
+    card('Placas Críticas', placasCriticas, 'CPK acima da meta', 'auto', placasCriticas>0?'alert-rd':''),
+    card('Rotas Críticas', rotasCriticas, 'margem negativa', 'auto', rotasCriticas>0?'alert-am':''),
+    card('Clientes Críticos', clientesCriticos, 'margem negativa', 'auto', clientesCriticos>0?'alert-am':'')
+  ].join('');
+
+  // Alertas
+  const alertDiv = document.getElementById('vg-alerts');
+  if (alertDiv) {
+    let html = '';
+    if (!CPK.szbLoaded) html += `<div class="cpk-nd"><span class="cpk-nd-icon">⚠️</span><span><strong>SZB não carregado.</strong> Acesse Download Base e carregue o arquivo SZB para habilitar o CPK. Enquanto isso, parâmetros e lançamentos manuais continuam disponíveis.</span></div>`;
+    else if ((t.pct_sem_km||0) > 50) html += `<div class="cpk-nd"><span class="cpk-nd-icon">⚠️</span><span><strong>${(t.pct_sem_km||0).toFixed(0)}% das viagens sem KM.</strong> Cadastre os KMs das rotas na aba Parâmetros ou via botão "KM" na tabela de Rotas para obter CPK confiável.</span></div>`;
+    alertDiv.innerHTML = html;
+  }
+
+  // Gráficos
+  cpkRenderChartPeriodo();
+  cpkRenderChartReceitaCPK();
+  cpkRenderChartComposicao();
+  cpkRenderChartUnidade();
+  // Top placas
+  cpkRenderTopPlacas();
+}
+
+// ─── GRÁFICOS ───
+function cpkChartDestroy(id) {
+  if (CPK.charts[id]) { try { CPK.charts[id].destroy(); } catch(e) {} delete CPK.charts[id]; }
+}
+
+function cpkRenderChartPeriodo() {
+  cpkChartDestroy('periodo');
+  const ctx = document.getElementById('ch-cpk-periodo');
+  if (!ctx || !CPK.viagens.length) return;
+  // Agrupa por mês
+  const byMes = {};
+  for (const v of CPK.viagens) {
+    const m = (v.dtEmissao||'').slice(0,7);
+    if (!m) continue;
+    if (!byMes[m]) byMes[m] = {fat:0, km:0, custo:0};
+    byMes[m].fat += v.valorTotal||0;
+    byMes[m].km += v.km||0;
+    byMes[m].custo += v.custo_total||0;
+  }
+  const meses = Object.keys(byMes).sort();
+  const cpkVals = meses.map(m => byMes[m].km > 0 ? byMes[m].custo/byMes[m].km : null);
+  const recVals = meses.map(m => byMes[m].km > 0 ? byMes[m].fat/byMes[m].km : null);
+  CPK.charts.periodo = new Chart(ctx, {
+    type:'line',
+    data: {
+      labels: meses.map(m => m.slice(5)+'/'+m.slice(0,4)),
+      datasets: [
+        {label:'CPK (R$/km)', data:cpkVals, borderColor:'#c81e1e', backgroundColor:'rgba(200,30,30,.08)', tension:.3, pointRadius:3},
+        {label:'Receita/km', data:recVals, borderColor:'#057a55', backgroundColor:'rgba(5,122,85,.08)', tension:.3, pointRadius:3}
+      ]
+    },
+    options: {responsive:true, plugins:{legend:{labels:{font:{size:10}}}}, scales:{y:{ticks:{font:{size:10},callback:v=>'R$'+v?.toFixed(2)}}}}
+  });
+}
+
+function cpkRenderChartReceitaCPK() {
+  cpkChartDestroy('receita-cpk');
+  const ctx = document.getElementById('ch-receita-cpk');
+  if (!ctx || !CPK.aggUnidade.length) return;
+  const data = CPK.aggUnidade.filter(u => u.km_total > 0);
+  CPK.charts['receita-cpk'] = new Chart(ctx, {
+    type:'bar',
+    data: {
+      labels: data.map(u => u.unidade||'ND'),
+      datasets: [
+        {label:'Receita/km', data:data.map(u=>u.receita_km), backgroundColor:'rgba(26,86,219,.6)'},
+        {label:'CPK', data:data.map(u=>u.cpk_total), backgroundColor:'rgba(200,30,30,.6)'}
+      ]
+    },
+    options:{responsive:true, plugins:{legend:{labels:{font:{size:10}}}}, scales:{y:{ticks:{font:{size:10},callback:v=>'R$'+v?.toFixed(2)}}}}
+  });
+}
+
+function cpkRenderChartComposicao() {
+  cpkChartDestroy('composicao');
+  const ctx = document.getElementById('ch-composicao');
+  if (!ctx) return;
+  const cat = CPK.aggCategoria || {};
+  const total = Object.values(cat).reduce((s,v)=>s+v,0);
+  if (total === 0) return;
+  CPK.charts.composicao = new Chart(ctx, {
+    type:'doughnut',
+    data: {
+      labels: ['Combustível','Manutenção','Pneus','Seguro','Rastreador','Outros'],
+      datasets:[{data:[cat.combustivel||0,cat.manutencao||0,cat.pneus||0,cat.seguro||0,cat.rastreador||0,cat.outros||0],
+        backgroundColor:['#1a56db','#f59e0b','#057a55','#6d28d9','#0e7490','#6b7a96']}]
+    },
+    options:{responsive:true, plugins:{legend:{labels:{font:{size:10}}}}}
+  });
+}
+
+function cpkRenderChartUnidade() {
+  cpkChartDestroy('unidade');
+  const ctx = document.getElementById('ch-unidade');
+  if (!ctx || !CPK.aggUnidade.length) return;
+  const data = CPK.aggUnidade.filter(u => u.cpk_total != null);
+  const meta = cpkNum(CPK.params.meta_cpk || 5.0);
+  CPK.charts.unidade = new Chart(ctx, {
+    type:'bar',
+    data: {
+      labels: data.map(u => u.unidade||'ND'),
+      datasets:[
+        {label:'CPK (R$/km)', data:data.map(u=>u.cpk_total), backgroundColor:data.map(u => cpkStatusColor(u.status))},
+        {label:'Meta', data:data.map(_=>meta), type:'line', borderColor:'#c81e1e', borderDash:[4,4], pointRadius:0, borderWidth:1.5}
+      ]
+    },
+    options:{responsive:true, plugins:{legend:{labels:{font:{size:10}}}}, scales:{y:{ticks:{font:{size:10},callback:v=>'R$'+v?.toFixed(2)}}}}
+  });
+}
+
+function cpkStatusColor(status) {
+  return {saudavel:'rgba(5,122,85,.65)',atencao:'rgba(180,83,9,.65)',critico:'rgba(200,30,30,.65)','sem-km':'rgba(107,122,150,.4)'}[status]||'rgba(107,122,150,.4)';
+}
+function cpkStatusBadge(status) {
+  const cfg = {saudavel:'bdg-gn',atencao:'bdg-am',critico:'bdg-rd','sem-km':'bdg-mu'};
+  const lbl = {saudavel:'Saudável',atencao:'Atenção',critico:'Crítico','sem-km':'Sem KM'};
+  return `<span class="bdg ${cfg[status]||'bdg-mu'}">${lbl[status]||status}</span>`;
+}
+
+function cpkRenderTopPlacas() {
+  const piores = [...(CPK.aggPlaca||[])].filter(p=>p.margem_km!=null).sort((a,b)=>(a.margem_km||0)-(b.margem_km||0)).slice(0,10);
+  const melhores = [...(CPK.aggPlaca||[])].filter(p=>p.margem_km!=null).sort((a,b)=>(b.margem_km||0)-(a.margem_km||0)).slice(0,10);
+  const tbodyP = document.querySelector('#tbl-top-piores tbody');
+  const tbodyM = document.querySelector('#tbl-top-melhores tbody');
+  function renderRows(items) {
+    return items.map(p => `<tr>
+      <td class="mono">${p.placa||'—'}</td>
+      <td class="mono">${p.frota||'—'}</td>
+      <td>${p.unidade||'—'}</td>
+      <td class="r" style="color:${(p.margem_km||0)<0?'var(--rd)':'var(--gn)'}">${cpkFmt(p.margem_km,'R$ ',4)}</td>
+      <td>${cpkStatusBadge(p.status)}</td>
+    </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--mu);padding:12px">— Sem dados —</td></tr>';
+  }
+  if (tbodyP) tbodyP.innerHTML = renderRows(piores);
+  if (tbodyM) tbodyM.innerHTML = renderRows(melhores);
+}
+
+// ─── RENDER: ANÁLISE POR PLACA ───
+function cpkRenderPlateAnalysis() {
+  CPK.filteredPlaca = [...(CPK.aggPlaca||[])];
+  cpkSortAndRenderPlaca();
+  const el = document.getElementById('placa-count');
+  if (el) el.textContent = CPK.filteredPlaca.length + ' placas';
+}
+
+function cpkSortAndRenderPlaca() {
+  const tbody = document.querySelector('#tbl-placa tbody');
+  if (!tbody) return;
+  const data = CPK.filteredPlaca;
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="17" style="text-align:center;color:var(--mu);padding:16px">${CPK.szbLoaded ? '— Nenhum resultado para os filtros selecionados —' : '⚠ SZB não carregado. Acesse Download Base.'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = data.map(p => `<tr onclick="cpkOpenDetailModal('placa','${p.placa}')" style="cursor:pointer">
+    <td class="mono"><strong>${p.placa||'—'}</strong></td>
+    <td class="mono">${p.frota||'—'}</td>
+    <td>${p.motorista||'—'}</td>
+    <td>${p.unidade||'—'}</td>
+    <td><span class="bdg ${p.vinculo==='CP'?'bdg-ac':'bdg-pu'}">${p.vinculo==='CP'?'Próprio':'Agregado'}</span></td>
+    <td class="r">${p.viagens||0}</td>
+    <td class="r">${cpkFmtKm(p.km_total)}</td>
+    <td class="r">${cpkFmt(p.faturamento)}</td>
+    <td class="r">${cpkFmt(p.receita_km,'R$ ',4)}</td>
+    <td class="r">${p.cpk_comb!=null?cpkFmt(p.cpk_comb,'R$ ',4):'<span class="bdg bdg-mu">Est.</span>'}</td>
+    <td class="r">${p.cpk_manut!=null?cpkFmt(p.cpk_manut,'R$ ',4):'—'}</td>
+    <td class="r">${p.cpk_outros!=null?cpkFmt(p.cpk_outros,'R$ ',4):'—'}</td>
+    <td class="r" style="font-weight:600">${p.cpk_total!=null?cpkFmt(p.cpk_total,'R$ ',4):'⚠ Ins.'}</td>
+    <td class="r" style="color:${p.margem_km!=null?(p.margem_km>=0?'var(--gn)':'var(--rd)'):'var(--mu)'}">${cpkFmt(p.margem_km,'R$ ',4)}</td>
+    <td class="r" style="color:${p.margem_pct!=null?(p.margem_pct>=0?'var(--gn)':'var(--rd)'):'var(--mu)'}">${p.margem_pct!=null?p.margem_pct.toFixed(1)+'%':'—'}</td>
+    <td>${cpkStatusBadge(p.status)}</td>
+    <td><button class="btn-icon" onclick="event.stopPropagation();cpkOpenDetailModal('placa','${p.placa}')">🔍</button></td>
+  </tr>`).join('');
+}
+
+// ─── RENDER: ANÁLISE POR ROTA ───
+function cpkRenderRouteAnalysis() {
+  CPK.filteredRota = [...(CPK.aggRota||[])];
+  CPK.filteredViagem = [...(CPK.viagens||[])];
+  const rotaCount = document.getElementById('rota-count');
+  if (rotaCount) rotaCount.textContent = CPK.filteredRota.length + ' rotas';
+  const viagemCount = document.getElementById('viagem-count');
+  if (viagemCount) viagemCount.textContent = CPK.filteredViagem.length + ' viagens';
+  cpkRenderRotaTable();
+  cpkRenderViagemTable();
+}
+
+function cpkRenderRotaTable() {
+  const tbody = document.querySelector('#tbl-rota tbody');
+  if (!tbody) return;
+  const data = CPK.filteredRota;
+  if (!data.length) { tbody.innerHTML = `<tr><td colspan="18" style="text-align:center;color:var(--mu);padding:16px">— Sem dados —</td></tr>`; return; }
+  tbody.innerHTML = data.map(r => `<tr>
+    <td>${r.rota||cpkAbrev(r.rotaKey)||'—'}</td>
+    <td>${r.localColeta||'—'}</td><td>${r.ufOrigem||'—'}</td>
+    <td>${r.localEntreg||'—'}</td><td>${r.ufDestino||'—'}</td>
+    <td title="${r.cliente||''}">${cpkAbrev(r.cliente||'—',20)}</td>
+    <td>${r.tipoFrete||'—'}</td><td>${r.unidade||'—'}</td>
+    <td class="r">${r.viagens||0}</td>
+    <td class="r">${r.km_medio!=null?cpkFmtKm(r.km_medio):'—'}</td>
+    <td class="r">${cpkFmtKm(r.km_total)}</td>
+    <td class="r">${cpkFmt(r.faturamento)}</td>
+    <td class="r">${cpkFmt(r.receita_km,'R$ ',4)}</td>
+    <td class="r">${r.cpk_total!=null?cpkFmt(r.cpk_total,'R$ ',4):'⚠ Ins.'}</td>
+    <td class="r" style="color:${r.margem_km!=null?(r.margem_km>=0?'var(--gn)':'var(--rd)'):'var(--mu)'}">${cpkFmt(r.margem_km,'R$ ',4)}</td>
+    <td class="r" style="color:${r.margem_pct!=null?(r.margem_pct>=0?'var(--gn)':'var(--rd)'):'var(--mu)'}">${r.margem_pct!=null?r.margem_pct.toFixed(1)+'%':'—'}</td>
+    <td>${r.tem_km?'<span class="bdg bdg-gn">Sim</span>':'<span class="bdg bdg-rd">Não</span>'}</td>
+    <td><button class="btn-icon" onclick="cpkOpenKmRota('${encodeURIComponent(JSON.stringify({rota:r.rota||'',orig:r.localColeta||'',ufOrig:r.ufOrigem||'',dest:r.localEntreg||'',ufDest:r.ufDestino||'',cli:r.cliente||'',tipo:r.tipoFrete||''}))}')" title="Cadastrar KM">📏</button></td>
+  </tr>`).join('');
+}
+
+function cpkRenderViagemTable() {
+  const tbody = document.querySelector('#tbl-viagem tbody');
+  if (!tbody) return;
+  const data = CPK.filteredViagem.slice(0, 500); // limita paginação
+  if (!data.length) { tbody.innerHTML = `<tr><td colspan="14" style="text-align:center;color:var(--mu);padding:16px">— Sem dados —</td></tr>`; return; }
+  tbody.innerHTML = data.map(v => {
+    const cpk = v.km > 0 && v.custo_total > 0 ? v.custo_total/v.km : null;
+    const recKm = v.km > 0 ? v.valorTotal/v.km : null;
+    const margKm = cpk != null && recKm != null ? recKm - cpk : null;
+    return `<tr>
+      <td class="mono">${v.dtEmissao||'—'}</td>
+      <td class="mono">${v.placa||'—'}</td>
+      <td>${cpkAbrev(v.motorista||'—',16)}</td>
+      <td title="${v.cliente||''}">${cpkAbrev(v.cliente||'—',18)}</td>
+      <td>${cpkAbrev(v.rota||v.rotaKey||'—',15)}</td>
+      <td>${cpkAbrev(v.localColeta||'—',12)}</td>
+      <td>${cpkAbrev(v.localEntreg||'—',12)}</td>
+      <td class="r">${v.km > 0 ? cpkFmtKm(v.km) : '<span class="bdg bdg-am">Pendente</span>'}</td>
+      <td class="r">${cpkFmt(v.valorTotal)}</td>
+      <td class="r">${v.custo_total > 0 ? cpkFmt(v.custo_total) : '—'}</td>
+      <td class="r">${cpk != null ? cpkFmt(cpk,'R$ ',4) : '—'}</td>
+      <td class="r">${recKm != null ? cpkFmt(recKm,'R$ ',4) : '—'}</td>
+      <td class="r" style="color:${margKm!=null?(margKm>=0?'var(--gn)':'var(--rd)'):'var(--mu)'}">${margKm != null ? cpkFmt(margKm,'R$ ',4) : '—'}</td>
+      <td><span class="bdg ${v.km > 0 ? 'bdg-gn' : 'bdg-am'}">${v.km > 0 ? 'OK' : 'S/ KM'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── RENDER: CLIENTES ───
+function cpkRenderClientAnalysis() {
+  CPK.filteredCliente = [...(CPK.aggCliente||[])].sort((a,b) => (b.faturamento||0) - (a.faturamento||0));
+  const tbody = document.querySelector('#tbl-cliente tbody');
+  const count = document.getElementById('cli-count');
+  if (count) count.textContent = CPK.filteredCliente.length + ' clientes';
+  if (!tbody) return;
+  const data = CPK.filteredCliente;
+  if (!data.length) { tbody.innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--mu);padding:16px">— Sem dados —</td></tr>`; return; }
+  tbody.innerHTML = data.map(c => {
+    const alertas = [];
+    if (c.margem_pct != null && c.margem_pct < 0) alertas.push('<span class="bdg bdg-rd">Margem neg.</span>');
+    if (c.faturamento > 100000 && (c.margem_pct||100) < 5) alertas.push('<span class="bdg bdg-am">Fat. alto baixa marg.</span>');
+    if (c.sem_km > 0) alertas.push(`<span class="bdg bdg-mu">${c.sem_km} s/KM</span>`);
+    return `<tr onclick="cpkOpenDetailModal('cliente','${encodeURIComponent(c.nome||'')}')">
+      <td title="${c.nome||''}">${cpkAbrev(c.nome||'—',25)}</td>
+      <td>${c.tipo_frete||'—'}</td><td>${c.unidade||'—'}</td>
+      <td class="r">${c.viagens||0}</td>
+      <td class="r">${cpkFmtKm(c.km_total)}</td>
+      <td class="r">${cpkFmt(c.faturamento)}</td>
+      <td class="r">${cpkFmt(c.receita_km,'R$ ',4)}</td>
+      <td class="r">${c.cpk_total!=null?cpkFmt(c.cpk_total,'R$ ',4):'⚠ Ins.'}</td>
+      <td class="r" style="color:${c.margem_km!=null?(c.margem_km>=0?'var(--gn)':'var(--rd)'):'var(--mu)'}">${cpkFmt(c.margem_km,'R$ ',4)}</td>
+      <td class="r" style="color:${c.margem_pct!=null?(c.margem_pct>=0?'var(--gn)':'var(--rd)'):'var(--mu)'}">${c.margem_pct!=null?c.margem_pct.toFixed(1)+'%':'—'}</td>
+      <td class="r">${c.markup!=null?c.markup.toFixed(1)+'%':'—'}</td>
+      <td>${alertas.join(' ')||'<span class="bdg bdg-gn">OK</span>'}</td>
+      <td><button class="btn-icon" onclick="event.stopPropagation();cpkOpenDetailModal('cliente','${encodeURIComponent(c.nome||'')}')">🔍</button></td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── RENDER: CUSTOS ───
+function cpkRenderCosts() {
+  CPK.filteredCustos = [...CPK.custos];
+  const tbody = document.getElementById('tbl-custos-body');
+  const count = document.getElementById('custos-count');
+  if (count) count.textContent = CPK.filteredCustos.length + ' lançamentos';
+  const acoesHeader = document.getElementById('custos-acoes-th');
+  if (acoesHeader) acoesHeader.style.display = CPK.isAdmin ? '' : 'none';
+  if (!tbody) return;
+  if (!CPK.custosLoaded) { tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--mu);padding:16px">Carregando…</td></tr>`; return; }
+  if (!CPK.filteredCustos.length) {
+    tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--mu);padding:16px">
+      ${CPK.isAdmin ? 'Nenhum lançamento. Clique em "+ Lançamento" para adicionar custos.' : 'Nenhum lançamento de custo para o período.'}
+    </td></tr>`;
+    return;
+  }
+  tbody.innerHTML = CPK.filteredCustos.map(c => {
+    const oriMap = {manual:'Manual',se2:'SE2',se5:'SE5',os:'OS',estimado:'Estimado'};
+    return `<tr>
+      <td class="mono">${c.mes||'—'}</td>
+      <td>${c.unidade||'—'}</td>
+      <td class="mono">${c.placa||'—'}</td>
+      <td class="mono">${c.frota||'—'}</td>
+      <td>${c.categoria||'—'}</td>
+      <td class="r">${cpkFmt(cpkNum(c.valor))}</td>
+      <td>${c.forma_rateio||'—'}</td>
+      <td><span class="bdg ${c.origem==='manual'?'bdg-am':c.origem==='estimado'?'bdg-pu':'bdg-ac'}">${oriMap[c.origem]||c.origem||'—'}</span></td>
+      <td title="${c.obs||''}">${cpkAbrev(c.obs||'—',20)}</td>
+      <td style="font-size:10px;color:var(--mu)">${c.createdBy||'—'}</td>
+      ${CPK.isAdmin?`<td><button class="btn-icon" onclick="cpkEditCusto('${c._id||''}')">✏</button> <button class="btn-icon" style="color:var(--rd)" onclick="cpkDeleteCusto('${c._id||''}')">🗑</button></td>`:''}
+    </tr>`;
+  }).join('');
+}
+
+// ─── RENDER: RANKINGS ───
+function cpkRenderRankings() {
+  const grid = document.getElementById('rankings-grid');
+  if (!grid) return;
+  const placas = CPK.aggPlaca || [];
+  const rotas = CPK.aggRota || [];
+  const clientes = CPK.aggCliente || [];
+  const unidades = CPK.aggUnidade || [];
+
+  function rankBox(title, items, valFn, labelFn, colorFn, maxN=10) {
+    if (!items.length) return `<div class="cpk-tw"><div class="cpk-th3"><span class="cpk-tt">${title}</span></div><div style="padding:12px;color:var(--mu);font-size:11px">— Sem dados —</div></div>`;
+    const max = Math.max(...items.slice(0,maxN).map(i => Math.abs(valFn(i)||0))) || 1;
+    return `<div class="cpk-tw">
+      <div class="cpk-th3"><span class="cpk-tt">${title}</span></div>
+      <div style="padding:8px 10px">
+        <ul class="rank-list">
+          ${items.slice(0,maxN).map((item,i) => {
+            const v = valFn(item);
+            const pct = max > 0 ? Math.abs(v||0)/max*100 : 0;
+            return `<li class="rank-item">
+              <span class="rank-pos">${i+1}</span>
+              <span class="rank-name" title="${labelFn(item)}">${cpkAbrev(labelFn(item),20)}</span>
+              <div class="rank-bar-wrap"><div class="rank-bar" style="width:${pct}%;background:${colorFn(item,v)}"></div></div>
+              <span class="rank-val" style="color:${colorFn(item,v)}">${v!=null?cpkFmt(v,'R$ ',4):' — '}</span>
+            </li>`;
+          }).join('')}
+        </ul>
+      </div>
+    </div>`;
+  }
+
+  const pioresPlacas = [...placas].filter(p=>p.margem_km!=null).sort((a,b)=>(a.margem_km||0)-(b.margem_km||0)).slice(0,10);
+  const melhoresPlacas = [...placas].filter(p=>p.margem_km!=null).sort((a,b)=>(b.margem_km||0)-(a.margem_km||0)).slice(0,10);
+  const rotasCriticas = [...rotas].filter(r=>r.margem_km!=null).sort((a,b)=>(a.margem_km||0)-(b.margem_km||0)).slice(0,10);
+  const rotasMelhores = [...rotas].filter(r=>r.margem_km!=null).sort((a,b)=>(b.margem_km||0)-(a.margem_km||0)).slice(0,10);
+  const cliRentaveis = [...clientes].filter(c=>c.margem_pct!=null).sort((a,b)=>(b.margem_pct||0)-(a.margem_pct||0)).slice(0,10);
+  const cliFatBaixoMarg = [...clientes].filter(c=>c.faturamento>50000).sort((a,b)=>(a.margem_pct||0)-(b.margem_pct||0)).slice(0,10);
+  const semKm = [...rotas].filter(r=>!r.tem_km).slice(0,10);
+
+  grid.innerHTML = [
+    rankBox('🔴 Piores Placas (Marg./km)', pioresPlacas, p=>p.margem_km, p=>p.placa+' · '+p.frota, (p,v)=>v>=0?'var(--gn)':'var(--rd)'),
+    rankBox('🟢 Melhores Placas (Marg./km)', melhoresPlacas, p=>p.margem_km, p=>p.placa+' · '+p.frota, ()=>'var(--gn)'),
+    rankBox('🔴 Rotas Críticas (Marg./km)', rotasCriticas, r=>r.margem_km, r=>r.rota||r.localColeta+'→'+r.localEntreg, (r,v)=>v>=0?'var(--gn)':'var(--rd)'),
+    rankBox('🟢 Rotas Rentáveis', rotasMelhores, r=>r.margem_km, r=>r.rota||r.localColeta+'→'+r.localEntreg, ()=>'var(--gn)'),
+    rankBox('🌟 Clientes Rentáveis (%Marg)', cliRentaveis, c=>c.margem_pct, c=>c.nome||'—', (c,v)=>v>=10?'var(--gn)':v>=0?'var(--am)':'var(--rd)'),
+    rankBox('⚠ Clientes Alto Fat. Baixa Marg.', cliFatBaixoMarg, c=>c.margem_pct, c=>c.nome||'—', (c,v)=>v>=0?'var(--am)':'var(--rd)'),
+  ].join('');
+
+  if (semKm.length) {
+    grid.innerHTML += `<div class="cpk-tw" style="grid-column:1/-1">
+      <div class="cpk-th3"><span class="cpk-tt">⚠ Rotas sem KM Cadastrado (${semKm.length})</span></div>
+      <div style="padding:8px 10px;display:flex;flex-wrap:wrap;gap:5px">
+        ${semKm.map(r => `<span class="bdg bdg-am" style="cursor:pointer" onclick="cpkOpenKmRota('${encodeURIComponent(JSON.stringify({rota:r.rota||'',orig:r.localColeta||'',ufOrig:r.ufOrigem||'',dest:r.localEntreg||'',ufDest:r.ufDestino||'',cli:r.cliente||'',tipo:r.tipoFrete||''}))}')">${cpkAbrev(r.rota||r.localColeta+'→'+r.localEntreg,25)} 📏</span>`).join('')}
+      </div>
+    </div>`;
+  }
+}
+
+// ─── RENDER: PARÂMETROS ───
+function cpkRenderParams() {
+  const el = document.getElementById('params-content');
+  if (!el) return;
+  const p = CPK.params;
+  const isAdmin = CPK.isAdmin;
+  el.innerHTML = `
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+    <!-- DIESEL -->
+    <div class="cpk-form">
+      <h3>⛽ Diesel e Rendimento</h3>
+      <div class="form-grid">
+        <div class="form-field"><label>Preço Diesel Padrão (R$/L)</label>
+          <input type="number" id="p-diesel" step="0.001" value="${p.diesel_padrao||5.5}" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Diesel SC (R$/L)</label>
+          <input type="number" id="p-diesel-sc" step="0.001" value="${p.diesel_sc||''}" placeholder="Padrão" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Diesel PR (R$/L)</label>
+          <input type="number" id="p-diesel-pr" step="0.001" value="${p.diesel_pr||''}" placeholder="Padrão" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Diesel SP (R$/L)</label>
+          <input type="number" id="p-diesel-sp" step="0.001" value="${p.diesel_sp||''}" placeholder="Padrão" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Rendimento Padrão (km/L)</label>
+          <input type="number" id="p-rend" step="0.01" value="${p.rendimento_padrao||2.5}" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Rendimento Cavalo 4x2 (km/L)</label>
+          <input type="number" id="p-rend-4x2" step="0.01" value="${p.rendimento_4x2||''}" placeholder="${p.rendimento_padrao||2.5}" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Rendimento Cavalo 6x4 (km/L)</label>
+          <input type="number" id="p-rend-6x4" step="0.01" value="${p.rendimento_6x4||''}" placeholder="${p.rendimento_padrao||2.5}" ${isAdmin?'':'readonly'}></div>
+      </div>
+      ${isAdmin ? `<div class="form-actions"><button class="btn-save" onclick="cpkSaveParams('diesel')">Salvar Diesel/Rendimento</button></div>` : `<div class="cpk-info" style="margin-top:8px">👁 Apenas admin pode editar parâmetros.</div>`}
+    </div>
+
+    <!-- METAS E ALERTAS -->
+    <div class="cpk-form">
+      <h3>🎯 Metas e Alertas</h3>
+      <div class="form-grid">
+        <div class="form-field"><label>Meta CPK (R$/km)</label>
+          <input type="number" id="p-meta-cpk" step="0.01" value="${p.meta_cpk||5.0}" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Meta Margem/km (R$/km)</label>
+          <input type="number" id="p-meta-marg" step="0.01" value="${p.meta_margem_km||0}" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Meta Markup (%)</label>
+          <input type="number" id="p-meta-mk" step="0.1" value="${p.meta_markup||0}" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Alerta ATENÇÃO — CPK acima de</label>
+          <input type="number" id="p-alerta-at" step="0.01" value="${p.alerta_atencao||4.5}" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Alerta CRÍTICO — CPK acima de</label>
+          <input type="number" id="p-alerta-cr" step="0.01" value="${p.alerta_critico||5.5}" ${isAdmin?'':'readonly'}></div>
+        <div class="form-field"><label>Forma de Rateio Padrão</label>
+          <select id="p-rateio" ${isAdmin?'':'disabled'}>
+            <option value="km" ${(p.rateio_padrao||'km')==='km'?'selected':''}>Por KM</option>
+            <option value="placa" ${p.rateio_padrao==='placa'?'selected':''}>Por Placa</option>
+            <option value="faturamento" ${p.rateio_padrao==='faturamento'?'selected':''}>Por Faturamento</option>
+          </select></div>
+      </div>
+      ${isAdmin ? `<div class="form-actions"><button class="btn-save" onclick="cpkSaveParams('metas')">Salvar Metas/Alertas</button></div>` : ''}
+    </div>
+
+    <!-- KM ROTAS CADASTRADAS -->
+    <div class="cpk-form" style="grid-column:1/-1">
+      <h3>📏 KM de Rotas Cadastradas (${CPK.kmRotas.length})</h3>
+      <div style="overflow-x:auto">
+        <table class="dt">
+          <thead><tr><th>Rota</th><th>Origem</th><th>UF</th><th>Destino</th><th>UF</th><th>Cliente</th><th>T.Frete</th><th>KM</th><th>Obs.</th>${isAdmin?'<th>Ação</th>':''}</tr></thead>
+          <tbody>
+            ${CPK.kmRotas.length ? CPK.kmRotas.map(k => `<tr>
+              <td class="mono">${k.rota||'—'}</td>
+              <td>${k.origem||'—'}</td><td>${k.uf_origem||'—'}</td>
+              <td>${k.destino||'—'}</td><td>${k.uf_destino||'—'}</td>
+              <td>${cpkAbrev(k.cliente||'—',18)}</td>
+              <td>${k.tipo_frete||'—'}</td>
+              <td class="r"><strong>${cpkFmtKm(cpkNum(k.km))}</strong></td>
+              <td>${cpkAbrev(k.obs||'—',20)}</td>
+              ${isAdmin?`<td><button class="btn-icon" onclick="cpkOpenKmRota('${encodeURIComponent(JSON.stringify({rota:k.rota||'',orig:k.origem||'',ufOrig:k.uf_origem||'',dest:k.destino||'',ufDest:k.uf_destino||'',cli:k.cliente||'',tipo:k.tipo_frete||'',km:k.km,id:k._id||''}))}')" title="Editar">✏</button></td>`:''}
+            </tr>`).join('') : `<tr><td colspan="${isAdmin?10:9}" style="text-align:center;color:var(--mu);padding:12px">Nenhuma rota cadastrada. Use o botão "📏" nas tabelas de rota para cadastrar.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── RENDER: DIAGNÓSTICO ───
+function cpkRenderDiagnostics() {
+  const grid = document.getElementById('diag-grid');
+  const issuesList = document.getElementById('diag-issues-list');
+  if (!grid) return;
+  const d = CPK.diag || {};
+  const bases = d.bases || {};
+
+  function diagCard(lbl, val, sub, cls) {
+    return `<div class="diag-item ${cls||''}">
+      <div class="diag-lbl">${lbl}</div>
+      <div class="diag-val">${val}</div>
+      <div class="diag-sub">${sub||''}</div>
+    </div>`;
+  }
+
+  grid.innerHTML = [
+    diagCard('Registros SZB', (d.total_registros||0).toLocaleString('pt-BR'), 'Total carregado', bases.szb?'ok':'err'),
+    diagCard('Ativos (sem cancel.)', (d.ativos||0).toLocaleString('pt-BR'), d.cancelados+' cancelados ignorados', 'ok'),
+    diagCard('Sem Placa', d.sem_placa||0, 'Registros sem identificação', (d.sem_placa||0)>0?'warn':'ok'),
+    diagCard('Sem KM', (d.sem_km||0).toLocaleString('pt-BR'), (d.pct_sem_km||0).toFixed(1)+'% das viagens', (d.sem_km||0)>0?'warn':'ok'),
+    diagCard('Fat. s/ KM', cpkFmt(d.fat_sem_km||0), (d.pct_fat_sem_km||0).toFixed(1)+'% do faturamento', (d.pct_fat_sem_km||0)>30?'warn':'ok'),
+    diagCard('Placas não cadastradas', (d.placas_nao_cadastradas||[]).length, 'Constam no SZB mas não na Frota', (d.placas_nao_cadastradas||[]).length>0?'warn':'ok'),
+    diagCard('Rotas sem KM', (d.rotas_sem_km||[]).length, 'Cadastre na aba Parâmetros', (d.rotas_sem_km||[]).length>0?'warn':'ok'),
+    diagCard('Custos sem Placa', d.custos_sem_placa||0, 'Rateados proporcionalmente', (d.custos_sem_placa||0)>0?'warn':'ok'),
+    diagCard('Base SZB', bases.szb?'✓ Disponível':'✗ Indisponível', 'Fonte: Download Base', bases.szb?'ok':'err'),
+    diagCard('Base Frota', bases.frota?'✓ Disponível':'✗ Indisponível', 'Fonte: Firestore/veiculos', bases.frota?'ok':'err'),
+    diagCard('Custos CPK', bases.custos?(CPK.custos.length+' lançamentos'):'Indisponível', 'Fonte: Firestore/cpk_lancamentos', bases.custos?'ok':'err'),
+    diagCard('KM Rotas', CPK.kmRotas.length+' rotas', 'Fonte: cpk_km_rotas', CPK.kmRotas.length>0?'ok':'warn'),
+  ].join('');
+
+  if (!issuesList) return;
+  const issues = [];
+  if (!bases.szb) issues.push({cls:'err', msg:'SZB não carregado. Acesse Download Base e importe o arquivo SZB_CONTROLE_FRETE.xlsm.'});
+  if ((d.pct_sem_km||0) > 80) issues.push({cls:'err', msg:`${(d.pct_sem_km||0).toFixed(0)}% das viagens sem KM. CPK não pode ser calculado com precisão. Cadastre KMs das rotas.`});
+  else if ((d.pct_sem_km||0) > 30) issues.push({cls:'warn', msg:`${(d.pct_sem_km||0).toFixed(0)}% das viagens sem KM. Resultado do CPK parcial.`});
+  (d.placas_nao_cadastradas||[]).slice(0,5).forEach(p => issues.push({cls:'warn', msg:`Placa ${p} está no SZB mas não cadastrada na Frota.`}));
+  (d.rotas_sem_km||[]).slice(0,5).forEach(r => issues.push({cls:'warn', msg:`Rota "${r}" sem KM cadastrado.`}));
+  if (!CPK.custos.length) issues.push({cls:'warn', msg:'Nenhum custo lançado. CPK combustível está sendo estimado por diesel/rendimento.'});
+  if (cpkNum(CPK.params.diesel_padrao) === 0) issues.push({cls:'err', msg:'Preço do diesel não configurado. Configure na aba Parâmetros.'});
+
+  issuesList.innerHTML = issues.length ? issues.map(i => `<div class="cpk-${i.cls==='err'?'err':'nd'}" style="margin-bottom:6px">
+    <span>${i.cls==='err'?'❌':'⚠️'}</span><span>${i.msg}</span></div>`).join('') :
+    `<div class="cpk-info">✅ Nenhuma pendência crítica encontrada.</div>`;
+}
+
+// ─── TABS ───
+function cpkGoTab(tabId, el) {
+  document.querySelectorAll('.cpk-tab[data-tab]').forEach(t => t.classList.toggle('on', t.dataset.tab === tabId));
+  document.querySelectorAll('.cpk-pane').forEach(p => p.classList.remove('on'));
+  const pane = document.getElementById('pane-' + tabId);
+  if (pane) pane.classList.add('on');
+  if (tabId === 'params') cpkRenderParams();
+  if (tabId === 'rankings') cpkRenderRankings();
+}
+
+function cpkGoSubTab(parentTab, subId, el) {
+  const parent = document.getElementById('pane-' + parentTab);
+  if (!parent) return;
+  parent.querySelectorAll('.cpk-tab[data-subtab]').forEach(t => t.classList.toggle('on', t.dataset.subtab === subId.split('-').pop()));
+  parent.querySelectorAll('[id^="subtab-' + parentTab + '-"]').forEach(p => p.style.display = 'none');
+  const sub = document.getElementById('subtab-' + parentTab + '-' + subId.split('-').pop());
+  if (sub) sub.style.display = '';
+}
+
+// ─── FILTER TABLE ───
+function cpkFilterTable(type) {
+  const q = cpkNormStr(document.getElementById(type+'-search')?.value || '');
+  if (type === 'placa') {
+    CPK.filteredPlaca = q ? (CPK.aggPlaca||[]).filter(p => [p.placa,p.frota,p.motorista,p.unidade].some(s=>cpkNormStr(s).includes(q))) : [...(CPK.aggPlaca||[])];
+    cpkSortAndRenderPlaca();
+  }
+  if (type === 'rota') {
+    CPK.filteredRota = q ? (CPK.aggRota||[]).filter(r => [r.rota,r.localColeta,r.localEntreg,r.cliente,r.tipoFrete].some(s=>cpkNormStr(s).includes(q))) : [...(CPK.aggRota||[])];
+    cpkRenderRotaTable();
+  }
+  if (type === 'viagem') {
+    CPK.filteredViagem = q ? (CPK.viagens||[]).filter(v => [v.placa,v.motorista,v.cliente,v.rota,v.localColeta,v.localEntreg].some(s=>cpkNormStr(s).includes(q))) : [...(CPK.viagens||[])];
+    cpkRenderViagemTable();
+  }
+  if (type === 'cliente') {
+    CPK.filteredCliente = q ? (CPK.aggCliente||[]).filter(c => cpkNormStr(c.nome||'').includes(q)) : [...(CPK.aggCliente||[])];
+    const tbody = document.querySelector('#tbl-cliente tbody');
+    if (tbody) cpkRenderClientAnalysis();
+  }
+  if (type === 'custos') {
+    CPK.filteredCustos = q ? CPK.custos.filter(c => [c.mes,c.placa,c.frota,c.categoria,c.unidade,c.obs].some(s=>cpkNormStr(s).includes(q))) : [...CPK.custos];
+    cpkRenderCosts();
+  }
+}
+
+// ─── SORT ───
+function cpkSort(type, field) {
+  const key = type+'_'+field;
+  const cur = CPK.sorts[key];
+  const dir = cur === 'asc' ? 'desc' : 'asc';
+  CPK.sorts[key] = dir;
+  // Update header classes
+  document.querySelectorAll(`#tbl-${type} th`).forEach(th => {
+    th.classList.remove('sorted-asc','sorted-desc');
+    if (th.getAttribute('onclick') && th.getAttribute('onclick').includes("'"+field+"'")) {
+      th.classList.add('sorted-' + dir);
+    }
+  });
+  function sortArr(arr) {
+    return [...arr].sort((a,b) => {
+      let va = a[field], vb = b[field];
+      if (va == null) va = dir==='asc' ? Infinity : -Infinity;
+      if (vb == null) vb = dir==='asc' ? Infinity : -Infinity;
+      if (typeof va === 'string') return dir==='asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+      return dir==='asc' ? va-vb : vb-va;
+    });
+  }
+  if (type === 'placa') { CPK.filteredPlaca = sortArr(CPK.filteredPlaca); cpkSortAndRenderPlaca(); }
+  if (type === 'rota') { CPK.filteredRota = sortArr(CPK.filteredRota); cpkRenderRotaTable(); }
+  if (type === 'cliente') { CPK.filteredCliente = sortArr(CPK.filteredCliente); cpkRenderClientAnalysis(); }
+}
+
+// ─── MODAIS ───
+function cpkOpenModal(id) { document.getElementById(id).classList.add('open'); }
+function cpkCloseModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function cpkOpenDetailModal(type, key) {
+  const title = document.getElementById('modal-detalhe-title');
+  const body = document.getElementById('modal-detalhe-body');
+  if (!title || !body) return;
+  let item = null;
+  if (type === 'placa') item = CPK.aggPlaca.find(p => p.placa === key);
+  if (type === 'cliente') item = CPK.aggCliente.find(c => encodeURIComponent(c.nome||'') === key);
+  if (!item) return;
+  title.textContent = (type === 'placa' ? '🚛 Placa ' : '👥 Cliente ') + (item.placa || item.nome || key);
+  function row(lbl, val) { return `<div class="detail-row"><span class="detail-lbl">${lbl}</span><span class="detail-val">${val}</span></div>`; }
+  function sec(lbl) { return `<div class="detail-section">${lbl}</div>`; }
+  let html = '';
+  if (type === 'placa') {
+    const veic = CPK.frota.find(v => v.placa === item.placa);
+    html += sec('Identificação');
+    html += row('Placa', item.placa||'—') + row('Frota', item.frota||'—') + row('Motorista', item.motorista||'—');
+    html += row('Unidade', item.unidade||'—') + row('Vínculo', item.vinculo==='CP'?'Frota Própria':'Agregado');
+    if (veic) html += row('Modelo', veic.modelo||'—') + row('Categoria', veic.categoria||'—') + row('Status', veic.disponibilidade||'—');
+    html += sec('Operação');
+    html += row('Viagens', item.viagens||0) + row('KM Total', cpkFmtKm(item.km_total)) + row('Faturamento', cpkFmt(item.faturamento));
+    html += sec('CPK e Margem');
+    html += row('Receita/km', cpkFmt(item.receita_km,'R$ ',4));
+    html += row('CPK Combustível', item.cpk_comb!=null?cpkFmt(item.cpk_comb,'R$ ',4):'Estimado');
+    html += row('CPK Manutenção', item.cpk_manut!=null?cpkFmt(item.cpk_manut,'R$ ',4):'—');
+    html += row('CPK Pneus', item.cpk_pneus!=null?cpkFmt(item.cpk_pneus,'R$ ',4):'—');
+    html += row('CPK Outros', item.cpk_outros!=null?cpkFmt(item.cpk_outros,'R$ ',4):'—');
+    html += row('CPK Total', `<strong>${item.cpk_total!=null?cpkFmt(item.cpk_total,'R$ ',4):'Dados insuficientes'}</strong>`);
+    html += row('Margem/km', `<strong style="color:${(item.margem_km||0)>=0?'var(--gn)':'var(--rd)'}">${cpkFmt(item.margem_km,'R$ ',4)}</strong>`);
+    html += row('Margem %', item.margem_pct!=null?item.margem_pct.toFixed(2)+'%':'—');
+    html += row('Markup', item.markup!=null?item.markup.toFixed(1)+'%':'—');
+    html += row('Status', cpkStatusBadge(item.status));
+    const semKmViag = (CPK.viagens||[]).filter(v => v.placa === item.placa && v.km === 0).length;
+    if (semKmViag > 0) html += `<div class="cpk-nd" style="margin-top:8px"><span>⚠️</span><span>${semKmViag} viagens sem KM — CPK calculado sobre as demais.</span></div>`;
+  } else if (type === 'cliente') {
+    html += sec('Identificação');
+    html += row('Cliente', item.nome||'—') + row('Unidade', item.unidade||'—') + row('Tipo Frete', item.tipo_frete||'—');
+    html += sec('Operação');
+    html += row('Viagens', item.viagens||0) + row('KM Total', cpkFmtKm(item.km_total)) + row('Faturamento', cpkFmt(item.faturamento));
+    html += sec('CPK e Margem');
+    html += row('Receita/km', cpkFmt(item.receita_km,'R$ ',4));
+    html += row('CPK Total', item.cpk_total!=null?cpkFmt(item.cpk_total,'R$ ',4):'Dados insuficientes');
+    html += row('Margem/km', `<strong style="color:${(item.margem_km||0)>=0?'var(--gn)':'var(--rd)'}">${cpkFmt(item.margem_km,'R$ ',4)}</strong>`);
+    html += row('Margem %', item.margem_pct!=null?item.margem_pct.toFixed(2)+'%':'—');
+    html += row('Markup', item.markup!=null?item.markup.toFixed(1)+'%':'—');
+    if (item.sem_km > 0) html += `<div class="cpk-nd" style="margin-top:8px"><span>⚠️</span><span>${item.sem_km} viagens sem KM.</span></div>`;
+  }
+  body.innerHTML = html;
+  cpkOpenModal('modal-detalhe');
+}
+
+// ─── KM ROTA ───
+function cpkOpenKmRota(encodedJson) {
+  if (!CPK.isAdmin) { cpkToast('Apenas admin pode cadastrar KM.'); return; }
+  try {
+    const obj = JSON.parse(decodeURIComponent(encodedJson));
+    document.getElementById('km-rota-rota').value = obj.rota || '';
+    document.getElementById('km-rota-origem').value = obj.orig || '';
+    document.getElementById('km-rota-uf-orig').value = obj.ufOrig || '';
+    document.getElementById('km-rota-destino').value = obj.dest || '';
+    document.getElementById('km-rota-uf-dest').value = obj.ufDest || '';
+    document.getElementById('km-rota-cliente').value = obj.cli || '';
+    document.getElementById('km-rota-tipo').value = obj.tipo || '';
+    document.getElementById('km-rota-km').value = obj.km || '';
+    document.getElementById('km-rota-obs').value = '';
+    document.getElementById('km-rota-km').dataset.editId = obj.id || '';
+  } catch(e) {}
+  cpkOpenModal('modal-km-rota');
+}
+
+async function cpkSaveKmRota() {
+  if (!CPK.isAdmin) return;
+  const rota = document.getElementById('km-rota-rota').value.trim();
+  const orig = document.getElementById('km-rota-origem').value.trim();
+  const dest = document.getElementById('km-rota-destino').value.trim();
+  const km = cpkNum(document.getElementById('km-rota-km').value);
+  if (km <= 0) { cpkToast('KM inválido.'); return; }
+  const btn = document.querySelector('#modal-km-rota .btn-save');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+  try {
+    const editId = document.getElementById('km-rota-km').dataset.editId;
+    const docId = editId || 'rota_' + Date.now();
+    const data = {
+      rota: rota || (orig + '→' + dest),
+      origem: orig,
+      uf_origem: document.getElementById('km-rota-uf-orig').value.trim(),
+      destino: dest,
+      uf_destino: document.getElementById('km-rota-uf-dest').value.trim(),
+      cliente: document.getElementById('km-rota-cliente').value.trim(),
+      tipo_frete: document.getElementById('km-rota-tipo').value.trim(),
+      km: km,
+      obs: document.getElementById('km-rota-obs').value.trim(),
+      updatedAt: new Date().toISOString(),
+      updatedBy: CPK.user?.email || '—'
+    };
+    if (!editId) { data.createdAt = new Date().toISOString(); data.createdBy = CPK.user?.email || '—'; }
+    await cpkFirestoreSet('cpk_km_rotas', docId, data);
+    cpkToast('KM salvo com sucesso!');
+    cpkCloseModal('modal-km-rota');
+    await cpkLoadKmRotas();
+    cpkApplyFilters();
+  } catch(e) {
+    cpkToast('Erro: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Salvar KM';
+  }
+}
+
+// ─── CUSTO MANUAL ───
+function cpkOpenCustoForm() {
+  if (!CPK.isAdmin) { cpkToast('Apenas admin pode lançar custos.'); return; }
+  document.getElementById('modal-custo-title').textContent = 'Novo Lançamento de Custo';
+  document.getElementById('c-edit-id').value = '';
+  document.getElementById('c-mes').value = document.getElementById('f-mes').value || '';
+  document.getElementById('c-unidade').value = '';
+  document.getElementById('c-placa').value = '';
+  document.getElementById('c-frota').value = '';
+  document.getElementById('c-categoria').value = '';
+  document.getElementById('c-valor').value = '';
+  document.getElementById('c-rateio').value = 'placa';
+  document.getElementById('c-origem').value = 'manual';
+  document.getElementById('c-obs').value = '';
+  cpkOpenModal('modal-custo');
+}
+
+function cpkEditCusto(id) {
+  if (!CPK.isAdmin) return;
+  const c = CPK.custos.find(x => x._id === id);
+  if (!c) return;
+  document.getElementById('modal-custo-title').textContent = 'Editar Lançamento';
+  document.getElementById('c-edit-id').value = id;
+  document.getElementById('c-mes').value = c.mes || '';
+  document.getElementById('c-unidade').value = c.unidade || '';
+  document.getElementById('c-placa').value = c.placa || '';
+  document.getElementById('c-frota').value = c.frota || '';
+  document.getElementById('c-categoria').value = c.categoria || '';
+  document.getElementById('c-valor').value = c.valor || '';
+  document.getElementById('c-rateio').value = c.forma_rateio || 'placa';
+  document.getElementById('c-origem').value = c.origem || 'manual';
+  document.getElementById('c-obs').value = c.obs || '';
+  cpkOpenModal('modal-custo');
+}
+
+async function cpkSaveCusto() {
+  if (!CPK.isAdmin) return;
+  const mes = document.getElementById('c-mes').value;
+  const unidade = document.getElementById('c-unidade').value;
+  const categoria = document.getElementById('c-categoria').value;
+  const valor = cpkNum(document.getElementById('c-valor').value);
+  if (!mes || !unidade || !categoria || valor <= 0) { cpkToast('Preencha: mês, unidade, categoria e valor.'); return; }
+  const btn = document.getElementById('c-save-btn');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+  try {
+    const editId = document.getElementById('c-edit-id').value;
+    const data = {
+      mes, unidade,
+      placa: cpkNormPlaca(document.getElementById('c-placa').value),
+      frota: document.getElementById('c-frota').value.trim().toUpperCase(),
+      categoria, valor,
+      forma_rateio: document.getElementById('c-rateio').value,
+      origem: document.getElementById('c-origem').value,
+      obs: document.getElementById('c-obs').value.trim(),
+      updatedAt: new Date().toISOString(),
+      updatedBy: CPK.user?.email || '—'
+    };
+    if (editId) {
+      await cpkFirestoreSet('cpk_lancamentos', editId, data);
+    } else {
+      data.createdAt = new Date().toISOString();
+      data.createdBy = CPK.user?.email || '—';
+      await cpkFirestoreAdd('cpk_lancamentos', data);
+    }
+    cpkToast('Lançamento salvo!');
+    cpkCloseModal('modal-custo');
+    await cpkLoadCustos();
+    cpkApplyFilters();
+  } catch(e) {
+    cpkToast('Erro: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Salvar Lançamento';
+  }
+}
+
+async function cpkDeleteCusto(id) {
+  if (!CPK.isAdmin) return;
+  if (!confirm('Excluir este lançamento?')) return;
+  try {
+    await cpkFirestoreDelete('cpk_lancamentos', id);
+    cpkToast('Lançamento excluído.');
+    await cpkLoadCustos();
+    cpkApplyFilters();
+  } catch(e) { cpkToast('Erro: ' + e.message); }
+}
+
+// ─── SALVAR PARAMS ───
+async function cpkSaveParams(section) {
+  if (!CPK.isAdmin) { cpkToast('Apenas admin.'); return; }
+  try {
+    let data = {};
+    if (section === 'diesel') {
+      data = {
+        diesel_padrao: cpkNum(document.getElementById('p-diesel')?.value) || 5.5,
+        diesel_sc: cpkNum(document.getElementById('p-diesel-sc')?.value) || null,
+        diesel_pr: cpkNum(document.getElementById('p-diesel-pr')?.value) || null,
+        diesel_sp: cpkNum(document.getElementById('p-diesel-sp')?.value) || null,
+        rendimento_padrao: cpkNum(document.getElementById('p-rend')?.value) || 2.5,
+        rendimento_4x2: cpkNum(document.getElementById('p-rend-4x2')?.value) || null,
+        rendimento_6x4: cpkNum(document.getElementById('p-rend-6x4')?.value) || null,
+      };
+    }
+    if (section === 'metas') {
+      data = {
+        meta_cpk: cpkNum(document.getElementById('p-meta-cpk')?.value) || 5.0,
+        meta_margem_km: cpkNum(document.getElementById('p-meta-marg')?.value) || 0,
+        meta_markup: cpkNum(document.getElementById('p-meta-mk')?.value) || 0,
+        alerta_atencao: cpkNum(document.getElementById('p-alerta-at')?.value) || 4.5,
+        alerta_critico: cpkNum(document.getElementById('p-alerta-cr')?.value) || 5.5,
+        rateio_padrao: document.getElementById('p-rateio')?.value || 'km',
+      };
+    }
+    data.updatedAt = new Date().toISOString();
+    data.updatedBy = CPK.user?.email || '—';
+    await cpkFirestoreSet('cpk_parametros', 'config', data);
+    CPK.params = {...CPK.params, ...data};
+    cpkToast('Parâmetros salvos!');
+    cpkApplyFilters();
+  } catch(e) {
+    cpkToast('Erro ao salvar: ' + e.message);
+  }
+}
+
+// ─── EXPORT ───
+function cpkExportData(type) {
+  const data = type === 'placa' ? CPK.aggPlaca :
+               type === 'rota' ? CPK.aggRota :
+               type === 'cliente' ? CPK.aggCliente : [];
+  if (!data.length) { cpkToast('Sem dados para exportar.'); return; }
+  const keys = Object.keys(data[0]).filter(k => !k.startsWith('_'));
+  const csv = [keys.join(';'), ...data.map(r => keys.map(k => {
+    let v = r[k] == null ? '' : r[k];
+    if (typeof v === 'number') v = v.toLocaleString('pt-BR');
+    return '"' + String(v).replace(/"/g,'""') + '"';
+  }).join(';'))].join('\n');
+  const blob = new Blob(['\ufeff' + csv], {type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url;
+  a.download = 'CPK_' + type + '_' + new Date().toISOString().slice(0,10) + '.csv';
+  a.click(); URL.revokeObjectURL(url);
+  cpkToast('Exportado!');
+}
+
+// ─── HELPERS UI ───
+function cpkAbrev(s, max=25) {
+  if (!s) return '—';
+  s = String(s);
+  return s.length > max ? s.slice(0,max-1)+'…' : s;
+}
+
+function cpkToast(msg, cls) {
+  const el = document.getElementById('cpk-toast');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'show ' + (cls||'');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ─── BOOT ───
+document.addEventListener('DOMContentLoaded', () => {
+  cpkInit();
+});
+
+window.cpkGoTab = cpkGoTab;
+window.cpkGoSubTab = cpkGoSubTab;
+window.cpkApplyFilters = cpkApplyFilters;
+window.cpkClearFilters = cpkClearFilters;
+window.cpkFilterTable = cpkFilterTable;
+window.cpkSort = cpkSort;
+window.cpkOpenDetailModal = cpkOpenDetailModal;
+window.cpkOpenKmRota = cpkOpenKmRota;
+window.cpkSaveKmRota = cpkSaveKmRota;
+window.cpkOpenCustoForm = cpkOpenCustoForm;
+window.cpkEditCusto = cpkEditCusto;
+window.cpkSaveCusto = cpkSaveCusto;
+window.cpkDeleteCusto = cpkDeleteCusto;
+window.cpkSaveParams = cpkSaveParams;
+window.cpkExportData = cpkExportData;
+window.cpkDoLogin = cpkDoLogin;
+window.cpkReload = cpkReload;
+window.cpkCloseModal = cpkCloseModal;
+</script>
+</body>
+</html>
