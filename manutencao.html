@@ -3699,6 +3699,7 @@ function osAnexarNF(osId, input) {
 async function finalizarOS(osId) {
   if (!APROV_DATA[osId]?.nfAnexada) { toast('Anexe a nota fiscal antes de finalizar.', 'am'); return; }
   const db = window._mntDB;
+  const placaOS = OS_DB[osId]?.veiculo || OS_DB[osId]?.placa || null;
   try {
     // Upload NF para Supabase Storage (mesma base dos canhotos)
     let nfUrl = null;
@@ -3712,7 +3713,10 @@ async function finalizarOS(osId) {
         finalizadoEm: new Date().toISOString(),
         nfUrl: nfUrl || null
       }, { merge: true });
+      if (OS_DB[osId]) OS_DB[osId].status = 'Concluída';
     }
+    // Verifica se placa ainda tem OS abertas; se não, remove da manutenção
+    if (placaOS) await removeManutencaoPlacaSeNaoHaOSAberta(placaOS);
     toast('OS-' + osId + ' finalizada com sucesso!', 'gn');
   } catch(err) {
     toast('OS finalizada com erro parcial: ' + err.message, 'am');
@@ -4018,14 +4022,50 @@ async function uploadOSFotoNuvem(file, osId) {
 async function setPlacaEmManutencao(placa) {
   if (!placa) return;
   try {
-    await atlasFsSetDoc('alocacao_frota_status', placa, {
+    // Grava na mesma coleção que o frota.html lê (alocacao_frota)
+    await atlasFsSetDoc('alocacao_frota', placa, {
+      cavalo_id: placa,
       placa,
       disponibilidade: 'manutencao',
       atualizadoEm: new Date(),
       origem: 'manutencao'
     }, { merge: true });
+    console.log('[Manutenção] Placa', placa, '→ manutencao gravado em alocacao_frota');
   } catch(err) {
     console.warn('[Manutenção] Não foi possível atualizar status da placa:', err.message);
+  }
+}
+
+/* Remove placa da manutenção quando não há mais OS abertas para ela */
+async function removeManutencaoPlacaSeNaoHaOSAberta(placa) {
+  if (!placa) return;
+  try {
+    // Verifica se ainda existe alguma OS não concluída para esta placa
+    const todas = Object.values(OS_DB || {});
+    const placaUp = String(placa).toUpperCase();
+    const temOSAberta = todas.some(os => {
+      const osPlaca = String(os.veiculo || os.placa || '').toUpperCase();
+      const concluida = String(os.status || '').toLowerCase().includes('conclu') ||
+                        String(os.status || '').toLowerCase().includes('cancel');
+      return osPlaca === placaUp && !concluida;
+    });
+
+    if (temOSAberta) {
+      console.log('[Manutenção] Placa', placa, 'ainda tem OS aberta — mantendo em manutenção');
+      return;
+    }
+
+    // Nenhuma OS aberta — restaura disponibilidade para operando
+    await atlasFsSetDoc('alocacao_frota', placa, {
+      cavalo_id: placa,
+      placa,
+      disponibilidade: 'operando',
+      atualizadoEm: new Date(),
+      origem: 'manutencao_finalizada'
+    }, { merge: true });
+    console.log('[Manutenção] Placa', placa, '→ operando (OS finalizada, sem OS abertas restantes)');
+  } catch(err) {
+    console.warn('[Manutenção] Não foi possível restaurar status da placa:', err.message);
   }
 }
 
@@ -4398,9 +4438,12 @@ async function salvarNFs() {
   try {
     await atlasFsSetDoc('ordens_servico', _currentOsId, updates, { merge: true });
     Object.assign(OS_DB[_currentOsId], updates);
+    // Após finalizar: verifica se a placa tem outras OS abertas; se não, remove da manutenção
+    const placaFinalizada = OS_DB[_currentOsId]?.veiculo || OS_DB[_currentOsId]?.placa;
     toast('OS ' + _currentOsId + ' finalizada com sucesso!', 'gn');
     closePanel();
     await loadOrdensServico();
+    if (placaFinalizada) await removeManutencaoPlacaSeNaoHaOSAberta(placaFinalizada);
   } catch(err) {
     toast('Erro ao finalizar OS: ' + err.message, 'rd');
   } finally {
