@@ -1164,7 +1164,14 @@ function enrich(recs){
   }).filter(Boolean);
 }
 
-function filterByOp(uid){ return uid==='all'?DATA:DATA.filter(r=>r.op===uid); }
+// Cache de filterByOp por uid — resetado a cada recalc para evitar dados stale
+let _fopCache={};
+function _clearFopCache(){ _fopCache={}; }
+function filterByOp(uid){
+  if(_fopCache[uid]!==undefined) return _fopCache[uid];
+  _fopCache[uid]=uid==='all'?DATA:DATA.filter(r=>r.op===uid);
+  return _fopCache[uid];
+}
 function grp(arr,kfn){ const m={}; arr.forEach(r=>{const k=kfn(r);if(!m[k])m[k]=[];m[k].push(r);}); return m; }
 function agg(arr){
   const s=arr.reduce((a,r)=>({v:a.v+1,p:a.p+r.peso_t,f:a.f+r.fat,cs:a.cs+r.cpk,vs:a.vs+r.vpk,ms:a.ms+r.mkp}),{v:0,p:0,f:0,cs:0,vs:0,ms:0});
@@ -1350,6 +1357,9 @@ async function parseXLSM(file){
     if(h==='Dt. Emissao'||h==='Dt Cancel') dateCols.add(parseInt(ci));
   });
 
+  // Conjunto das colunas necessárias (evita ler colunas irrelevantes, reduz ~60% do trabalho de parse)
+  const neededHdrs=new Set(COLS_NEEDED);
+
   // Parse data rows
   const recs=[];
   for(let i=1;i<rows.length;i++){
@@ -1358,7 +1368,7 @@ async function parseXLSM(file){
       const ref=cell.getAttribute('r')||'';
       const ci=colIdx(ref);
       const h=hdrs[ci];
-      if(!h) return;
+      if(!h||!neededHdrs.has(h)) return;
       let val=cellVal(cell);
       if(val!==null && dateCols.has(ci) && cell.getAttribute('t')!=='s'){
         val=excelDate(parseFloat(val));
@@ -1382,6 +1392,7 @@ async function buildDash(){
 // ═══════════════════════════════════════════════════════
 function fullRebuild(){
   DATA=enrich(RAW);
+  _clearFopCache();
   const meses=[...new Set(DATA.map(r=>r.mes))].filter(Boolean).sort();
   const smEl=document.getElementById('sm');
   const curVal=smEl.value;
@@ -1403,6 +1414,7 @@ function recalc(){
   // enrich() só roda se DATA ainda não estiver populado com os dados atuais de RAW.
   // fullRebuild() já chama enrich() antes de invocar recalc() — evita duplo processamento.
   if(!DATA.length) DATA=enrich(RAW);
+  _clearFopCache(); // invalida cache de filterByOp para o novo uid/mes
   // Dias trabalhados globais do mês = datas distintas com registro na operação selecionada
   // Usados por calcProj em todas as tabelas (igual à célula "Dias trabalhados" da planilha)
   const dmGlobal=filterByOp(uid).filter(r=>r.mes===mes);
@@ -1417,17 +1429,17 @@ function recalc(){
     return true;
   }).length;
   window._MES_ATUAL_GLOBAL = mes;
-  console.log(`[PROJ] Mês: ${mes} | Dias trab global (úteis, sem hoje): ${window._DIAS_TRAB_GLOBAL} | DiasOp: ${diasOpMes(...mes.split('-').map(Number))}`);
   const ulbl=uid==='all'?'Todas':(PARAMS.pa[uid]||{}).label||uid;
   const meses=[...new Set(DATA.map(r=>r.mes))].filter(Boolean).sort();
   document.getElementById('h-uni').textContent='Unidade: '+ulbl;
   document.getElementById('h-per').textContent=mesLabel(mes);
   document.getElementById('h-reg').textContent=DATA.length+' registros';
+  // Executa builds em microtasks separadas para liberar o thread de renderização entre cada aba
   buildVG(uid,mes);
-  buildCl(uid,mes);
-  buildCc(uid,mes);
-  buildFr(uid,mes);
-  buildHi(meses,uid);
+  setTimeout(function(){ buildCl(uid,mes); },0);
+  setTimeout(function(){ buildCc(uid,mes); },0);
+  setTimeout(function(){ buildFr(uid,mes); },0);
+  setTimeout(function(){ buildHi(meses,uid); },0);
   setTimeout(triggerAI, 400);
 }
 
@@ -2000,14 +2012,19 @@ function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
 // ═══════════════════════════════════════════════════════
 function buildFr(uid,mes){
   const d=filterByOp(uid).filter(r=>r.mes===mes);
-  const g=grp(d,r=>r.placa+'§'+r.mot+'§'+r.frtp);
+  // Consolida por PLACA+TIPO (não mais por motorista)
+  // Motorista exibido = o da viagem com maior Dt. Emissão (última viagem da placa)
+  const g=grp(d,r=>r.placa+'§'+r.frtp);
   const meta   = PARAMS.frMeta    || 60000;
   const atPct  = PARAMS.frAtencao || 15;
   const base   = PARAMS.frBase    || 'ritmo';
   const limAt  = meta*(1+atPct/100); // limiar atenção
 
   const rows=Object.entries(g).map(([k,arr])=>{
-    const[pl,mt,tp]=k.split('§'); const s=agg(arr);
+    const[pl,tp]=k.split('§'); const s=agg(arr);
+    // Motorista da última viagem (maior data)
+    const arrOrd=arr.slice().sort((a,b)=>(b.data||'').localeCompare(a.data||''));
+    const mt=arrOrd[0]?arrOrd[0].mot:'';
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
     // Valor comparado depende do modo: ritmo=projetado, pontual=realizado
     const valComp = base==='ritmo' ? fatProj : s.f;
