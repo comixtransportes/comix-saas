@@ -1586,6 +1586,46 @@ async function loadAllData() {
       }
     });
 
+    // ── INTEGRAÇÃO MANUTENÇÃO: cruza OS abertas e marca veículos automaticamente ──
+    // Qualquer veículo com OS não-concluída aparece na coluna "Em Manutenção"
+    try {
+      const _db = firebase.firestore();
+      const osSnap = await _db.collection("ordens_servico").get();
+      const placasEmManutencao = new Set();
+      const placasSemOSAberta  = new Set();
+
+      osSnap.docs.forEach(doc => {
+        const os = doc.data();
+        const placa = String(os.veiculo || os.placa || "").toUpperCase().trim();
+        if (!placa) return;
+        const concluida = /conclu|cancel/i.test(String(os.status || ""));
+        if (!concluida) {
+          placasEmManutencao.add(placa);
+        } else {
+          // só adiciona em "sem OS aberta" se não estiver também em aberta
+          if (!placasEmManutencao.has(placa)) placasSemOSAberta.add(placa);
+        }
+      });
+
+      // Remove da set "sem aberta" qualquer placa que ainda tem aberta
+      placasEmManutencao.forEach(p => placasSemOSAberta.delete(p));
+
+      STATE.veiculos.forEach(v => {
+        const placaUp = String(v.placa || v.id || "").toUpperCase().trim();
+        if (placasEmManutencao.has(placaUp)) {
+          // Força manutenção independente do que está salvo na alocação
+          v.disponibilidade = "manutencao";
+        } else if (placasSemOSAberta.has(placaUp) && v.disponibilidade === "manutencao") {
+          // OS finalizadas e a alocação ainda diz "manutencao" — restaura para operando
+          v.disponibilidade = "operando";
+        }
+      });
+
+      console.log("[Frota] OS cruzadas: " + placasEmManutencao.size + " placas em manutenção");
+    } catch(osErr) {
+      console.warn("[Frota] Não foi possível cruzar OS:", osErr.message);
+    }
+
     // Match motoristas com cavalos (por unidade — simplificação inicial)
     // No futuro, criar campo motorista_id direto em veiculos ou em alocacoes
     // Por enquanto: se a alocação tiver motorista_nome, usa
