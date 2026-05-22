@@ -3022,13 +3022,18 @@ function calcResumo() {
     return {
       cavalos_op: 0, frota_op: 0, agregado_op: 0,
       cavalos_disp: 0, cavalos_indisp: 0,
+      // Manutenção de cavalos (por vínculo)
+      cavalos_manut_frota: 0, cavalos_manut_agregado: 0,
       carretas: 0, carretas_op: 0, carretas_disp: 0,
       carretas_em_reforma: 0, carretas_a_reformar: 0, carretas_indisp: 0,
       compressores_op: 0, compressores_estoque: 0, compressores_manut: 0,
-      // Subtipos de carretas (op + disp)
+      // Subtipos de carretas (op + disp) — rodotrem e bitrem já divididos por 2 (conjuntos)
       sub_rodotrem: 0, sub_ls30: 0, sub_ls35: 0, sub_vanderleia: 0, sub_4eixo: 0, sub_bitrem: 0,
       // Subtipos disponíveis (não alocadas)
       disp_4eixo: 0, disp_ls30: 0, disp_ls35: 0, disp_vanderleia: 0, disp_rodotrem: 0, disp_bitrem: 0,
+      // Acumuladores brutos para rodotrem/bitrem (pré-divisão)
+      _raw_rodotrem: 0, _raw_bitrem: 0,
+      _raw_disp_rodotrem: 0, _raw_disp_bitrem: 0,
     };
   }
 
@@ -3058,6 +3063,16 @@ function calcResumo() {
     if (v.categoria === "cavalo") {
       if (d === "indisponivel" || d === "em_reforma" || d === "a_reformar") {
         if (unit && u[unit]) u[unit].cavalos_indisp++;
+      } else if (d === "manutencao") {
+        // Cavalos em manutenção — separados por vínculo
+        if (unit && u[unit]) {
+          if (v.vinculo === "AGREGADO") u[unit].cavalos_manut_agregado++;
+          else u[unit].cavalos_manut_frota++;
+          u[unit].cavalos_indisp++;
+        }
+        // Também conta em MANUT global
+        if (v.vinculo === "AGREGADO") u.MANUT.cavalos_manut_agregado++;
+        else u.MANUT.cavalos_manut_frota++;
       } else if (d === "disponivel") {
         if (unit && u[unit]) u[unit].cavalos_disp++;
       } else if (unit && u[unit]) {
@@ -3073,19 +3088,39 @@ function calcResumo() {
       else if (d === "disponivel" || d === "reserva") u[unit].carretas_disp++;
       else u[unit].carretas_op++;
 
-      // Subtipos
+      // Subtipos — rodotrem e bitrem acumulam em _raw (serão divididos por 2 após loop)
       const sub = classifySubtipo(v.subtipo);
       if (sub) {
-        const subKey = "sub_" + sub;
-        if (u[unit][subKey] != null) u[unit][subKey]++;
-        // Disponíveis = não está alocada em nenhum cavalo
-        if (!carretasUsadas.has(v.id) && d !== "indisponivel" && d !== "em_reforma" && d !== "a_reformar") {
-          const dispKey = "disp_" + sub;
-          if (u[unit][dispKey] != null) u[unit][dispKey]++;
+        if (sub === "rodotrem") {
+          u[unit]._raw_rodotrem++;
+          if (!carretasUsadas.has(v.id) && d !== "indisponivel" && d !== "em_reforma" && d !== "a_reformar") {
+            u[unit]._raw_disp_rodotrem++;
+          }
+        } else if (sub === "bitrem") {
+          u[unit]._raw_bitrem++;
+          if (!carretasUsadas.has(v.id) && d !== "indisponivel" && d !== "em_reforma" && d !== "a_reformar") {
+            u[unit]._raw_disp_bitrem++;
+          }
+        } else {
+          const subKey = "sub_" + sub;
+          if (u[unit][subKey] != null) u[unit][subKey]++;
+          if (!carretasUsadas.has(v.id) && d !== "indisponivel" && d !== "em_reforma" && d !== "a_reformar") {
+            const dispKey = "disp_" + sub;
+            if (u[unit][dispKey] != null) u[unit][dispKey]++;
+          }
         }
       }
     }
   });
+
+  // Rodotrem e Bitrem formam CONJUNTOS de 2 placas — divide por 2 (arredonda para baixo)
+  ["SC","SP","PR","MANUT"].forEach(uk => {
+    u[uk].sub_rodotrem  = Math.floor(u[uk]._raw_rodotrem / 2);
+    u[uk].sub_bitrem    = Math.floor(u[uk]._raw_bitrem / 2);
+    u[uk].disp_rodotrem = Math.floor(u[uk]._raw_disp_rodotrem / 2);
+    u[uk].disp_bitrem   = Math.floor(u[uk]._raw_disp_bitrem / 2);
+  });
+
   STATE.compressores.forEach(c => {
     const unit = normalizeUnitSlug(c.unidade);
     if (!unit || !u[unit]) return;
@@ -3194,17 +3229,38 @@ function renderDashboard() {
         ["Total Geral", totalDispSC, totalDispPR, totalDispSP, totalDispGeral])}
     </div>
 
-    <!-- Linha extra com reformas/disponíveis adicionais (que ficam embaixo na imagem) -->
+    <!-- Tabela Manutenção Cavalos Mecânicos -->
     <div class="dash-section" style="margin-top:14px">
-      <div class="dash-section-header">📋 Carretas — Status detalhado</div>
+      <div class="dash-section-header">🔧 Manutenção Cavalos Mecânicos</div>
       <table class="xl-tbl" style="margin:0;border:none">
         <thead>
           <tr><th class="xl-th-titulo">SITUAÇÃO</th><th>SANTA CATARINA</th><th>PARANÁ</th><th>SÃO PAULO</th><th>Total Geral</th></tr>
         </thead>
         <tbody>
-          ${[equipRows[3], equipRows[4], equipRows[5], equipRows[6]].map(row =>
-            `<tr><td>${row[0]}</td><td>${row[1]||''}</td><td>${row[2]||''}</td><td>${row[3]||''}</td><td>${row[4]||''}</td></tr>`).join('')}
+          <tr>
+            <td>FROTA EM MANUTENÇÃO</td>
+            <td>${r.byUnit.SC.cavalos_manut_frota||''}</td>
+            <td>${r.byUnit.PR.cavalos_manut_frota||''}</td>
+            <td>${r.byUnit.SP.cavalos_manut_frota||''}</td>
+            <td>${(r.byUnit.SC.cavalos_manut_frota||0)+(r.byUnit.PR.cavalos_manut_frota||0)+(r.byUnit.SP.cavalos_manut_frota||0)||''}</td>
+          </tr>
+          <tr>
+            <td>AGREGADO EM MANUTENÇÃO</td>
+            <td>${r.byUnit.SC.cavalos_manut_agregado||''}</td>
+            <td>${r.byUnit.PR.cavalos_manut_agregado||''}</td>
+            <td>${r.byUnit.SP.cavalos_manut_agregado||''}</td>
+            <td>${(r.byUnit.SC.cavalos_manut_agregado||0)+(r.byUnit.PR.cavalos_manut_agregado||0)+(r.byUnit.SP.cavalos_manut_agregado||0)||''}</td>
+          </tr>
         </tbody>
+        <tfoot>
+          <tr class="xl-total">
+            <td>Total Geral</td>
+            <td>${(r.byUnit.SC.cavalos_manut_frota||0)+(r.byUnit.SC.cavalos_manut_agregado||0)||''}</td>
+            <td>${(r.byUnit.PR.cavalos_manut_frota||0)+(r.byUnit.PR.cavalos_manut_agregado||0)||''}</td>
+            <td>${(r.byUnit.SP.cavalos_manut_frota||0)+(r.byUnit.SP.cavalos_manut_agregado||0)||''}</td>
+            <td>${(r.byUnit.SC.cavalos_manut_frota||0)+(r.byUnit.SC.cavalos_manut_agregado||0)+(r.byUnit.PR.cavalos_manut_frota||0)+(r.byUnit.PR.cavalos_manut_agregado||0)+(r.byUnit.SP.cavalos_manut_frota||0)+(r.byUnit.SP.cavalos_manut_agregado||0)||''}</td>
+          </tr>
+        </tfoot>
       </table>
     </div>
 
