@@ -4045,9 +4045,10 @@ async function removeManutencaoPlacaSeNaoHaOSAberta(placa) {
     const placaUp = String(placa).toUpperCase();
     const temOSAberta = todas.some(os => {
       const osPlaca = String(os.veiculo || os.placa || '').toUpperCase();
-      const concluida = String(os.status || '').toLowerCase().includes('conclu') ||
-                        String(os.status || '').toLowerCase().includes('cancel');
-      return osPlaca === placaUp && !concluida;
+      const st = String(os.status || '').toLowerCase();
+      // OS encerrada = concluída, cancelada OU reprovada (não gera obrigação de manutenção)
+      const encerrada = st.includes('conclu') || st.includes('cancel') || st.includes('reprov');
+      return osPlaca === placaUp && !encerrada;
     });
 
     if (temOSAberta) {
@@ -4368,6 +4369,7 @@ async function reprovarOS() {
   if (motivo === null) return; // cancelado
   const agora = new Date();
   const reprovadoPor = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || 'Admin';
+  const placaOS = OS_DB[_currentOsId]?.veiculo || OS_DB[_currentOsId]?.placa || null;
   const updates = {
     status: 'Reprovada',
     reprovadoEm: agora,
@@ -4381,6 +4383,8 @@ async function reprovarOS() {
     toast('OS ' + _currentOsId + ' reprovada. Custo não contabilizado.', 'rd');
     closePanel();
     await loadOrdensServico();
+    // OS reprovada encerra a manutenção — retira o veículo da coluna se não houver outras OS abertas
+    if (placaOS) await removeManutencaoPlacaSeNaoHaOSAberta(placaOS);
   } catch(err) {
     toast('Erro ao reprovar OS: ' + err.message, 'rd');
   }
