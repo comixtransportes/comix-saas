@@ -857,57 +857,738 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 </div>
 
 <div id="cpk-toast"></div>
-ue na aba Custos.</div>';return;}
-  const grupos={},cats={};
-  for(const i of (CPK.zza_categorizado||[])){
-    if(i.dc==='CREDITO')continue;
-    grupos[i.cat.grupo]=(grupos[i.cat.grupo]||{val:0,cnt:0});grupos[i.cat.grupo].val+=i.valor_abs;grupos[i.cat.grupo].cnt++;
-    const ck=i.cat.grupo+'||'+i.cat.cat;cats[ck]=(cats[ck]||{grupo:i.cat.grupo,cat:i.cat.cat,val:0,cnt:0});cats[ck].val+=i.valor_abs;cats[ck].cnt++;
-  }
-  const macroColors={Manutenção:'#f59e0b',Pneus:'#057a55',Operacional:'#1a56db',Administrativo:'#6d28d9',Combustível:'#c81e1e',Agregado:'#0e7490',Outros:'#6b7a96'};
-  document.getElementById('cat-grid-macro').innerHTML=Object.entries(grupos).sort((a,b)=>b[1].val-a[1].val).map(([g,{val,cnt}])=>`<div class="cat-item" style="border-left:3px solid ${macroColors[g]||'#6b7a96'}"><div class="ci-lbl">${g}</div><div class="ci-val">${cpkFmt(val)}</div><div class="ci-cnt">${cnt} lançamentos</div></div>`).join('')||'<div style="color:var(--mu);font-size:11.5px">Nenhuma despesa categorizada.</div>';
-  document.getElementById('cat-grid-detail').innerHTML=Object.entries(cats).sort((a,b)=>b[1].val-a[1].val).map(([_,{grupo,cat,val,cnt}])=>`<div class="cat-item"><div class="ci-lbl" style="font-size:8.5px">${grupo}</div><div class="ci-lbl">${cat}</div><div class="ci-val">${cpkFmt(val)}</div><div class="ci-cnt">${cnt} lançamentos</div></div>`).join('');
+<script>
+'use strict';
+/* COMIX Atlas — CPK v2 | Boot + Core */
 
-  // Não categorizadas
-  const nc=CPK.filtrados.nc||(CPK.zza_categorizado||[]).filter(i=>i.cat.grupo==='Outros'&&i.cat.cat==='Não categorizado');
-  document.getElementById('nc-count').textContent=nc.length+' itens';
-  const ncTbody=document.querySelector('#tbl-nc tbody');
-  if(ncTbody)ncTbody.innerHTML=nc.map((item,idx)=>`<tr>
-    <td><input type="checkbox" class="nc-chk" data-idx="${idx}"></td>
-    <td class="mono">${item.data||'—'}</td>
-    <td class="mono">${item.placa||'—'}</td>
-    <td title="${item.desc}">${cpkAbrev(item.desc||'—',35)}</td>
-    <td class="r">${cpkFmt(item.valor_abs)}</td>
-    <td><span class="bdg bm">Não categ.</span></td>
-    <td>
-      <select class="cpk-ts" style="width:160px;height:22px;font-size:10px" onchange="cpkClassificarItem(${idx},this.value)">
-        <option value="">— Classificar —</option>
-        <option value="Manutenção|Manutenção — Peças">Manut. — Peças</option>
-        <option value="Manutenção|Manutenção — Serviços">Manut. — Serviços</option>
-        <option value="Manutenção|Manutenção — Mão de obra">Manut. — Mão de obra</option>
-        <option value="Pneus|Pneus">Pneus</option>
-        <option value="Pneus|Pneus — Reforma">Pneus — Reforma</option>
-        <option value="Operacional|Operacional — Lavagem">Lavagem</option>
-        <option value="Operacional|Operacional — Pedágio">Pedágio</option>
-        <option value="Operacional|Operacional — Diárias">Diárias</option>
-        <option value="Operacional|Operacional — Reembolso">Reembolso</option>
-        <option value="Administrativo|Administrativo — Seguro">Seguro</option>
-        <option value="Administrativo|Administrativo — Licenciamento">Licenciamento</option>
-        <option value="Administrativo|Administrativo — Rastreador">Rastreador</option>
-        <option value="Agregado|Agregado — Adiantamento">Adit. Agregado</option>
-        <option value="Outros|Outros">Outros</option>
-      </select>
-    </td>
-  </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--mu);padding:10px">✅ Todos os itens foram categorizados!</td></tr>';
+const CPK_FB_CONFIG={apiKey:"AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",authDomain:"comix-relatorios.firebaseapp.com",projectId:"comix-relatorios",storageBucket:"comix-relatorios.firebasestorage.app",messagingSenderId:"586258388438",appId:"1:586258388438:web:3b9da22e650e88ddcf4077"};
 
-  // Regras
-  const regrasList=document.getElementById('regras-list');
-  const regrasCustom=CPK.regras.filter(r=>!r.padrao);
-  if(regrasList)regrasList.innerHTML=regrasCustom.length?`<table class="dt"><thead><tr><th>Palavra-chave</th><th>Grupo</th><th>Categoria</th><th>Subcategoria</th>${CPK.isAdmin?'<th>Ação</th>':''}</tr></thead><tbody>${regrasCustom.map(r=>`<tr><td class="mono">${r.kw||'—'}</td><td>${r.grupo||'—'}</td><td>${r.cat||'—'}</td><td>${r.sub||'—'}</td>${CPK.isAdmin?`<td><button class="btn-icon" onclick="cpkDeleteRegra('${r._id||''}')">🗑</button></td>`:''}</tr>`).join('')}</tbody></table>`:'<div style="color:var(--mu);font-size:11.5px;padding:4px 0">Nenhuma regra customizada.'+(CPK.isAdmin?' Use "+ Nova Regra" para criar.':'')+'</div>';
+const CPK={user:null,perfil:'motorista',isAdmin:false,szb:null,szy:{},szc:[],zza:[],szi:[],frota:[],params:{},rateios:[],regras:[],szbAtivo:[],aggPlaca:[],aggAgregado:[],aggRota:[],aggCliente:[],viagens:[],szc_por_placa:{},zza_categorizado:[],szi_por_placa:{},zza_por_placa:{},filtrados:{},sorts:{},loaded:false,szbLoaded:false,szyLoaded:false,szcLoaded:false,zzaLoaded:false,sziLoaded:false,frotaLoaded:false,charts:{},totais:{},diag:{}};
+
+let _fb=null,_db=null,_auth=null;
+
+function cpkGetFb(){
+  try{
+    if(_fb)return _fb;
+    if(window.parent&&window.parent!==window){
+      try{
+        const pf=window.parent.firebase;
+        if(pf){_fb=pf;_db=pf.firestore();_auth=pf.auth();return _fb;}
+      }catch(e){}
+    }
+    if(typeof firebase!=='undefined'){
+      try{_fb=firebase.app('cpk2');}
+      catch(e){_fb=firebase.initializeApp(CPK_FB_CONFIG,'cpk2');}
+      _db=_fb.firestore();_auth=_fb.auth();return _fb;
+    }
+  }catch(e){console.warn('[CPK2] Firebase:',e.message);}
+  return null;
 }
 
+function cpkLoaderMsg(m){const el=document.getElementById('cpk-load-msg');if(el)el.textContent=m;}
+function cpkLoaderHide(){
+  const el=document.getElementById('cpk-global-loader');
+  if(el){el.classList.add('hidden');setTimeout(()=>{if(el.parentNode)el.parentNode.removeChild(el);},400);}
+}
+function cpkSyncBadge(t,cls){const el=document.getElementById('cpk-sync-badge');if(el){el.textContent=t;el.className='sync-badge '+(cls||'');}}
+function cpkToast(msg){const el=document.getElementById('cpk-toast');if(!el)return;el.textContent=msg;el.classList.add('show');clearTimeout(el._t);el._t=setTimeout(()=>el.classList.remove('show'),3200);}
 
-// ─── APPLY SZY ───
+// ── BOOT ──────────────────────────────────────────────────────────
+function cpkInit(){
+  const isIframe=window.self!==window.top;
+  cpkLoaderMsg('Conectando…');
+
+  if(isIframe){
+    // Escuta ATLAS_USER que o index.html envia após frLoaded
+    // Timeout de segurança: se não receber ATLAS_USER em 6s, mostra o app mesmo assim
+    const safetyTimeout=setTimeout(()=>{
+      if(document.getElementById('scr-cpk').style.display==='none'){
+        console.warn('[CPK2] ATLAS_USER não recebido — boot sem auth');
+        cpkAfterAuth({email:'',uid:''},CPK.perfil);
+      }
+    },6000);
+    window._cpkSafetyTimeout=safetyTimeout;
+
+    // Tentar pegar usuário do parent diretamente (já logado)
+    try{
+      const pu=window.parent&&window.parent.curUser;
+      const pp=window.parent&&window.parent.curPerfil;
+      if(pu&&pu.email){
+        clearTimeout(safetyTimeout);
+        CPK.perfil=pp||'motorista';
+        CPK.isAdmin=CPK.perfil==='admin';
+        cpkAfterAuth(pu,CPK.perfil);
+        return;
+      }
+    }catch(e){}
+
+    // Pedir permissões ao parent
+    try{window.parent.postMessage({type:'ATLAS_REQUEST_TAB_PERMS'},'*');}catch(e){}
+
+    // Tentar SZB do parent
+    setTimeout(()=>{if(!CPK.szbLoaded)cpkTryParentSZB();},300);
+    setTimeout(()=>{if(!CPK.szbLoaded){cpkTryParentSZB();cpkRequestAtlasBase('szb');}},1500);
+
+  }else{
+    // Standalone: auth Firebase
+    cpkGetFb();
+    if(_auth){
+      _auth.onAuthStateChanged(user=>{
+        if(user){
+          document.getElementById('scr-login-cpk').style.display='none';
+          try{
+            _db.collection('usuarios').doc(user.uid).get().then(snap=>{
+              const d=snap.exists?snap.data():{};
+              CPK.perfil=d.perfil||d.tipo||'motorista';
+              CPK.isAdmin=CPK.perfil==='admin';
+              CPK.user=user;
+              cpkAfterAuth(user,CPK.perfil);
+            }).catch(()=>{CPK.user=user;cpkAfterAuth(user,'motorista');});
+          }catch(e){CPK.user=user;cpkAfterAuth(user,'motorista');}
+        }else{
+          cpkLoaderHide();
+          document.getElementById('scr-login-cpk').style.display='flex';
+        }
+      });
+    }else{
+      cpkLoaderHide();
+      document.getElementById('scr-login-cpk').style.display='flex';
+    }
+  }
+}
+
+function cpkAfterAuth(user,perfil){
+  clearTimeout(window._cpkSafetyTimeout);
+  CPK.user=user;CPK.perfil=perfil||'motorista';CPK.isAdmin=CPK.perfil==='admin';
+  const app=document.getElementById('scr-cpk');
+  if(app)app.style.display='flex';
+  const hdrUser=document.getElementById('cpk-hdr-user');
+  if(hdrUser)hdrUser.textContent=user.email||'';
+  const isIframe=window.self!==window.top;
+  if(!isIframe)document.querySelectorAll('.cpk-hdr').forEach(h=>h.style.display='flex');
+  cpkApplyUIPerms();
+  cpkSetDefaultFilters();
+  cpkLoaderMsg('Carregando dados…');
+  cpkLoadAll();
+}
+
+function cpkApplyUIPerms(){
+  const a=CPK.isAdmin;
+  ['btn-novo-rateio','btn-nova-regra','btn-save-params','btn-classificar-lote'].forEach(id=>{
+    const el=document.getElementById(id);if(el)el.style.display=a?'':'none';
+  });
+}
+
+function cpkSetDefaultFilters(){
+  const now=new Date();
+  const el=document.getElementById('f-mes');
+  if(el)el.value=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+}
+
+// ── POSTMESSAGE ──────────────────────────────────────────────────
+window.addEventListener('message',function(ev){
+  const d=ev.data||{};
+
+  if(d.type==='ATLAS_USER'){
+    clearTimeout(window._cpkSafetyTimeout);
+    CPK.perfil=d.perfil||'motorista';
+    CPK.isAdmin=CPK.perfil==='admin';
+    CPK.user={email:d.email||'',uid:d.uid||''};
+    cpkAfterAuth(CPK.user,CPK.perfil);
+    return;
+  }
+
+  if(d.type==='ATLAS_TAB_PERMS'){
+    CPK.perfil=d.perfil||CPK.perfil;
+    CPK.isAdmin=CPK.perfil==='admin';
+    cpkApplyUIPerms();
+    return;
+  }
+
+  if(d.type==='ATLAS_DATA_RESPONSE'&&d.table==='szb'&&d.payload){
+    cpkApplySZB(d.payload);return;
+  }
+  if(d.type==='ATLAS_DATA_READY'&&d.table==='szb'){
+    setTimeout(cpkTryParentSZB,80);return;
+  }
+  if(d.type==='ATLAS_DATA_READY'){
+    if(!CPK.szbLoaded)setTimeout(cpkTryParentSZB,120);return;
+  }
+
+  // Firestore bridge response
+  if(d.type==='ATLAS_FIRESTORE_RESPONSE'){
+    const cb=window._cpkBridgeCb&&window._cpkBridgeCb[d.requestId];
+    if(!cb)return;
+    delete window._cpkBridgeCb[d.requestId];
+    d.ok?cb.resolve(d.result):cb.reject(new Error(d.error||'Erro Firestore'));
+  }
+});
+
+function cpkRequestAtlasBase(t){
+  try{if(window.parent&&window.parent!==window)window.parent.postMessage({type:'ATLAS_REQUEST_DATA',table:t},'*');}catch(e){}
+}
+
+function cpkTryParentSZB(){
+  try{
+    const d=window.parent&&window.parent.ATLAS_DATA&&window.parent.ATLAS_DATA.szb;
+    if(d&&Array.isArray(d.rows)&&d.rows.length){cpkApplySZB(d);return true;}
+  }catch(e){}
+  return false;
+}
+
+// ── FIRESTORE BRIDGE ─────────────────────────────────────────────
+window._cpkBridgeCb={};
+let _cpkBridgeId=0;
+
+async function cpkFsGet(col,query){
+  if(window.self!==window.top)return cpkFsBridge(col,'getCollection',query||{});
+  if(!_db)cpkGetFb();
+  if(!_db)return null;
+  try{
+    let ref=_db.collection(col);
+    if(query&&query.where)for(const w of query.where)ref=ref.where(...w);
+    if(query&&query.orderBy)ref=ref.orderBy(query.orderBy,query.orderDir||'asc');
+    const s=await ref.get();
+    return s.docs.map(d=>({id:d.id,data:d.data()}));
+  }catch(e){console.warn('[CPK2] FsGet',col,e.message);return null;}
+}
+
+async function cpkFsSet(col,id,data){
+  if(window.self!==window.top)return cpkFsBridge(col,'setDoc',{docId:id,data,merge:true});
+  if(!_db)cpkGetFb();if(!_db)throw new Error('Firebase indisponível.');
+  await _db.collection(col).doc(id).set(data,{merge:true});
+}
+
+async function cpkFsAdd(col,data){
+  if(window.self!==window.top)return cpkFsBridge(col,'addDoc',{data});
+  if(!_db)cpkGetFb();if(!_db)throw new Error('Firebase indisponível.');
+  const ref=await _db.collection(col).add(data);return{id:ref.id};
+}
+
+async function cpkFsDel(col,id){
+  if(window.self!==window.top)return cpkFsBridge(col,'deleteDoc',{docId:id});
+  if(!_db)cpkGetFb();if(!_db)throw new Error('Firebase indisponível.');
+  await _db.collection(col).doc(id).delete();
+}
+
+function cpkFsBridge(col,action,extra){
+  return new Promise((res,rej)=>{
+    if(!window._cpkBridgeCb)window._cpkBridgeCb={};
+    const rid='cpk2-'+(++_cpkBridgeId);
+    window._cpkBridgeCb[rid]={resolve:res,reject:rej};
+    try{window.parent.postMessage({type:'ATLAS_FIRESTORE_REQUEST',requestId:rid,collection:col,action,...(extra||{})},'*');}
+    catch(e){rej(e);}
+    setTimeout(()=>{if(window._cpkBridgeCb[rid]){delete window._cpkBridgeCb[rid];rej(new Error('Timeout'));}},12000);
+  });
+}
+
+// ── LOAD ─────────────────────────────────────────────────────────
+async function cpkLoadAll(){
+  CPK.loaded=true;
+  cpkLoaderMsg('Carregando parâmetros…');
+  await Promise.allSettled([cpkLoadParams(),cpkLoadRateios(),cpkLoadRegras()]);
+  cpkLoaderMsg('Carregando frota…');
+  await cpkLoadFrota();
+  // SZB
+  if(!CPK.szbLoaded){
+    cpkLoaderMsg('Aguardando SZB…');
+    if(!cpkTryParentSZB())cpkRequestAtlasBase('szb');
+    // Se SZB não chegar em 4s, mostrar a tela de qualquer forma
+    setTimeout(()=>{
+      if(!CPK.szbLoaded){
+        cpkSyncBadge('SZB não disponível — carregue pelo Download Base','err');
+        cpkRenderAll();
+        cpkLoaderHide();
+      }
+    },4000);
+  }else{
+    cpkRenderAll();
+    cpkLoaderHide();
+  }
+}
+
+async function cpkLoadParams(){
+  try{
+    const docs=await cpkFsGet('cpk_parametros');
+    if(docs&&docs.length)CPK.params=docs[0].data||{};
+  }catch(e){CPK.params={};}
+  if(!CPK.params.diesel_padrao)CPK.params.diesel_padrao=5.50;
+  if(!CPK.params.rendimento_padrao)CPK.params.rendimento_padrao=2.5;
+  if(!CPK.params.meta_cpk)CPK.params.meta_cpk=5.0;
+  if(!CPK.params.alerta_atencao)CPK.params.alerta_atencao=4.5;
+  if(!CPK.params.alerta_critico)CPK.params.alerta_critico=5.5;
+  // Preencher form se existir
+  const fmap={diesel:'diesel_padrao','diesel-sc':'diesel_sc','diesel-pr':'diesel_pr','diesel-sp':'diesel_sp',rend:'rendimento_padrao','meta-cpk':'meta_cpk','meta-marg':'meta_margem_km',at:'alerta_atencao',cr:'alerta_critico'};
+  for(const[k,pk] of Object.entries(fmap)){const el=document.getElementById('p-'+k);if(el&&CPK.params[pk]!=null)el.value=CPK.params[pk];}
+}
+
+async function cpkLoadRateios(){
+  try{const docs=await cpkFsGet('cpk_lancamentos');CPK.rateios=docs?docs.map(d=>({...d.data,_id:d.id})):[];}
+  catch(e){CPK.rateios=[];}
+}
+
+async function cpkLoadRegras(){
+  try{const docs=await cpkFsGet('cpk_categorias_regras');CPK.regras=docs?docs.map(d=>({...d.data,_id:d.id})):[];}
+  catch(e){CPK.regras=[];}
+  if(!CPK.regras.length)cpkInitRegrasPadrao();
+}
+
+async function cpkLoadFrota(){
+  try{
+    const result=await cpkFsGet('veiculos');
+    if(result){
+      CPK.frota=result.map(d=>{
+        const v=d.data||{};
+        const u=v.unidade_slug||cpkInfUnidadeFr(v);
+        const vk=(v.vinculo||'FROTA').toUpperCase()==='AGREGADO'?'agregado':'proprio';
+        return{id:d.id,placa:cpkNormPlaca(v.placa||''),frota:(v.frota||'').toUpperCase(),motorista:v.motorista||'',unidade:u,vinculo:vk,modelo:v.modelo||'',categoria:v.categoria||'',disponibilidade:v.disponibilidade||''};
+      });
+      CPK.frotaLoaded=true;
+    }
+  }catch(e){console.warn('[CPK2] Frota:',e.message);CPK.frota=[];CPK.frotaLoaded=true;}
+}
+
+// ── SZB ──────────────────────────────────────────────────────────
+function cpkApplySZB(payload){
+  if(!payload||!Array.isArray(payload.rows)||!payload.rows.length){
+    cpkSyncBadge('SZB vazio','err');return;
+  }
+  CPK.szb=payload.rows;CPK.szbLoaded=true;
+  const ts=payload.ts?new Date(payload.ts):null;
+  cpkSyncBadge('✓ SZB '+CPK.szb.length.toLocaleString('pt-BR')+' reg.'+(ts?' · '+ts.toLocaleDateString('pt-BR'):''),'ok');
+  cpkRenderAll();cpkLoaderHide();
+}
+
+function cpkReload(){
+  CPK.szbLoaded=false;
+  cpkRequestAtlasBase('szb');
+  cpkSyncBadge('Atualizando…','');
+  cpkLoadAll();
+  cpkToast('Atualizando…');
+}
+
+// ── LOGIN STANDALONE ─────────────────────────────────────────────
+async function cpkDoLogin(){
+  const em=document.getElementById('cpk-email').value.trim();
+  const pw=document.getElementById('cpk-senha').value;
+  const btn=document.getElementById('cpk-lc-btn');
+  const err=document.getElementById('cpk-lc-err');
+  err.classList.remove('on');
+  if(!em||!pw){err.textContent='Preencha e-mail e senha.';err.classList.add('on');return;}
+  btn.disabled=true;btn.textContent='Entrando…';
+  try{
+    cpkGetFb();
+    if(!_auth)throw new Error('Firebase indisponível.');
+    await _auth.signInWithEmailAndPassword(em,pw);
+  }catch(e){
+    btn.disabled=false;btn.textContent='Entrar';
+    const m={'auth/user-not-found':'E-mail não encontrado.','auth/wrong-password':'Senha incorreta.','auth/invalid-credential':'E-mail ou senha incorretos.'};
+    err.textContent=m[e.code]||'Erro ao autenticar.';err.classList.add('on');
+  }
+}
+document.getElementById('cpk-senha')?.addEventListener('keydown',e=>{if(e.key==='Enter')cpkDoLogin();});
+
+// ── UTILITÁRIOS ──────────────────────────────────────────────────
+function cpkNormPlaca(s){return String(s||'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');}
+function cpkStr(v){return String(v==null?'':v).trim();}
+function cpkNum(v){if(typeof v==='number')return isNaN(v)?0:v;const n=parseFloat(String(v||'').replace(',','.'));return isNaN(n)?0:n;}
+function cpkNormDate(v){
+  if(!v||v===''||v===0)return'';
+  if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);
+  if(typeof v==='number'&&isFinite(v)){const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000);return d.toISOString().slice(0,10);}
+  const s=String(v).trim();
+  const iso=s.match(/^(\d{4})-(\d{2})-(\d{2})/);if(iso)return iso[0];
+  const br=s.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})/);
+  if(br){const y=br[3].length===2?'20'+br[3]:br[3];return y+'-'+String(br[2]).padStart(2,'0')+'-'+String(br[1]).padStart(2,'0');}
+  return s.slice(0,10);
+}
+function cpkNormStr(s){return String(s||'').trim().toUpperCase().replace(/\s+/g,' ');}
+function cpkFmt(v,pfx='R$ ',dec=2){if(v==null||isNaN(v))return'—';return pfx+v.toLocaleString('pt-BR',{minimumFractionDigits:dec,maximumFractionDigits:dec});}
+function cpkFmtKm(v){if(!v||isNaN(v)||v===0)return'—';return v.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0})+' km';}
+function cpkAbrev(s,max=22){if(!s)return'—';s=String(s);return s.length>max?s.slice(0,max-1)+'…':s;}
+function cpkInfUnidadeFr(v){const u=(v.unidade||'').toUpperCase();if(u.includes('CATARIN')||u==='SC')return'SC';if(u.includes('PARAN')||u==='PR')return'PR';if(u.includes('PAULO')||u==='SP')return'SP';return'';}
+function cpkInfUnidadeSZB(op,frota,placa){
+  const o=String(op||'').trim();
+  if(o==='17'||o==='0117')return'SC';if(o==='18'||o==='0118')return'PR';if(o==='03'||o==='0003')return'SP';
+  if(o.includes('SC')||o.includes('CATARIN'))return'SC';if(o.includes('PR')||o.includes('PARAN'))return'PR';if(o.includes('SP')||o.includes('PAULO'))return'SP';
+  const veic=CPK.frota.find(v=>v.frota===(frota||'').toUpperCase()||v.placa===placa);if(veic)return veic.unidade||'';
+  return'';
+}
+function cpkStatus(cpk){if(cpk==null||isNaN(cpk))return'sem-km';const at=cpkNum(CPK.params.alerta_atencao||4.5),cr=cpkNum(CPK.params.alerta_critico||5.5);if(cpk<=at)return'saudavel';if(cpk<=cr)return'atencao';return'critico';}
+function cpkStatusBadge(st){const cfg={saudavel:'bg',atencao:'ba',critico:'br','sem-km':'bm'};const lbl={saudavel:'Saudável',atencao:'Atenção',critico:'Crítico','sem-km':'Sem KM'};return`<span class="bdg ${cfg[st]||'bm'}">${lbl[st]||st}</span>`;}
+function cpkStatusColor(st){return{saudavel:'rgba(5,122,85,.65)',atencao:'rgba(180,83,9,.65)',critico:'rgba(200,30,30,.65)','sem-km':'rgba(107,122,150,.4)'}[st]||'rgba(107,122,150,.4)';}
+function cpkFonteBadge(f){const cfg={szy:'ds-szy',szb:'ds-szb',szc:'ds-szc',zza:'ds-zza',szi:'ds-szi',estimado:'ds-est',manual:'ds-man',pendente:'ds-nd',nd:'ds-nd'};const lbl={szy:'SZY',szb:'SZB',szc:'SZC',zza:'ZZA',szi:'SZI',estimado:'Est.',manual:'Manual',pendente:'Pendente',nd:'N/D'};return`<span class="ds-badge ${cfg[f]||'ds-est'}">${lbl[f]||f}</span>`;}
+function cpkChartDestroy(id){if(CPK.charts[id]){try{CPK.charts[id].destroy();}catch(e){}delete CPK.charts[id];}}
+
+// ── UPLOAD ───────────────────────────────────────────────────────
+function cpkDragOver(e,t){e.preventDefault();document.getElementById('ua-'+t)?.classList.add('drag');}
+function cpkDragOff(t){document.getElementById('ua-'+t)?.classList.remove('drag');}
+function cpkDrop(e,t){e.preventDefault();cpkDragOff(t);const f=e.dataTransfer.files[0];if(f)cpkProcessFile(f,t);}
+function cpkFileInput(e,t){const f=e.target.files[0];if(f)cpkProcessFile(f,t);}
+async function cpkProcessFile(file,tipo){
+  const statEl=document.getElementById(tipo+'-stat');
+  const fnEl=document.getElementById('ua-'+tipo+'-fn');
+  if(statEl){statEl.textContent='Processando…';statEl.className='ua-stat';}
+  if(fnEl)fnEl.textContent=file.name;
+  try{
+    const buf=await file.arrayBuffer();
+    const XLSX=window.XLSX||(window.parent&&window.parent.XLSX);
+    if(!XLSX)throw new Error('SheetJS não disponível. Abra pelo Atlas (Download Base deve estar carregado).');
+    const wb=XLSX.read(buf,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const raw=XLSX.utils.sheet_to_json(ws,{defval:'',raw:true,blankrows:false});
+    const rows=(raw||[]).map(r=>{const o={};for(const k of Object.keys(r||{})){const nk=String(k).replace(/\s+/g,' ').trim();if(nk)o[nk]=r[k];}return o;}).filter(r=>Object.values(r).some(v=>v!==''&&v!=null));
+    if(!rows.length)throw new Error('Planilha vazia ou formato não reconhecido.');
+    if(tipo==='szy')cpkApplySZY(rows,file.name);
+    else if(tipo==='szc')cpkApplySZC(rows,file.name);
+    else if(tipo==='zza')cpkApplyZZA(rows,file.name);
+    else if(tipo==='szi')cpkApplySZI(rows,file.name);
+    if(statEl){statEl.textContent='✓ '+rows.length.toLocaleString('pt-BR')+' reg.';statEl.className='ua-stat ok';}
+    cpkUpdateBasesStatus();
+    if(CPK.szbLoaded)cpkRenderAll();
+  }catch(e){
+    if(statEl){statEl.textContent='✗ Erro';statEl.className='ua-stat err';}
+    cpkToast('Erro '+tipo.toUpperCase()+': '+e.message);
+    console.error('[CPK2]',tipo,e);
+  }
+}
+
+// ── FILTROS / RENDER GERAL ────────────────────────────────────────
+function cpkGetFiltros(){return{mes:document.getElementById('f-mes')?.value||'',unidade:document.getElementById('f-unidade')?.value||'',vinculo:document.getElementById('f-vinculo')?.value||'',placa:cpkNormPlaca(document.getElementById('f-placa')?.value||''),cliente:cpkNormStr(document.getElementById('f-cliente')?.value||'')};}
+function cpkApplyFilters(){if(!CPK.szb){cpkToast('SZB não carregado. Acesse Download Base.');return;}cpkRenderAll();}
+function cpkClearFilters(){['f-unidade','f-vinculo','f-placa','f-cliente'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});cpkApplyFilters();}
+function cpkRenderAll(){cpkCalculate();cpkUpdateBasesStatus();const tab=document.querySelector('.cpk-tab.on')?.dataset?.tab||'vg';cpkRenderTab(tab);}
+function cpkRenderTab(tab){
+  if(tab==='vg')cpkRenderVG();
+  else if(tab==='proprio')cpkRenderProprio();
+  else if(tab==='agregado')cpkRenderAgregado();
+  else if(tab==='rotas')cpkRenderRotas();
+  else if(tab==='placas')cpkRenderPlacas();
+  else if(tab==='clientes')cpkRenderClientes();
+  else if(tab==='custos')cpkRenderCustos();
+  else if(tab==='categorias')cpkRenderCategorias();
+  else if(tab==='rankings')cpkRenderRankings();
+  else if(tab==='diag')cpkRenderDiag();
+}
+
+// ── TABS / MODAIS ─────────────────────────────────────────────────
+function cpkGoTab(tabId,el){
+  document.querySelectorAll('.cpk-tab[data-tab]').forEach(t=>t.classList.toggle('on',t.dataset.tab===tabId));
+  document.querySelectorAll('.cpk-pane').forEach(p=>p.classList.remove('on'));
+  const pane=document.getElementById('pane-'+tabId);if(pane)pane.classList.add('on');
+  cpkRenderTab(tabId);
+}
+function cpkGoSubTab(parentTab,subId,el){
+  const parent=document.getElementById('pane-'+parentTab);if(!parent)return;
+  parent.querySelectorAll('.subtab').forEach(t=>t.classList.toggle('on',t.dataset&&t.dataset.subtab===subId));
+  parent.querySelectorAll('[id^="subtab-'+parentTab+'-"]').forEach(p=>p.style.display='none');
+  const sub=document.getElementById('subtab-'+parentTab+'-'+subId);if(sub)sub.style.display='';
+}
+function cpkOpenModal(id){document.getElementById(id)?.classList.add('open');}
+function cpkCloseModal(id){document.getElementById(id)?.classList.remove('open');}
+document.addEventListener('click',e=>{const bd=e.target.closest('.modal-backdrop');if(bd&&bd===e.target)bd.classList.remove('open');});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')document.querySelectorAll('.modal-backdrop.open').forEach(m=>m.classList.remove('open'));});
+
+// ── STATUS BASES ──────────────────────────────────────────────────
+function cpkUpdateBasesStatus(){
+  const bases=[{id:'szb',loaded:CPK.szbLoaded,count:(CPK.szb||[]).length},{id:'szy',loaded:CPK.szyLoaded,count:Object.keys(CPK.szy||{}).length},{id:'szc',loaded:CPK.szcLoaded,count:(CPK.szc||[]).length},{id:'zza',loaded:CPK.zzaLoaded,count:(CPK.zza||[]).length},{id:'szi',loaded:CPK.sziLoaded,count:(CPK.szi||[]).length}];
+  const el=document.getElementById('f-bases-status');
+  if(el)el.textContent=bases.filter(b=>b.loaded).map(b=>b.id.toUpperCase()+':'+b.count.toLocaleString('pt-BR')).join(' · ')||'Nenhuma base carregada';
+  const chips=document.getElementById('vg-source-chips');
+  if(chips)chips.innerHTML=bases.map(b=>`<span class="ds-badge ${b.loaded?'ds-'+b.id:'ds-nd'}">${b.id.toUpperCase()}: ${b.loaded?b.count.toLocaleString('pt-BR'):'N/D'}</span>`).join('');
+}
+
+// ── SORT / FILTER ─────────────────────────────────────────────────
+function cpkSort(type,field){
+  const key=type+'_'+field;const cur=CPK.sorts[key];const dir=cur==='asc'?'desc':'asc';CPK.sorts[key]=dir;
+  document.querySelectorAll(`#tbl-${type} th`).forEach(th=>{th.classList.remove('sa','sd');if(th.getAttribute('onclick')?.includes("'"+field+"'"))th.classList.add(dir==='asc'?'sa':'sd');});
+  function sortArr(arr){return[...arr].sort((a,b)=>{let va=a[field],vb=b[field];if(va==null)va=dir==='asc'?Infinity:-Infinity;if(vb==null)vb=dir==='asc'?Infinity:-Infinity;if(typeof va==='string')return dir==='asc'?va.localeCompare(vb):vb.localeCompare(va);return dir==='asc'?va-vb:vb-va;});}
+  if(type==='proprio'){CPK.filtrados.proprio=sortArr(CPK.filtrados.proprio||CPK.aggPlaca);cpkRenderProprio();}
+  else if(type==='agregado'){CPK.filtrados.agregado=sortArr(CPK.filtrados.agregado||CPK.aggAgregado);cpkRenderAgregado();}
+  else if(type==='rota'){CPK.filtrados.rota=sortArr(CPK.filtrados.rota||CPK.aggRota);cpkRenderRotas();}
+  else if(type==='clientes'){CPK.filtrados.cliente=sortArr(CPK.filtrados.cliente||CPK.aggCliente);cpkRenderClientes();}
+  else if(type==='placas'){CPK.filtrados.placas=sortArr(CPK.filtrados.placas||[...CPK.aggPlaca,...CPK.aggAgregado]);cpkRenderPlacas();}
+}
+function cpkFilterTable(type){
+  const qs=id=>cpkNormStr(document.getElementById(id)?.value||'');
+  const q=qs(type+'-search')||qs(type==='nc'?'nc-search':type+'-search');
+  if(type==='proprio'){CPK.filtrados.proprio=q?CPK.aggPlaca.filter(p=>[p.placa,p.frota,p.motorista,p.unidade].some(s=>cpkNormStr(s).includes(q))):CPK.aggPlaca;cpkRenderProprio();}
+  else if(type==='agregado'){CPK.filtrados.agregado=q?CPK.aggAgregado.filter(p=>[p.placa,p.frota,p.motorista].some(s=>cpkNormStr(s).includes(q))):CPK.aggAgregado;cpkRenderAgregado();}
+  else if(type==='rota'){CPK.filtrados.rota=q?CPK.aggRota.filter(r=>[r.rota_nome,r.rota_cod,r.localColeta,r.localEntreg].some(s=>cpkNormStr(s).includes(q))):CPK.aggRota;cpkRenderRotas();}
+  else if(type==='viagem'){CPK.filtrados.viagem=q?CPK.viagens.filter(v=>[v.placa,v.motorista,v.cliente,v.rota].some(s=>cpkNormStr(s).includes(q))):CPK.viagens;cpkRenderRotas();}
+  else if(type==='clientes'){CPK.filtrados.cliente=q?CPK.aggCliente.filter(c=>cpkNormStr(c.nome||'').includes(q)):CPK.aggCliente;cpkRenderClientes();}
+  else if(type==='placas'){
+    const vf=document.getElementById('placas-filter-vinculo')?.value||'';
+    let data=[...CPK.aggPlaca,...CPK.aggAgregado];
+    if(vf)data=data.filter(p=>p.vinculo===vf);
+    if(q)data=data.filter(p=>[p.placa,p.frota,p.motorista,p.categoria].some(s=>cpkNormStr(s).includes(q)));
+    CPK.filtrados.placas=data;cpkRenderPlacas();
+  }
+  else if(type==='szi'){
+    const q2=qs('szi-search');
+    const body=document.querySelector('#tbl-szi tbody');
+    if(body){const rows=q2?CPK.szi.filter(r=>[cpkNormPlaca(r['Veiculo']||''),cpkStr(r['Descricao']||''),cpkStr(r['Nome Motoris']||'')].some(s=>cpkNormStr(s).includes(q2))):CPK.szi;body.innerHTML=rows.slice(0,200).map(r=>{const dc=cpkStr(r['Deb / Cred']||'');const val=cpkNum(r['Valor']||0);return`<tr><td class="mono">${cpkNormDate(r['Data']||'')}</td><td class="mono">${cpkNormPlaca(r['Veiculo']||'')}</td><td>${cpkAbrev(r['Nome Motoris']||'—',12)}</td><td>${cpkAbrev(r['Nome']||'—',14)}</td><td title="${cpkStr(r['Descricao']||r['Id Deb Autom']||'')}">${cpkAbrev(r['Descricao']||r['Id Deb Autom']||'—',28)}</td><td><span class="bdg ${dc==='CREDITO'?'bg':'br'}">${dc}</span></td><td class="r" style="color:${dc==='CREDITO'?'var(--gn)':'var(--rd)'}">${cpkFmt(val)}</td><td>${cpkStr(r['Descr Oper']||'')}</td></tr>`;}).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--mu);padding:10px">Sem dados</td></tr>';}
+  }
+  else if(type==='nc'){
+    const q3=qs('nc-search');
+    const nc=(CPK.zza_categorizado||[]).filter(i=>i.cat.grupo==='Outros'&&i.cat.cat==='Não categorizado');
+    CPK.filtrados.nc=q3?nc.filter(i=>cpkNormStr(i.desc||'').includes(q3)):nc;
+    cpkRenderCategorias();
+  }
+}
+
+// ── RENDER: HELPERS COMUNS ────────────────────────────────────────
+function card(lbl,val,sub,cls=''){return`<div class="cpk-card ${cls}"><div class="ck-lbl">${lbl}</div><div class="ck-val">${val}</div><div class="ck-sub">${sub||''}</div></div>`;}
+
+// ── RENDER: VISÃO GERAL ───────────────────────────────────────────
+function cpkRenderVG(){
+  const t=CPK.totais||{};
+  const todos=[...CPK.aggPlaca,...CPK.aggAgregado];
+  const tKm=t.km_total||0,tFat=t.faturamento||0;
+  const tCusto=todos.reduce((s,p)=>s+(p.custo_total||0),0);
+  const cpkG=tKm>0?tCusto/tKm:null,recG=tKm>0?tFat/tKm:null;
+  const margG=cpkG!=null&&recG!=null?recG-cpkG:null,margPct=tFat>0?(tFat-tCusto)/tFat*100:null;
+  const pKm=CPK.aggPlaca.reduce((s,p)=>s+(p.km_total||0),0),pFat=CPK.aggPlaca.reduce((s,p)=>s+(p.faturamento||0),0),pCusto=CPK.aggPlaca.reduce((s,p)=>s+(p.custo_total||0),0);
+  const pCpk=pKm>0?pCusto/pKm:null,pRec=pKm>0?pFat/pKm:null,pMarg=pCpk!=null&&pRec!=null?pRec-pCpk:null;
+  const aKm=CPK.aggAgregado.reduce((s,p)=>s+(p.km_total||0),0),aFat=CPK.aggAgregado.reduce((s,p)=>s+(p.faturamento||0),0),aCusto=CPK.aggAgregado.reduce((s,p)=>s+(p.custo_total||0),0);
+  const aCpk=aKm>0?aCusto/aKm:null,aRec=aKm>0?aFat/aKm:null,aMarg=aCpk!=null&&aRec!=null?aRec-aCpk:null;
+  const agrSZI=Object.values(CPK.szi_por_placa||{}).reduce((s,e)=>s+e.saldo,0);
+  const el=document.getElementById('vg-alerts');
+  if(el){let h='';if(!CPK.szbLoaded)h+=`<div class="cpk-err">❌ <span><strong>SZB não carregado.</strong> Acesse Download Base e importe o SZB.</span></div>`;if(!CPK.szyLoaded)h+=`<div class="cpk-nd">⚠️ <span><strong>SZY não carregado.</strong> Sem KM automático. Carregue na aba Custos.</span></div>`;if((t.pct_sem_km||0)>50)h+=`<div class="cpk-nd">⚠️ <span><strong>${(t.pct_sem_km||0).toFixed(0)}% das viagens sem KM.</strong> Carregue SZY para resolver.</span></div>`;el.innerHTML=h;}
+  const gc=document.getElementById('vg-cards-geral');
+  if(gc)gc.innerHTML=[card('CPK Total',cpkG!=null?cpkFmt(cpkG,'R$ ',4)+'/km':'⚠ Dados insuf.',`Meta: ${cpkFmt(cpkNum(CPK.params.meta_cpk),'R$ ',2)}/km`,cpkG!=null?(cpkG<=cpkNum(CPK.params.alerta_atencao||4.5)?'gn':cpkG<=cpkNum(CPK.params.alerta_critico||5.5)?'am':'rd'):''),card('Receita/km',recG!=null?cpkFmt(recG,'R$ ',4)+'/km':'—',''),card('Margem/km',margG!=null?cpkFmt(margG,'R$ ',4)+'/km':'—','',margG!=null?(margG>=0?'gn':'rd'):''),card('Margem %',margPct!=null?margPct.toFixed(1)+'%':'—',''),card('KM Total',cpkFmtKm(tKm),(t.viagens||0)+' viagens'),card('Faturamento',cpkFmt(tFat),''),card('Custo Total',cpkFmt(tCusto),''),card('Sem KM',(t.sem_km||0)+' ('+((t.pct_sem_km||0).toFixed(0))+'%)',cpkFmt(t.sem_km_fat||0)+'sem KM',(t.sem_km||0)>0?'am':'')].join('');
+  const pc=document.getElementById('vg-cards-proprio');
+  if(pc)pc.innerHTML=[card('Placas',CPK.aggPlaca.length,'Frota própria','cy'),card('CPK',pCpk!=null?cpkFmt(pCpk,'R$ ',4)+'/km':'—','',pCpk!=null?(pCpk<=cpkNum(CPK.params.alerta_atencao||4.5)?'gn':pCpk<=cpkNum(CPK.params.alerta_critico||5.5)?'am':'rd'):''),card('Rec./km',pRec!=null?cpkFmt(pRec,'R$ ',4)+'/km':'—',''),card('Marg./km',pMarg!=null?cpkFmt(pMarg,'R$ ',4)+'/km':'—','',pMarg!=null?(pMarg>=0?'gn':'rd'):''),card('KM',cpkFmtKm(pKm),''),card('Diesel Real',CPK.aggPlaca.filter(p=>p.diesel_fonte==='szc').length+'/'+CPK.aggPlaca.length,'c/ SZC real','gn')].join('');
+  const ac=document.getElementById('vg-cards-agregado');
+  if(ac)ac.innerHTML=[card('Placas',CPK.aggAgregado.length,'Agregados','pu'),card('CPK',aCpk!=null?cpkFmt(aCpk,'R$ ',4)+'/km':'—','',aCpk!=null?(aCpk<=cpkNum(CPK.params.alerta_atencao||4.5)?'gn':aCpk<=cpkNum(CPK.params.alerta_critico||5.5)?'am':'rd'):''),card('Rec./km',aRec!=null?cpkFmt(aRec,'R$ ',4)+'/km':'—',''),card('Saldo SZI',cpkFmt(agrSZI),'Créd − Déb',agrSZI>=0?'gn':'rd'),card('KM',cpkFmtKm(aKm),''),card('Sem SZI',CPK.aggAgregado.filter(p=>p.szi_debitos===0&&p.szi_creditos===0).length+' placas','sem lançamentos SZI')].join('');
+  cpkRenderVGCharts();cpkRenderTopPlacasVG();
+}
+
+function cpkRenderVGCharts(){
+  cpkChartDestroy('periodo');const c1=document.getElementById('ch-periodo');
+  if(c1&&CPK.viagens.length){const bm={};for(const v of CPK.viagens){const m=(v.dtEmissao||'').slice(0,7);if(!m)continue;if(!bm[m])bm[m]={fat:0,km:0};bm[m].fat+=v.fat;bm[m].km+=v.km||0;}const ms=Object.keys(bm).sort();CPK.charts.periodo=new Chart(c1,{type:'line',data:{labels:ms.map(m=>m.slice(5)+'/'+m.slice(0,4)),datasets:[{label:'Rec./km',data:ms.map(m=>bm[m].km>0?bm[m].fat/bm[m].km:null),borderColor:'#057a55',tension:.3,pointRadius:3}]},options:{responsive:true,plugins:{legend:{labels:{font:{size:10}}}},scales:{y:{ticks:{font:{size:10},callback:v=>v?'R$'+v.toFixed(2):null}}}}});}
+  cpkChartDestroy('composicao');const c2=document.getElementById('ch-composicao');
+  if(c2){const todos=[...CPK.aggPlaca,...CPK.aggAgregado];const d=todos.reduce((s,p)=>s+(p.custo_diesel||0),0),m=todos.reduce((s,p)=>s+(p.custo_manut||0),0),pn=todos.reduce((s,p)=>s+(p.custo_pneus||0),0),ad=todos.reduce((s,p)=>s+(p.custo_adm||0),0),op=todos.reduce((s,p)=>s+(p.custo_op||0),0),si=todos.reduce((s,p)=>s+(p.szi_debitos||0),0),ot=todos.reduce((s,p)=>s+(p.custo_zza_outros||0),0);if([d,m,pn,ad,op,si,ot].some(v=>v>0))CPK.charts.composicao=new Chart(c2,{type:'doughnut',data:{labels:['Diesel','Manutenção','Pneus','Administrativo','Operacional','SZI Débitos','Outros'],datasets:[{data:[d,m,pn,ad,op,si,ot],backgroundColor:['#1a56db','#f59e0b','#057a55','#6d28d9','#0e7490','#a0616d','#6b7a96']}]},options:{responsive:true,plugins:{legend:{labels:{font:{size:9}}}}}});}
+  cpkChartDestroy('unidade');const c3=document.getElementById('ch-unidade');
+  if(c3){const unis=['SC','PR','SP'];const cpks=unis.map(u=>{const pl=[...CPK.aggPlaca,...CPK.aggAgregado].filter(p=>p.unidade===u);const km=pl.reduce((s,p)=>s+(p.km_total||0),0),custo=pl.reduce((s,p)=>s+(p.custo_total||0),0);return km>0?custo/km:null;});const meta=cpkNum(CPK.params.meta_cpk||5);CPK.charts.unidade=new Chart(c3,{type:'bar',data:{labels:unis,datasets:[{label:'CPK',data:cpks,backgroundColor:cpks.map(c=>c?cpkStatusColor(cpkStatus(c)):'rgba(107,122,150,.4)')},{label:'Meta',data:unis.map(_=>meta),type:'line',borderColor:'#c81e1e',borderDash:[4,4],pointRadius:0,borderWidth:1.5}]},options:{responsive:true,plugins:{legend:{labels:{font:{size:10}}}},scales:{y:{ticks:{font:{size:10},callback:v=>v?'R$'+v.toFixed(2):null}}}}});}
+  cpkChartDestroy('vinculo');const c4=document.getElementById('ch-vinculo');
+  if(c4){const pKm=CPK.aggPlaca.reduce((s,p)=>s+(p.km_total||0),0),pFat=CPK.aggPlaca.reduce((s,p)=>s+(p.faturamento||0),0),pC=CPK.aggPlaca.reduce((s,p)=>s+(p.custo_total||0),0);const aKm=CPK.aggAgregado.reduce((s,p)=>s+(p.km_total||0),0),aFat=CPK.aggAgregado.reduce((s,p)=>s+(p.faturamento||0),0),aC=CPK.aggAgregado.reduce((s,p)=>s+(p.custo_total||0),0);CPK.charts.vinculo=new Chart(c4,{type:'bar',data:{labels:['Frota Própria','Agregados'],datasets:[{label:'CPK',data:[pKm>0?pC/pKm:0,aKm>0?aC/aKm:0],backgroundColor:['rgba(26,86,219,.65)','rgba(109,40,217,.65)']},{label:'Rec./km',data:[pKm>0?pFat/pKm:0,aKm>0?aFat/aKm:0],backgroundColor:['rgba(5,122,85,.65)','rgba(5,122,85,.4)']}]},options:{responsive:true,plugins:{legend:{labels:{font:{size:10}}}},scales:{y:{ticks:{font:{size:10},callback:v=>v?'R$'+v.toFixed(2):null}}}}});}
+}
+
+function cpkRenderTopPlacasVG(){
+  const todos=[...CPK.aggPlaca,...CPK.aggAgregado];
+  const piores=[...todos].filter(p=>p.margem_km!=null).sort((a,b)=>(a.margem_km||0)-(b.margem_km||0)).slice(0,10);
+  const melhores=[...todos].filter(p=>p.margem_km!=null).sort((a,b)=>(b.margem_km||0)-(a.margem_km||0)).slice(0,10);
+  function rows(items){return items.map(p=>`<tr><td class="mono">${p.placa||'—'}</td><td class="mono">${p.frota||'—'}</td><td><span class="bdg ${p.vinculo==='proprio'?'bac':'bp'}">${p.vinculo==='proprio'?'Pr.':'Agr.'}</span></td><td>${p.unidade||'—'}</td><td class="r" style="color:${(p.margem_km||0)<0?'var(--rd)':'var(--gn)'}">${cpkFmt(p.margem_km,'R$ ',4)}</td><td>${cpkStatusBadge(p.status)}</td></tr>`).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--mu);padding:10px">—</td></tr>';}
+  const tp=document.querySelector('#tbl-vg-piores tbody');if(tp)tp.innerHTML=rows(piores);
+  const tm=document.querySelector('#tbl-vg-melhores tbody');if(tm)tm.innerHTML=rows(melhores);
+}
+
+// ── RENDER: FROTA PRÓPRIA ─────────────────────────────────────────
+function cpkRenderProprio(){
+  const data=CPK.filtrados.proprio||CPK.aggPlaca;
+  const el=document.getElementById('prop-count');if(el)el.textContent=data.length+' placas';
+  const pKm=data.reduce((s,p)=>s+(p.km_total||0),0),pFat=data.reduce((s,p)=>s+(p.faturamento||0),0),pCusto=data.reduce((s,p)=>s+(p.custo_total||0),0);
+  const pCpk=pKm>0?pCusto/pKm:null,pRec=pKm>0?pFat/pKm:null,pMarg=pCpk!=null&&pRec!=null?pRec-pCpk:null;
+  const pc=document.getElementById('prop-cards');
+  if(pc)pc.innerHTML=[card('Placas Próprias',data.length,''),card('CPK',pCpk!=null?cpkFmt(pCpk,'R$ ',4)+'/km':'—','',pCpk!=null?(pCpk<=cpkNum(CPK.params.alerta_atencao||4.5)?'gn':pCpk<=cpkNum(CPK.params.alerta_critico||5.5)?'am':'rd'):''),card('Rec./km',pRec!=null?cpkFmt(pRec,'R$ ',4)+'/km':'—',''),card('Marg./km',pMarg!=null?cpkFmt(pMarg,'R$ ',4)+'/km':'—','',pMarg!=null?(pMarg>=0?'gn':'rd'):''),card('KM Total',cpkFmtKm(pKm),''),card('Diesel Real',data.filter(p=>p.diesel_fonte==='szc').length+'/'+data.length+' placas','c/ SZC real','gn'),card('Diesel Est.',data.filter(p=>p.diesel_fonte==='estimado').length+' placas','estimado','am'),card('Sem Diesel',data.filter(p=>p.diesel_fonte==='nd').length+' placas','sem dado',(data.filter(p=>p.diesel_fonte==='nd').length>0)?'rd':'')].join('');
+  const tbody=document.querySelector('#tbl-proprio tbody');
+  if(!tbody)return;
+  tbody.innerHTML=data.map(p=>`<tr onclick="cpkOpenPlacaDetail('${p.placa}')" style="cursor:pointer"><td class="mono"><strong>${p.placa||'—'}</strong></td><td class="mono">${p.frota||'—'}</td><td>${cpkAbrev(p.motorista||'—',14)}</td><td>${p.unidade||'—'}</td><td class="r">${p.viagens||0}</td><td class="r">${cpkFmtKm(p.km_total)}</td><td class="r">${cpkFmt(p.custo_diesel)}</td><td>${cpkFonteBadge(p.diesel_fonte||'nd')}</td><td class="r">${cpkFmt(p.custo_manut)}</td><td class="r">${cpkFmt(p.custo_pneus)}</td><td class="r">${cpkFmt((p.custo_op||0)+(p.custo_adm||0)+(p.custo_zza_outros||0))}</td><td class="r">${cpkFmt(p.custo_total)}</td><td class="r">${cpkFmt(p.faturamento)}</td><td class="r" style="font-weight:600">${p.cpk_total!=null?cpkFmt(p.cpk_total,'R$ ',4):'⚠ Ins.'}</td><td class="r">${cpkFmt(p.receita_km,'R$ ',4)}</td><td class="r" style="color:${(p.margem_km||0)<0?'var(--rd)':'var(--gn)'}">${cpkFmt(p.margem_km,'R$ ',4)}</td><td class="r">${p.margem_pct!=null?p.margem_pct.toFixed(1)+'%':'—'}</td><td><span class="bdg bm">${p.vinc_fonte||'?'}</span></td><td>${cpkStatusBadge(p.status)}</td><td><button class="btn-icon" onclick="event.stopPropagation();cpkOpenPlacaDetail('${p.placa}')">🔍</button></td></tr>`).join('')||`<tr><td colspan="20" style="text-align:center;color:var(--mu);padding:14px">${!CPK.szbLoaded?'SZB não carregado':'Nenhum resultado'}</td></tr>`;
+}
+
+// ── RENDER: AGREGADOS ─────────────────────────────────────────────
+function cpkRenderAgregado(){
+  const data=CPK.filtrados.agregado||CPK.aggAgregado;
+  const el=document.getElementById('agr-count');if(el)el.textContent=data.length+' placas';
+  const aKm=data.reduce((s,p)=>s+(p.km_total||0),0),aFat=data.reduce((s,p)=>s+(p.faturamento||0),0);
+  const aDeb=data.reduce((s,p)=>s+(p.szi_debitos||0),0),aCred=data.reduce((s,p)=>s+(p.szi_creditos||0),0),aSaldo=aCred-aDeb;
+  const aCpk=aKm>0?data.reduce((s,p)=>s+(p.custo_total||0),0)/aKm:null;
+  const ac=document.getElementById('agr-cards');
+  if(ac)ac.innerHTML=[card('Placas Agr.',data.length,'','pu'),card('CPK',aCpk!=null?cpkFmt(aCpk,'R$ ',4)+'/km':'—',''),card('Rec./km',aKm>0?cpkFmt(aFat/aKm,'R$ ',4)+'/km':'—',''),card('Total Débitos SZI',cpkFmt(aDeb),'descontos/custos','rd'),card('Total Créditos SZI',cpkFmt(aCred),'valores pagos','gn'),card('Saldo SZI',cpkFmt(aSaldo),'Créd − Déb',aSaldo>=0?'gn':'rd'),card('KM Total',cpkFmtKm(aKm),''),card('Sem SZI',data.filter(p=>p.szi_debitos===0&&p.szi_creditos===0).length+' placas','sem lançamentos',(data.filter(p=>p.szi_debitos===0&&p.szi_creditos===0).length>0)?'am':'')].join('');
+  const tbody=document.querySelector('#tbl-agregado tbody');
+  if(tbody)tbody.innerHTML=data.map(p=>`<tr onclick="cpkOpenPlacaDetail('${p.placa}')" style="cursor:pointer"><td class="mono"><strong>${p.placa||'—'}</strong></td><td>${cpkAbrev(p.nomeAgg||p.frota||'—',16)}</td><td>${cpkAbrev(p.motorista||'—',14)}</td><td>${p.unidade||'—'}</td><td class="r">${p.viagens||0}</td><td class="r">${cpkFmtKm(p.km_total)}</td><td class="r" style="color:var(--rd)">${cpkFmt(p.szi_debitos)}</td><td class="r" style="color:var(--gn)">${cpkFmt(p.szi_creditos)}</td><td class="r" style="color:${(p.szi_saldo||0)>=0?'var(--gn)':'var(--rd)'};font-weight:600">${cpkFmt(p.szi_saldo)}</td><td class="r">${cpkFmt(p.faturamento)}</td><td class="r">${p.cpk_total!=null?cpkFmt(p.cpk_total,'R$ ',4):'⚠ Ins.'}</td><td class="r">${cpkFmt(p.receita_km,'R$ ',4)}</td><td class="r" style="color:${(p.margem_km||0)<0?'var(--rd)':'var(--gn)'}">${cpkFmt(p.margem_km,'R$ ',4)}</td><td class="r">${p.margem_pct!=null?p.margem_pct.toFixed(1)+'%':'—'}</td><td>${cpkStatusBadge(p.status)}</td><td><button class="btn-icon" onclick="event.stopPropagation();cpkOpenPlacaDetail('${p.placa}')">🔍</button></td></tr>`).join('')||`<tr><td colspan="16" style="text-align:center;color:var(--mu);padding:14px">${CPK.sziLoaded?'Nenhum resultado':'SZI não carregado — carregar na aba Custos'}</td></tr>`;
+  const sziCount=document.getElementById('szi-count');if(sziCount)sziCount.textContent=(CPK.szi||[]).length+' lançamentos';
+  const sziTbody=document.querySelector('#tbl-szi tbody');
+  if(sziTbody)sziTbody.innerHTML=(CPK.szi||[]).slice(0,300).map(r=>{const dc=cpkStr(r['Deb / Cred']||'');const val=cpkNum(r['Valor']||0);return`<tr><td class="mono">${cpkNormDate(r['Data']||'')}</td><td class="mono">${cpkNormPlaca(r['Veiculo']||'')}</td><td>${cpkAbrev(r['Nome Motoris']||'—',14)}</td><td>${cpkAbrev(r['Nome']||'—',14)}</td><td title="${cpkStr(r['Descricao']||r['Id Deb Autom']||'')}">${cpkAbrev(r['Descricao']||r['Id Deb Autom']||'—',28)}</td><td><span class="bdg ${dc==='CREDITO'?'bg':'br'}">${dc}</span></td><td class="r" style="color:${dc==='CREDITO'?'var(--gn)':'var(--rd)'}">${cpkFmt(val)}</td><td>${cpkStr(r['Descr Oper']||'')}</td></tr>`;}).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--mu);padding:10px">SZI não carregado</td></tr>';
+}
+
+// ── RENDER: ROTAS ─────────────────────────────────────────────────
+function cpkRenderRotas(){
+  const data=CPK.filtrados.rota||CPK.aggRota;
+  const rc=document.getElementById('rota-count');if(rc)rc.textContent=data.length+' rotas';
+  const comKm=data.filter(r=>r.km_total>0).length,comSZY=data.filter(r=>r.fonte_km==='szy').length;
+  const rcards=document.getElementById('rotas-cards');
+  if(rcards)rcards.innerHTML=[card('Rotas',data.length,''),card('Com KM',comKm+' ('+((data.length?comKm/data.length*100:0).toFixed(0))+'%)','','gn'),card('Via SZY',comSZY,'KM revisado','pu'),card('Sem KM',data.length-comKm,'sem distância','am'),card('KM Total',cpkFmtKm(CPK.totais?.km_total),'ida+volta (retorno vazio)')].join('');
+  const tbody=document.querySelector('#tbl-rota tbody');
+  if(tbody)tbody.innerHTML=data.map(r=>{const sD=CPK.szy[r.rota_cod];return`<tr><td>${cpkAbrev(r.rota_nome||'—',18)}</td><td class="mono">${r.rota_cod||'—'}</td><td>${cpkAbrev(r.localColeta||'—',10)}</td><td>${r.ufOrigem||'—'}</td><td>${cpkAbrev(r.localEntreg||'—',10)}</td><td>${r.ufDestino||'—'}</td><td class="r">${r.viagens||0}</td><td class="r">${sD&&sD.km_ida>0?cpkFmtKm(sD.km_ida):'—'}</td><td class="r">${sD&&sD.km_volta>0?cpkFmtKm(sD.km_volta):'—'}</td><td class="r"><strong>${r.km_total>0?cpkFmtKm(r.km_total):'<span class="bdg br">S/ KM</span>'}</strong></td><td class="r">${cpkFmt(r.faturamento)}</td><td class="r">${cpkFmt(r.receita_km,'R$ ',4)}</td><td class="r">${r.cpk_total!=null?cpkFmt(r.cpk_total,'R$ ',4):'—'}</td><td class="r" style="color:${(r.margem_km||0)<0?'var(--rd)':'var(--gn)'}">${cpkFmt(r.margem_km,'R$ ',4)}</td><td class="r">${r.margem_pct!=null?r.margem_pct.toFixed(1)+'%':'—'}</td><td>${cpkFonteBadge(r.fonte_km||'pendente')}</td><td>${sD?`<span class="bdg ${sD.revisto?'bg':'ba'}">${sD.revisto?'Sim':'Não'}</span>`:'<span class="bdg bm">N/D</span>'}</td></tr>`;}).join('')||'<tr><td colspan="17" style="text-align:center;color:var(--mu);padding:12px">Sem dados</td></tr>';
+  const vc=document.getElementById('viagem-count');if(vc)vc.textContent=(CPK.filtrados.viagem||[]).length+' viagens';
+  const vtbody=document.querySelector('#tbl-viagem tbody');
+  if(vtbody)vtbody.innerHTML=(CPK.filtrados.viagem||[]).slice(0,300).map(v=>`<tr><td class="mono">${v.dtEmissao||'—'}</td><td class="mono">${v.ctrc||'—'}</td><td class="mono">${v.placa||'—'}</td><td>${cpkAbrev(v.motorista||'—',12)}</td><td title="${v.cliente||''}">${cpkAbrev(v.cliente||'—',15)}</td><td class="mono">${v.rota||'—'}</td><td>${cpkAbrev(v.localColeta||'—',10)}</td><td>${cpkAbrev(v.localEntreg||'—',10)}</td><td class="r">${v.km>0?cpkFmtKm(v.km):'<span class="bdg ba">Pend.</span>'}</td><td class="r">${cpkFmt(v.fat)}</td><td class="r">${v.km>0?cpkFmt(v.fat/v.km,'R$ ',4):'—'}</td><td>${cpkFonteBadge(v.fonte_km||'pendente')}</td><td><span class="bdg ${v.vinculo==='proprio'?'bac':'bp'}">${v.vinculo==='proprio'?'Pr.':'Agr.'}</span></td></tr>`).join('')||'<tr><td colspan="13" style="text-align:center;color:var(--mu);padding:12px">Sem dados</td></tr>';
+  const semKmDiv=document.getElementById('subtab-rotas-sem-km');
+  if(semKmDiv&&semKmDiv.style.display!=='none'){const semKm=(CPK.filtrados.viagem||[]).filter(v=>v.km===0);const byRota={};for(const v of semKm){const k=v.rota||(`${v.localColeta}|${v.localEntreg}`);if(!byRota[k])byRota[k]={rota:v.rota,orig:v.localColeta,ufO:v.ufOrigem,dest:v.localEntreg,ufD:v.ufDestino,viagens:0,fat:0};byRota[k].viagens++;byRota[k].fat+=v.fat;}semKmDiv.innerHTML=`<div class="cpk-nd" style="margin-bottom:8px">⚠️ <span><strong>${semKm.length} viagens sem KM</strong>${CPK.szyLoaded?' — SZY carregado mas não cobriu estas rotas.':' — Carregue SZY para resolver automaticamente.'}</span></div><div class="cpk-tw"><div class="cpk-th3"><span class="cpk-tt">Rotas sem KM</span></div><div class="cpk-to"><table class="dt"><thead><tr><th>Rota</th><th>Origem</th><th>UF</th><th>Destino</th><th>UF</th><th>Viagens</th><th>Faturamento</th></tr></thead><tbody>${Object.values(byRota).sort((a,b)=>b.fat-a.fat).map(r=>`<tr><td class="mono">${r.rota||'—'}</td><td>${cpkAbrev(r.orig||'—',10)}</td><td>${r.ufO||'—'}</td><td>${cpkAbrev(r.dest||'—',10)}</td><td>${r.ufD||'—'}</td><td class="r">${r.viagens}</td><td class="r">${cpkFmt(r.fat)}</td></tr>`).join('')}</tbody></table></div></div>`;}
+}
+
+// ── RENDER: PLACAS ────────────────────────────────────────────────
+function cpkRenderPlacas(){
+  const data=CPK.filtrados.placas||[...CPK.aggPlaca,...CPK.aggAgregado];
+  const el=document.getElementById('placas-count');if(el)el.textContent=data.length+' placas';
+  const tbody=document.querySelector('#tbl-placas tbody');
+  if(!tbody)return;
+  tbody.innerHTML=data.map(p=>`<tr onclick="cpkOpenPlacaDetail('${p.placa}')" style="cursor:pointer"><td class="mono"><strong>${p.placa||'—'}</strong></td><td class="mono">${p.frota||'—'}</td><td>${p.categoria||'—'}</td><td><span class="bdg ${p.vinculo==='proprio'?'bac':'bp'}">${p.vinculo==='proprio'?'Próprio':'Agregado'}</span></td><td>${p.unidade||'—'}</td><td>${cpkAbrev(p.motorista||'—',12)}</td><td class="r">${p.viagens||0}</td><td class="r">${cpkFmtKm(p.km_total)}</td><td class="r">${cpkFmt(p.custo_diesel)}</td><td>${cpkFonteBadge(p.diesel_fonte||'nd')}</td><td class="r">${cpkFmt(p.custo_manut)}</td><td class="r">${cpkFmt(p.custo_pneus)}</td><td class="r">${cpkFmt((p.custo_op||0)+(p.custo_adm||0)+(p.custo_zza_outros||0))}</td><td class="r" style="color:${(p.szi_saldo||0)>=0?'var(--gn)':'var(--rd)'}">${p.vinculo==='agregado'?cpkFmt(p.szi_saldo):'—'}</td><td class="r"><strong>${cpkFmt(p.custo_total)}</strong></td><td class="r">${cpkFmt(p.faturamento)}</td><td class="r" style="font-weight:600">${p.cpk_total!=null?cpkFmt(p.cpk_total,'R$ ',4):'⚠ Ins.'}</td><td class="r">${cpkFmt(p.receita_km,'R$ ',4)}</td><td class="r" style="color:${(p.margem_km||0)<0?'var(--rd)':'var(--gn)'}">${cpkFmt(p.margem_km,'R$ ',4)}</td><td class="r">${p.margem_pct!=null?p.margem_pct.toFixed(1)+'%':'—'}</td><td>${cpkStatusBadge(p.status)}</td><td><button class="btn-icon" onclick="event.stopPropagation();cpkOpenPlacaDetail('${p.placa}')">🔍</button></td></tr>`).join('')||'<tr><td colspan="22" style="text-align:center;color:var(--mu);padding:14px">Sem dados</td></tr>';
+}
+
+// ── RENDER: CLIENTES ──────────────────────────────────────────────
+function cpkRenderClientes(){
+  const data=CPK.filtrados.cliente||CPK.aggCliente;
+  const el=document.getElementById('cli-count');if(el)el.textContent=data.length+' clientes';
+  const tbody=document.querySelector('#tbl-clientes tbody');
+  if(!tbody)return;
+  tbody.innerHTML=data.map(c=>{const al=[];if(c.margem_pct!=null&&c.margem_pct<0)al.push('<span class="bdg br">Marg. neg.</span>');if(c.faturamento>100000&&(c.margem_pct||100)<5)al.push('<span class="bdg ba">Fat. alto</span>');if(c.sem_km>0)al.push(`<span class="bdg bm">${c.sem_km} s/KM</span>`);return`<tr><td title="${c.nome||''}">${cpkAbrev(c.nome||'—',22)}</td><td>${c.tipo_frete||'—'}</td><td>${c.tipo_servico||'—'}</td><td>${c.unidade||'—'}</td><td class="r">${c.viagens||0}</td><td class="r">${cpkFmtKm(c.km_total)}</td><td class="r">${cpkFmt(c.faturamento)}</td><td class="r">${cpkFmt(c.receita_km,'R$ ',4)}</td><td class="r">${c.cpk_total!=null?cpkFmt(c.cpk_total,'R$ ',4):'⚠ Ins.'}</td><td class="r" style="color:${(c.margem_km||0)<0?'var(--rd)':'var(--gn)'}">${cpkFmt(c.margem_km,'R$ ',4)}</td><td class="r" style="color:${(c.margem_pct||0)<0?'var(--rd)':'inherit'}">${c.margem_pct!=null?c.margem_pct.toFixed(1)+'%':'—'}</td><td class="r">${c.markup!=null?c.markup.toFixed(1)+'%':'—'}</td><td class="r">${c.proprio||0}</td><td class="r">${c.agregado||0}</td><td>${al.join(' ')||'<span class="bdg bg">OK</span>'}</td><td><button class="btn-icon" onclick="cpkOpenClienteDetail('${encodeURIComponent(c.nome||'')}')">🔍</button></td></tr>`;}).join('')||'<tr><td colspan="16" style="text-align:center;color:var(--mu);padding:12px">Sem dados</td></tr>';
+}
+
+// ── RENDER: CUSTOS ────────────────────────────────────────────────
+function cpkRenderCustos(){
+  const dt=document.getElementById('diesel-total'),db=document.getElementById('diesel-badges'),ds=document.getElementById('diesel-stats');
+  if(dt){const dv=Object.values(CPK.szc_por_placa||{}).reduce((s,e)=>s+e.valor_total,0),dl=Object.values(CPK.szc_por_placa||{}).reduce((s,e)=>s+e.litros_diesel,0),dp=Object.keys(CPK.szc_por_placa||{}).length;dt.textContent=CPK.szcLoaded?cpkFmt(dv):'N/D';if(db)db.innerHTML=CPK.szcLoaded?`<span class="bdg bg">${(CPK.szc||[]).length} abastec.</span> <span class="bdg bac">${dp} placas</span>`:' <span class="bdg br">SZC não carregado</span>';if(ds)ds.innerHTML=CPK.szcLoaded?`<div class="cc-stat"><span class="cs-lbl">Diesel</span><span class="cs-val">${cpkFmt(Object.values(CPK.szc_por_placa||{}).reduce((s,e)=>s+e.valor_diesel,0))}</span></div><div class="cc-stat"><span class="cs-lbl">Arla</span><span class="cs-val">${cpkFmt(Object.values(CPK.szc_por_placa||{}).reduce((s,e)=>s+e.valor_arla,0))}</span></div><div class="cc-stat"><span class="cs-lbl">Litros</span><span class="cs-val">${dl.toLocaleString('pt-BR',{maximumFractionDigits:0})}L</span></div>`:' Carregue a planilha SZC na área acima.';}
+  const zt=document.getElementById('zza-total'),zb=document.getElementById('zza-badges'),zs=document.getElementById('zza-stats');
+  if(zt){const zv=(CPK.zza_categorizado||[]).filter(i=>i.dc!=='CREDITO').reduce((s,i)=>s+i.valor_abs,0),nc=(CPK.filtrados.nc||[]).length;zt.textContent=CPK.zzaLoaded?cpkFmt(zv):'N/D';if(zb)zb.innerHTML=CPK.zzaLoaded?`<span class="bdg bg">${(CPK.zza||[]).length} itens</span>${nc>0?` <span class="bdg ba">${nc} não categ.</span>`:''}`:'<span class="bdg br">ZZA não carregado</span>';const grupos={};for(const i of(CPK.zza_categorizado||[])){if(i.dc==='CREDITO')continue;grupos[i.cat.grupo]=(grupos[i.cat.grupo]||0)+i.valor_abs;}if(zs)zs.innerHTML=Object.entries(grupos).map(([g,v])=>`<div class="cc-stat"><span class="cs-lbl">${g}</span><span class="cs-val">${cpkFmt(v)}</span></div>`).join('')||(CPK.zzaLoaded?'':'Carregue a planilha ZZA.');}
+  const st=document.getElementById('szi-total'),sb=document.getElementById('szi-badges'),ss=document.getElementById('szi-stats');
+  if(st){const sd=Object.values(CPK.szi_por_placa||{}).reduce((s,e)=>s+e.debitos,0),sc=Object.values(CPK.szi_por_placa||{}).reduce((s,e)=>s+e.creditos,0),ss2=sc-sd;st.textContent=CPK.sziLoaded?cpkFmt(ss2):'N/D';if(sb)sb.innerHTML=CPK.sziLoaded?`<span class="bdg br">Déb: ${cpkFmt(sd)}</span> <span class="bdg bg">Créd: ${cpkFmt(sc)}</span>`:'<span class="bdg br">SZI não carregado</span>';if(ss)ss.innerHTML=CPK.sziLoaded?`<div class="cc-stat"><span class="cs-lbl">Débitos</span><span class="cs-val" style="color:var(--rd)">${cpkFmt(sd)}</span></div><div class="cc-stat"><span class="cs-lbl">Créditos</span><span class="cs-val" style="color:var(--gn)">${cpkFmt(sc)}</span></div><div class="cc-stat"><span class="cs-lbl">Saldo</span><span class="cs-val" style="color:${ss2>=0?'var(--gn)':'var(--rd)'}">${cpkFmt(ss2)}</span></div>`:'Carregue SZI.';}
+  const rt=document.getElementById('rateio-total'),rl=document.getElementById('rateio-list-area');
+  if(rt)rt.textContent=cpkFmt(CPK.rateios.reduce((s,r)=>s+cpkNum(r.valor),0));
+  if(rl)rl.innerHTML=!CPK.rateios.length?`<div style="color:var(--mu);font-size:11.5px;padding:6px 0">Nenhum rateio.${CPK.isAdmin?' Clique "+ Lançar Rateio".':''}</div>`:`<table class="dt"><thead><tr><th>Mês</th><th>Unidade</th><th>Categoria</th><th>Valor</th><th>Rateio</th>${CPK.isAdmin?'<th>Ação</th>':''}</tr></thead><tbody>${CPK.rateios.map(r=>`<tr><td>${r.mes||'—'}</td><td>${r.unidade||'—'}</td><td>${r.categoria||'—'}</td><td class="r">${cpkFmt(cpkNum(r.valor))}</td><td>${r.forma_rateio||'—'}</td>${CPK.isAdmin?`<td><button class="btn-icon" onclick="cpkDeleteRateio('${r._id||''}')">🗑</button></td>`:''}</tr>`).join('')}</tbody></table>`;
+}
+
+// ── RENDER: CATEGORIAS ────────────────────────────────────────────
+function cpkRenderCategorias(){
+  if(!CPK.zzaLoaded){document.getElementById('cat-grid-macro').innerHTML='<div class="cpk-nd">⚠️ ZZA não carregado. Carregue na aba Custos.</div>';return;}
+  const grupos={},cats={};
+  for(const i of(CPK.zza_categorizado||[])){
+    if(i.dc==='CREDITO')continue;
+    if(!grupos[i.cat.grupo])grupos[i.cat.grupo]={val:0,cnt:0};grupos[i.cat.grupo].val+=i.valor_abs;grupos[i.cat.grupo].cnt++;
+    const ck=i.cat.grupo+'||'+i.cat.cat;if(!cats[ck])cats[ck]={grupo:i.cat.grupo,cat:i.cat.cat,val:0,cnt:0};cats[ck].val+=i.valor_abs;cats[ck].cnt++;
+  }
+  const colors={'Manutenção':'#f59e0b',Pneus:'#057a55',Operacional:'#1a56db',Administrativo:'#6d28d9',Combustível:'#c81e1e',Agregado:'#0e7490',Outros:'#6b7a96'};
+  const mg=document.getElementById('cat-grid-macro');if(mg)mg.innerHTML=Object.entries(grupos).sort((a,b)=>b[1].val-a[1].val).map(([g,{val,cnt}])=>`<div class="cat-item" style="border-left:3px solid ${colors[g]||'#6b7a96'}"><div class="ci-lbl">${g}</div><div class="ci-val">${cpkFmt(val)}</div><div class="ci-cnt">${cnt} lançamentos</div></div>`).join('')||'<div style="color:var(--mu)">Nenhuma despesa categorizada.</div>';
+  const dg=document.getElementById('cat-grid-detail');if(dg)dg.innerHTML=Object.entries(cats).sort((a,b)=>b[1].val-a[1].val).map(([_,{grupo,cat,val,cnt}])=>`<div class="cat-item"><div class="ci-lbl" style="font-size:8.5px">${grupo}</div><div class="ci-lbl">${cat}</div><div class="ci-val">${cpkFmt(val)}</div><div class="ci-cnt">${cnt} lançamentos</div></div>`).join('');
+  const nc=CPK.filtrados.nc||(CPK.zza_categorizado||[]).filter(i=>i.cat.grupo==='Outros'&&i.cat.cat==='Não categorizado');
+  const ncc=document.getElementById('nc-count');if(ncc)ncc.textContent=nc.length+' itens';
+  const ncTbody=document.querySelector('#tbl-nc tbody');
+  if(ncTbody)ncTbody.innerHTML=nc.map((item,idx)=>`<tr><td><input type="checkbox" class="nc-chk" data-idx="${idx}"></td><td class="mono">${item.data||'—'}</td><td class="mono">${item.placa||'—'}</td><td title="${item.desc}">${cpkAbrev(item.desc||'—',35)}</td><td class="r">${cpkFmt(item.valor_abs)}</td><td><span class="bdg bm">Não categ.</span></td><td><select class="cpk-ts" style="width:160px;height:22px;font-size:10px" onchange="cpkClassificarItem(${idx},this.value)"><option value="">— Classificar —</option><option value="Manutenção|Manutenção — Peças">Manut. — Peças</option><option value="Manutenção|Manutenção — Serviços">Manut. — Serviços</option><option value="Pneus|Pneus">Pneus</option><option value="Pneus|Pneus — Reforma">Pneus — Reforma</option><option value="Operacional|Operacional — Lavagem">Lavagem</option><option value="Operacional|Operacional — Pedágio">Pedágio</option><option value="Operacional|Operacional — Diárias">Diárias</option><option value="Operacional|Operacional — Reembolso">Reembolso</option><option value="Administrativo|Administrativo — Seguro">Seguro</option><option value="Administrativo|Administrativo — Licenciamento">Licenciamento</option><option value="Outros|Outros">Outros</option></select></td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--mu);padding:10px">✅ Todos categorizados!</td></tr>';
+  const rl=document.getElementById('regras-list');const rc=CPK.regras.filter(r=>!r.padrao);if(rl)rl.innerHTML=rc.length?`<table class="dt"><thead><tr><th>Palavra-chave</th><th>Grupo</th><th>Categoria</th>${CPK.isAdmin?'<th>Ação</th>':''}</tr></thead><tbody>${rc.map(r=>`<tr><td class="mono">${r.kw||'—'}</td><td>${r.grupo||'—'}</td><td>${r.cat||'—'}</td>${CPK.isAdmin?`<td><button class="btn-icon" onclick="cpkDeleteRegra('${r._id||''}')">🗑</button></td>`:''}</tr>`).join('')}</tbody></table>`:`<div style="color:var(--mu);font-size:11.5px;padding:4px 0">Nenhuma regra customizada.${CPK.isAdmin?' Use "+ Nova Regra".':''}</div>`;
+}
+
+// ── MODAIS ────────────────────────────────────────────────────────
+function cpkOpenPlacaDetail(placa){
+  const p=[...CPK.aggPlaca,...CPK.aggAgregado].find(x=>x.placa===placa);if(!p)return;
+  const veic=CPK.frota.find(v=>v.placa===placa);
+  document.getElementById('modal-detalhe-title').textContent='🚛 '+placa+' · '+(p.frota||'');
+  function row(lbl,val,color){return`<div class="detail-row"><span class="detail-lbl">${lbl}</span><span class="detail-val"${color?` style="color:${color}"`:''}>${val}</span></div>`;}
+  function sec(lbl){return`<div class="detail-sec">${lbl}</div>`;}
+  let h=sec('Identificação');
+  h+=row('Placa',p.placa||'—')+row('Frota',p.frota||'—')+row('Motorista',p.motorista||'—')+row('Unidade',p.unidade||'—')+row('Vínculo',p.vinculo==='proprio'?'Frota Própria':'Agregado')+row('Fonte Vínculo',p.vinc_fonte||'—');
+  if(veic)h+=row('Categoria',veic.categoria||'—')+row('Modelo',veic.modelo||'—')+row('Status',veic.disponibilidade||'—');
+  h+=sec('Operação');h+=row('Viagens',p.viagens||0)+row('KM Total',cpkFmtKm(p.km_total))+row('Faturamento',cpkFmt(p.faturamento));
+  h+=sec('Diesel');h+=row('Custo Diesel',cpkFmt(p.custo_diesel))+row('Arla',cpkFmt(p.custo_arla))+row('Litros',p.litros?(p.litros.toLocaleString('pt-BR',{maximumFractionDigits:0})+'L'):'—')+row('Fonte',cpkFonteBadge(p.diesel_fonte||'nd'));
+  h+=sec('Despesas ZZA');h+=row('Manutenção',cpkFmt(p.custo_manut))+row('Pneus',cpkFmt(p.custo_pneus))+row('Operacional',cpkFmt(p.custo_op))+row('Administrativo',cpkFmt(p.custo_adm));
+  if(p.vinculo==='agregado'){h+=sec('SZI — Agregado');h+=row('Débitos',cpkFmt(p.szi_debitos),'var(--rd)')+row('Créditos',cpkFmt(p.szi_creditos),'var(--gn)')+row('Saldo (C−D)',cpkFmt(p.szi_saldo),p.szi_saldo>=0?'var(--gn)':'var(--rd)');}
+  h+=sec('CPK e Margem');h+=row('CPK Total',p.cpk_total!=null?cpkFmt(p.cpk_total,'R$ ',4)+'/km':'Dados insuficientes')+row('Receita/km',cpkFmt(p.receita_km,'R$ ',4))+row('Margem/km',cpkFmt(p.margem_km,'R$ ',4),p.margem_km!=null?(p.margem_km>=0?'var(--gn)':'var(--rd)'):null)+row('Margem %',p.margem_pct!=null?p.margem_pct.toFixed(2)+'%':'—')+row('Status',cpkStatusBadge(p.status));
+  document.getElementById('modal-detalhe-body').innerHTML=h;
+  cpkOpenModal('modal-detalhe');
+}
+function cpkOpenClienteDetail(nome){
+  const c=CPK.aggCliente.find(x=>encodeURIComponent(x.nome||'')===nome);if(!c)return;
+  document.getElementById('modal-detalhe-title').textContent='👥 '+c.nome;
+  function row(lbl,val,color){return`<div class="detail-row"><span class="detail-lbl">${lbl}</span><span class="detail-val"${color?` style="color:${color}"`:''}>${val}</span></div>`;}
+  function sec(lbl){return`<div class="detail-sec">${lbl}</div>`;}
+  let h=sec('Operação')+row('Tipo Frete',c.tipo_frete||'—')+row('Tipo Serviço',c.tipo_servico||'—')+row('Unidade',c.unidade||'—')+row('Viagens',c.viagens)+row('KM Total',cpkFmtKm(c.km_total))+row('Faturamento',cpkFmt(c.faturamento));
+  h+=sec('CPK e Margem')+row('Receita/km',cpkFmt(c.receita_km,'R$ ',4))+row('CPK',c.cpk_total!=null?cpkFmt(c.cpk_total,'R$ ',4):'Insuf.')+row('Margem/km',cpkFmt(c.margem_km,'R$ ',4),c.margem_km!=null?(c.margem_km>=0?'var(--gn)':'var(--rd)'):null)+row('Margem %',c.margem_pct!=null?c.margem_pct.toFixed(2)+'%':'—');
+  h+=sec('Mix de Frota')+row('Próprias',c.proprio||0)+row('Agregados',c.agregado||0)+row('Sem KM',c.sem_km||0);
+  document.getElementById('modal-detalhe-body').innerHTML=h;cpkOpenModal('modal-detalhe');
+}
+
+// ── CLASSIFY / REGRAS ─────────────────────────────────────────────
+function cpkClassificarItem(idx,val){
+  if(!val)return;const nc=CPK.filtrados.nc||[];const item=nc[idx];if(!item)return;
+  const[grupo,cat]=val.split('|');item.cat={grupo,cat:cat||grupo,sub:''};
+  CPK.filtrados.nc=nc.filter((_,i)=>i!==idx);cpkToast('Classificado como: '+cat);cpkRenderCategorias();
+}
+function cpkNcSelAll(chk){document.querySelectorAll('.nc-chk').forEach(c=>c.checked=chk.checked);}
+function cpkClassificarLote(){
+  const checked=[...document.querySelectorAll('.nc-chk:checked')];if(!checked.length){cpkToast('Selecione ao menos um item.');return;}
+  const sel=prompt('Classificar como (ex: Manutenção|Manutenção — Peças):','Manutenção|Manutenção — Peças');if(!sel)return;
+  const[grupo,cat]=sel.split('|');checked.forEach(chk=>{const idx=parseInt(chk.dataset.idx);const item=(CPK.filtrados.nc||[])[idx];if(item)item.cat={grupo,cat:cat||grupo,sub:''};});
+  CPK.filtrados.nc=(CPK.filtrados.nc||[]).filter(i=>i.cat.grupo!='Outros'||i.cat.cat!='Não categorizado');
+  cpkToast(checked.length+' itens classificados.');cpkRenderCategorias();
+}
+
+// ── RATEIOS ───────────────────────────────────────────────────────
+function cpkOpenRateioForm(){if(!CPK.isAdmin)return;document.getElementById('rat-mes').value=document.getElementById('f-mes')?.value||'';document.getElementById('rat-edit-id').value='';cpkOpenModal('modal-rateio');}
+async function cpkSaveRateio(){
+  if(!CPK.isAdmin)return;
+  const mes=document.getElementById('rat-mes').value,unidade=document.getElementById('rat-unidade').value,categoria=document.getElementById('rat-categoria').value,valor=cpkNum(document.getElementById('rat-valor').value);
+  if(!mes||!categoria||valor<=0){cpkToast('Preencha: mês, categoria e valor.');return;}
+  const data={mes,unidade,categoria,valor,forma_rateio:document.getElementById('rat-forma').value,vinculo:document.getElementById('rat-vinculo').value,obs:document.getElementById('rat-obs').value.trim(),updatedAt:new Date().toISOString(),updatedBy:CPK.user?.email||'—'};
+  try{await cpkFsAdd('cpk_lancamentos',{...data,createdAt:new Date().toISOString(),createdBy:CPK.user?.email||'—'});cpkToast('Rateio salvo!');cpkCloseModal('modal-rateio');await cpkLoadRateios();cpkRenderCustos();}catch(e){cpkToast('Erro: '+e.message);}
+}
+async function cpkDeleteRateio(id){if(!CPK.isAdmin)return;if(!confirm('Excluir rateio?'))return;try{await cpkFsDel('cpk_lancamentos',id);cpkToast('Excluído.');await cpkLoadRateios();cpkRenderCustos();}catch(e){cpkToast('Erro: '+e.message);}}
+
+// ── REGRAS ────────────────────────────────────────────────────────
+function cpkOpenRegraForm(){if(!CPK.isAdmin)return;cpkOpenModal('modal-regra');}
+async function cpkSaveRegra(){
+  if(!CPK.isAdmin)return;
+  const kw=document.getElementById('regra-kw').value.trim().toLowerCase();
+  const grupo=document.getElementById('regra-grupo').value;
+  const cat=document.getElementById('regra-cat').value.trim()||grupo;
+  const sub=document.getElementById('regra-sub').value.trim();
+  if(!kw||!grupo){cpkToast('Preencha palavra-chave e grupo.');return;}
+  const data={kw,grupo,cat,sub,padrao:false,createdAt:new Date().toISOString(),createdBy:CPK.user?.email||'—'};
+  try{
+    await cpkFsAdd('cpk_categorias_regras',data);cpkToast('Regra salva!');cpkCloseModal('modal-regra');await cpkLoadRegras();
+    if(CPK.zza.length){CPK.zza_categorizado=CPK.zza.map(r=>{const placa=cpkNormPlaca(r['Veiculo']||'');const data2=cpkNormDate(r['Data']||'');const mes=data2.slice(0,7);const desc=cpkStr(r['Descricao']||'');const dc=cpkStr(r['Deb / Cred']||'DEBITO');const valor=cpkNum(r['Valor']||0);const sinal=dc==='CREDITO'?-1:1;const cat2=cpkCategorizar(desc,r);return{placa,data:data2,mes,desc,dc,valor:sinal*valor,valor_abs:valor,operacao:cpkStr(r['Operacao']||''),motorista:cpkStr(r['Nome Motoris']||''),cat:cat2,_raw:r};});}
+    CPK.filtrados.nc=(CPK.zza_categorizado||[]).filter(i=>i.cat.grupo==='Outros'&&i.cat.cat==='Não categorizado');
+    cpkRenderCategorias();
+  }catch(e){cpkToast('Erro: '+e.message);}
+}
+async function cpkDeleteRegra(id){if(!CPK.isAdmin)return;if(!confirm('Excluir regra?'))return;try{await cpkFsDel('cpk_categorias_regras',id);cpkToast('Excluída.');await cpkLoadRegras();cpkRenderCategorias();}catch(e){cpkToast('Erro: '+e.message);}}
+
+// ── PARÂMETROS ────────────────────────────────────────────────────
+async function cpkSaveParams(){
+  if(!CPK.isAdmin){cpkToast('Apenas admin.');return;}
+  const g=id=>cpkNum(document.getElementById(id)?.value);
+  const data={diesel_padrao:g('p-diesel')||5.5,diesel_sc:g('p-diesel-sc')||null,diesel_pr:g('p-diesel-pr')||null,diesel_sp:g('p-diesel-sp')||null,rendimento_padrao:g('p-rend')||2.5,meta_cpk:g('p-meta-cpk')||5.0,meta_margem_km:g('p-meta-marg')||0,alerta_atencao:g('p-at')||4.5,alerta_critico:g('p-cr')||5.5,rateio_padrao:document.getElementById('p-rateio')?.value||'km',updatedAt:new Date().toISOString(),updatedBy:CPK.user?.email||'—'};
+  try{await cpkFsSet('cpk_parametros','config',data);CPK.params={...CPK.params,...data};cpkToast('Parâmetros salvos!');if(CPK.szbLoaded)cpkRenderAll();}catch(e){cpkToast('Erro: '+e.message);}
+}
+
+// ── EXPORT ────────────────────────────────────────────────────────
+function cpkExportData(type){
+  const data=type==='proprio'?CPK.aggPlaca:type==='agregado'?CPK.aggAgregado:type==='rota'?CPK.aggRota:type==='cliente'?CPK.aggCliente:[];
+  if(!data.length){cpkToast('Sem dados.');return;}
+  const keys=Object.keys(data[0]).filter(k=>!k.startsWith('_')&&k!=='meses'&&k!=='r'&&k!=='filtrados');
+  const csv=[keys.join(';'),...data.map(r=>keys.map(k=>{let v=r[k];if(v instanceof Set)v=[...v].join(',');if(v==null)v='';if(typeof v==='number')v=v.toLocaleString('pt-BR');return'"'+String(v).replace(/"/g,'""')+'"';}).join(';'))].join('\n');
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='CPK_'+type+'_'+new Date().toISOString().slice(0,10)+'.csv';a.click();URL.revokeObjectURL(url);cpkToast('Exportado!');
+}
+
+// ── DOMContentLoaded ──────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded',()=>cpkInit());
+
+// ── GLOBALS ───────────────────────────────────────────────────────
+window.cpkGoTab=cpkGoTab;window.cpkGoSubTab=cpkGoSubTab;
+window.cpkApplyFilters=cpkApplyFilters;window.cpkClearFilters=cpkClearFilters;
+window.cpkFilterTable=cpkFilterTable;window.cpkSort=cpkSort;
+window.cpkOpenModal=cpkOpenModal;window.cpkCloseModal=cpkCloseModal;
+window.cpkOpenPlacaDetail=cpkOpenPlacaDetail;window.cpkOpenClienteDetail=cpkOpenClienteDetail;
+window.cpkDoLogin=cpkDoLogin;window.cpkReload=cpkReload;window.cpkExportData=cpkExportData;
+window.cpkOpenRateioForm=cpkOpenRateioForm;window.cpkSaveRateio=cpkSaveRateio;window.cpkDeleteRateio=cpkDeleteRateio;
+window.cpkOpenRegraForm=cpkOpenRegraForm;window.cpkSaveRegra=cpkSaveRegra;window.cpkDeleteRegra=cpkDeleteRegra;
+window.cpkSaveParams=cpkSaveParams;window.cpkLoadParams=cpkLoadParams;
+window.cpkClassificarItem=cpkClassificarItem;window.cpkNcSelAll=cpkNcSelAll;window.cpkClassificarLote=cpkClassificarLote;
+window.cpkDragOver=cpkDragOver;window.cpkDragOff=cpkDragOff;window.cpkDrop=cpkDrop;window.cpkFileInput=cpkFileInput;
+
+
+
 function cpkApplySZY(rows,fname){const byRota={};for(const r of rows){const raw=cpkStr(r['Codigo']||r['codigo']||'');const cod=raw.replace(/^0+/,'').padStart(6,'0');if(!cod||cod==='000000')continue;const kmIda=cpkNum(r['Km Ida']||r['KM Ida']||r['km_ida']||0);const kmVolta=cpkNum(r['Km Volta']||r['KM Volta']||r['km_volta']||0);const revisto=(r['Revisto']||'').toString().toLowerCase()==='sim';const ufO=cpkStr(r['UF Origem']||r['Uf Origem']||'');const ufD=cpkStr(r['Uf Destino']||r['UF Destino']||'');const existing=byRota[cod];if(!existing||(revisto&&!existing.revisto)||(revisto===existing.revisto&&kmIda>existing.km_ida)){byRota[cod]={km_ida:kmIda,km_volta:kmVolta,km_total:kmIda+kmVolta,revisto,uf_orig:ufO,uf_dest:ufD};}}CPK.szy=byRota;CPK.szyLoaded=true;const comKm=Object.values(byRota).filter(r=>r.km_total>0).length;const fnEl=document.getElementById('ua-szy-fn');if(fnEl)fnEl.textContent=fname+' — '+Object.keys(byRota).length+' rotas, '+comKm+' com KM';cpkToast('SZY: '+Object.keys(byRota).length+' rotas ('+comKm+' com KM)');}
 // ─── APPLY SZC ───
 function cpkApplySZC(rows,fname){CPK.szc=rows;CPK.szcLoaded=true;const byPlacaMes={};for(const r of rows){const placa=cpkNormPlaca(r['Veiculo']||r['veiculo']||'');const data=cpkNormDate(r['Data Emissao']||r['Data']||'');const mes=data.slice(0,7);const tipo=cpkStr(r['Combustivel']||r['combustivel']||'Diesel');const litros=cpkNum(r['Qtd Litros']||r['qtd_litros']||0);const preco=cpkNum(r['Unit Venda']||r['unit_venda']||0);const valor=cpkNum(r['Valor']||r['valor']||0);const operacao=cpkStr(r['Operacao']||r['operacao']||'');if(!placa||!mes)continue;const key=placa+'|'+mes;if(!byPlacaMes[key])byPlacaMes[key]={placa,mes,litros_diesel:0,litros_arla:0,valor_diesel:0,valor_arla:0,precos:[],operacao,abastecimentos:0};const e=byPlacaMes[key];e.abastecimentos++;if(tipo.toLowerCase().includes('arla')){e.litros_arla+=litros;e.valor_arla+=valor;}else{e.litros_diesel+=litros;e.valor_diesel+=valor;if(preco>0)e.precos.push(preco);}}for(const e of Object.values(byPlacaMes)){e.preco_medio=e.precos.length?e.precos.reduce((a,b)=>a+b,0)/e.precos.length:0;e.valor_total=e.valor_diesel+e.valor_arla;}CPK.szc_por_placa=byPlacaMes;cpkToast('SZC: '+rows.length+' abastecimentos, '+Object.keys(byPlacaMes).length+' placa-mês');}
