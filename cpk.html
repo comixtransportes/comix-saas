@@ -1386,23 +1386,35 @@ function cpkResolveSZI(placa, mes){
 }
 
 function cpkResolveVinculo(placa, frotaSZB){
-  // Prioridade 1: cadastro Firestore
+  // O SZB traz na coluna 'Frota' o TEXTO "Propria" ou "Agregado" (não código CP/CA).
+  // Cadastro Firestore guarda em 'tipo_vinculo'. Estratégia em camadas:
+  // 1) Cadastro Firestore (mais autoritativo - é a fonte oficial de classificação)
+  // 2) Texto literal do SZB (Propria/Agregado)
+  // 3) Existência em SZI (se tem lançamento como agregado, é agregado)
+  // 4) Default = sem classificação
+
+  // Prioridade 1: cadastro Firestore tem a placa
   const veic = CPK.frota.find(v=>v.placa===placa);
-  if(veic){
-    const pref = (frotaSZB||'').toUpperCase().slice(0,2);
-    const szb_v = pref==='CP'?'proprio' : pref==='CA'?'agregado' : null;
+  const szbText = String(frotaSZB||'').trim().toLowerCase();
+  let szb_v = null;
+  if(szbText.startsWith('propri')) szb_v = 'proprio';
+  else if(szbText.startsWith('agreg')) szb_v = 'agregado';
+
+  if(veic && veic.vinculo){
     const div = szb_v && szb_v !== veic.vinculo;
     return {vinculo:veic.vinculo, fonte:'firestore', divergencia:div};
   }
-  // Prioridade 2: prefixo SZB
-  const pref = (frotaSZB||'').toUpperCase().slice(0,2);
-  if(pref==='CP') return {vinculo:'proprio', fonte:'szb', divergencia:false};
-  if(pref==='CA') return {vinculo:'agregado', fonte:'szb', divergencia:false};
-  // Prioridade 3: SZI (se tem lançamento, deve ser agregado)
+
+  // Prioridade 2: texto do SZB
+  if(szb_v) return {vinculo:szb_v, fonte:'szb', divergencia:false};
+
+  // Prioridade 3: existência em SZI sugere agregado
   if(CPK.szi_por_placa && Object.keys(CPK.szi_por_placa).some(k=>k.startsWith(placa+'|'))){
     return {vinculo:'agregado', fonte:'szi', divergencia:false};
   }
-  return {vinculo:'proprio', fonte:'indefinido', divergencia:false};
+
+  // Prioridade 4: indefinido — NÃO classifica como próprio sem evidência
+  return {vinculo:'indefinido', fonte:'indefinido', divergencia:false};
 }
 
 // ── FIRESTORE BRIDGE (Firestore via parent ou direto) ─────────────
@@ -1528,11 +1540,22 @@ async function cpkLoadFrota(){
       CPK.frota = result.map(d=>{
         const v = d.data||{};
         const u = v.unidade_slug || cpkInfUnidadeFr(v);
-        const vk = (v.vinculo||'FROTA').toUpperCase()==='AGREGADO' ? 'agregado' : 'proprio';
-        return {id:d.id, placa:cpkNormPlaca(v.placa||''), frota:(v.frota||'').toUpperCase(), motorista:v.motorista||'', unidade:u, vinculo:vk, modelo:v.modelo||'', categoria:v.categoria||'', disponibilidade:v.disponibilidade||''};
+        // CORREÇÃO: o cadastros.html grava o campo como 'tipo_vinculo' (não 'vinculo')
+        // Valores: 'FROTA' (própria) ou 'AGREGADO'. Também aceita 'vinculo' por compat.
+        const tv = String(v.tipo_vinculo || v.vinculo || '').toUpperCase().trim();
+        const vk = tv === 'AGREGADO' ? 'agregado' : tv === 'FROTA' ? 'proprio' : '';
+        // Se NÃO tiver tipo_vinculo: deduz pelo prefixo da Frota (CP=próprio, CA=agregado)
+        // Senão fica vazio e cpkResolveVinculo decide pelo SZB
+        const frotaCode = (v.frota||'').toUpperCase();
+        const pref = frotaCode.slice(0,2);
+        const vinculo = vk || (pref==='CP'?'proprio' : pref==='CA'?'agregado' : '');
+        return {id:d.id, placa:cpkNormPlaca(v.placa||''), frota:frotaCode, motorista:v.motorista||'', unidade:u, vinculo, modelo:v.modelo||'', categoria:v.categoria||v.tipo||'', disponibilidade:v.disponibilidade||v.status||''};
       });
       CPK.frotaLoaded = true;
-      cpkLog('Frota:',CPK.frota.length,'veículos');
+      const proprios = CPK.frota.filter(v=>v.vinculo==='proprio').length;
+      const agregados = CPK.frota.filter(v=>v.vinculo==='agregado').length;
+      const indef = CPK.frota.filter(v=>!v.vinculo).length;
+      cpkLog(`Frota: ${CPK.frota.length} veículos (${proprios} próprios + ${agregados} agregados + ${indef} indef.)`);
     }
   }catch(e){cpkLog('Frota erro:',e.message); CPK.frota=[]; CPK.frotaLoaded=true;}
 }
@@ -1839,14 +1862,16 @@ function cpkCalculate(){
 
   CPK.aggPlaca = Object.values(agg).filter(p=>p.vinculo==='proprio');
   CPK.aggAgregado = Object.values(agg).filter(p=>p.vinculo==='agregado');
+  CPK.aggIndefinido = Object.values(agg).filter(p=>p.vinculo==='indefinido' || !p.vinculo);
   CPK.aggRota = Object.values(aggR);
   CPK.aggCliente = Object.values(aggC).sort((a,b)=>b.faturamento-a.faturamento);
   CPK.viagens = viagens;
   CPK.totais = {viagens:tV, faturamento:tF, km_total:tK, sem_km:sK, sem_km_fat:sKF, pct_sem_km:tV?sK/tV*100:0};
   CPK.filtrados = {
-    placas:[...CPK.aggPlaca,...CPK.aggAgregado],
+    placas:[...CPK.aggPlaca,...CPK.aggAgregado,...CPK.aggIndefinido],
     proprio:[...CPK.aggPlaca],
     agregado:[...CPK.aggAgregado],
+    indefinido:[...CPK.aggIndefinido],
     rota:[...CPK.aggRota],
     cliente:[...CPK.aggCliente],
     viagem:[...CPK.viagens],
