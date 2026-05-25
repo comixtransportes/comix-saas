@@ -408,6 +408,7 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 .status-tag.em_reforma{background:#fef3c7;color:#854f0b}
 .status-tag.a_reformar{background:var(--orange-l);color:var(--orange)}
 .status-tag.reserva{background:var(--gray-bg);color:var(--gray)}
+.status-tag.vendida{background:#f3f4f6;color:#6b7280;text-decoration:line-through}
 
 /* Placa Mercosul */
 .plate-mercosul{
@@ -2483,7 +2484,7 @@ function openSlotPicker(cavaloId, slot, title) {
     const livres = STATE.compressores.filter(c => !usadosCompressor.has(c.id));
     opts = livres.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.identificacao || c.id)} ${c.serie ? '· '+escapeHtml(c.serie) : ''}</option>`).join("");
   } else {
-    const livres = STATE.veiculos.filter(x => x.categoria === "carreta" && !usadosCarreta.has(x.id));
+    const livres = STATE.veiculos.filter(x => x.categoria === "carreta" && !usadosCarreta.has(x.id) && x.disponibilidade !== "vendida");
     opts = livres.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.frota || '')} · ${escapeHtml(c.placa)} ${c.subtipo ? '('+escapeHtml(c.subtipo)+')' : ''}</option>`).join("");
   }
 
@@ -2718,6 +2719,7 @@ function renderGeral() {
     {v:"em_reforma",l:"Em reforma"},
     {v:"a_reformar",l:"A reformar"},
     {v:"indisponivel",l:"Indisponível"},
+    {v:"vendida",l:"Vendida"},
   ];
   const UNIT_OPTS = [
     {v:"SC",l:"Santa Catarina"},
@@ -3089,6 +3091,7 @@ function calcResumo() {
       }
     }
     if (v.categoria === "carreta" && unit && u[unit]) {
+      if (d === "vendida") return; // Vendidas não entram em nenhum contador
       u[unit].carretas++;
       if (d === "em_reforma") u[unit].carretas_em_reforma++;
       else if (d === "a_reformar") u[unit].carretas_a_reformar++;
@@ -3099,20 +3102,24 @@ function calcResumo() {
       // Subtipos — rodotrem e bitrem acumulam em _raw (serão divididos por 2 após loop)
       const sub = classifySubtipo(v.subtipo);
       if (sub) {
-        if (sub === "rodotrem") {
+        const isVendida = d === "vendida";
+        if (isVendida) { /* vendidas não entram em subtipo */ }
+        else if (sub === "rodotrem") {
           u[unit]._raw_rodotrem++;
-          if (!carretasUsadas.has(v.id) && d !== "indisponivel" && d !== "em_reforma" && d !== "a_reformar") {
+          // Disponível: status disponivel/reserva E não alocada
+          if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
             u[unit]._raw_disp_rodotrem++;
           }
         } else if (sub === "bitrem") {
           u[unit]._raw_bitrem++;
-          if (!carretasUsadas.has(v.id) && d !== "indisponivel" && d !== "em_reforma" && d !== "a_reformar") {
+          if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
             u[unit]._raw_disp_bitrem++;
           }
         } else {
           const subKey = "sub_" + sub;
           if (u[unit][subKey] != null) u[unit][subKey]++;
-          if (!carretasUsadas.has(v.id) && d !== "indisponivel" && d !== "em_reforma" && d !== "a_reformar") {
+          // Disponível: status disponivel/reserva E não alocada
+          if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
             const dispKey = "disp_" + sub;
             if (u[unit][dispKey] != null) u[unit][dispKey]++;
           }
@@ -3438,6 +3445,17 @@ function populateFilialFilters() {
   ['filter-geral-unit', 'filter-comp-unit'].forEach(gid => {
     const g = document.getElementById(gid);
     if (!g) return;
+    // Garante listener no botão "Todas unidades" (reset de filtro)
+    const btnTodas = g.querySelector('.filter-chip[data-unit="all"]');
+    if (btnTodas && !btnTodas._listenerAdded) {
+      btnTodas._listenerAdded = true;
+      btnTodas.addEventListener("click", () => {
+        g.querySelectorAll(".filter-chip").forEach(c => c.classList.remove("active"));
+        btnTodas.classList.add("active");
+        if (gid === "filter-geral-unit") { STATE.filterGeral.unit = "all"; renderGeral(); }
+        else { STATE.filterComp.unit = "all"; renderCompressores(); }
+      });
+    }
     // limpa adicionados (mantém botão "Todas")
     g.querySelectorAll('.filter-chip:not([data-unit="all"])').forEach(c => c.remove());
     unitsFromVeiculos.forEach(uk => {
