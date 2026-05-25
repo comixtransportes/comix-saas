@@ -474,6 +474,10 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 .comp-row.editable:hover .comp-clear{opacity:1}
 .comp-row .comp-clear:hover{background:var(--red-l)}
 .comp-row.drag-over-slot{background:var(--blue-l) !important;outline:2px dashed var(--blue);outline-offset:-2px}
+.comp-row.carreta-match{background:#dbeafe !important;border-radius:4px;outline:2px solid #1a56db;outline-offset:-2px}
+.comp-row.carreta-match .comp-label{color:#1a56db}
+.comp-row.carreta-match .comp-val{color:#1a56db;font-weight:700}
+.card.carreta-highlight{outline:2px solid #1a56db;box-shadow:0 0 0 4px rgba(26,86,219,.12)}
 .comp-row .comp-empty-slot{color:var(--gray);font-style:italic}
 
 /* Dias operados */
@@ -2006,8 +2010,18 @@ function getCavalosPorColuna(colId) {
     const alert = isIndisp ? "gray" : classificarAlerta(dias);
     if (STATE.search.alocacao) {
       const q = STATE.search.alocacao.toLowerCase();
-      const hay = [v.frota, v.placa, v.motorista, v.modelo].filter(Boolean).join(" ").toLowerCase();
-      if (!hay.includes(q)) return false;
+      // Busca no cavalo (frota, placa, motorista, modelo)
+      const hayCavalo = [v.frota, v.placa, v.motorista, v.modelo].filter(Boolean).join(" ").toLowerCase();
+      if (hayCavalo.includes(q)) return true;
+      // Busca nas carretas alocadas (frota e placa do Carr.1 e Carr.2)
+      const aloc = STATE.alocacoes[v.id] || {};
+      const c1 = aloc.carreta1_id ? findVeiculo(aloc.carreta1_id) : null;
+      const c2 = aloc.carreta2_id ? findVeiculo(aloc.carreta2_id) : null;
+      const hayCarretas = [
+        c1 && c1.frota, c1 && c1.placa,
+        c2 && c2.frota, c2 && c2.placa
+      ].filter(Boolean).join(" ").toLowerCase();
+      if (!hayCarretas.includes(q)) return false;
     }
     if (STATE.filterAlerta !== "all") {
       const ordem = { green: 0, yellow: 1, orange: 2, red: 3, gray: -1 };
@@ -2030,7 +2044,7 @@ function renderPlaca(placa, size) {
   </div>`;
 }
 
-function renderCard(cavalo) {
+function renderCard(cavalo, searchTerm) {
   const szb = szbDe(cavalo.id);
   // dias_sem_viagem já vem calculado em processarSzbRows (data atual - última Dt. Emissao do CTRC)
   const dias = szb ? szb.dias_sem_viagem : null;
@@ -2043,6 +2057,12 @@ function renderCard(cavalo) {
   const c1 = aloc.carreta1_id ? findVeiculo(aloc.carreta1_id) : null;
   const c2 = aloc.carreta2_id ? findVeiculo(aloc.carreta2_id) : null;
   const compressor = aloc.compressor_id ? STATE.compressores.find(c => c.id === aloc.compressor_id) : null;
+
+  // Highlight de carreta buscada
+  const sq = searchTerm ? searchTerm.toLowerCase() : "";
+  const c1Match = sq && c1 && ([c1.frota, c1.placa].filter(Boolean).join(" ").toLowerCase().includes(sq));
+  const c2Match = sq && c2 && ([c2.frota, c2.placa].filter(Boolean).join(" ").toLowerCase().includes(sq));
+  const cardHighlight = (c1Match || c2Match) ? " carreta-highlight" : "";
 
   const isAgregado = cavalo.vinculo === "AGREGADO";
   const isApoio = cavalo.categoria === "apoio";
@@ -2079,7 +2099,7 @@ function renderCard(cavalo) {
        </div>` : '');
 
   const c1Slot = c1
-    ? `<div class="comp-row ${editAttr}" data-slot="carreta1" data-cavalo="${escapeHtml(cavalo.id)}">
+    ? `<div class="comp-row ${editAttr}${c1Match ? ' carreta-match' : ''}" data-slot="carreta1" data-cavalo="${escapeHtml(cavalo.id)}">
          <span class="comp-icon">${ico('ico-carreta', 14)}</span>
          <span class="comp-label">Carr. 1</span>
          <span class="comp-val">${escapeHtml(c1.frota || '')} · ${escapeHtml(c1.placa)}</span>
@@ -2092,7 +2112,7 @@ function renderCard(cavalo) {
        </div>` : '');
 
   const c2Slot = c2
-    ? `<div class="comp-row ${editAttr}" data-slot="carreta2" data-cavalo="${escapeHtml(cavalo.id)}">
+    ? `<div class="comp-row ${editAttr}${c2Match ? ' carreta-match' : ''}" data-slot="carreta2" data-cavalo="${escapeHtml(cavalo.id)}">
          <span class="comp-icon">${ico('ico-carreta', 14)}</span>
          <span class="comp-label">Carr. 2</span>
          <span class="comp-val">${escapeHtml(c2.frota || '')} · ${escapeHtml(c2.placa)}</span>
@@ -2106,7 +2126,7 @@ function renderCard(cavalo) {
 
   const compHtml = !isApoio ? `<div class="card-composition">${compSlot}${c1Slot}${c2Slot}</div>` : '';
 
-  const cardClass = "card" + (STATE.isAdmin ? "" : " no-drag");
+  const cardClass = "card" + (STATE.isAdmin ? "" : " no-drag") + cardHighlight;
   const draggable = STATE.isAdmin ? "true" : "false";
   const opsBadge = opsDias != null && !isIndisp
     ? `<span class="card-ops-badge" title="Dias operados nos últimos 30 dias trabalhados">Operou: <strong>${opsDias}</strong>/30d</span>`
@@ -2222,7 +2242,7 @@ function renderBoard() {
         </div>
       </div>
       <div class="column-body" data-col="${col.id}">
-        ${cavalos.length ? cavalos.map(renderCard).join("") : '<div class="empty-col">Vazio</div>'}
+        ${cavalos.length ? cavalos.map(c => renderCard(c, STATE.search.alocacao)).join("") : '<div class="empty-col">Vazio</div>'}
       </div>
     `;
     board.appendChild(colEl);
