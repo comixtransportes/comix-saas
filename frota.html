@@ -1680,6 +1680,43 @@ async function loadAllData() {
     populateFilialFilters();
     refreshCurrentView();
 
+    // === Reconcilia status das carretas com a realidade da alocação ===
+    // Carreta vinculada a algum cavalo = operando. Sem vínculo e sem status especial = disponivel.
+    // Roda em background; divergências são persistidas silenciosamente para o admin.
+    {
+      const carretasEmUso = new Set();
+      Object.values(STATE.alocacoes).forEach(a => {
+        if (a.carreta1_id) carretasEmUso.add(a.carreta1_id);
+        if (a.carreta2_id) carretasEmUso.add(a.carreta2_id);
+      });
+      const STATUS_ESPECIAL = ["indisponivel","em_reforma","a_reformar","manutencao","vendida"];
+      const toSync = [];
+      STATE.veiculos.forEach(v => {
+        if (v.categoria !== "carreta") return;
+        if (carretasEmUso.has(v.id)) {
+          // Alocada mas não marcada como operando
+          if (v.disponibilidade !== "operando") {
+            v.disponibilidade = "operando";
+            toSync.push({ placa: v.placa, status: "OPERANDO" });
+          }
+        } else {
+          // Não alocada, e tem status de operando (inconsistência) -> disponivel
+          if (v.disponibilidade === "operando" && !STATUS_ESPECIAL.includes(v.disponibilidade)) {
+            v.disponibilidade = "disponivel";
+            toSync.push({ placa: v.placa, status: "DISPONIVEL" });
+          }
+        }
+      });
+      if (STATE.isAdmin && toSync.length) {
+        console.log("[Frota] Reconciliando status de " + toSync.length + " carreta(s)...");
+        toSync.forEach(({ placa, status }) => {
+          window._FB.atualizarVeiculo(placa, { status }).catch(e =>
+            console.warn("[Frota] Falha ao reconciliar", placa, e.message)
+          );
+        });
+      }
+    }
+
     // === Auto-persistir tipo_vinculo dos cavalos classificados por prefixo (CP/CA) ===
     // Roda em background, não bloqueia a UI. Apenas admin pode gravar.
     if (STATE.isAdmin) {
@@ -2361,13 +2398,25 @@ async function clearSlot(cavaloId, slot) {
   if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
   const aloc = STATE.alocacoes[cavaloId] || {};
   const patch = { ...aloc };
+  let itemRemovidoId = null;
   if (slot === "compressor") patch.compressor_id = null;
-  else if (slot === "carreta1") patch.carreta1_id = null;
-  else if (slot === "carreta2") patch.carreta2_id = null;
+  else if (slot === "carreta1") { itemRemovidoId = aloc.carreta1_id; patch.carreta1_id = null; }
+  else if (slot === "carreta2") { itemRemovidoId = aloc.carreta2_id; patch.carreta2_id = null; }
   try {
     await window._FB.salvarAlocacao(cavaloId, sanitizeAloc(patch, cavaloId));
     STATE.alocacoes[cavaloId] = { ...aloc, ...patch };
+
+    // Sincroniza status da carreta removida -> disponivel
+    if (itemRemovidoId) {
+      const carreta = findVeiculo(itemRemovidoId);
+      if (carreta && !["indisponivel","em_reforma","a_reformar","manutencao","vendida"].includes(carreta.disponibilidade)) {
+        carreta.disponibilidade = "disponivel";
+        try { await window._FB.atualizarVeiculo(carreta.placa, { status: "DISPONIVEL" }); } catch(_){}
+      }
+    }
+
     renderBoard();
+    renderDashboard();
     showToast("Item removido", "success");
   } catch(e) { showToast("Erro: " + e.message, "error"); }
 }
@@ -2376,7 +2425,7 @@ async function assignSlot(targetCavalo, slot, payload) {
   if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
   const itemId = payload.id;
 
-  // 1) Se o item já está em outro cavalo, remove de lá (integridade: 1 item por slot)
+  // 1) Se o item já estava em outro cavalo, remove de lá + marca carreta como disponivel
   if (payload.fromCavalo && payload.fromCavalo !== targetCavalo && payload.fromSlot) {
     const src = { ...(STATE.alocacoes[payload.fromCavalo] || {}) };
     if (payload.fromSlot === "compressor") src.compressor_id = null;
@@ -2396,8 +2445,19 @@ async function assignSlot(targetCavalo, slot, payload) {
   try {
     await window._FB.salvarAlocacao(targetCavalo, sanitizeAloc(tgt, targetCavalo));
     STATE.alocacoes[targetCavalo] = tgt;
+
+    // Sincroniza status da carreta -> operando (alocada = em uso = operando)
+    if (slot !== "compressor") {
+      const carreta = findVeiculo(itemId);
+      if (carreta && carreta.disponibilidade !== "operando") {
+        carreta.disponibilidade = "operando";
+        try { await window._FB.atualizarVeiculo(carreta.placa, { status: "OPERANDO" }); } catch(_){}
+      }
+    }
+
     renderBoard();
-    showToast("Atribuído", "success");
+    renderDashboard();
+    showToast("Atribuido", "success");
   } catch(e) { showToast("Erro: " + e.message, "error"); }
 }
 
