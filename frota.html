@@ -1681,8 +1681,8 @@ async function loadAllData() {
     refreshCurrentView();
 
     // === Reconcilia status das carretas com a realidade da alocação ===
-    // Carreta vinculada a algum cavalo = operando. Sem vínculo e sem status especial = disponivel.
-    // Roda em background; divergências são persistidas silenciosamente para o admin.
+    // Carreta vinculada = operando. Sem vínculo e sem status especial = disponivel.
+    // Indexa por id + placa + frota para resistir a mismatch de chave (ex: carreta1_id="SL184" vs id="MGF3787")
     {
       const carretasEmUso = new Set();
       Object.values(STATE.alocacoes).forEach(a => {
@@ -1690,21 +1690,26 @@ async function loadAllData() {
           if (!cid) return;
           carretasEmUso.add(cid);
           const cv = STATE.veiculos.find(x => x.id === cid || x.placa === cid || x.frota === cid);
-          if (cv) { carretasEmUso.add(cv.id); carretasEmUso.add(cv.placa); if (cv.frota) carretasEmUso.add(cv.frota); }
+          if (cv) {
+            carretasEmUso.add(cv.id);
+            carretasEmUso.add(cv.placa);
+            if (cv.frota) carretasEmUso.add(cv.frota);
+          }
         });
       });
       const STATUS_ESPECIAL = ["indisponivel","em_reforma","a_reformar","manutencao","vendida"];
       const toSync = [];
       STATE.veiculos.forEach(v => {
         if (v.categoria !== "carreta") return;
-        if (carretasEmUso.has(v.id)) {
-          // Alocada mas não marcada como operando
+        const emUso = carretasEmUso.has(v.id) || carretasEmUso.has(v.placa) || (v.frota && carretasEmUso.has(v.frota));
+        if (emUso) {
+          // Alocada → deve ser operando
           if (v.disponibilidade !== "operando") {
             v.disponibilidade = "operando";
             toSync.push({ placa: v.placa, status: "OPERANDO" });
           }
         } else {
-          // Não alocada, e tem status de operando (inconsistência) -> disponivel
+          // Não alocada + sem status especial + marcada como operando → inconsistência → disponivel
           if (v.disponibilidade === "operando" && !STATUS_ESPECIAL.includes(v.disponibilidade)) {
             v.disponibilidade = "disponivel";
             toSync.push({ placa: v.placa, status: "DISPONIVEL" });
@@ -1712,7 +1717,7 @@ async function loadAllData() {
         }
       });
       if (STATE.isAdmin && toSync.length) {
-        console.log("[Frota] Reconciliando status de " + toSync.length + " carreta(s)...");
+        console.log("[Frota] Reconciliando status de " + toSync.length + " carreta(s):", toSync.map(x=>x.placa+":"+x.status));
         toSync.forEach(({ placa, status }) => {
           window._FB.atualizarVeiculo(placa, { status }).catch(e =>
             console.warn("[Frota] Falha ao reconciliar", placa, e.message)
@@ -2453,14 +2458,9 @@ async function assignSlot(targetCavalo, slot, payload) {
     // Sincroniza status da carreta -> operando (alocada = em uso = operando)
     if (slot !== "compressor") {
       const carreta = findVeiculo(itemId);
-      if (carreta) {
-        // Normaliza: garante que carreta1_id/carreta2_id use sempre o id canônico
-        if (tgt.carreta1_id === itemId && carreta.id !== itemId) tgt.carreta1_id = carreta.id;
-        if (tgt.carreta2_id === itemId && carreta.id !== itemId) tgt.carreta2_id = carreta.id;
-        if (carreta.disponibilidade !== "operando") {
-          carreta.disponibilidade = "operando";
-          try { await window._FB.atualizarVeiculo(carreta.placa, { status: "OPERANDO" }); } catch(_){}
-        }
+      if (carreta && carreta.disponibilidade !== "operando") {
+        carreta.disponibilidade = "operando";
+        try { await window._FB.atualizarVeiculo(carreta.placa, { status: "OPERANDO" }); } catch(_){}
       }
     }
 
@@ -2543,12 +2543,8 @@ function openSlotPicker(cavaloId, slot, title) {
   const usadosCarreta = new Set();
   const usadosCompressor = new Set();
   Object.values(STATE.alocacoes).forEach(a => {
-    [a.carreta1_id, a.carreta2_id].forEach(cid => {
-      if (!cid) return;
-      usadosCarreta.add(cid);
-      const cv = STATE.veiculos.find(x => x.id === cid || x.placa === cid || x.frota === cid);
-      if (cv) { usadosCarreta.add(cv.id); usadosCarreta.add(cv.placa); if (cv.frota) usadosCarreta.add(cv.frota); }
-    });
+    if (a.carreta1_id) usadosCarreta.add(a.carreta1_id);
+    if (a.carreta2_id) usadosCarreta.add(a.carreta2_id);
     if (a.compressor_id) usadosCompressor.add(a.compressor_id);
   });
 
@@ -3121,31 +3117,11 @@ function calcResumo() {
   }
 
   // Conjunto de carretas em uso (alocadas em algum cavalo)
-  // Indexa por id E por placa para resistir a mismatch de chave no Firestore
   const carretasUsadas = new Set();
   Object.values(STATE.alocacoes).forEach(a => {
-    [a.carreta1_id, a.carreta2_id].forEach(cid => {
-      if (!cid) return;
-      carretasUsadas.add(cid);
-      // Resolve pelo veículo real para adicionar também placa e frota como aliases
-      const cv = STATE.veiculos.find(x => x.id === cid || x.placa === cid || x.frota === cid);
-      if (cv) { carretasUsadas.add(cv.id); carretasUsadas.add(cv.placa); if (cv.frota) carretasUsadas.add(cv.frota); }
-    });
+    if (a.carreta1_id) carretasUsadas.add(a.carreta1_id);
+    if (a.carreta2_id) carretasUsadas.add(a.carreta2_id);
   });
-
-  // [DIAGNÓSTICO] — log automático para carretas com mismatch de status vs alocação
-  if (window._diagFrotaLog !== false) {
-    window._diagFrotaLog = false; // roda só uma vez por sessão
-    const sl = STATE.veiculos.filter(v => v.categoria === "carreta" && (v.frota || v.id || "").toUpperCase().includes("SL"));
-    sl.forEach(v => {
-      const emUso = carretasUsadas.has(v.id) || carretasUsadas.has(v.placa) || (v.frota && carretasUsadas.has(v.frota));
-      console.log("[Frota Diag] Carreta", v.frota || v.id,
-        "| id:", v.id, "| placa:", v.placa,
-        "| disp:", v.disponibilidade,
-        "| emUso:", emUso,
-        "| carretasUsadas sample:", [...carretasUsadas].slice(0,5));
-    });
-  }
 
   function classifySubtipo(subtipo) {
     const s = String(subtipo || "").toUpperCase();
