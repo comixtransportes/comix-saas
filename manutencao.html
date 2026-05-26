@@ -747,6 +747,12 @@ body.checklist-only .view-area{height:100%;}
                 <div class="fld"><label>Hodômetro</label><input type="number" id="mnt_nova_km" value="" placeholder="0" onblur="validarHodometroSelecionado(true)" oninput="validarHodometroSelecionado(false)"></div>
               </div>
               <div id="hodometro-alerta" class="hodometro-alerta"></div>
+              <div class="fld">
+                <label>Centro de Custo</label>
+                <select id="mnt_nova_centro_custo">
+                  <option value="">Carregando...</option>
+                </select>
+              </div>
 
               <div class="fld">
                 <label>Motorista</label>
@@ -1455,6 +1461,7 @@ async function salvarOS() {
   const prazo      = document.querySelector('#view-nova-os input[type="date"]:not([readonly])')?.value || '';
   const problema   = document.querySelector('#view-nova-os textarea')?.value?.trim() || '';
   const km         = document.getElementById('mnt_nova_km')?.value || '';
+  const centroCusto = document.getElementById('mnt_nova_centro_custo')?.value || '';
   const total      = parseFloat(document.getElementById('nova-os-custo')?.value) || 0;
   const servicos   = coletarServicos();
   const pecas      = coletarPecas();
@@ -1500,6 +1507,7 @@ async function salvarOS() {
       criadoPor: ATLAS_CURRENT_USER.email || '—',
       criadoPorNome: ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '—',
       criadoPorUid: ATLAS_CURRENT_USER.uid || '',
+      centroCusto,
     };
 
     const saveRes = await atlasFsSetDoc('ordens_servico', osId, payload, { merge: true });
@@ -1662,12 +1670,13 @@ function deleteChecklist(chkId, btn) {
 
 /* Cache local — populado na inicialização via loadCadastrosFirebase() */
 const MNT_CACHE = {
-  veiculos:   [],   // { id, placa, frota, tipo, modelo, filial, km }
-  motoristas: [],   // { id, nome, filial }
-  filiais:    [],   // { id, sigla, nome, estado }
-  usuarios:   [],   // { id, email, nome, perfil, uid }
-  alocacoes:  {},   // mapa cavalo_id → { motorista, carreta1_id, carreta2_id, ... }
-  ordens:     [],   // O.S reais carregadas do Firestore
+  veiculos:     [],   // { id, placa, frota, tipo, modelo, filial, km }
+  motoristas:   [],   // { id, nome, filial }
+  filiais:      [],   // { id, sigla, nome, estado }
+  usuarios:     [],   // { id, email, nome, perfil, uid }
+  alocacoes:    {},   // mapa cavalo_id → { motorista, carreta1_id, carreta2_id, ... }
+  ordens:       [],   // O.S reais carregadas do Firestore
+  centrosCusto: [],   // { id, codigo, nome, ativo }
 };
 
 /* Usuário atual (populado via Auth ou postMessage do index.html) */
@@ -1696,12 +1705,13 @@ async function loadCadastrosFirebase() {
   if (!db) { console.warn('[Manutenção] Firebase não inicializado.'); return; }
 
   try {
-    const [snapV, snapM, snapF, snapA, snapC] = await Promise.all([
+    const [snapV, snapM, snapF, snapA, snapC, snapCC] = await Promise.all([
       db.collection('veiculos').get(),
       db.collection('motoristas').get(),
       db.collection('filiais').get(),
       db.collection('alocacao_frota').get(),
       db.collection('compressores').get(),   // ← carrega compressores reais
+      db.collection('centros_custo').get(),  // ← carrega centros de custo
     ]);
 
     MNT_CACHE.veiculos = snapV.docs.map(d => {
@@ -1738,6 +1748,12 @@ async function loadCadastrosFirebase() {
         serie:         dd.serie || '',
       };
     });
+
+    // Lista de centros de custo
+    MNT_CACHE.centrosCusto = snapCC.docs.map(d => {
+      const dd = d.data();
+      return { id: d.id, codigo: dd.codigo || d.id, nome: dd.nome || d.id, ativo: dd.ativo !== false };
+    }).filter(c => c.ativo).sort((a,b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 
     // Monta mapa de alocações: cavalo_id → doc
     snapA.docs.forEach(d => {
@@ -1789,8 +1805,21 @@ function popularSelectsOS() {
   popularSelectUnidade();
   popularSelectVeiculo();
   popularSelectMotorista();
+  popularSelectCentroCusto();
   popularSelectUsuarios();
   popularSelectVeiculoPreventiva();
+}
+
+function popularSelectCentroCusto() {
+  const sel = document.getElementById('mnt_nova_centro_custo');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">Selecione o Centro de Custo...</option>';
+  (MNT_CACHE.centrosCusto || []).forEach(c => {
+    const label = c.codigo ? `${c.codigo} — ${c.nome}` : c.nome;
+    sel.appendChild(mntOpt(c.id, label));
+  });
+  if (cur) sel.value = cur;
 }
 
 function popularSelectUnidade() {
@@ -2486,6 +2515,7 @@ function renderKanbanReais() {
 function resetFormularioOS() {
   document.getElementById('mnt_nova_placa_input') && (document.getElementById('mnt_nova_placa_input').value = '');
   document.getElementById('mnt_nova_km') && (document.getElementById('mnt_nova_km').value = '');
+  document.getElementById('mnt_nova_centro_custo') && (document.getElementById('mnt_nova_centro_custo').value = '');
   document.getElementById('hodometro-alerta')?.classList.remove('on');
   document.getElementById('mnt_nova_prestador') && (document.getElementById('mnt_nova_prestador').value = '');
   const txt = document.querySelector('#view-nova-os textarea'); if (txt) txt.value = '';
