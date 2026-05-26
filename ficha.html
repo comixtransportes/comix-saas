@@ -486,15 +486,15 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
 
 <style id="atlas-layout-ajustes-solicitados">
-/* Ajustes solicitados: formulário inteiro visível, sem rolagem, com ajuste automático ao tamanho da tela */
+/* Ajustes solicitados: botão sempre acessível no celular, compensando a barra inferior do navegador */
 .ident-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:4px 0 8px;min-width:0}
 .ident-row .slbl{margin:0!important;min-width:0}
 .ident-emissao{font-size:12px;font-weight:800;color:var(--primary);white-space:nowrap;text-align:right;flex-shrink:0}
+#scr_form{--atlas-form-scale:1;--atlas-vh:1vh;--atlas-mobile-bottom-guard:0px;--atlas-bottom-browser-guard:0px!important}
 #scr_form.active{display:block!important;height:calc(var(--atlas-vh,1vh) * 100)!important;min-height:0!important;overflow:hidden!important;position:relative!important;background:var(--bg)}
-#scr_form{--atlas-form-scale:1;--atlas-vh:1vh;--atlas-bottom-browser-guard:0px!important}
 #scr_form .atlas-form-fit{width:100%;max-width:540px;margin:0 auto;transform:scale(var(--atlas-form-scale));transform-origin:top center;will-change:transform}
 #scr_form .atlas-form-fit>.scroll-body{height:auto!important;min-height:0!important;max-width:none!important;width:100%!important;flex:none!important;overflow:visible!important;padding:12px 14px 8px!important;margin:0!important}
-#scr_form .atlas-form-fit>.bbar{max-width:none!important;width:100%!important;flex:none!important;margin:0!important;position:relative!important;z-index:10!important;padding:10px 14px calc(10px + env(safe-area-inset-bottom,0px))!important;background:rgba(255,255,255,.92)}
+#scr_form .atlas-form-fit>.bbar{max-width:none!important;width:100%!important;flex:none!important;margin:0!important;position:relative!important;z-index:10!important;padding:10px 14px 12px!important;background:rgba(255,255,255,.94);border-top:1px solid var(--line);box-shadow:0 -8px 28px rgba(15,59,104,.08)}
 #scr_form .user-badge{margin-bottom:8px;padding:6px 10px;font-size:10.5px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #scr_form .req-note{margin-bottom:10px;font-size:10.5px;line-height:1.2}
 #scr_form .card{margin-bottom:10px}
@@ -511,6 +511,9 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 #scr_form .mod-ico{width:44px!important;height:38px!important;min-width:44px!important}
 #scr_form .mod-ico img{width:44px!important;height:38px!important}
 #scr_form .bb{padding:12px;font-size:13px}
+@media(hover:none) and (pointer:coarse){
+  #scr_form .atlas-form-fit>.bbar{padding-bottom:14px!important}
+}
 @media(max-width:420px){
   #scr_form .atlas-form-fit>.scroll-body{padding-left:10px!important;padding-right:10px!important}
   #scr_form .atlas-form-fit>.bbar{padding-left:10px!important;padding-right:10px!important}
@@ -3220,6 +3223,16 @@ window.openPanel = function() {
     var w = (window.visualViewport && window.visualViewport.width) ? window.visualViewport.width : window.innerWidth;
     return w || document.documentElement.clientWidth || 0;
   }
+  function mobileBottomGuard(vh, vw){
+    var coarse = false;
+    try { coarse = window.matchMedia && window.matchMedia('(hover:none) and (pointer:coarse)').matches; } catch(e) {}
+    var standalone = false;
+    try { standalone = (window.navigator && window.navigator.standalone) || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches); } catch(e) {}
+    if(!coarse || vw > 760) return 0;
+    if(standalone) return 18;
+    /* Reserva espaço para a barra inferior do navegador em celulares, que pode sobrepor o conteúdo. */
+    return Math.min(124, Math.max(88, Math.round(vh * 0.15)));
+  }
   function fitFormScreen(){
     var screen = document.getElementById('scr_form');
     var fit = document.getElementById('atlas_form_fit');
@@ -3228,7 +3241,9 @@ window.openPanel = function() {
     var vh = vvHeight();
     var vw = vvWidth();
     if(!vh || !vw) return;
+    var guard = mobileBottomGuard(vh, vw);
     screen.style.setProperty('--atlas-vh', (vh * 0.01) + 'px');
+    screen.style.setProperty('--atlas-mobile-bottom-guard', guard + 'px');
 
     fit.style.setProperty('--atlas-form-scale', '1');
     fit.style.width = '';
@@ -3238,7 +3253,7 @@ window.openPanel = function() {
     var screenW = screen.clientWidth || document.documentElement.clientWidth || vw;
     if(!naturalH || !naturalW || !screenW) return;
 
-    var availableH = Math.max(120, vh - 2);
+    var availableH = Math.max(260, vh - guard - 6);
     var availableW = Math.max(180, Math.min(screenW, vw || screenW) - 2);
     var scaleH = availableH / naturalH;
     var scaleW = availableW / naturalW;
@@ -3257,12 +3272,14 @@ window.openPanel = function() {
       setTimeout(fitFormScreen, 60);
       setTimeout(fitFormScreen, 240);
       setTimeout(fitFormScreen, 600);
+      setTimeout(fitFormScreen, 1200);
     });
   }
 
   window.atlasFitFormScreen = queueFit;
   window.addEventListener('resize', queueFit, {passive:true});
   window.addEventListener('orientationchange', queueFit, {passive:true});
+  window.addEventListener('pageshow', queueFit, {passive:true});
   if(window.visualViewport){
     window.visualViewport.addEventListener('resize', queueFit, {passive:true});
     window.visualViewport.addEventListener('scroll', queueFit, {passive:true});
