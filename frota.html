@@ -3157,22 +3157,23 @@ function calcResumo() {
       cavalos_em_reforma: 0, cavalos_a_reformar: 0, cavalos_indisponivel: 0,
       // Manutenção de cavalos (por vínculo) — apenas status=manutencao
       cavalos_manut_frota: 0, cavalos_manut_agregado: 0,
+      // Contadores de carretas — já ajustados (÷2 para rodo/bi aplicado no pós-loop)
       carretas: 0, carretas_op: 0, carretas_disp: 0, carretas_reserva: 0, carretas_manut: 0,
       carretas_em_reforma: 0, carretas_a_reformar: 0, carretas_indisp: 0,
       compressores_op: 0, compressores_estoque: 0, compressores_manut: 0,
-      // Subtipos de carretas (op + disp) — rodotrem e bitrem já divididos por 2 (conjuntos)
+      // Subtipos de carretas (÷2 para rodo/bi aplicado no pós-loop)
       sub_rodotrem: 0, sub_ls30: 0, sub_ls35: 0, sub_vanderleia: 0, sub_4eixo: 0, sub_bitrem: 0,
-      // Subtipos disponíveis (não alocadas)
+      // Subtipos disponíveis (÷2 para rodo/bi aplicado no pós-loop)
       disp_4eixo: 0, disp_ls30: 0, disp_ls35: 0, disp_vanderleia: 0, disp_rodotrem: 0, disp_bitrem: 0,
-      // Subtipos em manutenção (em_reforma + a_reformar + manutencao) — rodotrem/bitrem ÷2
+      // Subtipos em manutenção (÷2 para rodo/bi aplicado no pós-loop)
       manut_ls30: 0, manut_ls35: 0, manut_vanderleia: 0, manut_4eixo: 0,
       manut_rodotrem: 0, manut_bitrem: 0,
-      // Acumuladores brutos para rodotrem/bitrem (pré-divisão)
-      _raw_rodotrem: 0, _raw_bitrem: 0,
-      _raw_disp_rodotrem: 0, _raw_disp_bitrem: 0,
-      // Acumuladores brutos para manutenção de rodotrem/bitrem (pré-divisão)
-      manut_rodotrem: 0, manut_bitrem: 0,
-      _raw_manut_rodotrem: 0, _raw_manut_bitrem: 0,
+      // Acumuladores brutos de PLACAS — rodotrem e bitrem: 2 placas = 1 equipamento
+      // Todos os _raw_ são divididos por 2 no pós-loop e somados aos contadores acima
+      _rr_total: 0, _rr_op: 0, _rr_disp: 0, _rr_reserva: 0, _rr_manut: 0,
+      _rr_em_reforma: 0, _rr_a_reformar: 0, _rr_indisp: 0, _rr_disp_livre: 0, _rr_manut_sub: 0,
+      _rb_total: 0, _rb_op: 0, _rb_disp: 0, _rb_reserva: 0, _rb_manut: 0,
+      _rb_em_reforma: 0, _rb_a_reformar: 0, _rb_indisp: 0, _rb_disp_livre: 0, _rb_manut_sub: 0,
     };
   }
 
@@ -3199,6 +3200,8 @@ function calcResumo() {
   STATE.veiculos.forEach(v => {
     const unit = v.unidade_slug;
     const d = v.disponibilidade;
+
+    // ── CAVALOS ──────────────────────────────────────────────────────────────
     if (v.categoria === "cavalo") {
       if (d === "indisponivel") {
         if (unit && u[unit]) { u[unit].cavalos_indisp++; u[unit].cavalos_indisponivel++; }
@@ -3207,14 +3210,11 @@ function calcResumo() {
       } else if (d === "a_reformar") {
         if (unit && u[unit]) { u[unit].cavalos_indisp++; u[unit].cavalos_a_reformar++; }
       } else if (d === "manutencao") {
-        // Cavalos em manutenção — separados por vínculo
         if (unit && u[unit]) {
+          u[unit].cavalos_indisp++; u[unit].cavalos_manut++;
           if (v.vinculo === "AGREGADO") u[unit].cavalos_manut_agregado++;
           else u[unit].cavalos_manut_frota++;
-          u[unit].cavalos_indisp++;
-          u[unit].cavalos_manut++;
         }
-        // Também conta em MANUT global
         if (v.vinculo === "AGREGADO") u.MANUT.cavalos_manut_agregado++;
         else u.MANUT.cavalos_manut_frota++;
       } else if (d === "disponivel") {
@@ -3224,56 +3224,69 @@ function calcResumo() {
         if (v.vinculo === "AGREGADO") u[unit].agregado_op++; else u[unit].frota_op++;
       }
     }
-    if (v.categoria === "carreta" && unit && u[unit]) {
-      if (d === "vendida") return; // Vendidas não entram em nenhum contador
-      u[unit].carretas++;
-      if (d === "em_reforma") u[unit].carretas_em_reforma++;
-      else if (d === "a_reformar") u[unit].carretas_a_reformar++;
-      else if (d === "indisponivel") u[unit].carretas_indisp++;
-      else if (d === "manutencao") u[unit].carretas_manut++;
-      else if (d === "reserva") u[unit].carretas_reserva++;
-      else if (d === "disponivel") u[unit].carretas_disp++;
-      else u[unit].carretas_op++;
 
-      // Subtipos — rodotrem e bitrem acumulam em _raw (serão divididos por 2 após loop)
-      const sub = classifySubtipo(v.subtipo);
-      if (sub) {
-        const isVendida = d === "vendida";
-        if (isVendida) { /* vendidas não entram em subtipo */ }
-        else if (sub === "rodotrem") {
-          // Conta placa individual (sem ÷2) — mesma grandeza do card KPI
-          u[unit].sub_rodotrem++;
-          if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
-            u[unit].disp_rodotrem++;
-          }
-          if (d === "em_reforma" || d === "a_reformar" || d === "manutencao") {
-            u[unit].manut_rodotrem++;
-          }
-        } else if (sub === "bitrem") {
-          // Conta placa individual (sem ÷2) — mesma grandeza do card KPI
-          u[unit].sub_bitrem++;
-          if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
-            u[unit].disp_bitrem++;
-          }
-          if (d === "em_reforma" || d === "a_reformar" || d === "manutencao") {
-            u[unit].manut_bitrem++;
-          }
-        } else {
-          const subKey = "sub_" + sub;
-          if (u[unit][subKey] != null) u[unit][subKey]++;
-          // Disponível: status disponivel/reserva E não alocada
-          if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
-            const dispKey = "disp_" + sub;
-            if (u[unit][dispKey] != null) u[unit][dispKey]++;
-          }
-          // Manutenção: em_reforma, a_reformar ou manutencao
-          if (d === "em_reforma" || d === "a_reformar" || d === "manutencao") {
-            const manutKey = "manut_" + sub;
-            if (u[unit][manutKey] != null) u[unit][manutKey]++;
-          }
+    // ── CARRETAS ─────────────────────────────────────────────────────────────
+    if (v.categoria === "carreta" && unit && u[unit]) {
+      if (d === "vendida") return; // Vendidas fora de todos os contadores
+
+      const sub  = classifySubtipo(v.subtipo);
+      const isPar = (sub === "rodotrem" || sub === "bitrem");
+      const rPfx  = sub === "rodotrem" ? "_rr" : (sub === "bitrem" ? "_rb" : null);
+
+      if (isPar) {
+        // Acumula em _raw — pós-loop divide por 2 e soma nos contadores principais
+        u[unit][rPfx + "_total"]++;
+        if      (d === "em_reforma")    u[unit][rPfx + "_em_reforma"]++;
+        else if (d === "a_reformar")    u[unit][rPfx + "_a_reformar"]++;
+        else if (d === "indisponivel")  u[unit][rPfx + "_indisp"]++;
+        else if (d === "manutencao")    u[unit][rPfx + "_manut"]++;
+        else if (d === "reserva")       u[unit][rPfx + "_reserva"]++;
+        else if (d === "disponivel")    u[unit][rPfx + "_disp"]++;
+        else                            u[unit][rPfx + "_op"]++;
+        // tabela disponíveis: livre = sem cavalo alocado
+        if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id))
+          u[unit][rPfx + "_disp_livre"]++;
+        // subtipo manutenção
+        if (d === "em_reforma" || d === "a_reformar" || d === "manutencao")
+          u[unit][rPfx + "_manut_sub"]++;
+      } else {
+        // Outros subtipos: 1 placa = 1 equipamento
+        u[unit].carretas++;
+        if      (d === "em_reforma")    u[unit].carretas_em_reforma++;
+        else if (d === "a_reformar")    u[unit].carretas_a_reformar++;
+        else if (d === "indisponivel")  u[unit].carretas_indisp++;
+        else if (d === "manutencao")    u[unit].carretas_manut++;
+        else if (d === "reserva")       u[unit].carretas_reserva++;
+        else if (d === "disponivel")    u[unit].carretas_disp++;
+        else                            u[unit].carretas_op++;
+        if (sub) {
+          u[unit]["sub_" + sub]++;
+          if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id))
+            u[unit]["disp_" + sub]++;
+          if (d === "em_reforma" || d === "a_reformar" || d === "manutencao")
+            u[unit]["manut_" + sub]++;
         }
       }
     }
+  });
+
+  // ── POS-LOOP: ÷2 para rodotrem e bitrem em TODOS os contadores ─────────────
+  ["SC", "SP", "PR", "MANUT"].forEach(uk => {
+    const o = u[uk];
+    [["_rr","rodotrem"],["_rb","bitrem"]].forEach(([p, sub]) => {
+      const h = (k) => Math.floor((o[p + k] || 0) / 2);
+      o.carretas         += h("_total");
+      o.carretas_op      += h("_op");
+      o.carretas_disp    += h("_disp");
+      o.carretas_reserva += h("_reserva");
+      o.carretas_manut   += h("_manut");
+      o.carretas_em_reforma += h("_em_reforma");
+      o.carretas_a_reformar += h("_a_reformar");
+      o.carretas_indisp  += h("_indisp");
+      o["sub_"  + sub]   += h("_total");
+      o["disp_" + sub]   += h("_disp_livre");
+      o["manut_"+ sub]   += h("_manut_sub");
+    });
   });
 
   // Subtipos contam placas individuais — mesma grandeza do card KPI (sem divisão por 2)
@@ -3307,7 +3320,7 @@ function renderDashboard() {
   const r = calcResumo();
   const totalCavalosOp = r.total.cavalos_op;
 
-  // totalCarretas correto: usa soma dos subtipos (já ÷2 para rodotrem/bitrem)
+  // Tabela Carretas — subtipos já com ÷2 aplicado para rodotrem/bitrem (par = 1 equipamento)
   const carrRows = [
     ["RODOTREM",   r.byUnit.SC.sub_rodotrem,   r.byUnit.PR.sub_rodotrem,   r.byUnit.SP.sub_rodotrem,   r.total.sub_rodotrem],
     ["LS (30m³)",  r.byUnit.SC.sub_ls30,       r.byUnit.PR.sub_ls30,       r.byUnit.SP.sub_ls30,       r.total.sub_ls30],
@@ -3320,12 +3333,12 @@ function renderDashboard() {
   const totalCarrPR = carrRows.reduce((s,r)=>s+r[2],0);
   const totalCarrSP = carrRows.reduce((s,r)=>s+r[3],0);
   const totalCarrGeral = carrRows.reduce((s,r)=>s+r[4],0);
-  // totalCarretas = placas físicas reais (r.total.carretas conta todas exceto vendidas)
+
+  // totalCarretas — r.total.carretas já tem ÷2 aplicado para rodo/bi no pós-loop
   const totalCarretas = r.total.carretas;
 
-  // Manutenção/reforma de carretas: placas reais por status
+  // Manutenção — r.total.carretas_* já refletem ÷2 para rodo/bi
   const totalCarrManutPlacas = r.total.carretas_em_reforma + r.total.carretas_a_reformar + r.total.carretas_manut;
-  // cavalos_indisp = manutencao + em_reforma + a_reformar + indisponivel
   const totalManut = r.total.cavalos_indisp + totalCarrManutPlacas + r.total.carretas_indisp;
 
   const totalCompressores = r.total.compressores_op + r.total.compressores_estoque + r.total.compressores_manut;
@@ -3394,7 +3407,7 @@ function renderDashboard() {
       ${xlTbl("COMPRESSORES", "Situação atual dos compressores: ativos, estoque e manutenção", compRows,
         ["Total Geral", totalCompSC, totalCompPR, totalCompSP, totalCompGeral])}
 
-      ${xlTbl("CARRETAS", "Distribuição por subtipo de carreta por unidade operacional (placas individuais, exceto vendidas)", carrRows,
+      ${xlTbl("CARRETAS", "Distribuição por subtipo de carreta por unidade (rodotrem/bitrem = par de placas = 1 equipamento)", carrRows,
         ["Total Geral", totalCarrSC, totalCarrPR, totalCarrSP, totalCarrGeral])}
 
       ${xlTbl("CARRETAS DISPONÍVEIS", "Carretas sem alocação de cavalo, disponíveis para operação", dispRows,
@@ -3466,9 +3479,9 @@ function renderDashboard() {
         <div class="kpi-sub">${r.alertas.red} crítico · ${r.alertas.orange} alerta</div>
       </div>
       <div class="kpi accent-orange">
-        <div class="kpi-label">Em Manutenção / Reforma</div>
+        <div class="kpi-label">Em Manutenção</div>
         <div class="kpi-value">${totalManut}</div>
-        <div class="kpi-sub">cavalos: ${r.total.cavalos_manut} manut. · ${r.total.cavalos_em_reforma} em ref. · ${r.total.cavalos_a_reformar} a ref. · ${r.total.cavalos_indisponivel} indisp. | carretas: ${r.total.carretas_em_reforma} em ref. · ${r.total.carretas_a_reformar} a ref. · ${r.total.carretas_manut} manut. · ${r.total.carretas_indisp} indisp.</div>
+        <div class="kpi-sub">cavalos: ${r.total.cavalos_manut} manut. · ${r.total.cavalos_em_reforma||0} em ref. · ${r.total.cavalos_a_reformar||0} a ref. · ${r.total.cavalos_indisponivel||0} indisp. | carretas: ${r.total.carretas_em_reforma} em ref. · ${r.total.carretas_a_reformar} a ref. · ${r.total.carretas_manut} manut. · ${r.total.carretas_indisp} indisp.</div>
       </div>
     </div>
 
