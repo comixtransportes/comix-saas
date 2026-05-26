@@ -3123,7 +3123,7 @@ function calcResumo() {
       cavalos_disp: 0, cavalos_indisp: 0,
       // Manutenção de cavalos (por vínculo)
       cavalos_manut_frota: 0, cavalos_manut_agregado: 0,
-      carretas: 0, carretas_op: 0, carretas_disp: 0,
+      carretas: 0, carretas_op: 0, carretas_disp: 0, carretas_reserva: 0, carretas_manut: 0,
       carretas_em_reforma: 0, carretas_a_reformar: 0, carretas_indisp: 0,
       compressores_op: 0, compressores_estoque: 0, compressores_manut: 0,
       // Subtipos de carretas (op + disp) — rodotrem e bitrem já divididos por 2 (conjuntos)
@@ -3191,7 +3191,9 @@ function calcResumo() {
       if (d === "em_reforma") u[unit].carretas_em_reforma++;
       else if (d === "a_reformar") u[unit].carretas_a_reformar++;
       else if (d === "indisponivel") u[unit].carretas_indisp++;
-      else if (d === "disponivel" || d === "reserva") u[unit].carretas_disp++;
+      else if (d === "manutencao") { u[unit].carretas_manut++; u[unit].carretas_disp++; }
+      else if (d === "reserva") { u[unit].carretas_reserva++; u[unit].carretas_disp++; }
+      else if (d === "disponivel") u[unit].carretas_disp++;
       else u[unit].carretas_op++;
 
       // Subtipos — rodotrem e bitrem acumulam em _raw (serão divididos por 2 após loop)
@@ -3274,11 +3276,32 @@ function renderDashboard() {
   }
   const r = calcResumo();
   const totalCavalosOp = r.total.cavalos_op;
-  const totalCarretas = r.total.carretas;
+
+  // totalCarretas correto: usa soma dos subtipos (já ÷2 para rodotrem/bitrem)
+  const carrRows = [
+    ["RODOTREM",   r.byUnit.SC.sub_rodotrem,   r.byUnit.PR.sub_rodotrem,   r.byUnit.SP.sub_rodotrem,   r.total.sub_rodotrem],
+    ["LS (30m³)",  r.byUnit.SC.sub_ls30,       r.byUnit.PR.sub_ls30,       r.byUnit.SP.sub_ls30,       r.total.sub_ls30],
+    ["LS (35m³)",  r.byUnit.SC.sub_ls35,       r.byUnit.PR.sub_ls35,       r.byUnit.SP.sub_ls35,       r.total.sub_ls35],
+    ["VANDERLEIA", r.byUnit.SC.sub_vanderleia, r.byUnit.PR.sub_vanderleia, r.byUnit.SP.sub_vanderleia, r.total.sub_vanderleia],
+    ["4º EIXO",    r.byUnit.SC.sub_4eixo,      r.byUnit.PR.sub_4eixo,      r.byUnit.SP.sub_4eixo,      r.total.sub_4eixo],
+    ["BITREM",     r.byUnit.SC.sub_bitrem,     r.byUnit.PR.sub_bitrem,     r.byUnit.SP.sub_bitrem,     r.total.sub_bitrem],
+  ];
+  const totalCarrSC = carrRows.reduce((s,r)=>s+r[1],0);
+  const totalCarrPR = carrRows.reduce((s,r)=>s+r[2],0);
+  const totalCarrSP = carrRows.reduce((s,r)=>s+r[3],0);
+  const totalCarrGeral = carrRows.reduce((s,r)=>s+r[4],0);
+  // Carretas correto (subtipos já ÷2 para rodotrem/bitrem)
+  const totalCarretas = totalCarrGeral;
+
+  // Manutenção de carretas com ÷2 aplicado para rodotrem/bitrem
+  const totalCarrManut = r.total.manut_ls30 + r.total.manut_ls35 + r.total.manut_4eixo + r.total.manut_vanderleia + r.total.manut_rodotrem + r.total.manut_bitrem;
+  // Reforma = em_reforma + a_reformar, mas rodotrem/bitrem já estão contabilizados via manut
+  // Para totalManut, usamos os contadores de subtipo em manutenção (já ÷2)
+  const totalCarretasReformaSomado = totalCarrManut;
+  const totalManut = r.total.cavalos_indisp + totalCarrManut + r.total.carretas_indisp;
+
   const totalCompressores = r.total.compressores_op + r.total.compressores_estoque + r.total.compressores_manut;
   const totalCriticos = r.alertas.red + r.alertas.orange;
-  const totalCarretasReformaSomado = r.total.carretas_em_reforma + r.total.carretas_a_reformar;
-  const totalManut = r.total.cavalos_indisp + totalCarretasReformaSomado + r.total.carretas_indisp;
 
   // Linhas auxiliares para o resumo principal (ordem da imagem: SC, PR, SP)
   const equipRows = [
@@ -3300,19 +3323,6 @@ function renderDashboard() {
     ["EM ESTOQUE", r.byUnit.SC.compressores_estoque, r.byUnit.PR.compressores_estoque, r.byUnit.SP.compressores_estoque, r.total.compressores_estoque],
     ["MANUTENÇÃO", r.byUnit.SC.compressores_manut,   r.byUnit.PR.compressores_manut,   r.byUnit.SP.compressores_manut,   r.total.compressores_manut],
   ];
-
-  const carrRows = [
-    ["RODOTREM",   r.byUnit.SC.sub_rodotrem,   r.byUnit.PR.sub_rodotrem,   r.byUnit.SP.sub_rodotrem,   r.total.sub_rodotrem],
-    ["LS (30m³)",  r.byUnit.SC.sub_ls30,       r.byUnit.PR.sub_ls30,       r.byUnit.SP.sub_ls30,       r.total.sub_ls30],
-    ["LS (35m³)",  r.byUnit.SC.sub_ls35,       r.byUnit.PR.sub_ls35,       r.byUnit.SP.sub_ls35,       r.total.sub_ls35],
-    ["VANDERLEIA", r.byUnit.SC.sub_vanderleia, r.byUnit.PR.sub_vanderleia, r.byUnit.SP.sub_vanderleia, r.total.sub_vanderleia],
-    ["4º EIXO",    r.byUnit.SC.sub_4eixo,      r.byUnit.PR.sub_4eixo,      r.byUnit.SP.sub_4eixo,      r.total.sub_4eixo],
-    ["BITREM",     r.byUnit.SC.sub_bitrem,     r.byUnit.PR.sub_bitrem,     r.byUnit.SP.sub_bitrem,     r.total.sub_bitrem],
-  ];
-  const totalCarrSC = carrRows.reduce((s,r)=>s+r[1],0);
-  const totalCarrPR = carrRows.reduce((s,r)=>s+r[2],0);
-  const totalCarrSP = carrRows.reduce((s,r)=>s+r[3],0);
-  const totalCarrGeral = carrRows.reduce((s,r)=>s+r[4],0);
 
   const dispRows = [
     ["4º EIXO",    r.byUnit.SC.disp_4eixo,      r.byUnit.PR.disp_4eixo,      r.byUnit.SP.disp_4eixo,      r.total.disp_4eixo],
@@ -3413,7 +3423,7 @@ function renderDashboard() {
       <div class="kpi accent-green">
         <div class="kpi-label">Carretas</div>
         <div class="kpi-value">${totalCarretas}</div>
-        <div class="kpi-sub">${r.total.carretas_op} operando · ${totalCarretasReformaSomado} reforma</div>
+        <div class="kpi-sub">${r.total.carretas_op} oper. · ${r.total.carretas_disp - r.total.carretas_reserva - r.total.carretas_manut} disp. · ${r.total.carretas_reserva} reserva · ${r.total.carretas_manut} manut. · ${r.total.carretas_em_reforma} em ref. · ${r.total.carretas_a_reformar} a ref. · ${r.total.carretas_indisp} indisp.</div>
       </div>
       <div class="kpi accent-purple">
         <div class="kpi-label">Compressores</div>
@@ -3428,7 +3438,7 @@ function renderDashboard() {
       <div class="kpi accent-orange">
         <div class="kpi-label">Em Manutenção</div>
         <div class="kpi-value">${totalManut}</div>
-        <div class="kpi-sub">${r.total.cavalos_indisp} cavalos · ${totalCarretasReformaSomado + r.total.carretas_indisp} carretas</div>
+        <div class="kpi-sub">${r.total.cavalos_indisp} cavalos · ${totalCarrManut} carretas (÷2 rodo/bi) · ${r.total.carretas_indisp} indisp.</div>
       </div>
     </div>
 
