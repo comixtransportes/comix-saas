@@ -7,7 +7,7 @@
      width=device-width: respeita a largura real do dispositivo.
      Sem maximum-scale: pinch-zoom totalmente livre.
      O dimensionamento (1280×altura_virtual → tela) é feito via transform:scale no body. -->
-<meta name="viewport" content="width=1280, minimum-scale=0.1, maximum-scale=10, user-scalable=yes, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, minimum-scale=0.1, maximum-scale=10, user-scalable=yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -302,29 +302,54 @@ table.dt td.dia-cell::after{
 .dc-sel-label span{color:var(--ac);font-weight:600;}
 
 
-/* ── AJUSTE SOMENTE DE VISUALIZAÇÃO MOBILE ──
-   Mantém a largura virtual de 1280px, libera pinch-to-zoom e garante
-   rolagem vertical completa no celular sem alterar cálculos, dados,
-   gráficos ou lógica do dashboard. */
-html{
-  -webkit-text-size-adjust:100%;
-}
+/* ── AJUSTE ATLAS: VISUALIZAÇÃO MOBILE PROPORCIONAL ──
+   Em telas pequenas, o dashboard é tratado como um canvas virtual fixo
+   de 1280×720 e reduzido por transform:scale, preservando a proporção
+   dos cards, tabelas e gráficos. No desktop, o layout original permanece. */
+html{ -webkit-text-size-adjust:100%; }
 
-@media (hover:none) and (pointer:coarse){
+#atlas_pd_stage{display:flex;flex:1;min-height:0;width:100%;flex-direction:column;}
+#atlas_pd_canvas{display:flex;flex:1;min-height:0;width:100%;flex-direction:column;}
+
+@media (hover:none) and (pointer:coarse), (max-width:900px){
   html,
   body{
-    width:1280px !important;
-    min-width:1280px !important;
+    width:100% !important;
+    min-width:0 !important;
     height:auto !important;
-    min-height:100%;
+    min-height:var(--atlas-pd-stage-h,100vh) !important;
     overflow:auto !important;
     overscroll-behavior:none;
     -webkit-overflow-scrolling:touch;
+    touch-action:pan-x pan-y pinch-zoom !important;
     background:#ffffff !important;
   }
 
-  body{
-    display:block !important;
+  body{display:block !important;}
+
+  #atlas_pd_stage{
+    width:100vw !important;
+    min-width:0 !important;
+    height:var(--atlas-pd-stage-h,auto) !important;
+    min-height:var(--atlas-pd-stage-h,auto) !important;
+    overflow:visible !important;
+    position:relative !important;
+  }
+
+  #atlas_pd_canvas{
+    width:1280px !important;
+    min-width:1280px !important;
+    max-width:1280px !important;
+    height:var(--atlas-pd-base-h,720px) !important;
+    min-height:var(--atlas-pd-base-h,720px) !important;
+    max-height:var(--atlas-pd-base-h,720px) !important;
+    display:flex !important;
+    flex-direction:column !important;
+    overflow:hidden !important;
+    transform:scale(var(--atlas-pd-scale,1));
+    transform-origin:top left;
+    will-change:transform;
+    background:var(--bg);
   }
 
   .hdr,
@@ -333,47 +358,18 @@ html{
   #scr-main,
   .content,
   .pane.on{
-    width:1280px !important;
-    min-width:1280px !important;
+    width:100% !important;
+    min-width:0 !important;
   }
 
-  #scr-main,
-  .content,
-  .pane,
-  .pane.on,
-  #p-vg,
-  .pane-scroll,
-  .hi-wrap,
-  .tw,
-  .to,
-  .ai-panel,
-  .modal{
-    height:auto !important;
-    max-height:none !important;
-    min-height:0 !important;
-    overflow:visible !important;
-    -webkit-overflow-scrolling:touch;
-  }
+  #scr-main{flex:1 !important;min-height:0 !important;overflow:hidden !important;}
+  #scr-drop{flex:1 !important;min-height:0 !important;overflow:hidden !important;}
+  .content{flex:1 !important;min-height:0 !important;overflow:hidden !important;display:flex !important;flex-direction:column !important;}
+  .pane{min-height:0 !important;overflow:hidden !important;}
+  .pane.on{display:flex !important;flex-direction:column !important;flex:1 !important;min-height:0 !important;overflow:hidden !important;}
+  #p-vg{overflow:hidden !important;}
 
-  .pane{overflow:visible !important;}
-  .pane.on{display:block !important;}
-
-  .content{
-    display:block !important;
-    flex:none !important;
-  }
-
-  canvas{
-    touch-action:auto !important;
-  }
-
-  body::after{
-    content:'';
-    display:block;
-    width:1px;
-    height:100vh;
-    pointer-events:none;
-  }
+  canvas{touch-action:auto !important;}
 }
 
 </style>
@@ -390,6 +386,8 @@ html{
   </div>
 </div>
 
+<div id="atlas_pd_stage">
+  <div id="atlas_pd_canvas">
 <div class="hdr">
   <div class="logo">COMIX <em>PD Diário</em></div>
   <div class="hm">
@@ -658,6 +656,8 @@ html{
         </div>
       </div>
     </div>
+  </div>
+</div>
   </div>
 </div>
 
@@ -3505,6 +3505,100 @@ window.addEventListener('message', function(event) {
     }
   }
   setTimeout(attach, 300);
+})();
+</script>
+
+
+<script id="atlas-pd-mobile-fit">
+(function(){
+  var BASE_W = 1280;
+  var BASE_H = 720;
+  var raf = 0;
+
+  function vvWidth(){
+    return (window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || BASE_W;
+  }
+  function vvHeight(){
+    return (window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || BASE_H;
+  }
+  function shouldFit(){
+    var coarse = false;
+    try { coarse = window.matchMedia && window.matchMedia('(hover:none) and (pointer:coarse)').matches; } catch(e) {}
+    return coarse || vvWidth() <= 900 || window.innerWidth <= 900;
+  }
+  function mobileBottomGuard(vh, vw){
+    var standalone = false;
+    try { standalone = (window.navigator && window.navigator.standalone) || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches); } catch(e) {}
+    if(standalone) return 18;
+    if(vw > 900) return 0;
+    return Math.min(124, Math.max(88, Math.round(vh * 0.15)));
+  }
+  function resizeChartsSoon(){
+    try {
+      if (typeof CHS !== 'undefined' && CHS) {
+        Object.keys(CHS).forEach(function(k){
+          try { if(CHS[k] && CHS[k].resize) CHS[k].resize(); } catch(e) {}
+        });
+      }
+    } catch(e) {}
+  }
+  function fitDashboard(){
+    var stage = document.getElementById('atlas_pd_stage');
+    var canvas = document.getElementById('atlas_pd_canvas');
+    if(!stage || !canvas) return;
+
+    if(!shouldFit()){
+      stage.style.removeProperty('--atlas-pd-scale');
+      stage.style.removeProperty('--atlas-pd-stage-h');
+      stage.style.removeProperty('--atlas-pd-base-h');
+      canvas.style.removeProperty('--atlas-pd-scale');
+      document.documentElement.style.removeProperty('--atlas-pd-stage-h');
+      return;
+    }
+
+    var vw = Math.max(1, vvWidth());
+    var vh = Math.max(1, vvHeight());
+    var guard = mobileBottomGuard(vh, vw);
+    var scale = Math.min(1, vw / BASE_W);
+    if(!isFinite(scale) || scale <= 0) scale = 1;
+    scale = Math.max(0.16, scale);
+    var stageH = Math.ceil((BASE_H * scale) + guard + 8);
+
+    stage.style.setProperty('--atlas-pd-scale', String(scale));
+    stage.style.setProperty('--atlas-pd-base-h', BASE_H + 'px');
+    stage.style.setProperty('--atlas-pd-stage-h', stageH + 'px');
+    canvas.style.setProperty('--atlas-pd-scale', String(scale));
+    document.documentElement.style.setProperty('--atlas-pd-stage-h', stageH + 'px');
+
+    setTimeout(resizeChartsSoon, 80);
+    setTimeout(resizeChartsSoon, 260);
+  }
+  function queueFit(){
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(function(){
+      fitDashboard();
+      setTimeout(fitDashboard, 80);
+      setTimeout(fitDashboard, 300);
+      setTimeout(fitDashboard, 900);
+    });
+  }
+
+  window.atlasFitPDDashboard = queueFit;
+  window.addEventListener('resize', queueFit, {passive:true});
+  window.addEventListener('orientationchange', queueFit, {passive:true});
+  window.addEventListener('pageshow', queueFit, {passive:true});
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', queueFit, {passive:true});
+    window.visualViewport.addEventListener('scroll', queueFit, {passive:true});
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    var canvas = document.getElementById('atlas_pd_canvas');
+    if(canvas && window.MutationObserver){
+      new MutationObserver(queueFit).observe(canvas, {childList:true, subtree:true, attributes:true, characterData:true});
+    }
+    queueFit();
+  });
+  queueFit();
 })();
 </script>
 
