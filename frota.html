@@ -3153,8 +3153,9 @@ function calcResumo() {
   function blank() {
     return {
       cavalos_op: 0, frota_op: 0, agregado_op: 0,
-      cavalos_disp: 0, cavalos_indisp: 0,
-      // Manutenção de cavalos (por vínculo)
+      cavalos_disp: 0, cavalos_indisp: 0, cavalos_manut: 0,
+      cavalos_em_reforma: 0, cavalos_a_reformar: 0, cavalos_indisponivel: 0,
+      // Manutenção de cavalos (por vínculo) — apenas status=manutencao
       cavalos_manut_frota: 0, cavalos_manut_agregado: 0,
       carretas: 0, carretas_op: 0, carretas_disp: 0, carretas_reserva: 0, carretas_manut: 0,
       carretas_em_reforma: 0, carretas_a_reformar: 0, carretas_indisp: 0,
@@ -3199,14 +3200,19 @@ function calcResumo() {
     const unit = v.unidade_slug;
     const d = v.disponibilidade;
     if (v.categoria === "cavalo") {
-      if (d === "indisponivel" || d === "em_reforma" || d === "a_reformar") {
-        if (unit && u[unit]) u[unit].cavalos_indisp++;
+      if (d === "indisponivel") {
+        if (unit && u[unit]) { u[unit].cavalos_indisp++; u[unit].cavalos_indisponivel++; }
+      } else if (d === "em_reforma") {
+        if (unit && u[unit]) { u[unit].cavalos_indisp++; u[unit].cavalos_em_reforma++; }
+      } else if (d === "a_reformar") {
+        if (unit && u[unit]) { u[unit].cavalos_indisp++; u[unit].cavalos_a_reformar++; }
       } else if (d === "manutencao") {
-        // Cavalos em manutenção — separados por vínculo (somente categoria==="cavalo"; carretas NÃO entram aqui)
+        // Cavalos em manutenção — separados por vínculo
         if (unit && u[unit]) {
           if (v.vinculo === "AGREGADO") u[unit].cavalos_manut_agregado++;
           else u[unit].cavalos_manut_frota++;
           u[unit].cavalos_indisp++;
+          u[unit].cavalos_manut++;
         }
         // Também conta em MANUT global
         if (v.vinculo === "AGREGADO") u.MANUT.cavalos_manut_agregado++;
@@ -3225,7 +3231,7 @@ function calcResumo() {
       else if (d === "a_reformar") u[unit].carretas_a_reformar++;
       else if (d === "indisponivel") u[unit].carretas_indisp++;
       else if (d === "manutencao") u[unit].carretas_manut++;
-      else if (d === "reserva") { u[unit].carretas_reserva++; u[unit].carretas_disp++; }
+      else if (d === "reserva") u[unit].carretas_reserva++;
       else if (d === "disponivel") u[unit].carretas_disp++;
       else u[unit].carretas_op++;
 
@@ -3317,9 +3323,9 @@ function renderDashboard() {
   // totalCarretas = placas físicas reais (r.total.carretas conta todas exceto vendidas)
   const totalCarretas = r.total.carretas;
 
-  // Manutenção de carretas: placas reais em em_reforma + a_reformar + manutencao
+  // Manutenção/reforma de carretas: placas reais por status
   const totalCarrManutPlacas = r.total.carretas_em_reforma + r.total.carretas_a_reformar + r.total.carretas_manut;
-  const totalCarretasReformaSomado = totalCarrManutPlacas;
+  // cavalos_indisp = manutencao + em_reforma + a_reformar + indisponivel
   const totalManut = r.total.cavalos_indisp + totalCarrManutPlacas + r.total.carretas_indisp;
 
   const totalCompressores = r.total.compressores_op + r.total.compressores_estoque + r.total.compressores_manut;
@@ -3347,10 +3353,12 @@ function renderDashboard() {
   ];
 
   const dispRows = [
-    ["4º EIXO",    r.byUnit.SC.disp_4eixo,      r.byUnit.PR.disp_4eixo,      r.byUnit.SP.disp_4eixo,      r.total.disp_4eixo],
+    ["RODOTREM",   r.byUnit.SC.disp_rodotrem,   r.byUnit.PR.disp_rodotrem,   r.byUnit.SP.disp_rodotrem,   r.total.disp_rodotrem],
     ["LS (30m³)",  r.byUnit.SC.disp_ls30,       r.byUnit.PR.disp_ls30,       r.byUnit.SP.disp_ls30,       r.total.disp_ls30],
     ["LS (35m³)",  r.byUnit.SC.disp_ls35,       r.byUnit.PR.disp_ls35,       r.byUnit.SP.disp_ls35,       r.total.disp_ls35],
     ["VANDERLEIA", r.byUnit.SC.disp_vanderleia, r.byUnit.PR.disp_vanderleia, r.byUnit.SP.disp_vanderleia, r.total.disp_vanderleia],
+    ["4º EIXO",    r.byUnit.SC.disp_4eixo,      r.byUnit.PR.disp_4eixo,      r.byUnit.SP.disp_4eixo,      r.total.disp_4eixo],
+    ["BITREM",     r.byUnit.SC.disp_bitrem,     r.byUnit.PR.disp_bitrem,     r.byUnit.SP.disp_bitrem,     r.total.disp_bitrem],
   ];
   const totalDispSC = dispRows.reduce((s,r)=>s+r[1],0);
   const totalDispPR = dispRows.reduce((s,r)=>s+r[2],0);
@@ -3458,9 +3466,9 @@ function renderDashboard() {
         <div class="kpi-sub">${r.alertas.red} crítico · ${r.alertas.orange} alerta</div>
       </div>
       <div class="kpi accent-orange">
-        <div class="kpi-label">Em Manutenção</div>
+        <div class="kpi-label">Em Manutenção / Reforma</div>
         <div class="kpi-value">${totalManut}</div>
-        <div class="kpi-sub">${r.total.cavalos_indisp} cavalos · carretas: ${r.total.carretas_em_reforma} em reforma · ${r.total.carretas_a_reformar} a reformar · ${r.total.carretas_manut} manut. · ${r.total.carretas_indisp} indisp.</div>
+        <div class="kpi-sub">cavalos: ${r.total.cavalos_manut} manut. · ${r.total.cavalos_em_reforma} em ref. · ${r.total.cavalos_a_reformar} a ref. · ${r.total.cavalos_indisponivel} indisp. | carretas: ${r.total.carretas_em_reforma} em ref. · ${r.total.carretas_a_reformar} a ref. · ${r.total.carretas_manut} manut. · ${r.total.carretas_indisp} indisp.</div>
       </div>
     </div>
 
