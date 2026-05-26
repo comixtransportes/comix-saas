@@ -3130,9 +3130,15 @@ function calcResumo() {
       sub_rodotrem: 0, sub_ls30: 0, sub_ls35: 0, sub_vanderleia: 0, sub_4eixo: 0, sub_bitrem: 0,
       // Subtipos disponíveis (não alocadas)
       disp_4eixo: 0, disp_ls30: 0, disp_ls35: 0, disp_vanderleia: 0, disp_rodotrem: 0, disp_bitrem: 0,
+      // Subtipos em manutenção (em_reforma + a_reformar + manutencao) — rodotrem/bitrem ÷2
+      manut_ls30: 0, manut_ls35: 0, manut_vanderleia: 0, manut_4eixo: 0,
+      manut_rodotrem: 0, manut_bitrem: 0,
       // Acumuladores brutos para rodotrem/bitrem (pré-divisão)
       _raw_rodotrem: 0, _raw_bitrem: 0,
       _raw_disp_rodotrem: 0, _raw_disp_bitrem: 0,
+      // Acumuladores brutos para manutenção de rodotrem/bitrem (pré-divisão)
+      manut_rodotrem: 0, manut_bitrem: 0,
+      _raw_manut_rodotrem: 0, _raw_manut_bitrem: 0,
     };
   }
 
@@ -3199,10 +3205,18 @@ function calcResumo() {
           if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
             u[unit]._raw_disp_rodotrem++;
           }
+          // Manutenção: em_reforma, a_reformar ou manutencao
+          if (d === "em_reforma" || d === "a_reformar" || d === "manutencao") {
+            u[unit]._raw_manut_rodotrem++;
+          }
         } else if (sub === "bitrem") {
           u[unit]._raw_bitrem++;
           if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
             u[unit]._raw_disp_bitrem++;
+          }
+          // Manutenção: em_reforma, a_reformar ou manutencao
+          if (d === "em_reforma" || d === "a_reformar" || d === "manutencao") {
+            u[unit]._raw_manut_bitrem++;
           }
         } else {
           const subKey = "sub_" + sub;
@@ -3211,6 +3225,11 @@ function calcResumo() {
           if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
             const dispKey = "disp_" + sub;
             if (u[unit][dispKey] != null) u[unit][dispKey]++;
+          }
+          // Manutenção: em_reforma, a_reformar ou manutencao
+          if (d === "em_reforma" || d === "a_reformar" || d === "manutencao") {
+            const manutKey = "manut_" + sub;
+            if (u[unit][manutKey] != null) u[unit][manutKey]++;
           }
         }
       }
@@ -3223,6 +3242,8 @@ function calcResumo() {
     u[uk].sub_bitrem    = Math.floor(u[uk]._raw_bitrem / 2);
     u[uk].disp_rodotrem = Math.floor(u[uk]._raw_disp_rodotrem / 2);
     u[uk].disp_bitrem   = Math.floor(u[uk]._raw_disp_bitrem / 2);
+    u[uk].manut_rodotrem = Math.floor(u[uk]._raw_manut_rodotrem / 2);
+    u[uk].manut_bitrem   = Math.floor(u[uk]._raw_manut_bitrem / 2);
   });
 
   STATE.compressores.forEach(c => {
@@ -3333,7 +3354,7 @@ function renderDashboard() {
       ${xlTbl("COMPRESSORES", "Situação atual dos compressores: ativos, estoque e manutenção", compRows,
         ["Total Geral", totalCompSC, totalCompPR, totalCompSP, totalCompGeral])}
 
-      ${xlTbl("CARRETAS", "Distribuição por subtipo de carreta e unidade operacional", carrRows,
+      ${xlTbl("CARRETAS", "Distribuição por subtipo de carreta (Operando, Disponíveis, em reforma, à reformar, manutenção e reserva)", carrRows,
         ["Total Geral", totalCarrSC, totalCarrPR, totalCarrSP, totalCarrGeral])}
 
       ${xlTbl("CARRETAS DISPONÍVEIS", "Carretas sem alocação de cavalo, disponíveis para operação", dispRows,
