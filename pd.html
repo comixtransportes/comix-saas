@@ -623,7 +623,7 @@ html{
       <div class="pane-scroll">
         <div class="charts-row">
           <div class="cc"><div class="ct">Top 10 — Faturamento (Consolidado)</div><div style="height:180px"><canvas id="c-ccf"></canvas></div></div>
-          <div class="cc"><div class="ct" id="ct-hist-cc">Atual vs Mês Anterior (R$)</div><div style="height:180px"><canvas id="c-ccb"></canvas></div></div>
+          <div class="cc"><div class="ct" id="ct-hist-cc">Faturamento (R$) Proj. Atual Vs Faturamento Real. Mês Anterior</div><div style="height:180px"><canvas id="c-ccb"></canvas></div></div>
         </div>
         <div class="tw">
           <div class="th3"><div><span class="tt">Clientes</span><span class="tc" id="cnt-cc"></span></div><input class="ts" type="text" placeholder="Buscar remetente…" oninput="filt('tbl-cc',this.value)"></div>
@@ -2145,10 +2145,14 @@ function _buildCcTable(uid, mes, diaSel) {
     [{data:t10cc.map(r=>r.f),backgroundColor:t10cc.map(r=>r.frt==='CIF'?'rgba(26,86,219,.65)':'rgba(234,88,12,.65)'),borderRadius:2}],
     {ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0}});
 
-  // ── Linha Dupla: Top 10 clientes (mês atual) vs faturamento no mês anterior ──
+  // ── Linha Dupla: Faturamento Projetado Atual vs Faturamento Real Mês Anterior ──
   const gRemAtual=grp(d,r=>r.cli_dev||r.r_nome);
-  const top10Atual=Object.entries(gRemAtual).map(([rem,arr])=>({rem,f:arr.reduce((a,r)=>a+r.fat,0)}))
-    .sort((a,b)=>b.f-a.f).slice(0,10);
+  const top10Atual=Object.entries(gRemAtual).map(([rem,arr])=>{
+    const fatReal=arr.reduce((a,r)=>a+r.fat,0);
+    const prodReal=arr.reduce((a,r)=>a+(r.prod||0),0);
+    const {fatProj}=calcProj(mes,fatReal,prodReal);
+    return {rem,f:fatReal,fatProj};
+  }).sort((a,b)=>b.f-a.f).slice(0,10);
   // Mês anterior
   const [_mesAno,_mesN]=mes.split('-').map(Number);
   const _mesAntN=_mesN===1?12:_mesN-1;
@@ -2157,8 +2161,8 @@ function _buildCcTable(uid, mes, diaSel) {
   const dAnt=filterByOp(uid).filter(r=>r.mes===_mesAntStr);
   const gRemAnt=grp(dAnt,r=>r.cli_dev||r.r_nome);
   const dupLabels=top10Atual.map(r=>r.rem.length>16?r.rem.slice(0,15)+'…':r.rem);
-  const dupAtual=top10Atual.map(r=>r.f);
-  const dupAnt=top10Atual.map(r=>{ const arr=gRemAnt[r.rem]||[]; return arr.reduce((a,x)=>a+x.fat,0); });
+  const dupAtual=top10Atual.map(r=>r.fatProj); // Faturamento PROJETADO mês atual
+  const dupAnt=top10Atual.map(r=>{ const arr=gRemAnt[r.rem]||[]; return arr.reduce((a,x)=>a+x.fat,0); }); // Real mês anterior
 
   if(CHS['c-ccb']) CHS['c-ccb'].destroy();
   const elP=document.getElementById('c-ccb'); if(elP){
@@ -2167,8 +2171,8 @@ function _buildCcTable(uid, mes, diaSel) {
       data:{
         labels:dupLabels,
         datasets:[
-          {label:'Atual',data:dupAtual,borderColor:'#1a56db',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#1a56db',tension:.3},
-          {label:'Mês Anterior',data:dupAnt,borderColor:'#9ca3af',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#9ca3af',tension:.3,borderDash:[4,3]},
+          {label:'Fat. Proj. Atual',data:dupAtual,borderColor:'#1a56db',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#1a56db',tension:.3},
+          {label:'Fat. Real Mês Ant.',data:dupAnt,borderColor:'#9ca3af',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#9ca3af',tension:.3,borderDash:[4,3]},
         ]
       },
       options:{
