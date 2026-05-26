@@ -1761,6 +1761,39 @@ async function autoClassifyTipo() {
   if (ok > 0) console.log(`[Frota] ✓ ${ok}/${cavalosToFix.length} salvos`);
 }
 
+/* ─── Dias úteis entre duas datas (exclui domingos e feriados nacionais BR fixos) ─── */
+function diasUteisEntre(dataInicio, dataFim) {
+  // Feriados nacionais brasileiros FIXOS (MM-DD)
+  const FERIADOS_FIXOS = new Set([
+    "01-01", // Ano Novo
+    "04-21", // Tiradentes
+    "05-01", // Dia do Trabalho
+    "09-07", // Independência
+    "10-12", // Nossa Senhora Aparecida
+    "11-02", // Finados
+    "11-15", // Proclamação da República
+    "11-20", // Consciência Negra (nacional desde 2024)
+    "12-25", // Natal
+  ]);
+  function isFeriadoFixo(d) {
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return FERIADOS_FIXOS.has(mm + "-" + dd);
+  }
+  let count = 0;
+  const cur = new Date(dataInicio);
+  cur.setHours(0, 0, 0, 0);
+  const fim = new Date(dataFim);
+  fim.setHours(0, 0, 0, 0);
+  while (cur < fim) {
+    const dow = cur.getDay();
+    // 0 = domingo → pula; sábado (6) conta (transportes operam sábado)
+    if (dow !== 0 && !isFeriadoFixo(cur)) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+
 /* ─── Processa rows do SZB real (Firestore, importado via index.html) ─── */
 /*
  * Esquema das rows (salvas pelo index.html, slim em ATLAS_PD_COLS_NEEDED):
@@ -1872,7 +1905,7 @@ function processarSzbRows(rows) {
     if (entry) {
       const ultima = new Date(entry.ultimaData);
       ultima.setHours(0, 0, 0, 0);
-      const dias = Math.max(0, Math.floor((hoje - ultima) / 86400000));
+      const dias = diasUteisEntre(ultima, hoje);
       out[v.id] = {
         ultima_viagem: ultima.toISOString().slice(0, 10),
         dias_sem_viagem: dias,
@@ -3191,7 +3224,7 @@ function calcResumo() {
       if (d === "em_reforma") u[unit].carretas_em_reforma++;
       else if (d === "a_reformar") u[unit].carretas_a_reformar++;
       else if (d === "indisponivel") u[unit].carretas_indisp++;
-      else if (d === "manutencao") { u[unit].carretas_manut++; u[unit].carretas_disp++; }
+      else if (d === "manutencao") u[unit].carretas_manut++;
       else if (d === "reserva") { u[unit].carretas_reserva++; u[unit].carretas_disp++; }
       else if (d === "disponivel") u[unit].carretas_disp++;
       else u[unit].carretas_op++;
@@ -3202,23 +3235,22 @@ function calcResumo() {
         const isVendida = d === "vendida";
         if (isVendida) { /* vendidas não entram em subtipo */ }
         else if (sub === "rodotrem") {
-          u[unit]._raw_rodotrem++;
-          // Disponível: status disponivel/reserva E não alocada
+          // Conta placa individual (sem ÷2) — mesma grandeza do card KPI
+          u[unit].sub_rodotrem++;
           if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
-            u[unit]._raw_disp_rodotrem++;
+            u[unit].disp_rodotrem++;
           }
-          // Manutenção: em_reforma, a_reformar ou manutencao
           if (d === "em_reforma" || d === "a_reformar" || d === "manutencao") {
-            u[unit]._raw_manut_rodotrem++;
+            u[unit].manut_rodotrem++;
           }
         } else if (sub === "bitrem") {
-          u[unit]._raw_bitrem++;
+          // Conta placa individual (sem ÷2) — mesma grandeza do card KPI
+          u[unit].sub_bitrem++;
           if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id)) {
-            u[unit]._raw_disp_bitrem++;
+            u[unit].disp_bitrem++;
           }
-          // Manutenção: em_reforma, a_reformar ou manutencao
           if (d === "em_reforma" || d === "a_reformar" || d === "manutencao") {
-            u[unit]._raw_manut_bitrem++;
+            u[unit].manut_bitrem++;
           }
         } else {
           const subKey = "sub_" + sub;
@@ -3238,15 +3270,7 @@ function calcResumo() {
     }
   });
 
-  // Rodotrem e Bitrem formam CONJUNTOS de 2 placas — divide por 2 (arredonda para baixo)
-  ["SC","SP","PR","MANUT"].forEach(uk => {
-    u[uk].sub_rodotrem  = Math.floor(u[uk]._raw_rodotrem / 2);
-    u[uk].sub_bitrem    = Math.floor(u[uk]._raw_bitrem / 2);
-    u[uk].disp_rodotrem = Math.floor(u[uk]._raw_disp_rodotrem / 2);
-    u[uk].disp_bitrem   = Math.floor(u[uk]._raw_disp_bitrem / 2);
-    u[uk].manut_rodotrem = Math.floor(u[uk]._raw_manut_rodotrem / 2);
-    u[uk].manut_bitrem   = Math.floor(u[uk]._raw_manut_bitrem / 2);
-  });
+  // Subtipos contam placas individuais — mesma grandeza do card KPI (sem divisão por 2)
 
   STATE.compressores.forEach(c => {
     const unit = normalizeUnitSlug(c.unidade);
@@ -3362,7 +3386,7 @@ function renderDashboard() {
       ${xlTbl("COMPRESSORES", "Situação atual dos compressores: ativos, estoque e manutenção", compRows,
         ["Total Geral", totalCompSC, totalCompPR, totalCompSP, totalCompGeral])}
 
-      ${xlTbl("CARRETAS", "Distribuição por subtipo de carreta (Operando, Disponíveis, em reforma, à reformar, manutenção e reserva)", carrRows,
+      ${xlTbl("CARRETAS", "Distribuição por subtipo de carreta por unidade operacional (placas individuais, exceto vendidas)", carrRows,
         ["Total Geral", totalCarrSC, totalCarrPR, totalCarrSP, totalCarrGeral])}
 
       ${xlTbl("CARRETAS DISPONÍVEIS", "Carretas sem alocação de cavalo, disponíveis para operação", dispRows,
@@ -3421,7 +3445,7 @@ function renderDashboard() {
       <div class="kpi accent-green">
         <div class="kpi-label">Carretas</div>
         <div class="kpi-value">${totalCarretas}</div>
-        <div class="kpi-sub">${r.total.carretas_op} oper. · ${r.total.carretas_disp - r.total.carretas_reserva - r.total.carretas_manut} disp. · ${r.total.carretas_reserva} reserva · ${r.total.carretas_manut} manut. · ${r.total.carretas_em_reforma} em ref. · ${r.total.carretas_a_reformar} a ref. · ${r.total.carretas_indisp} indisp.</div>
+        <div class="kpi-sub">${r.total.carretas_op} oper. · ${r.total.carretas_disp} disp. · ${r.total.carretas_reserva} reserva · ${r.total.carretas_manut} manut. · ${r.total.carretas_em_reforma} em ref. · ${r.total.carretas_a_reformar} a ref. · ${r.total.carretas_indisp} indisp.</div>
       </div>
       <div class="kpi accent-purple">
         <div class="kpi-label">Compressores</div>
@@ -3436,7 +3460,7 @@ function renderDashboard() {
       <div class="kpi accent-orange">
         <div class="kpi-label">Em Manutenção</div>
         <div class="kpi-value">${totalManut}</div>
-        <div class="kpi-sub">${r.total.cavalos_indisp} cavalos · ${totalCarrManutPlacas} em ref./manut. · ${r.total.carretas_indisp} indisp.</div>
+        <div class="kpi-sub">${r.total.cavalos_indisp} cavalos · carretas: ${r.total.carretas_em_reforma} em reforma · ${r.total.carretas_a_reformar} a reformar · ${r.total.carretas_manut} manut. · ${r.total.carretas_indisp} indisp.</div>
       </div>
     </div>
 
