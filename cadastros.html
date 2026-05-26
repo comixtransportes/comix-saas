@@ -513,6 +513,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       <button class="cfg-tab" id="cfg_tab_veiculos" type="button" onclick="openAdminSection('veiculos')">🚛 Veículos</button>
       <button class="cfg-tab" id="cfg_tab_motoristas" type="button" onclick="openAdminSection('motoristas')">🪪 Motoristas</button>
       <button class="cfg-tab" id="cfg_tab_filiais" type="button" onclick="openAdminSection('filiais')">🏢 Filiais</button>
+      <button class="cfg-tab" id="cfg_tab_centros_custo" type="button" onclick="openAdminSection('centros_custo')">💰 Centro de Custo</button>
       <button class="cfg-tab perm-tab" id="cfg_tab_permissoes" type="button" onclick="openAdminSection('permissoes')">🔒 Permissões</button>
     </div>
 
@@ -666,6 +667,39 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       <div class="card">
         <div class="card-hdr"><div class="card-ico" style="background:var(--green-l);color:var(--green)">📍</div><h2>Filiais cadastradas</h2></div>
         <div class="card-body"><div class="cfg-list" id="cfg_fil_list"><div class="loading-state">Carregando filiais...</div></div></div>
+      </div>
+    </section>
+
+    <section class="cfg-section" id="cfg_sec_centros_custo">
+      <div class="card">
+        <div class="card-hdr"><div class="card-ico" style="background:var(--yellow-l,#fef9c3);color:var(--yellow,#ca8a04)">💰</div><h2>Cadastro de Centro de Custo</h2></div>
+        <div class="card-body">
+          <form id="cfg_cc_form" onsubmit="cfgSaveCentroCusto(event)">
+            <input type="hidden" id="cfg_cc_doc_id">
+            <div class="fr">
+              <div class="f"><label>Código <span class="req">*</span></label><input id="cfg_cc_codigo" required placeholder="Ex: CC-001" oninput="cfgUppercaseInput(this)"></div>
+              <div class="f w3"><label>Nome <span class="req">*</span></label><input id="cfg_cc_nome" required placeholder="Nome do centro de custo" oninput="cfgUppercaseInput(this)"></div>
+              <div class="f"><label>Descrição</label><input id="cfg_cc_descricao" placeholder="Descrição opcional"></div>
+            </div>
+            <div class="fr">
+              <div class="f">
+                <label>Status</label>
+                <select id="cfg_cc_ativo">
+                  <option value="true">Ativo</option>
+                  <option value="false">Inativo</option>
+                </select>
+              </div>
+            </div>
+            <div class="cfg-actions">
+              <button class="cfg-save" type="submit">Salvar Centro de Custo</button>
+              <button class="cfg-clear" type="button" onclick="cfgResetCentroCusto()">Limpar</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><div class="card-ico" style="background:var(--green-l);color:var(--green)">📋</div><h2>Centros de Custo cadastrados</h2></div>
+        <div class="card-body"><div class="cfg-list" id="cfg_cc_list"><div class="loading-state">Carregando centros de custo...</div></div></div>
       </div>
     </section>
 
@@ -1524,7 +1558,7 @@ window._appReady = async function(user, perfil) {
 ════════════════════════════════════════════════════ */
 let cfgCurrentSection = "usuarios";
 let cfgPaisInicializado = false;
-const cfgCache = { usuarios: [], veiculos: [], motoristas: [], filiais: [] };
+const cfgCache = { usuarios: [], veiculos: [], motoristas: [], filiais: [], centrosCusto: [] };
 
 function cfgIsAdmin() {
   return !!(window._FB && typeof window._FB.getCurrentPerfil === "function" && window._FB.getCurrentPerfil() === "admin");
@@ -1567,6 +1601,7 @@ async function cfgLoadSection(section) {
       await cfgRefreshMotoristas();
     }
     if (section === "filiais") await cfgRefreshFiliais();
+    if (section === "centros_custo") await cfgRefreshCentrosCusto();
     if (section === "permissoes") cfgLoadPermissoes();
   } catch (err) {
     showToast(err.message || "Erro ao carregar configurações.", "error");
@@ -4761,6 +4796,100 @@ async function cfgDeleteUnidade(id) {
     showToast(err.message || "Erro ao excluir filial.", "error");
   }
 }
+
+/* ══ CENTRO DE CUSTO ══ */
+async function cfgRefreshCentrosCusto(renderList = true) {
+  if (renderList) {
+    const list = document.getElementById("cfg_cc_list");
+    if (list) list.innerHTML = '<div class="loading-state">Carregando centros de custo...</div>';
+  }
+  const docs = await cfgList("centros_custo");
+  cfgCache.centrosCusto = docs.map(d => ({
+    id: d.id,
+    codigo: d.codigo || d.id,
+    nome: d.nome || d.id,
+    descricao: d.descricao || '',
+    ativo: d.ativo !== false,
+    ...d
+  })).sort((a,b) => (a.codigo||'').localeCompare(b.codigo||'', 'pt-BR'));
+  if (renderList) cfgRenderCentrosCusto();
+}
+
+function cfgRenderCentrosCusto() {
+  const list = document.getElementById("cfg_cc_list");
+  if (!list) return;
+  const itens = cfgCache.centrosCusto || [];
+  if (!itens.length) {
+    list.innerHTML = '<div class="cfg-empty">Nenhum centro de custo cadastrado.</div>';
+    return;
+  }
+  list.innerHTML = itens.map(c => `<div class="cfg-list-item">
+    <div class="cfg-item-title">${cfgEscape(c.codigo ? c.codigo + ' — ' + c.nome : c.nome)}</div>
+    <div class="cfg-item-sub">${c.descricao ? cfgEscape(c.descricao) + ' · ' : ''}${c.ativo ? '<span style="color:var(--green)">Ativo</span>' : '<span style="color:var(--mu)">Inativo</span>'}</div>
+    <div class="cfg-item-actions">
+      <button class="cfg-small" type="button" onclick="cfgEditCentroCusto(decodeURIComponent('${cfgCode(c.id)}'))">Editar</button>
+      <button class="cfg-small cfg-danger" type="button" onclick="cfgDeleteCentroCusto(decodeURIComponent('${cfgCode(c.id)}'))">Excluir</button>
+    </div>
+  </div>`).join('');
+}
+
+function cfgResetCentroCusto() {
+  document.getElementById("cfg_cc_form")?.reset();
+  cfgSet("cfg_cc_doc_id", "");
+  const statusSel = document.getElementById("cfg_cc_ativo");
+  if (statusSel) statusSel.value = "true";
+}
+
+async function cfgSaveCentroCusto(event) {
+  event.preventDefault();
+  if (!cfgRequireAdmin()) return;
+  const codigo = cfgUpper(cfgVal("cfg_cc_codigo"));
+  const nome   = cfgUpper(cfgVal("cfg_cc_nome"));
+  if (!codigo) return showToast("Informe o código do centro de custo.", "error");
+  if (!nome)   return showToast("Informe o nome do centro de custo.", "error");
+  const payload = {
+    codigo,
+    nome,
+    descricao: cfgVal("cfg_cc_descricao"),
+    ativo: document.getElementById("cfg_cc_ativo")?.value !== "false",
+    atualizadoEm: new Date().toISOString(),
+  };
+  try {
+    const docId = cfgVal("cfg_cc_doc_id") || codigo.replace(/[^A-Z0-9]/g, '_');
+    await cfgSave("centros_custo", docId, payload);
+    showToast("Centro de custo salvo no Firebase.", "success");
+    cfgResetCentroCusto();
+    await cfgRefreshCentrosCusto();
+  } catch (err) {
+    showToast(err.message || "Erro ao salvar centro de custo.", "error");
+  }
+}
+
+function cfgEditCentroCusto(id) {
+  if (!cfgCache.centrosCusto) return;
+  const c = cfgCache.centrosCusto.find(x => x.id === id);
+  if (!c) return;
+  cfgSet("cfg_cc_doc_id", c.id);
+  cfgSet("cfg_cc_codigo", c.codigo || "");
+  cfgSet("cfg_cc_nome", c.nome || "");
+  cfgSet("cfg_cc_descricao", c.descricao || "");
+  const statusSel = document.getElementById("cfg_cc_ativo");
+  if (statusSel) statusSel.value = c.ativo !== false ? "true" : "false";
+  document.getElementById("cfg_cc_form")?.scrollIntoView({ behavior:"smooth", block:"start" });
+}
+
+async function cfgDeleteCentroCusto(id) {
+  if (!cfgRequireAdmin()) return;
+  if (!confirm("Excluir este centro de custo?")) return;
+  try {
+    await cfgDelete("centros_custo", id);
+    showToast("Centro de custo excluído.", "success");
+    await cfgRefreshCentrosCusto();
+  } catch (err) {
+    showToast(err.message || "Erro ao excluir centro de custo.", "error");
+  }
+}
+/* ══ fim CENTRO DE CUSTO ══ */
 async function cfgBuscarCep() {
   const cep = cfgDigits(cfgVal("cfg_fil_cep"));
   if (cep.length !== 8) return;
