@@ -677,7 +677,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
           <form id="cfg_cc_form" onsubmit="cfgSaveCentroCusto(event)">
             <input type="hidden" id="cfg_cc_doc_id">
             <div class="fr">
-              <div class="f"><label>Código <span class="req">*</span></label><input id="cfg_cc_codigo" required placeholder="Ex: CC-001" oninput="cfgUppercaseInput(this)"></div>
+              <div class="f"><label>Código <span class="req">*</span></label><input id="cfg_cc_codigo" required placeholder="00.00" maxlength="5" oninput="cfgCcCodigoMask(this)" inputmode="numeric" style="width:90px;font-family:var(--m,monospace);letter-spacing:1px"></div>
               <div class="f w3"><label>Nome <span class="req">*</span></label><input id="cfg_cc_nome" required placeholder="Nome do centro de custo" oninput="cfgUppercaseInput(this)"></div>
               <div class="f"><label>Descrição</label><input id="cfg_cc_descricao" placeholder="Descrição opcional"></div>
             </div>
@@ -786,7 +786,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     }
   }
   function assertAllowedAdminCollection(collectionName) {
-    const allowed = ["usuarios", "veiculos", "motoristas", "filiais"];
+    const allowed = ["usuarios", "veiculos", "motoristas", "filiais", "centros_custo"];
     if (!allowed.includes(collectionName)) {
       throw new Error("Coleção administrativa não permitida");
     }
@@ -1601,7 +1601,7 @@ async function cfgLoadSection(section) {
       await cfgRefreshMotoristas();
     }
     if (section === "filiais") await cfgRefreshFiliais();
-    if (section === "centros_custo") await cfgRefreshCentrosCusto();
+    if (section === "centros_custo") { await cfgSeedCentrosCusto(); await cfgRefreshCentrosCusto(); }
     if (section === "permissoes") cfgLoadPermissoes();
   } catch (err) {
     showToast(err.message || "Erro ao carregar configurações.", "error");
@@ -4798,6 +4798,14 @@ async function cfgDeleteUnidade(id) {
 }
 
 /* ══ CENTRO DE CUSTO ══ */
+
+// Máscara 00.00 — aplica enquanto digita
+function cfgCcCodigoMask(input) {
+  let v = input.value.replace(/\D/g, '').slice(0, 4);
+  if (v.length > 2) v = v.slice(0,2) + '.' + v.slice(2);
+  input.value = v;
+}
+
 async function cfgRefreshCentrosCusto(renderList = true) {
   if (renderList) {
     const list = document.getElementById("cfg_cc_list");
@@ -4843,9 +4851,10 @@ function cfgResetCentroCusto() {
 async function cfgSaveCentroCusto(event) {
   event.preventDefault();
   if (!cfgRequireAdmin()) return;
-  const codigo = cfgUpper(cfgVal("cfg_cc_codigo"));
+  const codigo = cfgVal("cfg_cc_codigo").trim();
   const nome   = cfgUpper(cfgVal("cfg_cc_nome"));
   if (!codigo) return showToast("Informe o código do centro de custo.", "error");
+  if (!/^\d{2}\.\d{2}$/.test(codigo)) return showToast("Código deve estar no formato 00.00 (ex: 01.01).", "error");
   if (!nome)   return showToast("Informe o nome do centro de custo.", "error");
   const payload = {
     codigo,
@@ -4855,7 +4864,9 @@ async function cfgSaveCentroCusto(event) {
     atualizadoEm: new Date().toISOString(),
   };
   try {
-    const docId = cfgVal("cfg_cc_doc_id") || codigo.replace(/[^A-Z0-9]/g, '_');
+    // docId = código sem ponto para ser um ID limpo (ex: "0101")
+    const existingId = cfgVal("cfg_cc_doc_id");
+    const docId = existingId || ('CC_' + codigo.replace('.',''));
     await cfgSave("centros_custo", docId, payload);
     showToast("Centro de custo salvo no Firebase.", "success");
     cfgResetCentroCusto();
@@ -4887,6 +4898,32 @@ async function cfgDeleteCentroCusto(id) {
     await cfgRefreshCentrosCusto();
   } catch (err) {
     showToast(err.message || "Erro ao excluir centro de custo.", "error");
+  }
+}
+
+// Seed: grava os centros de custo no Firebase se ainda não existirem
+async function cfgSeedCentrosCusto() {
+  try {
+    const existentes = await cfgList("centros_custo");
+    if (existentes.length > 0) return; // já tem dados, não sobrescreve
+    const SEED = [
+      { id:'CC_0101', codigo:'01.01', nome:'DIESEL INTERNO' },
+      { id:'CC_0102', codigo:'01.02', nome:'DIESEL EXTERNO' },
+      { id:'CC_0103', codigo:'01.03', nome:'ARLA' },
+      { id:'CC_0201', codigo:'02.01', nome:'MANUTENÇÃO FROTA PRÓPRIA' },
+      { id:'CC_0202', codigo:'02.02', nome:'MANUTENÇÃO FROTA AGREGADA' },
+      { id:'CC_0203', codigo:'02.03', nome:'MANUTENÇÃO PNEUS' },
+      { id:'CC_0301', codigo:'03.01', nome:'SALÁRIOS' },
+      { id:'CC_0302', codigo:'03.02', nome:'ENCARGOS SOCIAIS' },
+      { id:'CC_0401', codigo:'04.01', nome:'PEDÁGIO' },
+      { id:'CC_0402', codigo:'04.02', nome:'RASTREAMENTO' },
+    ];
+    for (const cc of SEED) {
+      await window._FB.adminSalvar('centros_custo', cc.id, { codigo: cc.codigo, nome: cc.nome, descricao: '', ativo: true });
+    }
+    console.log('[Atlas] Seed centros_custo concluído — ' + SEED.length + ' registros.');
+  } catch(e) {
+    console.warn('[Atlas] Seed centros_custo ignorado:', e.message);
   }
 }
 /* ══ fim CENTRO DE CUSTO ══ */
