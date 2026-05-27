@@ -776,6 +776,25 @@ function go(viewId, el) {
     if (fr) fr.src = v.src;
   } else {
     dispatchNav(viewId, v.nav);
+    // Sempre que voltar para início já carregado, atualiza dados
+    if (viewId === 'inicio') {
+      const _fr = document.getElementById('fr-inicio');
+      if (_fr && _fr.contentWindow) {
+        setTimeout(() => {
+          try {
+            _fr.contentWindow.postMessage({
+              type:        'ATLAS_USER',
+              email:       curUser?.email        || '',
+              uid:         curUser?.uid          || '',
+              perfil:      curPerfil             || 'motorista',
+              nome:        curUser?.displayName  || '',
+              displayName: curUser?.displayName  || ''
+            }, '*');
+            atlasResendDataToFrame('fr-inicio');
+          } catch(_) {}
+        }, 150);
+      }
+    }
   }
 }
 
@@ -788,15 +807,20 @@ function frLoaded(viewId) {
   setTimeout(() => {
     try {
       fr.contentWindow.postMessage({
-        type:   'ATLAS_USER',
-        email:  curUser?.email  || '',
-        uid:    curUser?.uid    || '',
-        perfil: curPerfil       || 'motorista',
-        nome:   curUser?.displayName || ''
+        type:        'ATLAS_USER',
+        email:       curUser?.email        || '',
+        uid:         curUser?.uid          || '',
+        perfil:      curPerfil             || 'motorista',
+        nome:        curUser?.displayName  || '',
+        displayName: curUser?.displayName  || ''
       }, '*');
       // Envia também permissões de abas se já carregadas
       sendTabPermsToFrame('fr-'+viewId);
       dispatchNav(viewId, VIEWS[viewId]?.nav);
+      // Para o início: re-envia dados SZB assim que o iframe carrega
+      if (viewId === 'inicio') {
+        atlasResendDataToFrame('fr-inicio');
+      }
     } catch(_) {}
   }, 300);
 }
@@ -1285,6 +1309,8 @@ async function atlasPreloadAllBases(){
         if(id === 'szb') window.__atlasSZBLastTs = p.ts;
         // Notifica iframes abertos antes do preload terminar (ex: PD Diário em branco)
         atlasBroadcast(id, p);
+        // Garante que o iframe de início receba o payload completo (não só o sinal)
+        atlasResendDataToFrame('fr-inicio');
       }
     }catch(e){ console.warn(`[Atlas] preload ${id}:`, e.message); }
   }
@@ -1338,6 +1364,27 @@ async function atlasLoadBase(id){
 function atlasBroadcast(id,payload){
   const msg={type:'ATLAS_DATA_READY',table:id,count:payload.count,ts:payload.ts};
   document.querySelectorAll('.fr-wrap iframe').forEach(fr=>{try{fr.contentWindow.postMessage(msg,'*');}catch(_){};});
+}
+
+/* Reenvia todos os dados carregados (ATLAS_DATA) para um iframe específico.
+   Usado quando o iframe de início já está carregado e o usuário volta para ele,
+   ou logo após o iframe carregar pela primeira vez. */
+function atlasResendDataToFrame(frameId) {
+  const fr = document.getElementById(frameId);
+  if (!fr || !fr.contentWindow) return;
+  const tables = Object.keys(window.ATLAS_DATA || {});
+  tables.forEach(id => {
+    const payload = window.ATLAS_DATA[id];
+    if (payload && Array.isArray(payload.rows) && payload.rows.length) {
+      try {
+        fr.contentWindow.postMessage({
+          type: 'ATLAS_DATA_RESPONSE',
+          table: id,
+          payload: payload
+        }, '*');
+      } catch(_) {}
+    }
+  });
 }
 window.addEventListener('message',async ev=>{
   const d=ev.data||{};
@@ -1602,6 +1649,8 @@ async function dbProc(file,id){
       }
     }
     atlasBroadcast(id, window.ATLAS_DATA[id]);
+    // Re-envia payload completo para o iframe do início (não só o sinal READY)
+    atlasResendDataToFrame('fr-inicio');
     const sec=((Date.now()-t0)/1000).toFixed(1);
     dbSt(id,'ok',dbFmt(rows.length)+' reg.');
     document.getElementById('dbc-'+id).className='db-card loaded';
