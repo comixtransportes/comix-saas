@@ -5,9 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>COMIX Atlas — Início</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
 <style>
 :root{
   --bg:#f0f2f5;--wh:#fff;--bd:#d1d9e6;--bd2:#e4e9f2;
@@ -456,22 +453,11 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
   try{ if(window.self===window.top) window.location.replace('index.html#inicio'); }catch(_){}
 })();
 
-/* ── Firebase — leitura direta, sem auth próprio ── */
-let _db = null;
-(function initFirebase(){
-  try{
-    const cfg = {
-      apiKey:"AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",
-      authDomain:"comix-relatorios.firebaseapp.com",
-      projectId:"comix-relatorios",
-      storageBucket:"comix-relatorios.firebasestorage.app",
-      messagingSenderId:"586258388438",
-      appId:"1:586258388438:web:3b9da22e650e88ddcf4077"
-    };
-    const app = firebase.apps.length ? firebase.apps[0] : firebase.initializeApp(cfg);
-    _db = firebase.firestore(app);
-  }catch(e){ console.warn('[Início] Firebase:', e.message); }
-})();
+/* ── Sem Firebase próprio — usa o db e funções já autenticadas do parent ──
+   O index.html já inicializou o Firebase e tem sessão de auth ativa.
+   Reutilizamos window.parent.atlasLoadBaseFromFirestore que já conhece
+   as Firestore Rules e a sessão do usuário logado.
+──────────────────────────────────────────────────────────────── */
 
 /* ── Estado ── */
 let _perfil = 'motorista', _nome = '';
@@ -508,31 +494,51 @@ window.addEventListener('message', ev => {
     else if(d.displayName&&d.displayName.trim()) _nome=d.displayName.trim().split(' ')[0];
     else if(d.email&&d.email.includes('@')) _nome=cap(d.email.split('@')[0]);
     renderHero();
-    // Perfil motorista/consulta: oculta grid de gestão
     if(!['admin','lr','lm','lu_sc','lu_pr','lu_sp'].includes(_perfil)){
       const b=document.querySelector('.body'); if(b) b.style.display='none';
       const k=document.querySelector('.hero-kpis'); if(k) k.style.display='none';
     }
+  }
+
+  /* Index avisa que uma base foi carregada/sincronizada — re-tenta o SZB */
+  if(d.type==='ATLAS_DATA_READY' && d.table==='szb'){
+    console.log('[Início] ATLAS_DATA_READY szb recebido — re-tentando render');
+    loadSZB().then(p=>{ if(p&&p.rows&&p.rows.length) render(p.rows,p.ts); }).catch(()=>{});
   }
 });
 
 /* ── Navegação ── */
 function navTo(v){ try{ window.parent.go&&window.parent.go(v); }catch(_){} }
 
-/* ── Lê SZB direto do Firestore ── */
+/* ── Lê SZB usando a função do index.html (parent) ──
+   Estratégia em cascata:
+   1. window.parent.ATLAS_DATA.szb  — já em memória no index (mais rápido)
+   2. window.parent.atlasLoadBaseFromFirestore('szb')  — busca do Firestore autenticado
+   Ambas as opções usam a sessão de auth já ativa no parent.
+──────────────────────────────────────────────────────────────── */
 async function loadSZB(){
-  if(!_db) throw new Error('Firestore indisponível');
-  const ref = _db.collection('bases_szb').doc('meta');
-  const meta = await ref.get();
-  if(!meta.exists) throw new Error('SZB ainda não carregado no Firestore');
-  const d = meta.data();
-  const n = d.numChunks||0;
-  if(!n) throw new Error('SZB sem chunks no Firestore');
-  const snaps = await Promise.all(Array.from({length:n},(_,i)=>ref.collection('chunks').doc(String(i)).get()));
-  const rows = [];
-  for(const s of snaps){ if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) rows.push(...r); } }
-  if(!rows.length) throw new Error('SZB sem linhas');
-  return {rows, ts:d.ts||d.clientTs||'', file:d.file||'SZB', user:d.user||'nuvem'};
+  try {
+    // Estratégia 1: dados já em memória no index
+    const mem = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA['szb'];
+    if(mem && Array.isArray(mem.rows) && mem.rows.length > 0){
+      console.log('[Início] SZB: usando dados em memória do index (' + mem.rows.length + ' linhas)');
+      return mem;
+    }
+
+    // Estratégia 2: função do index que usa Firestore autenticado
+    if(typeof window.parent.atlasLoadBaseFromFirestore === 'function'){
+      const payload = await window.parent.atlasLoadBaseFromFirestore('szb');
+      if(payload && Array.isArray(payload.rows) && payload.rows.length > 0){
+        console.log('[Início] SZB: carregado do Firestore via parent (' + payload.rows.length + ' linhas)');
+        return payload;
+      }
+    }
+
+    throw new Error('SZB não disponível — faça o upload da base no menu Download Base');
+  } catch(e) {
+    // Se o erro veio do throw acima, repassa
+    throw e;
+  }
 }
 
 /* ── Formatos ── */
@@ -694,16 +700,29 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   /* Solicita usuário ao parent */
   try{ window.parent.postMessage({type:'ATLAS_REQUEST_USER'},'*'); }catch(_){}
 
-  try{
-    const payload = await loadSZB();
-    render(payload.rows, payload.ts);
-  } catch(e){
-    console.warn('[Início] SZB Firestore:', e.message);
-    $('cav-list').innerHTML=`<div class="est"><p>${e.message}</p></div>`;
-    tx('h-carga','↻ '+e.message);
+  /* Tenta carregar o SZB com até 3 tentativas espaçadas.
+     O index pode ainda estar fazendo o preload do Firestore quando o
+     iframe é aberto — o delay cobre essa janela de tempo. */
+  async function tryLoad(attemptNum){
+    try{
+      const payload = await loadSZB();
+      render(payload.rows, payload.ts);
+      hideSplash();
+    } catch(e){
+      console.warn('[Início] SZB tentativa ' + attemptNum + ':', e.message);
+      if(attemptNum < 3){
+        // Aguarda e tenta novamente (o parent pode estar carregando o SZB)
+        const delay = attemptNum === 1 ? 2000 : 4000;
+        setTimeout(() => tryLoad(attemptNum + 1), delay);
+      } else {
+        // Esgotou tentativas — mostra erro
+        $('cav-list').innerHTML = '<div class="est"><p>' + e.message + '</p></div>';
+        tx('h-carga','↻ SZB não disponível');
+        hideSplash();
+      }
+    }
   }
-
-  hideSplash();
+  tryLoad(1);
 });
 
 setInterval(()=>tx('h-hora',horaFmt()),60000);
