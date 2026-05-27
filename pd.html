@@ -116,7 +116,7 @@ select.sel{border:1px solid var(--bd);border-radius:3px;padding:3px 6px;font-siz
 .ct-legend{display:flex;gap:10px;margin-left:auto;}
 .ct-leg-item{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--mu);}
 .ct-leg-dot{width:8px;height:8px;border-radius:2px;}
-.vg-bot{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;flex-shrink:0;}
+.vg-bot{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;flex-shrink:0;}
 .pc{background:var(--wh);border:1px solid var(--bd);border-radius:4px;padding:9px 13px;}
 .pc-icon{display:flex;align-items:center;gap:10px;}
 .pc-ic{flex-shrink:0;display:flex;align-items:center;justify-content:center;width:44px;height:44px;border-radius:50%;background:var(--sf);}
@@ -685,6 +685,25 @@ html{ -webkit-text-size-adjust:100%; }
             <div class="ps" id="ps-fdu">—</div>
           </div>
         </div>
+        <!-- Card 5: Diesel — ícone bomba de combustível -->
+        <div class="pc pc-icon">
+          <div class="pc-ic" style="color:#057a55">
+            <svg width="32" height="32" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <rect x="15" y="10" width="27" height="44" rx="4" fill="#ffffff" stroke="#057a55" stroke-width="4"/>
+              <rect x="20" y="16" width="17" height="13" rx="2" fill="#ecfdf5" stroke="#057a55" stroke-width="3"/>
+              <path d="M42 20h5.5c2.5 0 4.5 2 4.5 4.5V45c0 3-2.4 5.5-5.5 5.5S41 48 41 45v-5" stroke="#057a55" stroke-width="4" stroke-linecap="round"/>
+              <path d="M45 20l7-7" stroke="#057a55" stroke-width="4" stroke-linecap="round"/>
+              <path d="M52 13l3.5 3.5" stroke="#057a55" stroke-width="4" stroke-linecap="round"/>
+              <path d="M20 54h18" stroke="#057a55" stroke-width="4" stroke-linecap="round"/>
+              <path d="M24 39c0-4 5-9 5-9s5 5 5 9a5 5 0 0 1-10 0Z" fill="#dcfce7" stroke="#057a55" stroke-width="2.5"/>
+            </svg>
+          </div>
+          <div class="pc-content">
+            <div class="pl">Diesel</div>
+            <div class="pv" id="pv-diesel-pm">—</div>
+            <div class="ps" id="ps-diesel-peso">Peso Diesel: —</div>
+          </div>
+        </div>
       </div>
 
       <div class="vg-charts">
@@ -930,6 +949,7 @@ let PARAMS = {
 };
 
 let RAW=[], DATA=[];
+let RAW_SZC=[], SZC_DATA=[];
 const CHS={};
 
 // ═══════════════════════════════════════════════════════
@@ -1047,6 +1067,46 @@ async function loadSZBFromFirestore() {
     console.warn('[PD] Firestore SZB load falhou:', e.message);
     return null;
   }
+}
+
+async function loadPDBaseFromFirestore(id) {
+  const fb = pdGetFirebase();
+  if (!fb || !id) return null;
+  id = String(id).toLowerCase();
+  try {
+    const db = fb.firestore();
+    const docRef = db.collection('bases_cloud').doc(id);
+    const metaSnap = await docRef.get();
+    if (!metaSnap.exists) return null;
+    const meta = metaSnap.data();
+    const n = meta.numChunks || 0;
+    if (!n) return null;
+    const promises = [];
+    for (let i=0; i<n; i++) promises.push(docRef.collection('chunks').doc(String(i)).get());
+    const snaps = await Promise.all(promises);
+    const rows = [];
+    for (const s of snaps) {
+      if (s.exists) {
+        const r = s.data().rows;
+        if (Array.isArray(r)) rows.push(...r);
+      }
+    }
+    if (!rows.length) return null;
+    return {
+      rows,
+      file: meta.file || (id.toUpperCase()+'.xlsm'),
+      ts: meta.ts || new Date().toISOString(),
+      count: rows.length,
+      user: meta.user || 'nuvem'
+    };
+  } catch(e) {
+    console.warn('[PD] Firestore '+id.toUpperCase()+' load falhou:', e.message);
+    return null;
+  }
+}
+
+async function loadSZCFromFirestore() {
+  return loadPDBaseFromFirestore('szc');
 }
 
 // ── Carregar parâmetros da nuvem ──
@@ -1170,6 +1230,7 @@ async function loadDataFromCloud() {
           synEl.className = 'hm-sync ok';
         }
         setPDTimestamp(fs.ts);
+        loadSZCFromFirestore().then(function(szc){ if(szc) applyAtlasSZC(szc, 'Nuvem SZC'); }).catch(function(){});
         return true;
       }
     } catch(_) {}
@@ -1269,7 +1330,18 @@ function parseXML(text) {
 // ═══════════════════════════════════════════════════════
 // ENRICH
 // ═══════════════════════════════════════════════════════
-function toN(v){ try{return parseFloat((v||'0').replace(',','.'))||0;}catch(_){return 0;} }
+function toN(v){
+  try{
+    if(v===null||v===undefined||v==='') return 0;
+    if(typeof v==='number') return isFinite(v)?v:0;
+    let s=String(v).trim();
+    if(!s) return 0;
+    // Aceita tanto padrão BR (1.234,56) quanto decimal com ponto (1234.56).
+    if(s.includes(',') && s.includes('.')) s=s.replace(/\./g,'').replace(',','.');
+    else s=s.replace(',','.');
+    return parseFloat(s)||0;
+  }catch(_){return 0;}
+}
 function dtStr(s){ return s?s.slice(0,10):null; }
 function mesStr(s){ return s?s.slice(0,7):''; }
 
@@ -1305,6 +1377,43 @@ function enrich(recs){
       peso_t, fat, tar, cpk:cpk_, vpk, mkp,
     };
   }).filter(Boolean);
+}
+
+function enrichSZC(recs){
+  return (recs||[]).map(row=>{
+    const data = dtStr(row['Data Emissao']);
+    if(!data) return null;
+    const combustivel = String(row['Combustivel']||'').trim();
+    if(combustivel && !/diesel/i.test(combustivel)) return null;
+    const litros = toN(row['Qtd Litros']);
+    const unitVenda = toN(row['Unit Venda']);
+    const valorRaw = toN(row['Valor']);
+    const valor = valorRaw>0 ? valorRaw : (litros>0 && unitVenda>0 ? litros*unitVenda : 0);
+    const precoUnit = litros>0 ? valor/litros : unitVenda;
+    if(!litros || !valor || !precoUnit) return null;
+    const op = String(row['Operacao'] || row['Filial de In'] || row['Filial incl'] || row['Filial'] || '').trim();
+    return {
+      op,
+      data,
+      mes: mesStr(data),
+      combustivel,
+      litros,
+      valor,
+      precoUnit,
+      veiculo: String(row['Veiculo']||'').trim(),
+      origem: String(row['Origem']||'').trim()
+    };
+  }).filter(Boolean);
+}
+
+function calcDieselKPI(uid, mes, fatRealizado){
+  if(!SZC_DATA.length && RAW_SZC.length) SZC_DATA = enrichSZC(RAW_SZC);
+  const base = SZC_DATA.filter(r=>r.mes===mes && (uid==='all' || r.op===uid));
+  const litros = base.reduce((a,r)=>a+r.litros,0);
+  const valor  = base.reduce((a,r)=>a+r.valor,0);
+  const precoMedio = litros>0 ? valor/litros : 0;
+  const pesoDiesel = precoMedio>0 ? (fatRealizado||0)/precoMedio : 0;
+  return {precoMedio, pesoDiesel, litros, valor, qtd:base.length};
 }
 
 // Cache de filterByOp por uid — resetado a cada recalc para evitar dados stale
@@ -2010,6 +2119,23 @@ function buildVG(uid, mes){
   document.getElementById('ps-nec').textContent=diasR+' dias restantes';
   document.getElementById('pv-fdu').textContent=R(medD);
   document.getElementById('ps-fdu').textContent=`${diasAp} dias trabalhados`;
+
+  const dieselKPI = calcDieselKPI(uid, mes, fat);
+  const elDieselPm = document.getElementById('pv-diesel-pm');
+  const elDieselPeso = document.getElementById('ps-diesel-peso');
+  if(elDieselPm && elDieselPeso){
+    if(dieselKPI.precoMedio>0){
+      elDieselPm.textContent='R$ '+D2(dieselKPI.precoMedio)+'/L';
+      elDieselPm.style.color='var(--gn)';
+      elDieselPeso.textContent='Peso Diesel: '+N(dieselKPI.pesoDiesel)+' L eq.';
+      elDieselPeso.title=`SZC: ${N(dieselKPI.litros)} L abastecidos no período`;
+    }else{
+      elDieselPm.textContent='—';
+      elDieselPm.style.color='';
+      elDieselPeso.textContent=RAW_SZC.length?'Sem SZC no filtro':'Aguardando SZC';
+      elDieselPeso.title='';
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2669,11 +2795,15 @@ window.addEventListener('DOMContentLoaded', ()=>{
   if (window.self !== window.top) {
     setTimeout(()=>{
       if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
+      if (typeof tryAtlasSZC === 'function') tryAtlasSZC();
       if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
+      if (typeof requestAtlasSZC === 'function') requestAtlasSZC();
     }, 150);
     setTimeout(()=>{
       if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
+      if (typeof tryAtlasSZC === 'function') tryAtlasSZC();
       if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
+      if (typeof requestAtlasSZC === 'function') requestAtlasSZC();
     }, 900);
     setTimeout(async ()=>{
       if (__ATLAS_PD_CARREGADO) return;
@@ -3420,6 +3550,13 @@ function atlasExcelDateToISO(v) {
   }
   var s = String(v).trim();
   if (!s) return '';
+  if (/^\d+(?:\.\d+)?$/.test(s)) {
+    var serial = Number(s);
+    if (serial > 20000 && serial < 90000) {
+      var ds = new Date(Date.UTC(1899, 11, 30) + Math.round(serial) * 86400000);
+      return ds.toISOString().slice(0, 10);
+    }
+  }
   var iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) return iso[0];
   var br = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
@@ -3446,6 +3583,58 @@ function normalizeAtlasSZBRows(rows) {
   }).filter(function(r) {
     return Object.values(r).some(function(v) { return v !== '' && v !== null && v !== undefined; });
   });
+}
+
+function normalizeAtlasSZCRows(rows) {
+  var dateCols = new Set(['Data Emissao']);
+  return (rows || []).map(function(row) {
+    var out = {};
+    Object.keys(row || {}).forEach(function(k) {
+      var key = String(k).replace(/\s+/g, ' ').trim();
+      if (!key) return;
+      var v = row[k];
+      if (dateCols.has(key)) out[key] = atlasExcelDateToISO(v);
+      else if (v === null || v === undefined) out[key] = '';
+      else out[key] = String(v);
+    });
+    return out;
+  }).filter(function(r) {
+    return Object.values(r).some(function(v) { return v !== '' && v !== null && v !== undefined; });
+  });
+}
+
+function atlasParentSZC() {
+  try {
+    if (!window.parent || window.parent === window) return null;
+    var d = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szc;
+    if (d && Array.isArray(d.rows) && d.rows.length) return d;
+  } catch(e) {}
+  return null;
+}
+
+function applyAtlasSZC(parentData, origem) {
+  if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
+  var rows = normalizeAtlasSZCRows(parentData.rows);
+  if (!rows.length) return false;
+  RAW_SZC = rows;
+  SZC_DATA = enrichSZC(RAW_SZC);
+  if (DATA.length || RAW.length) {
+    try { recalc(); } catch(e) { console.warn('[PD Diário] recalc SZC:', e.message); }
+  }
+  return true;
+}
+
+function tryAtlasSZC() {
+  try { return applyAtlasSZC(atlasParentSZC(), 'Download Base SZC'); }
+  catch(e) { console.warn('[PD Diário] tryAtlasSZC erro:', e); return false; }
+}
+
+function requestAtlasSZC() {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szc'}, '*');
+    }
+  } catch(e) {}
 }
 
 function atlasParentSZB() {
@@ -3511,6 +3700,10 @@ function applyAtlasSZB(parentData, origem) {
   ldShow();
   ldSet(80, 'Montando dashboard…');
   fullRebuild();
+  if (!tryAtlasSZC()) {
+    requestAtlasSZC();
+    loadSZCFromFirestore().then(function(szc){ if(szc) applyAtlasSZC(szc, 'Nuvem SZC'); }).catch(function(){});
+  }
   ldSet(100, 'Pronto!');
   setTimeout(ldHide, 350);
   setTimeout(triggerAI, 800);
@@ -3563,15 +3756,19 @@ async function tryAtlasSZBFromIndexedDB() {
 
 window.addEventListener('message', function(event) {
   var d = event.data || {};
-  if (d.table && d.table !== 'szb') return;
+  if (d.table && d.table !== 'szb' && d.table !== 'szc') return;
   if (d.type === 'ATLAS_DATA_RESPONSE' && d.payload) {
-    applyAtlasSZB(d.payload, 'Download Base');
+    if (d.table === 'szc') applyAtlasSZC(d.payload, 'Download Base SZC');
+    else applyAtlasSZB(d.payload, 'Download Base');
     return;
   }
   if (d.type === 'ATLAS_DATA_READY') {
     setTimeout(function() {
-      if (!tryAtlasSZB()) {
-        requestAtlasSZB();
+      if (d.table === 'szc') {
+        if (!tryAtlasSZC()) requestAtlasSZC();
+      } else {
+        if (!tryAtlasSZB()) requestAtlasSZB();
+        if (!tryAtlasSZC()) requestAtlasSZC();
       }
     }, 80);
   }
@@ -3579,15 +3776,13 @@ window.addEventListener('message', function(event) {
 
 (function bootAtlasSZB() {
   setTimeout(function() {
-    if (!tryAtlasSZB()) {
-      requestAtlasSZB();
-    }
+    if (!tryAtlasSZB()) requestAtlasSZB();
+    if (!tryAtlasSZC()) requestAtlasSZC();
   }, 100);
   setTimeout(function() {
     if (!__ATLAS_PD_CARREGADO) {
-      if (!tryAtlasSZB()) {
-        requestAtlasSZB();
-      }
+      if (!tryAtlasSZB()) requestAtlasSZB();
+      if (!tryAtlasSZC()) requestAtlasSZC();
     }
   }, 900);
 })();
