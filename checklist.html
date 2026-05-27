@@ -562,7 +562,7 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
             </div>
             <div class="card" style="padding:0;overflow:hidden">
               <table>
-                <thead><tr><th>Frota</th><th>Filial</th><th>Tipo</th><th>Motorista</th><th>Horário</th><th>Aprovados</th><th>Reprovados</th><th>Fotos</th><th>OS gerada</th><th></th></tr></thead>
+                <thead><tr><th>Nº</th><th>Frota</th><th>Filial</th><th>Tipo</th><th>Motorista</th><th>Horário</th><th>Hodômetro</th><th>Aprovados</th><th>Reprovados</th><th>Fotos</th><th>OS gerada</th><th></th></tr></thead>
                 <tbody id="checklist-tbody"></tbody>
               </table>
             </div>
@@ -841,6 +841,7 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
               <div id="mnt-inspection-plate" class="plate-mercosul"><div class="pm-top"><span class="br-flag"></span>BRASIL</div><div class="pm-num" id="insp-plate-num">—</div></div>
               <span class="frota-pill" id="insp-frota-pill">—</span>
               <span class="frota-pill">Checklist Semanal</span>
+              <span class="frota-pill" id="insp-checklist-numero" style="margin-left:auto">Inspeção nº —</span>
             </div>
             <div class="driver-line" id="insp-driver-line">Motorista: — · <span id="insp-date-display">—</span></div>
             <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px">
@@ -890,7 +891,7 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
             <div class="cl-item"><div style="flex:1"><div style="font-size:12px;font-weight:500">Tacógrafo funcionando</div></div><div class="status-actions"><button class="status-btn aprovado on" title="Aprovado" onclick="setStatus(this,'aprovado')">✓</button><button class="status-btn reprovado" title="Reprovado" onclick="setStatus(this,'reprovado')">✗</button></div></div>
             <div class="fld" style="margin:8px 0 2px">
               <label for="insp-hodometro">Hodômetro</label>
-              <input type="text" id="insp-hodometro" inputmode="numeric" autocomplete="off" placeholder="Ex.: 123.456" oninput="formatarHodometroInput(this)" onblur="formatarHodometroInput(this)">
+              <input type="text" id="insp-hodometro" inputmode="numeric" autocomplete="off" maxlength="9" placeholder="Ex.: 123.456" oninput="formatarHodometroInput(this)" onblur="formatarHodometroInput(this)">
               <div id="insp-hodometro-hint" style="font-size:10.5px;color:var(--mu);margin-top:4px">Informe o hodômetro atual do veículo.</div>
             </div>
             <div style="margin-top:10px;padding:10px;background:var(--am-bg);border:1px solid var(--am-bd);border-radius:var(--rs)">
@@ -2175,6 +2176,61 @@ function registrarNumOS(num) {
   if (!n || n > 9999) return;
   const atual = parseInt(localStorage.getItem('atlas_manutencao_os_seq') || '0', 10) || 0;
   if (n > atual) localStorage.setItem('atlas_manutencao_os_seq', String(n));
+}
+
+function extrairNumeroChecklist(obj) {
+  const fonte = obj && (obj.checklist_numero ?? obj.numeroChecklist ?? obj.numero_inspecao ?? obj.numeroInspecao ?? obj.numChecklist);
+  const digits = String(fonte ?? '').replace(/\D/g, '');
+  if (!digits) return null;
+  const n = parseInt(digits.slice(-6), 10);
+  return Number.isFinite(n) && n >= 0 && n <= 999999 ? n : null;
+}
+function formatarNumeroChecklist(valor) {
+  const n = extrairNumeroChecklist({ checklist_numero: valor });
+  return n === null ? '—' : String(n).padStart(6, '0');
+}
+function registrarNumeroChecklist(num) {
+  const n = extrairNumeroChecklist({ checklist_numero: num });
+  if (n === null || n > 999999) return;
+  const atual = parseInt(localStorage.getItem('atlas_manutencao_checklist_seq') || '-1', 10);
+  if (n > atual) localStorage.setItem('atlas_manutencao_checklist_seq', String(n));
+}
+async function gerarNumeroChecklist() {
+  let maior = parseInt(localStorage.getItem('atlas_manutencao_checklist_seq') || '-1', 10);
+  if (!Number.isFinite(maior)) maior = -1;
+  try {
+    const docs = await atlasFsGetCollection('checklists_diarios', { limit:1000 });
+    docs.forEach(doc => {
+      const n = extrairNumeroChecklist({ id: doc.id, ...(doc.data || {}) });
+      if (n !== null && n > maior) maior = n;
+    });
+  } catch(e) {
+    console.warn('[Checklist] Não foi possível buscar último número sequencial:', e.message);
+  }
+  const prox = maior < 0 ? 0 : maior + 1;
+  if (prox > 999999) throw new Error('Limite de numeração de inspeções atingido.');
+  const numero = String(prox).padStart(6, '0');
+  registrarNumeroChecklist(numero);
+  return numero;
+}
+async function prepararNumeroInspecao() {
+  const el = document.getElementById('insp-checklist-numero');
+  if (el) el.textContent = 'Inspeção nº Gerando...';
+  try {
+    const numero = await gerarNumeroChecklist();
+    window._inspNumeroChecklist = numero;
+    if (el) el.textContent = 'Inspeção nº ' + numero;
+    return numero;
+  } catch(err) {
+    window._inspNumeroChecklist = null;
+    if (el) el.textContent = 'Inspeção nº —';
+    toast('Erro ao gerar número da inspeção: ' + err.message, 'rd');
+    return null;
+  }
+}
+async function garantirNumeroChecklist() {
+  if (window._inspNumeroChecklist) return window._inspNumeroChecklist;
+  return await prepararNumeroInspecao();
 }
 async function gerarNumOS() {
   let maior = parseInt(localStorage.getItem('atlas_manutencao_os_seq') || '0', 10) || 0;
@@ -3474,7 +3530,7 @@ async function loadChecklists() {
   const tbody = document.getElementById('checklist-tbody');
   if (!tbody) return;
 
-  tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:14px;font-size:11px">Carregando...</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--mu);padding:14px;font-size:11px">Carregando...</td></tr>';
 
   try {
     await atlasWaitAuthReady();
@@ -3510,7 +3566,7 @@ async function loadChecklists() {
       }
       rawDocs = Object.values(byId);
       if (!rawDocs.length && !emailAtual && !placasPermitidas.length) {
-        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Aguardando identificação do usuário para carregar os checklists.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Aguardando identificação do usuário para carregar os checklists.</td></tr>';
         return;
       }
     }
@@ -3535,7 +3591,7 @@ async function loadChecklists() {
     }
 
     if (docs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhum checklist registrado.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhum checklist registrado.</td></tr>';
       ['chk-kpi-hoje','chk-kpi-reprov','chk-kpi-pend'].forEach(id => {
         const el = document.getElementById(id); if (el) el.textContent = '0';
       });
@@ -3557,21 +3613,33 @@ async function loadChecklists() {
 
     tbody.innerHTML = docs.map(chk => {
       const placa       = mntUpper(chk.placa || '—');
+      const numero      = formatarNumeroChecklist(chk.checklist_numero || chk.numeroChecklist || chk.numero_inspecao || chk.numeroInspecao || chk.numChecklist);
       const tipo        = chk.tipo || '—';
       const motorista   = chk.motorista || chk.motorista_nome || '—';
       const aprovados   = chk.aprovados ?? '—';
       const reprovados  = chk.reprovados ?? '—';
       const fotos       = chk.fotos ?? 0;
+      const hodometro   = chk.hodometro || (chk.hodometro_numero != null ? formatarHodometroNumero(chk.hodometro_numero) : '—');
       const osGerada    = chk.osGerada || chk.os_gerada || '—';
       const horario     = chk.horario || (chk.dataAbertura?.toDate ? chk.dataAbertura.toDate().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}) : '—');
       const isPendente  = chk.status === 'pendente' || !chk.horario;
       const id          = chk.id;
+      const vObj        = MNT_CACHE.veiculos.find(x => mntUpper(x.placa) === placa);
+      const filialV     = vObj ? (vObj.filial || chk.filial || '—') : (chk.filial || '—');
 
       if (isPendente) {
         return `<tr style="opacity:.65">
-          <td class="os-n">${placa}</td><td>${tipo}</td><td>—</td>
+          <td class="os-n">${numero}</td>
+          <td class="os-n">${placa}</td>
+          <td style="font-size:10.5px;color:var(--mu)">${filialV}</td>
+          <td>${tipo}</td>
+          <td>${motorista}</td>
+          <td>—</td>
+          <td style="font-family:var(--m);color:var(--mu)">${hodometro}</td>
+          <td>—</td>
           <td style="color:var(--am)">Pendente</td>
-          <td>—</td><td>—</td><td>—</td><td>—</td>
+          <td>—</td>
+          <td>—</td>
           <td><button class="btn btn-xs btn-ac" onclick="iniciarInspecao('${placa}')">Iniciar</button></td>
         </tr>`;
       }
@@ -3580,15 +3648,14 @@ async function loadChecklists() {
         ? `<span class="os-n">${osGerada}</span>`
         : `<span style="color:var(--mu)">—</span>`;
 
-      // Filial da placa do cavalo via cache de veículos
-      const vObj    = MNT_CACHE.veiculos.find(x => mntUpper(x.placa) === placa);
-      const filialV = vObj ? (vObj.filial || chk.filial || '—') : (chk.filial || '—');
       return `<tr>
+        <td class="os-n">${numero}</td>
         <td class="os-n">${placa}</td>
         <td style="font-size:10.5px;color:var(--mu)">${filialV}</td>
         <td>${tipo}</td>
         <td>${motorista}</td>
         <td>${horario}</td>
+        <td style="font-family:var(--m);color:var(--tx)">${hodometro}</td>
         <td style="color:var(--gn);font-weight:700">${aprovados}</td>
         <td style="color:${Number(reprovados)>0?'var(--rd)':'var(--mu)'};font-weight:700">${reprovados}</td>
         <td style="color:var(--ac);font-family:var(--m)">${fotos} fotos</td>
@@ -3603,7 +3670,7 @@ async function loadChecklists() {
   } catch(err) {
     console.error('[Manutenção] Erro ao carregar checklists:', err);
     const isAuthErr = err.message && (err.message.includes('permission') || err.message.includes('Missing or insufficient') || err.message.includes('unauthenticated'));
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">${
+    tbody.innerHTML = `<tr><td colspan="12" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">${
       isAuthErr
         ? '⚠️ Sem permissão de acesso — faça login para visualizar os checklists.'
         : 'Erro ao carregar checklists: ' + (err.message || 'verifique a conexão.')
@@ -3621,6 +3688,7 @@ async function openChecklistFirebase(id) {
     if (!snap) { openChecklistPanel(id); return; }
     const chk = { id: snap.id, ...(snap.data || {}) };
     CHK_DB[id] = {
+      numero:   formatarNumeroChecklist(chk.checklist_numero || chk.numeroChecklist || chk.numero_inspecao || chk.numeroInspecao || chk.numChecklist),
       placa:    mntUpper(chk.placa || ''),
       tipo:     chk.tipo || '—',
       motorista: chk.motorista || chk.motorista_nome || '—',
@@ -3749,6 +3817,8 @@ function iniciarInspecao(placa, motoristaNomeParam) {
   window._inspTs        = agora.toISOString();
   window._inspFotos     = {};
   window._inspMotorista = motoristaNome;
+  window._inspNumeroChecklist = null;
+  prepararNumeroInspecao();
 
   // Exibe hero e checklist
   const formSel = document.getElementById('insp-form-selecao');
@@ -3936,9 +4006,11 @@ function formatarHodometroNumero(valor) {
 }
 function formatarHodometroInput(input) {
   if (!input) return;
-  const digits = String(input.value || '').replace(/\D/g, '');
-  input.value = digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-  input.dataset.valor = digits;
+  const digits = String(input.value || '').replace(/\D/g, '').slice(0, 7);
+  const n = digits ? Math.min(Number(digits), 9999999) : '';
+  const valor = digits ? String(n) : '';
+  input.value = valor.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  input.dataset.valor = valor;
 }
 function getHodometroAtual() {
   const input = document.getElementById('insp-hodometro');
@@ -3985,6 +4057,16 @@ async function validarHodometroInspecao(placa) {
     }
     setHodometroHint('Informe o hodômetro atual do veículo.', 'rd');
     toast('Informe o hodômetro atual do veículo.', 'am');
+    wizStep(0);
+    return { ok:false };
+  }
+  if (atual.valor > 9999999) {
+    if (atual.input) {
+      atual.input.style.borderColor = 'var(--rd)';
+      if (typeof atual.input.scrollIntoView === 'function') setTimeout(() => atual.input.scrollIntoView({ behavior:'smooth', block:'center' }), 50);
+    }
+    setHodometroHint('O hodômetro deve ser no máximo 9.999.999.', 'rd');
+    toast('O hodômetro deve ser no máximo 9.999.999.', 'rd');
     wizStep(0);
     return { ok:false };
   }
@@ -4093,6 +4175,9 @@ async function salvarChecklistFirebase() {
     const itensChecklist = coletarItensChecklistInspecao();
     const itensReprovados = itensChecklist.filter(i => i.status === 'reprovado');
 
+    const numeroChecklist = await garantirNumeroChecklist();
+    if (!numeroChecklist) return false;
+
     const aprovados  = itensChecklist.filter(i => i.status === 'aprovado').length;
     const reprovados = itensReprovados.length;
     const FOTO_IDS = FOTO_VEICULO_OBRIGATORIAS.map(f => f.id);
@@ -4108,6 +4193,9 @@ async function salvarChecklistFirebase() {
     const compLabel  = compCache ? compCache.identificacao : compDocId;
 
     const payload = {
+      checklist_numero: numeroChecklist,
+      numeroChecklist:  numeroChecklist,
+      numero_inspecao:  numeroChecklist,
       placa,
       motorista,
       motorista_email:  ATLAS_CURRENT_USER.email || '—',
@@ -4140,7 +4228,8 @@ async function salvarChecklistFirebase() {
     };
 
     const ref = await atlasFsAddDoc('checklists_diarios', payload);
-    console.log('[Inspeção] Checklist salvo:', ref.id, 'placa:', placa);
+    registrarNumeroChecklist(numeroChecklist);
+    console.log('[Inspeção] Checklist salvo:', ref.id, 'nº:', numeroChecklist, 'placa:', placa);
 
     // OS NÃO é gerada automaticamente — líder decide ao revisar
     if (itensReprovados.length > 0) {
@@ -4542,6 +4631,7 @@ function resetarInspecaoEmBranco() {
   window._inspTs = '';
   window._inspFotos = {};
   window._inspMotorista = '';
+  window._inspNumeroChecklist = null;
   window._inspCompressor = null;
   window._inspCarreta1 = null;
   window._inspCarreta2 = null;
@@ -4550,6 +4640,8 @@ function resetarInspecaoEmBranco() {
   document.querySelectorAll('#insp-checklist-content .cl-item').forEach(row => row.classList.remove('reprovado','nok-row'));
   document.querySelectorAll('#insp-checklist-content .inline-reprova').forEach(el => el.remove());
   document.querySelectorAll('#insp-checklist-content input[type="file"]').forEach(inp => { inp.value = ''; });
+  const numeroEl = document.getElementById('insp-checklist-numero');
+  if (numeroEl) numeroEl.textContent = 'Inspeção nº —';
   const hodometroInput = document.getElementById('insp-hodometro');
   if (hodometroInput) { hodometroInput.value = ''; hodometroInput.dataset.valor = ''; hodometroInput.style.borderColor = ''; }
   setHodometroHint('Informe o hodômetro atual do veículo.');
