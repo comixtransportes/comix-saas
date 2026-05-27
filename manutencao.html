@@ -713,10 +713,6 @@ body.checklist-only .view-area{height:100%;}
       <div class="view" id="view-nova-os">
         <div class="view-body">
 
-          <div class="page-hdr">
-            <div><h1>Abrir O.S</h1><p>Registre uma nova Ordem de Serviço para a frota</p></div>
-          </div>
-
           <div class="g2">
             <!-- Coluna esquerda: Identificação, local e tipo -->
             <div>
@@ -913,7 +909,7 @@ body.checklist-only .view-area{height:100%;}
       <div class="view" id="view-gestao">
         <div class="view-body">
           <div class="card">
-            <div class="card-hdr"><div><div class="card-title">Geral</div><div class="card-sub">Todas as O.S cadastradas no Firebase</div></div><div style="display:flex;gap:6px"><button class="btn btn-sm">📊 Exportar</button><button class="btn btn-sm btn-ac" onclick="goTo('nova-os',null)">+ Nova OS</button></div></div>
+            <div class="card-hdr"><div><div class="card-title">Geral</div><div class="card-sub">Todas as O.S cadastradas no Firebase</div></div><div style="display:flex;gap:6px"><button class="btn btn-sm btn-ac" onclick="goTo('nova-os',null)">+ Nova OS</button></div></div>
             <div class="filter-bar">
               <select id="gestao-filter-status"><option value="">Todos status</option><option>Aberta</option><option>Em execução</option><option>Aprovada</option><option>Aguardando finalizar</option><option>Reprovada</option><option>Concluída</option><option>Manutenção</option></select>
               <select id="gestao-filter-tipo"><option value="">Todos tipos</option><option>Cavalo</option><option>Carreta</option><option>Compressor</option><option>Corretiva</option><option>Preventiva</option><option>Preditiva</option><option>Acidente</option></select>
@@ -2436,7 +2432,7 @@ function renderPainelGeral() {
       <td><span class="bdg ${badgeClasseStatus(os.status)}">${escapeHtml(os.status || 'Aberta')}</span></td>
       <td style="white-space:nowrap;display:flex;gap:4px;align-items:center">
         <button class="btn btn-xs" title="Ver" onclick="event.stopPropagation();openPanel('${escapeHtml(os.id)}')">Ver</button>
-        ${podeEditarOS() ? `<button class="btn btn-xs btn-ac" title="Editar OS" onclick="event.stopPropagation();abrirModalEditarOS('${escapeHtml(os.id)}')">✏ Editar</button>` : ''}
+        ${podeEditarOS() ? `<button class="btn btn-xs btn-ac" title="Editar OS" onclick="event.stopPropagation();abrirModalEditarOS('${escapeHtml(os.id)}')">Editar</button>` : ''}
         <button class="btn btn-xs btn-rd" title="Excluir" onclick="event.stopPropagation();deleteOS('${escapeHtml(os.id)}',this)">Excluir</button>
         ${isAprovador() ? `<button class="btn btn-xs btn-aprov-pulse" title="Aprovação pendente" onclick="event.stopPropagation();openPanel('${escapeHtml(os.id)}')">Aprovação</button>` : ''}
       </td>
@@ -4831,6 +4827,15 @@ function podeEditarOS() {
   const perfil = String(ATLAS_CURRENT_USER.perfil || '').toLowerCase();
   return ['admin','lr','aprovador','gestor'].includes(perfil);
 }
+function editItemQty(item) {
+  return Number(item?.quantidade ?? item?.qtd ?? item?.qty ?? 1) || 1;
+}
+function editItemUnit(item) {
+  return Number(item?.valorUnitario ?? item?.vlUnit ?? item?.vunit ?? 0) || 0;
+}
+function editItemTotal(item) {
+  return Number(item?.valorTotal ?? item?.vlTotal ?? item?.vtotal ?? 0) || 0;
+}
 
 // ══════════════════════════════════════════════════════════
 // EDIÇÃO DE OS — ABRIR MODAL
@@ -4858,11 +4863,24 @@ function abrirModalEditarOS(osId) {
   container.innerHTML = servicos.map((s, i) => `
     <div class="edit-os-svc-row" id="edit-svc-row-${i}" style="display:grid;grid-template-columns:1fr 60px 90px 90px 28px;gap:5px;align-items:center;margin-bottom:5px">
       <input type="text" class="edit-svc-desc" placeholder="Descrição do serviço" value="${escapeHtml(s.descricao || s.item || '')}" style="padding:5px 8px;font-size:11.5px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx)">
-      <input type="number" class="edit-svc-qty" placeholder="Qtd" value="${Number(s.quantidade || s.qty || 1)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx);text-align:center" oninput="recalcEditSvc(${i})">
-      <input type="number" class="edit-svc-vunit" placeholder="R$ Unit" value="${Number(s.valorUnitario || s.vunit || 0).toFixed(2)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--m);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx);text-align:right" oninput="recalcEditSvc(${i})">
-      <input type="number" class="edit-svc-vtotal" placeholder="Total" value="${Number(s.valorTotal || s.vtotal || 0).toFixed(2)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--m);border:1.5px solid var(--ac-bg);background:var(--bg);border-radius:var(--rs);color:var(--tx);text-align:right" readonly>
+      <input type="number" class="edit-svc-qty" placeholder="Qtd" value="${editItemQty(s)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx);text-align:center" oninput="recalcEditSvc(${i})">
+      <input type="number" class="edit-svc-vunit" placeholder="R$ Unit" value="${editItemUnit(s).toFixed(2)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--m);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx);text-align:right" oninput="recalcEditSvc(${i})">
+      <input type="number" class="edit-svc-vtotal" placeholder="Total" value="${editItemTotal(s).toFixed(2)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--m);border:1.5px solid var(--ac-bg);background:var(--bg);border-radius:var(--rs);color:var(--tx);text-align:right" readonly>
       <button onclick="removerEditSvcRow(${i})" style="width:24px;height:24px;border-radius:50%;border:1px solid var(--rd-bd);background:var(--rd-bg);color:var(--rd);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;font-weight:700" title="Remover serviço">×</button>
     </div>`).join('');
+
+  const pecasContainer = document.getElementById('edit-os-pecas');
+  const pecas = Array.isArray(os.pecas) && os.pecas.length ? os.pecas : [{ descricao: '', quantidade: 1, vlUnit: 0, vlTotal: 0 }];
+  if (pecasContainer) {
+    pecasContainer.innerHTML = pecas.map((p, i) => `
+      <div class="edit-os-peca-row" id="edit-peca-row-${i}" style="display:grid;grid-template-columns:1fr 60px 90px 90px 28px;gap:5px;align-items:center;margin-bottom:5px">
+        <input type="text" class="edit-peca-desc" placeholder="Descrição da peça" value="${escapeHtml(p.descricao || p.item || p.desc || '')}" style="padding:5px 8px;font-size:11.5px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx)">
+        <input type="number" class="edit-peca-qty" placeholder="Qtd" value="${editItemQty(p)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx);text-align:center" oninput="recalcEditPeca(${i})">
+        <input type="number" class="edit-peca-vunit" placeholder="R$ Unit" value="${editItemUnit(p).toFixed(2)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--m);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx);text-align:right" oninput="recalcEditPeca(${i})">
+        <input type="number" class="edit-peca-vtotal" placeholder="Total" value="${editItemTotal(p).toFixed(2)}" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--m);border:1.5px solid var(--ac-bg);background:var(--bg);border-radius:var(--rs);color:var(--tx);text-align:right" readonly>
+        <button onclick="removerEditPecaRow(${i})" style="width:24px;height:24px;border-radius:50%;border:1px solid var(--rd-bd);background:var(--rd-bg);color:var(--rd);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;font-weight:700" title="Remover peça">×</button>
+      </div>`).join('');
+  }
   atualizarTotalEditOS();
 
   document.getElementById('modal-edit-os').style.display = 'flex';
@@ -4879,9 +4897,13 @@ function recalcEditSvc(idx) {
 }
 
 function atualizarTotalEditOS() {
-  const rows = document.querySelectorAll('#edit-os-servicos .edit-os-svc-row');
   let total = 0;
-  rows.forEach(row => { total += parseFloat(row.querySelector('.edit-svc-vtotal')?.value) || 0; });
+  document.querySelectorAll('#edit-os-servicos .edit-os-svc-row').forEach(row => {
+    total += parseFloat(row.querySelector('.edit-svc-vtotal')?.value) || 0;
+  });
+  document.querySelectorAll('#edit-os-pecas .edit-os-peca-row').forEach(row => {
+    total += parseFloat(row.querySelector('.edit-peca-vtotal')?.value) || 0;
+  });
   const el = document.getElementById('edit-os-custo-total');
   if (el) el.value = moeda(total);
 }
@@ -4908,6 +4930,39 @@ function removerEditSvcRow(idx) {
   if (row) { row.remove(); atualizarTotalEditOS(); }
 }
 
+function recalcEditPeca(idx) {
+  const row = document.getElementById('edit-peca-row-' + idx);
+  if (!row) return;
+  const qty = parseFloat(row.querySelector('.edit-peca-qty')?.value) || 0;
+  const vunit = parseFloat(row.querySelector('.edit-peca-vunit')?.value) || 0;
+  const vtotalEl = row.querySelector('.edit-peca-vtotal');
+  if (vtotalEl) vtotalEl.value = (qty * vunit).toFixed(2);
+  atualizarTotalEditOS();
+}
+
+function adicionarEditPecaRow() {
+  const container = document.getElementById('edit-os-pecas');
+  const rows = container.querySelectorAll('.edit-os-peca-row');
+  const i = rows.length;
+  const div = document.createElement('div');
+  div.className = 'edit-os-peca-row';
+  div.id = 'edit-peca-row-' + i;
+  div.style.cssText = 'display:grid;grid-template-columns:1fr 60px 90px 90px 28px;gap:5px;align-items:center;margin-bottom:5px';
+  div.innerHTML = `
+    <input type="text" class="edit-peca-desc" placeholder="Descrição da peça" style="padding:5px 8px;font-size:11.5px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx)">
+    <input type="number" class="edit-peca-qty" placeholder="Qtd" value="1" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx);text-align:center" oninput="recalcEditPeca(${i})">
+    <input type="number" class="edit-peca-vunit" placeholder="R$ Unit" value="0" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--m);border:1.5px solid var(--bd);border-radius:var(--rs);color:var(--tx);text-align:right" oninput="recalcEditPeca(${i})">
+    <input type="number" class="edit-peca-vtotal" placeholder="Total" value="0" min="0" step="0.01" style="padding:5px 6px;font-size:11.5px;font-family:var(--m);border:1.5px solid var(--ac-bg);background:var(--bg);border-radius:var(--rs);color:var(--tx);text-align:right" readonly>
+    <button onclick="removerEditPecaRow(${i})" style="width:24px;height:24px;border-radius:50%;border:1px solid var(--rd-bd);background:var(--rd-bg);color:var(--rd);cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;font-weight:700" title="Remover peça">×</button>`;
+  container.appendChild(div);
+  div.querySelector('input').focus();
+}
+
+function removerEditPecaRow(idx) {
+  const row = document.getElementById('edit-peca-row-' + idx);
+  if (row) { row.remove(); atualizarTotalEditOS(); }
+}
+
 function fecharModalEditarOS() {
   document.getElementById('modal-edit-os').style.display = 'none';
 }
@@ -4928,7 +4983,18 @@ async function salvarEdicaoOS() {
     const qty = parseFloat(row.querySelector('.edit-svc-qty')?.value) || 1;
     const vunit = parseFloat(row.querySelector('.edit-svc-vunit')?.value) || 0;
     const vtotal = parseFloat(row.querySelector('.edit-svc-vtotal')?.value) || (qty * vunit);
-    if (desc) { servicos.push({ descricao: desc, quantidade: qty, valorUnitario: vunit, valorTotal: vtotal }); valorTotal += vtotal; }
+    if (desc) { servicos.push({ descricao: desc, quantidade: qty, valorUnitario: vunit, valorTotal: vtotal, vlUnit: vunit, vlTotal: vtotal }); valorTotal += vtotal; }
+  });
+
+  // Coletar peças editadas
+  const pecasRows = document.querySelectorAll('#edit-os-pecas .edit-os-peca-row');
+  const pecas = [];
+  pecasRows.forEach(row => {
+    const desc = row.querySelector('.edit-peca-desc')?.value?.trim() || '';
+    const qty = parseFloat(row.querySelector('.edit-peca-qty')?.value) || 1;
+    const vunit = parseFloat(row.querySelector('.edit-peca-vunit')?.value) || 0;
+    const vtotal = parseFloat(row.querySelector('.edit-peca-vtotal')?.value) || (qty * vunit);
+    if (desc) { pecas.push({ descricao: desc, quantidade: qty, valorUnitario: vunit, valorTotal: vtotal, vlUnit: vunit, vlTotal: vtotal }); valorTotal += vtotal; }
   });
 
   const problema = document.getElementById('edit-os-problema').value?.trim() || os.problema || '';
@@ -4951,6 +5017,7 @@ async function salvarEdicaoOS() {
   const editadoPor = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || 'Admin';
   const updates = {
     servicos,
+    pecas,
     valorTotal,
     problema,
     prestador,
@@ -5047,6 +5114,21 @@ setTimeout(iniciarAutoRefresh, 5000);
           <span></span>
         </div>
         <div id="edit-os-servicos"></div>
+      </div>
+      <!-- Peças -->
+      <div style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">
+          <span style="font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.5px">Peças</span>
+          <button onclick="adicionarEditPecaRow()" class="btn btn-xs btn-ac">+ Adicionar peça</button>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 60px 90px 90px 28px;gap:5px;margin-bottom:4px;padding:0 2px">
+          <span style="font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase">Descrição da peça</span>
+          <span style="font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;text-align:center">Qtd</span>
+          <span style="font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;text-align:right">R$ Unit</span>
+          <span style="font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;text-align:right">Total</span>
+          <span></span>
+        </div>
+        <div id="edit-os-pecas"></div>
       </div>
       <!-- Total -->
       <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:var(--rs);border:1px solid var(--bd2)">
