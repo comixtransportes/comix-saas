@@ -62,6 +62,7 @@ body{background:var(--bg);color:var(--tx);font-family:var(--f);font-size:12px;di
 .btn-sm{padding:4px 12px;font-size:11px;}
 .btn-sec{background:transparent;border:1px solid var(--bd);color:var(--tx);font-family:var(--f);font-size:11px;padding:4px 12px;border-radius:4px;cursor:pointer;}
 .btn-sec:hover{border-color:var(--ac);color:var(--ac);}
+.btn-sec:disabled{opacity:.45;cursor:not-allowed;pointer-events:none;}
 .lnk{color:var(--mu);font-size:11px;cursor:pointer;text-decoration:underline;}
 .lnk:hover{color:var(--ac);}
 
@@ -553,7 +554,7 @@ html{ -webkit-text-size-adjust:100%; }
     <button class="tab"    onclick="showTab('hi')">Histórico</button>
     <div class="bar-r">
       <div class="h-ts" id="h-ts" title="Última atualização da tabela SZB">🕐 Última atualização SZB: <span class="h-ts-v" id="h-ts-v">—</span></div>
-      <button class="btn-sec" onclick="openParams()">⚙ Parâmetros</button>
+      <button class="btn-sec" id="btn-pd-parametros" onclick="openParams()">⚙ Parâmetros</button>
       <select class="sel" id="sm" onchange="recalc()"><option value="">—</option></select>
       <select class="sel" id="su" onchange="recalc()">
         <option value="17">SC</option>
@@ -959,6 +960,26 @@ const CHS={};
 const ATLAS_PD_ALL_OPS = ['17','18','03'];
 const ATLAS_PD_PROFILE_OPS = { lu_sc:['17'], lu_pr:['18'], lu_sp:['03'] };
 let ATLAS_PD_SCOPE = { perfil:'', isAdmin:false, filiais:{}, filiaisAtivas:[], pdOps:null };
+let ATLAS_PD_BTN_PERMS = null;
+
+function pdCanUseParams() {
+  if (ATLAS_PD_SCOPE && ATLAS_PD_SCOPE.isAdmin) return true;
+  if (!ATLAS_PD_BTN_PERMS || typeof ATLAS_PD_BTN_PERMS !== 'object') return true;
+  return ATLAS_PD_BTN_PERMS.btn_parametros === true;
+}
+function applyPDButtonPerms() {
+  const btn = document.getElementById('btn-pd-parametros');
+  if (!btn) return;
+  const allowed = pdCanUseParams();
+  btn.disabled = !allowed;
+  btn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+  btn.title = allowed ? 'Parâmetros' : 'Sem permissão para acessar parâmetros';
+}
+function setAtlasPDButtonPerms(msg) {
+  const src = (msg && (msg.permissoes || msg)) || {};
+  if (src.botoes && typeof src.botoes === 'object') ATLAS_PD_BTN_PERMS = src.botoes;
+  applyPDButtonPerms();
+}
 
 function pdNormText(v) {
   return String(v == null ? '' : v)
@@ -993,6 +1014,7 @@ function setAtlasPDScope(msg) {
   const before = JSON.stringify(ATLAS_PD_SCOPE || {});
   ATLAS_PD_SCOPE = next;
   configureUnitSelectForScope();
+  applyPDButtonPerms();
   if (JSON.stringify(ATLAS_PD_SCOPE || {}) !== before && DATA.length) {
     try { fullRebuild(); } catch(e) { console.warn('[PD Diário] rebuild por escopo:', e.message); }
   }
@@ -1058,7 +1080,10 @@ function configureUnitSelectForScope() {
 }
 window.addEventListener('message', function(event) {
   const d = event.data || {};
-  if (d.type === 'ATLAS_USER' || d.type === 'ATLAS_TAB_PERMS') setAtlasPDScope(d);
+  if (d.type === 'ATLAS_USER' || d.type === 'ATLAS_TAB_PERMS') {
+    setAtlasPDButtonPerms(d);
+    setAtlasPDScope(d);
+  }
   if (d.type === 'ATLAS_DATA_READY' && d.scope) setAtlasPDScope(d.scope);
 });
 try {
@@ -2840,6 +2865,7 @@ function calcFdu(){
 }
 
 function openParams(){
+  if (!pdCanUseParams()) return;
   const map={'17':'sc','18':'pr','03':'sp'};
   Object.entries(map).forEach(([op,u])=>{
     const pa=PARAMS.pa[op]||{};
