@@ -927,7 +927,7 @@ html{ -webkit-text-size-adjust:100%; }
         <div class="antt-calc-grid">
           <div class="antt-calc-field"><label>Distância ida</label><input id="antt-calc-ida" type="number" step="0.01" value="0" oninput="updateAnttCalc()"></div>
           <div class="antt-calc-field"><label>Distância volta</label><input id="antt-calc-volta" type="number" step="0.01" value="0" oninput="updateAnttCalc()"></div>
-          <div class="antt-calc-field"><label>N° eixos</label><select id="antt-calc-eixos" onchange="updateAnttCalc()"><option>5</option><option>6</option><option>7</option><option>9</option></select></div>
+          <div class="antt-calc-field"><label>N° eixos</label><select id="antt-calc-eixos" onchange="updateAnttCalc()"><option>5</option><option>6</option><option selected>7</option><option>9</option></select></div>
           <div class="antt-calc-field"><label>Retorna vazio</label><select id="antt-calc-ret" onchange="updateAnttCalc()"><option value="sim">Sim</option><option value="nao">Não</option></select></div>
           <div class="antt-calc-field"><label>Alto desemp.</label><select id="antt-calc-alto" onchange="updateAnttCalc()"><option value="nao">Não</option><option value="sim">Sim</option></select></div>
           <div class="antt-calc-field"><label>Frete mínimo</label><div class="antt-result" id="antt-calc-res">R$ 0,00</div></div>
@@ -1742,9 +1742,11 @@ function calcAnttFreteMinimo(distIda, distVolta, eixos, retornaVazio, altoDesemp
   const tabela = altoDesemp==='sim' ? 'C' : 'A'; // todos os fretes considerados como composição veicular
   const ccd = readAnttCoef(tabela,'ccd',String(eixos));
   const cc  = readAnttCoef(tabela,'cc', String(eixos));
-  const km = (toN(distIda)||0) + (retornaVazio==='sim' ? (toN(distVolta)||0) : 0);
-  if(!km || !ccd) return 0;
-  return km * ccd + (cc||0);
+  const ida = toN(distIda)||0;
+  const volta = retornaVazio==='sim' ? (toN(distVolta)||0) : 0;
+  if(!ida || !ccd) return 0;
+  // Regra ANTT: ida = distância x CCD + CC; retorno vazio = 0,92 x distância de volta x CCD.
+  return (ida * ccd) + (cc||0) + (0.92 * volta * ccd);
 }
 function updateAnttCalc(){
   const ida=document.getElementById('antt-calc-ida');
@@ -1772,6 +1774,21 @@ function normRotaKey(v){
   if(/^0+\d+$/.test(compact)) return String(parseInt(compact,10));
   return compact;
 }
+function normOpKey(v){
+  const s=String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+  if(!s) return '';
+  if(/(^|\D)0?3($|\D)/.test(s) || /\bSP\b/.test(s) || /SAO PAULO/.test(s)) return '03';
+  if(/(^|\D)17($|\D)/.test(s) || /\bSC\b/.test(s) || /SANTA CATARINA/.test(s)) return '17';
+  if(/(^|\D)18($|\D)/.test(s) || /\bPR\b/.test(s) || /PARANA/.test(s)) return '18';
+  const digits=s.replace(/\D/g,'');
+  if(digits){
+    const n=parseInt(digits,10);
+    if(n===3) return '03';
+    if(n===17) return '17';
+    if(n===18) return '18';
+  }
+  return s;
+}
 function normalizeAtlasSZYRows(rows) {
   return (rows || []).map(function(row) {
     var out = {};
@@ -1789,10 +1806,11 @@ function normalizeAtlasSZYRows(rows) {
 function enrichSZY(recs){
   return (recs||[]).map(row=>{
     const codigo = String(rowLoose(row,['Codigo','Código','Cod. Rota','Cod Rota','Rota'])||'').trim();
+    const op = normOpKey(rowLoose(row,['Operacao','Operação','Filial','Filial de In','Filial incl','Cod Filial','Cod. Filial','Unidade','Unid','UF Filial']));
     const kmIda = toN(rowLoose(row,['Km Ida','KM Ida','Km IDA','Distância Ida','Distancia Ida','Ida']));
     const kmVolta = toN(rowLoose(row,['Km Volta','KM Volta','Km VOLTA','Distância Volta','Distancia Volta','Volta']));
     if(!codigo) return null;
-    return { codigo, key:normRotaKey(codigo), kmIda, kmVolta,
+    return { codigo, key:normRotaKey(codigo), op, kmIda, kmVolta,
       ufo:String(rowLoose(row,['UF Origem','Uf Origem'])||'').trim(),
       ufd:String(rowLoose(row,['UF Destino','Uf Destino'])||'').trim(),
       revisto:String(rowLoose(row,['Revisto'])||'').trim()
@@ -1802,27 +1820,42 @@ function enrichSZY(recs){
 function rebuildSZYMap(){
   SZY_DATA = enrichSZY(RAW_SZY);
   SZY_MAP = {};
+  const rotaGroups = {};
+  const addKey=(key,row)=>{ if(key) SZY_MAP[key]=row; };
   SZY_DATA.forEach(r=>{
-    if(r.key) SZY_MAP[r.key]=r;
-    const raw=String(r.codigo||'').trim().toUpperCase();
-    if(raw) SZY_MAP[raw]=r;
+    const op=normOpKey(r.op);
+    const keys=[r.key, String(r.codigo||'').trim().toUpperCase()].filter(Boolean);
+    keys.forEach(k=>{
+      if(op) addKey(op+'§'+k, r);
+      (rotaGroups[k]||(rotaGroups[k]=[])).push(r);
+    });
+  });
+  Object.entries(rotaGroups).forEach(([k,list])=>{
+    const uniq=[...new Set(list)];
+    const ops=[...new Set(uniq.map(r=>normOpKey(r.op)).filter(Boolean))];
+    if(uniq.length===1 || ops.length<=1) addKey(k, uniq[0]);
   });
 }
-function getSZYByRota(rota){
+function getSZYByRota(rota, filial){
   if(!SZY_DATA.length && RAW_SZY.length) rebuildSZYMap();
   const k=normRotaKey(rota);
-  return SZY_MAP[k] || SZY_MAP[String(rota||'').trim().toUpperCase()] || null;
+  const raw=String(rota||'').trim().toUpperCase();
+  const op=normOpKey(filial);
+  if(op){
+    return SZY_MAP[op+'§'+k] || SZY_MAP[op+'§'+raw] || null;
+  }
+  return SZY_MAP[k] || SZY_MAP[raw] || null;
 }
 
 let TA_CFG={};
 try{ TA_CFG=JSON.parse(localStorage.getItem('PD_TARIFA_CFG')||'{}')||{}; }catch(_){ TA_CFG={}; }
-function taCfgKey(r){ return [r.rota,r.rem,r.dst,r.orig,r.ufo,r.dest,r.ufd,r.frt].join('§'); }
+function taCfgKey(r){ return [r.op||'',r.rota,r.rem,r.dst,r.orig,r.ufo,r.dest,r.ufd,r.frt].join('§'); }
 function taCfgGet(r){
   const k=typeof r==='string'?r:taCfgKey(r);
-  return Object.assign({eixos:'5',retornaVazio:'sim',altoDesemp:'nao'}, TA_CFG[k]||{});
+  return Object.assign({eixos:'7',retornaVazio:'sim',altoDesemp:'nao'}, TA_CFG[k]||{});
 }
 function taCfgSet(k,field,value){
-  TA_CFG[k]=Object.assign({eixos:'5',retornaVazio:'sim',altoDesemp:'nao'}, TA_CFG[k]||{});
+  TA_CFG[k]=Object.assign({eixos:'7',retornaVazio:'sim',altoDesemp:'nao'}, TA_CFG[k]||{});
   TA_CFG[k][field]=value;
   try{ localStorage.setItem('PD_TARIFA_CFG', JSON.stringify(TA_CFG)); }catch(_){ }
   if(_taUID && _taMes) buildTa(_taUID,_taMes);
@@ -2676,7 +2709,8 @@ function taFreteAtual(arr){
 }
 function taBuildCalc(row){
   const cfg=taCfgGet(row);
-  const szy=getSZYByRota(row.rota);
+  const filial=row.op || _taUID || '';
+  const szy=getSZYByRota(row.rota, filial);
   const distIda=szy ? szy.kmIda : 0;
   const distVolta=szy ? szy.kmVolta : 0;
   const freteMin=calcAnttFreteMinimo(distIda, distVolta, cfg.eixos, cfg.retornaVazio, cfg.altoDesemp);
@@ -2687,12 +2721,12 @@ function buildTa(uid,mes){
   ensureAnttParams();
   _taUID=uid; _taMes=mes;
   const d=filterByOp(uid).filter(r=>r.mes===mes);
-  const g=grp(d,r=>(r.rota||'')+'§'+r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
+  const g=grp(d,r=>(r.op||'')+'§'+(r.rota||'')+'§'+r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
   const rows=Object.entries(g).map(([k,arr])=>{
-    const[rota,rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
+    const[op,rota,rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
     const s=agg(arr);
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
-    return{rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
+    return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
   }).sort((a,b)=>b.f-a.f);
 
   const cnt=document.getElementById('cnt-ta');
@@ -2726,6 +2760,7 @@ function buildTa(uid,mes){
 }
 
 function addTarivaRowClick(){
+  const tbl = document.getElementById('tbl-ta');
   const tbody = document.querySelector('#tbl-ta tbody');
   if(!tbody) return;
   tbody.querySelectorAll('tr').forEach(tr=>{
@@ -2733,6 +2768,12 @@ function addTarivaRowClick(){
     tr.addEventListener('click',()=>{
       tbody.querySelectorAll('tr').forEach(r=>r.style.background='');
       tr.style.background='#dbeafe';
+      const idx=Number(tr.dataset.ri);
+      const row=(tbl && tbl._view && tbl._view[idx]) ? tbl._view[idx] : null;
+      if(row){
+        showTarivaHist(row.op||'', row.rota||'', row.rem||'', row.dst||'', row.frt||'', row.orig||'', row.ufo||'', row.dest||'', row.ufd||'');
+        return;
+      }
       const t=tr.querySelectorAll('td');
       if(t.length<6) return;
       const rota   = t[0].textContent.trim();
@@ -2743,15 +2784,16 @@ function addTarivaRowClick(){
       const frt    = t[5].textContent.trim();
       const [orig,ufo] = coleta.split('/');
       const [dest,ufd] = entrega.split('/');
-      showTarivaHist(rota==='—'?'':rota,rem,dst,frt,(orig||'').trim(),(ufo||'').trim(),(dest||'').trim(),(ufd||'').trim());
+      showTarivaHist('', rota==='—'?'':rota,rem,dst,frt,(orig||'').trim(),(ufo||'').trim(),(dest||'').trim(),(ufd||'').trim());
     });
   });
 }
 
-function showTarivaHist(rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
+function showTarivaHist(op,rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
   const corte='2025-01-01';
   const allRota = filterByOp(_taUID).filter(r=>
     r.data > corte &&
+    (!op || r.op === op) &&
     (!rota || r.rota === rota) &&
     r.d_nome  === dstNome &&
     r.r_nome  === remNome &&
@@ -2803,7 +2845,7 @@ function showTarivaHist(rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
   };
 
   const ct=document.getElementById('ct-tarifa');
-  const rotaLabel=`${rota?('Rota '+rota+' | '):''}${remNome.slice(0,18)} → ${dstNome.slice(0,18)} (${frt})`;
+  const rotaLabel=`${op?('Filial '+pdBranchLabel(op)+' | '):''}${rota?('Rota '+rota+' | '):''}${remNome.slice(0,18)} → ${dstNome.slice(0,18)} (${frt})`;
   if(ct){
     const qtd=alteracoes.filter(p=>p.tipo==='alta'||p.tipo==='queda').length;
     const ultTxt=ultimaEmissao?` | última emissão: ${fmtDataTarifa(ultimaEmissao.data)}`:'';
@@ -3261,10 +3303,10 @@ function buildHi(meses,uid){
 // ═══════════════════════════════════════════════════════
 function bldT(id,data,cols){
   const t=document.getElementById(id); if(!t) return;
-  t._d=data; t._c=cols;
+  t._d=data; t._c=cols; t._view=data;
   t.innerHTML=
     `<thead><tr>${cols.map((c,i)=>`<th onclick="srt('${id}',${i})">${c.h}</th>`).join('')}</tr></thead>`
-    +`<tbody>${data.map(r=>`<tr>${cols.map(c=>`<td class="${c.n?'n':'nm'}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    +`<tbody>${data.map((r,idx)=>`<tr data-ri="${idx}">${cols.map(c=>`<td class="${c.n?'n':'nm'}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
 }
 const SS={};
 function srt(id,ci){
@@ -3278,7 +3320,8 @@ function srt(id,ci){
     return asc?va.localeCompare(vb,'pt'):vb.localeCompare(va,'pt');
   });
   t.querySelectorAll('th').forEach((th,i)=>{th.className=i===ci?(asc?'asc':'desc'):'';});
-  t.querySelector('tbody').outerHTML=`<tbody>${sd.map(r=>`<tr>${t._c.map(c=>`<td class="${c.n?'n':'nm'}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  t._view=sd;
+  t.querySelector('tbody').outerHTML=`<tbody>${sd.map((r,idx)=>`<tr data-ri="${idx}">${t._c.map(c=>`<td class="${c.n?'n':'nm'}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
   if(id==='tbl-cl' && typeof addClRowClick==='function') addClRowClick();
   if(id==='tbl-ta' && typeof addTarivaRowClick==='function') addTarivaRowClick();
 }
