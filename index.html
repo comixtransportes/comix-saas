@@ -770,7 +770,9 @@ function frLoaded(viewId) {
         email:  curUser?.email  || '',
         uid:    curUser?.uid    || '',
         perfil: curPerfil       || 'motorista',
-        nome:   curUser?.displayName || ''
+        nome:   curUser?.displayName || '',
+        scope:  atlasPermissionContext(),
+        permissoes: atlasPermissionContext()
       }, '*');
       // Envia também permissões de abas se já carregadas
       sendTabPermsToFrame('fr-'+viewId);
@@ -1314,7 +1316,15 @@ async function atlasLoadBase(id){
   });
 }
 function atlasBroadcast(id,payload){
-  const msg={type:'ATLAS_DATA_READY',table:id,count:payload.count,ts:payload.ts};
+  const scopedPayload = atlasScopePayloadForCurrentUser(id, payload);
+  const ctx = atlasPermissionContext();
+  const msg={
+    type:'ATLAS_DATA_READY',
+    table:id,
+    count:scopedPayload && scopedPayload.count !== undefined ? scopedPayload.count : payload.count,
+    ts:payload.ts,
+    scope:ctx
+  };
   document.querySelectorAll('.fr-wrap iframe').forEach(fr=>{try{fr.contentWindow.postMessage(msg,'*');}catch(_){};});
 }
 window.addEventListener('message',async ev=>{
@@ -1361,7 +1371,16 @@ window.addEventListener('message',async ev=>{
     }
   }
 
-  if(payload&&ev.source){try{ev.source.postMessage({type:'ATLAS_DATA_RESPONSE',table:id,payload},'*');}catch(_){} }
+  if(payload&&ev.source){
+    try{
+      ev.source.postMessage({
+        type:'ATLAS_DATA_RESPONSE',
+        table:id,
+        payload:atlasScopePayloadForCurrentUser(id, payload),
+        scope:atlasPermissionContext()
+      },'*');
+    }catch(_){}
+  }
 });
 const DB_TABLES=['se1','se2','se4','se5','szb','sa1','szy','szc','zza','szi'];
 function dbDrag(e,id){e.preventDefault();document.getElementById('dbdrop-'+id).classList.add('drag');}
@@ -1733,6 +1752,93 @@ function isLU(perfil) {
   return perfil === 'lu' || perfil === 'lu_sc' || perfil === 'lu_pr' || perfil === 'lu_sp';
 }
 
+
+/* ── Escopo de filiais para módulos, principalmente PD Diário ── */
+const ATLAS_PD_OPS_BY_PROFILE = {
+  lu_sc:['17'],
+  lu_pr:['18'],
+  lu_sp:['03']
+};
+const ATLAS_PD_ALL_OPS = ['17','18','03'];
+
+function atlasNormText(v) {
+  return String(v == null ? '' : v)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toUpperCase().trim();
+}
+function atlasPDOpFromValue(v) {
+  const s = atlasNormText(v);
+  if (!s) return null;
+  if (/^0?3$/.test(s) || /\bSP\b/.test(s) || /SAO PAULO/.test(s)) return '03';
+  if (/^17$/.test(s) || /\bSC\b/.test(s) || /SANTA CATARINA/.test(s)) return '17';
+  if (/^18$/.test(s) || /\bPR\b/.test(s) || /PARANA/.test(s)) return '18';
+  return null;
+}
+function atlasUnique(arr) {
+  return [...new Set((arr || []).filter(Boolean))];
+}
+function atlasActiveFilialIds() {
+  const f = (ATLAS_PERMS && ATLAS_PERMS.filiais) ? ATLAS_PERMS.filiais : {};
+  return Object.keys(f).filter(k => !!f[k]).map(k => String(k));
+}
+function atlasPDAllowedOps() {
+  if (curPerfil === 'admin') return null; // sem restrição
+  const active = atlasActiveFilialIds();
+  const mapped = atlasUnique(active.map(atlasPDOpFromValue));
+  if (mapped.length) return mapped;
+  // Para perfis LU, nunca libera visão global se nenhuma filial ativa foi mapeada.
+  // Cai para a filial regional padrão do próprio perfil.
+  if (isLU(curPerfil)) return ATLAS_PD_OPS_BY_PROFILE[curPerfil] ? [...ATLAS_PD_OPS_BY_PROFILE[curPerfil]] : [];
+  return null; // outros perfis sem filial ativa continuam sem filtro legado
+}
+function atlasPermissionContext() {
+  const filiais = (ATLAS_PERMS && ATLAS_PERMS.filiais) ? {...ATLAS_PERMS.filiais} : {};
+  const pdOps = atlasPDAllowedOps();
+  return {
+    perfil: curPerfil || 'motorista',
+    isAdmin: curPerfil === 'admin',
+    filiais,
+    filiaisAtivas: atlasActiveFilialIds(),
+    pdOps: Array.isArray(pdOps) ? pdOps : null
+  };
+}
+function atlasRowPDOp(row) {
+  if (!row || typeof row !== 'object') return null;
+  return atlasPDOpFromValue(row['Operacao']) ||
+         atlasPDOpFromValue(row['Filial']) ||
+         atlasPDOpFromValue(row['Filial de In']) ||
+         atlasPDOpFromValue(row['Filial incl']) ||
+         atlasPDOpFromValue(row['Unidade']) ||
+         null;
+}
+function atlasScopeRowsForCurrentUser(table, rows) {
+  const id = String(table || '').toLowerCase();
+  if (id !== 'szb' && id !== 'szc') return rows || [];
+  const ops = atlasPDAllowedOps();
+  if (!Array.isArray(ops)) return rows || [];
+  const allowed = new Set(ops);
+  return (rows || []).filter(r => allowed.has(atlasRowPDOp(r)));
+}
+function atlasScopePayloadForCurrentUser(table, payload) {
+  if (!payload || !Array.isArray(payload.rows)) return payload;
+  const id = String(table || '').toLowerCase();
+  if (id !== 'szb' && id !== 'szc') return payload;
+  const rows = atlasScopeRowsForCurrentUser(id, payload.rows);
+  return {
+    ...payload,
+    rows,
+    count: rows.length,
+    scope: atlasPermissionContext()
+  };
+}
+function atlasRefreshScopesInOpenFrames() {
+  Object.values(FRAME_MAP || {}).forEach(fid => sendTabPermsToFrame(fid));
+  ['szb','szc'].forEach(id => {
+    const payload = window.ATLAS_DATA && window.ATLAS_DATA[id];
+    if (payload) atlasBroadcast(id, payload);
+  });
+}
+
 function applyDynamicPermissions() {
   const telas = ATLAS_PERMS.telas || {};
   const telaMap = atlasViewPermMap();
@@ -1788,10 +1894,15 @@ function sendTabPermsToFrame(frameId) {
   // Só envia abas se ATLAS_PERMS tiver sido carregado do Firestore.
   // Enviar objeto vazio causaria bloqueio indevido no applyTabPerms dos módulos.
   const abas = (ATLAS_PERMS && ATLAS_PERMS.abas) ? ATLAS_PERMS.abas : {};
+  const ctx = atlasPermissionContext();
   frame.contentWindow.postMessage({
     type: 'ATLAS_TAB_PERMS',
     perfil: curPerfil || 'motorista',
-    abas: abas
+    abas: abas,
+    filiais: ctx.filiais,
+    filiaisAtivas: ctx.filiaisAtivas,
+    pdOps: ctx.pdOps,
+    scope: ctx
   }, '*');
 }
 
@@ -1872,7 +1983,9 @@ window.addEventListener('message', function(ev) {
   if (!ev.data || typeof ev.data !== 'object') return;
   // Quando permissões são atualizadas, recarregar
   if (ev.data.type === 'PERM_UPDATED') {
-    if (ev.data.tipo === curPerfil) loadPermissions();
+    if (ev.data.tipo === curPerfil || ev.data.tipo === 'ALL') {
+      Promise.resolve(loadPermissions()).then(atlasRefreshScopesInOpenFrames).catch(()=>{});
+    }
     toast(`Permissões atualizadas para perfil "${ev.data.tipo}".`, 'gn');
   }
   // Módulo pede suas permissões de abas
