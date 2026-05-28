@@ -549,6 +549,7 @@ html{ -webkit-text-size-adjust:100%; }
   <div class="bar">
     <button class="tab on" onclick="showTab('vg')">Visão Geral</button>
     <button class="tab"    onclick="showTab('cl')">Rotas</button>
+    <button class="tab"    onclick="showTab('ta')">Tarifa</button>
     <button class="tab"    onclick="showTab('cc')">Clientes</button>
     <button class="tab"    onclick="showTab('fr')">Frota</button>
     <button class="tab"    onclick="showTab('hi')">Histórico</button>
@@ -748,6 +749,23 @@ html{ -webkit-text-size-adjust:100%; }
         <div class="tw">
           <div class="th3"><div><span class="tt">Clientes</span><span class="tc" id="cnt-cl"></span></div><input class="ts" type="text" placeholder="Buscar…" oninput="filt('tbl-cl',this.value)"></div>
           <div class="to"><table class="dt" id="tbl-cl"></table></div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- TARIVA -->
+    <div class="pane" id="p-ta">
+      <div class="pane-scroll">
+        <div class="charts-row">
+          <div class="cc" style="grid-column:1 / -1;">
+            <div class="ct" id="ct-tariva">Histórico de Variação de Tarifa — selecione uma linha</div>
+            <div style="height:240px"><canvas id="c-tv"></canvas></div>
+          </div>
+        </div>
+        <div class="tw">
+          <div class="th3"><div><span class="tt">Tarifa</span><span class="tc" id="cnt-ta"></span></div><input class="ts" type="text" placeholder="Buscar…" oninput="filt('tbl-ta',this.value)"></div>
+          <div class="to"><table class="dt" id="tbl-ta"></table></div>
         </div>
       </div>
     </div>
@@ -1842,6 +1860,7 @@ function recalc(){
   // Executa builds em microtasks separadas para liberar o thread de renderização entre cada aba
   buildVG(uid,mes);
   setTimeout(function(){ buildCl(uid,mes); },0);
+  setTimeout(function(){ buildTa(uid,mes); },0);
   setTimeout(function(){ buildCc(uid,mes); },0);
   setTimeout(function(){ buildFr(uid,mes); },0);
   setTimeout(function(){ buildHi(meses,uid); },0);
@@ -2429,6 +2448,187 @@ function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
   }],{ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0}});
 }
 
+
+// ═══════════════════════════════════════════════════════
+// TARIVA — cópia da aba Rotas com histórico de variação de tarifa
+// ═══════════════════════════════════════════════════════
+let _taUID='', _taMes='';
+
+function buildTa(uid,mes){
+  _taUID=uid; _taMes=mes;
+  const d=filterByOp(uid).filter(r=>r.mes===mes);
+  const g=grp(d,r=>r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
+  const rows=Object.entries(g).map(([k,arr])=>{
+    const[rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
+    const s=agg(arr);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
+    return{rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj};
+  }).sort((a,b)=>b.f-a.f);
+
+  const cnt=document.getElementById('cnt-ta');
+  if(cnt) cnt.textContent=' — '+rows.length+' linhas';
+
+  mkC('c-tv','line',[],[{data:[],borderColor:'rgba(26,86,219,.9)',backgroundColor:'rgba(26,86,219,.08)',tension:.25,fill:true,pointRadius:4,pointHoverRadius:6}],{ytk:{callback:v=>'R$'+D2(v)},y:{beginAtZero:false}});
+  const ct=document.getElementById('ct-tariva');
+  if(ct) ct.textContent='Histórico de Variação de Tarifa — selecione uma linha';
+
+  const ft=rows.reduce((a,r)=>a+r.f,0);
+  bldT('tbl-ta',rows,[
+    {h:'Remetente',       fn:r=>`<span class="nm">${r.rem}</span>`},
+    {h:'Destinatário',    fn:r=>`<span class="nm">${r.dst}</span>`},
+    {h:'Local Coleta',    fn:r=>`${r.orig}/${r.ufo}`},
+    {h:'Local Entrega',   fn:r=>`${r.dest}/${r.ufd}`},
+    {h:'Frete',           fn:r=>r.frt},
+    {h:'Viagens',         fn:r=>N(r.v),        n:true},
+    {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
+    {h:'Fat.(R$) Real.',  fn:r=>R(r.f),         n:true},
+    {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`, n:true},
+    {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
+    {h:'CPK',             fn:r=>D2(r.cpk),      n:true},
+    {h:'VPK',             fn:r=>D2(r.vpk),      n:true},
+    {h:'Markup',          fn:r=>bdg(r.mkp,50),  n:true},
+    {h:'% Fat',           fn:r=>Pct(ft?r.f/ft*100:0),n:true},
+  ]);
+  addTarivaRowClick();
+}
+
+function addTarivaRowClick(){
+  const tbody = document.querySelector('#tbl-ta tbody');
+  if(!tbody) return;
+  tbody.querySelectorAll('tr').forEach(tr=>{
+    tr.style.cursor='pointer';
+    tr.addEventListener('click',()=>{
+      tbody.querySelectorAll('tr').forEach(r=>r.style.background='');
+      tr.style.background='#dbeafe';
+      const t=tr.querySelectorAll('td');
+      if(t.length<5) return;
+      const rem    = t[0].textContent.trim();
+      const dst    = t[1].textContent.trim();
+      const coleta = t[2].textContent.trim();
+      const entrega= t[3].textContent.trim();
+      const frt    = t[4].textContent.trim();
+      const [orig,ufo] = coleta.split('/');
+      const [dest,ufd] = entrega.split('/');
+      showTarivaHist(rem,dst,frt,(orig||'').trim(),(ufo||'').trim(),(dest||'').trim(),(ufd||'').trim());
+    });
+  });
+}
+
+function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
+  const corte='2025-01-01';
+  const allRota = filterByOp(_taUID).filter(r=>
+    r.data > corte &&
+    r.d_nome  === dstNome &&
+    r.r_nome  === remNome &&
+    r.frete   === frt     &&
+    r.orig    === orig    &&
+    r.ufo     === ufo     &&
+    r.dest    === dest    &&
+    r.ufd     === ufd
+  );
+
+  const porData = grp(allRota,r=>r.data);
+  const serieDiaria = Object.entries(porData).map(([data,arr])=>{
+    const fat=arr.reduce((a,r)=>a+r.fat,0);
+    const peso=arr.reduce((a,r)=>a+r.peso_t,0);
+    const tarPeso=peso>0?fat/peso:0;
+    const tarRaw=arr.reduce((a,r)=>a+(r.tar||0),0)/(arr.length||1);
+    return{data, tarifa:tarPeso>0?tarPeso:tarRaw, viagens:arr.length, peso, fat};
+  }).filter(p=>p.tarifa>0).sort((a,b)=>a.data.localeCompare(b.data));
+
+  const alteracoes=[];
+  let ultima=null;
+  serieDiaria.forEach(p=>{
+    const cents=Math.round(p.tarifa*100);
+    if(ultima===null){
+      alteracoes.push({...p,tipo:'base',diff:null,diffPct:null});
+      ultima=cents;
+      return;
+    }
+    if(cents!==ultima){
+      const prev=alteracoes[alteracoes.length-1];
+      const diff=p.tarifa-(prev?prev.tarifa:0);
+      const diffPct=prev&&prev.tarifa>0?diff/prev.tarifa*100:null;
+      alteracoes.push({...p,tipo:diff>0?'alta':'queda',diff,diffPct});
+      ultima=cents;
+    }
+  });
+
+  const ct=document.getElementById('ct-tariva');
+  const rotaLabel=`${remNome.slice(0,18)} → ${dstNome.slice(0,18)} (${frt})`;
+  if(ct){
+    const qtd=Math.max(alteracoes.length-1,0);
+    ct.textContent=`Histórico de Variação de Tarifa — ${rotaLabel} | ${qtd} alteração(ões) após 01/01/2025`;
+  }
+
+  if(!alteracoes.length){
+    mkC('c-tv','line',[],[{data:[],borderColor:'rgba(26,86,219,.9)',backgroundColor:'rgba(26,86,219,.08)',tension:.25,fill:true,pointRadius:4}],{ytk:{callback:v=>'R$'+D2(v)},y:{beginAtZero:false}});
+    return;
+  }
+
+  const labels=alteracoes.map(p=>{
+    const[a,m,d]=p.data.split('-');
+    return `${d}/${m}/${a.slice(2)}`;
+  });
+  const valores=alteracoes.map(p=>p.tarifa);
+  const cores=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,1)':p.tipo==='queda'?'rgba(200,30,30,1)':'rgba(26,86,219,1)');
+  const bg=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,.12)':p.tipo==='queda'?'rgba(200,30,30,.12)':'rgba(26,86,219,.12)');
+
+  mkC('c-tv','line',labels,[{
+    label:'Tarifa R$/t',
+    data:valores,
+    borderColor:'rgba(26,86,219,.9)',
+    backgroundColor:'rgba(26,86,219,.06)',
+    pointBackgroundColor:cores,
+    pointBorderColor:cores,
+    pointRadius:4,
+    pointHoverRadius:6,
+    tension:.25,
+    fill:true
+  }],{
+    ytk:{callback:v=>'R$'+D2(v)},
+    y:{beginAtZero:false},
+    ex:{
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          ...TTP,
+          callbacks:{
+            title:items=>items&&items[0]?`Data: ${items[0].label}`:'',
+            label:ctx=>{
+              const p=alteracoes[ctx.dataIndex];
+              const partes=[`Tarifa: R$ ${D2(p.tarifa)}/t`];
+              if(p.tipo!=='base'){
+                const sinal=p.diff>0?'+':'';
+                partes.push(`Variação: ${sinal}R$ ${D2(p.diff)} (${sinal}${Pct(p.diffPct||0)})`);
+              }else{
+                partes.push('Primeiro valor no período');
+              }
+              return partes;
+            }
+          }
+        },
+        datalabels:{
+          display:true,
+          align:'top',
+          anchor:'end',
+          color:CT,
+          font:{size:9,weight:'600'},
+          formatter:(v,ctx)=>{
+            const p=alteracoes[ctx.dataIndex];
+            if(!p||p.tipo==='base') return 'Base';
+            return p.tipo==='alta'?'Alta':'Queda';
+          }
+        }
+      },
+      scales:{
+        x:{ticks:{color:CT,font:{size:9},maxRotation:45,autoSkip:false},grid:{color:CG,lineWidth:.5}},
+        y:{ticks:{color:CT,font:{size:9},callback:v=>'R$'+D2(v)},grid:{color:CG,lineWidth:.5},beginAtZero:false}
+      }
+    }
+  });
+}
+
 // ═══════════════════════════════════════════════════════
 // FROTA
 // ═══════════════════════════════════════════════════════
@@ -2826,6 +3026,8 @@ function srt(id,ci){
   });
   t.querySelectorAll('th').forEach((th,i)=>{th.className=i===ci?(asc?'asc':'desc'):'';});
   t.querySelector('tbody').outerHTML=`<tbody>${sd.map(r=>`<tr>${t._c.map(c=>`<td class="${c.n?'n':'nm'}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  if(id==='tbl-cl' && typeof addClRowClick==='function') addClRowClick();
+  if(id==='tbl-ta' && typeof addTarivaRowClick==='function') addTarivaRowClick();
 }
 function filt(id,q){
   document.querySelectorAll('#'+id+' tbody tr').forEach(tr=>{
@@ -2837,7 +3039,7 @@ function filt(id,q){
 // TABS
 // ═══════════════════════════════════════════════════════
 function showTab(id){
-  const mp={vg:'Visão Geral',cl:'Rotas',cc:'Clientes',fr:'Frota',hi:'Histórico'};
+  const mp={vg:'Visão Geral',cl:'Rotas',ta:'Tarifa',cc:'Clientes',fr:'Frota',hi:'Histórico'};
   document.querySelectorAll('.tab').forEach(b=>{b.classList.toggle('on',b.textContent.trim()===mp[id]);});
   document.querySelectorAll('.pane').forEach(p=>{p.classList.toggle('on',p.id==='p-'+id);});
 }
