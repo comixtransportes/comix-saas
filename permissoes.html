@@ -672,9 +672,10 @@ function normalizePermissions(profileId, source) {
 }
 
 function buildPermissionPayload(profileId) {
+  const normalized = enforceRegionalFiliais(profileId, normalizePermissions(profileId, perms[profileId]));
   return {
     tipo: profileId,
-    permissoes: normalizePermissions(profileId, perms[profileId]),
+    permissoes: normalized,
     atualizadoEm: new Date().toISOString(),
     atualizadoPor: getUser(),
     schema: 'atlas-permissoes-v1'
@@ -977,7 +978,24 @@ function isFilialPermitida(filial, ut) {
   return (ut.regionalEstados||[]).some(e => est === e.toUpperCase() || est.startsWith(e.slice(0,2).toUpperCase()));
 }
 
+function enforceRegionalFiliais(profileId, normalized) {
+  const ut = USER_TYPES.find(u => u.id === profileId);
+  if (!ut?.regional || !normalized?.filiais || !filials.length) return normalized;
+  Object.keys(normalized.filiais).forEach(fid => {
+    const filial = filials.find(f => String(f.id) === String(fid));
+    if (filial && !isFilialPermitida(filial, ut)) delete normalized.filiais[fid];
+  });
+  return normalized;
+}
+
 function toggleFilial(fid, val) {
+  const ut = USER_TYPES.find(u => u.id === sel);
+  const filial = filials.find(f => String(f.id) === String(fid));
+  if (val && ut?.regional && filial && !isFilialPermitida(filial, ut)) {
+    showToast('Filial bloqueada para este perfil regional.', 'rd');
+    renderFiliaisPanel();
+    return;
+  }
   if (!perms[sel].filiais) perms[sel].filiais = {};
   perms[sel].filiais[fid] = val;
   const el = document.getElementById('fst-'+fid);
