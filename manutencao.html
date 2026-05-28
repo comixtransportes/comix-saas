@@ -103,6 +103,7 @@ tbody tr:last-child{border-bottom:none}
 /* Botões */
 .btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border-radius:var(--rs);border:1px solid var(--bd);cursor:pointer;font-size:11.5px;font-weight:600;font-family:var(--f);transition:all .15s;background:var(--wh);color:var(--tx)}
 .btn:hover{background:var(--bg)}
+.btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none;}
 .btn-ac{background:var(--ac);color:#fff;border-color:var(--ac-h)}.btn-ac:hover{background:var(--ac-h)}
 .btn-gn{background:var(--gn);color:#fff;border-color:#046c4e}.btn-gn:hover{background:#046c4e}
 .btn-rd{background:var(--rd-bg);color:var(--rd);border-color:var(--rd-bd)}.btn-rd:hover{background:#fecaca}
@@ -1335,6 +1336,27 @@ const CHK_DB = {};
 // ══ NAVEGAÇÃO ══
 const TITLES = {dashboard:'Dashboard',kanban:'Painel Kanban',gestao:'Painel Geral',preventiva:'Plano Preventivo',aprovacao:'Aprovações',alertas:'Central de Alertas',paradas:'Análise de Paradas',historico:'Histórico','nova-os':'Abrir O.S',params:'Parâmetros'};
 let _mntLastView = 'dashboard';
+let MNT_BUTTON_PERMS = null;
+
+function mntCanUseParams() {
+  const perfil = String(ATLAS_CURRENT_USER?.perfil || '').toLowerCase();
+  if (perfil === 'admin') return true;
+  if (!MNT_BUTTON_PERMS || typeof MNT_BUTTON_PERMS !== 'object') return true;
+  return MNT_BUTTON_PERMS.btn_parametros === true;
+}
+function applyMntButtonPerms() {
+  const allowed = mntCanUseParams();
+  document.querySelectorAll('.param-btn').forEach(btn => {
+    btn.disabled = !allowed;
+    btn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
+    btn.title = allowed ? 'Parâmetros' : 'Sem permissão para acessar parâmetros';
+  });
+}
+function setMntButtonPerms(msg) {
+  const src = (msg && (msg.permissoes || msg)) || {};
+  if (src.botoes && typeof src.botoes === 'object') MNT_BUTTON_PERMS = src.botoes;
+  applyMntButtonPerms();
+}
 
 function closeFloatingPanels() {
   // Fecha painéis flutuantes para não bloquear a troca de abas
@@ -1345,6 +1367,7 @@ function closeFloatingPanels() {
 }
 
 function goTo(id, el) {
+  if (id === 'params' && !mntCanUseParams()) return;
   const v = document.getElementById('view-' + id);
   if (!v) {
     console.warn('[Manutenção] View não encontrada:', id);
@@ -2050,11 +2073,13 @@ window.addEventListener('message', function(ev) {
   if (!ev.data || typeof ev.data !== 'object') return;
   if (ev.data.type === 'ATLAS_USER') {
     ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...ev.data };
+    applyMntButtonPerms();
     // Com o usuário identificado, resolve a alocação dele
     resolveAlocacaoUsuario();
     loadChecklists();
   }
   if (ev.data.type === 'ATLAS_TAB_PERMS') {
+    setMntButtonPerms(ev.data);
     applyTabPerms(ev.data.perfil, ev.data.abas || {});
   }
   if (ev.data.type === 'ATLAS_NAV' && ev.data.view) {
