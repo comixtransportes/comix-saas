@@ -218,6 +218,24 @@ table.dt td.nm{max-width:140px;overflow:hidden;text-overflow:ellipsis;}
 .sync-status.err{background:var(--rbg);color:var(--rd);}
 .sync-status.saving{background:var(--abg);color:var(--am);}
 
+
+
+/* ── TARIFA / ANTT ── */
+.ta-sel{font-size:10px!important;padding:2px 4px!important;min-width:46px;}
+.antt-note{font-size:10px;color:var(--mu);line-height:1.5;margin-bottom:8px;}
+.antt-wrap{overflow-x:auto;border:1px solid var(--bd2);border-radius:4px;margin-bottom:10px;}
+.antt-table{width:100%;border-collapse:collapse;min-width:640px;background:var(--wh);}
+.antt-table th{background:var(--hd);color:var(--ht);font-size:8.5px;text-transform:uppercase;letter-spacing:.45px;padding:5px;border-right:1px solid #253652;text-align:center;white-space:nowrap;}
+.antt-table td{padding:4px 5px;border-bottom:1px solid var(--bd2);border-right:1px solid var(--bd2);font-size:10px;text-align:center;white-space:nowrap;}
+.antt-table td:first-child,.antt-table td:nth-child(2){text-align:left;font-family:var(--f);}
+.antt-inp{width:74px;border:1px solid var(--bd);border-radius:3px;padding:3px 5px;font-family:var(--m);font-size:10px;text-align:right;outline:none;}
+.antt-inp:focus{border-color:var(--ac);}
+.antt-calc-grid{display:grid;grid-template-columns:repeat(6, minmax(100px,1fr));gap:8px;align-items:end;}
+.antt-calc-field label{display:block;font-size:9px;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;}
+.antt-calc-field input,.antt-calc-field select{width:100%;border:1px solid var(--bd);border-radius:3px;padding:5px 7px;font-family:var(--m);font-size:11px;}
+.antt-result{font-family:var(--m);font-size:12px;font-weight:600;color:var(--ac);background:#eff4ff;border:1px solid #b8d0ff;border-radius:3px;padding:6px 8px;text-align:right;min-height:29px;}
+@media(max-width:900px){.antt-calc-grid{grid-template-columns:1fr 1fr;}.antt-table{min-width:720px;}}
+
 /* ── PAINEL IA ── */
 .ai-panel{background:var(--wh);border:1px solid var(--bd);border-radius:4px;display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;}
 .ai-ph{background:var(--hd);color:var(--ht);padding:5px 10px;font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;display:flex;justify-content:space-between;align-items:center;border-radius:3px 3px 0 0;}
@@ -899,6 +917,23 @@ html{ -webkit-text-size-adjust:100%; }
           <span class="field-tag">km/L</span>
         </div>
       </div>
+
+      <div class="modal-sec">
+        <div class="modal-sec-title">Calculadora ANTT — Piso Frete Mínimo | Tipo 12 Carga Granel Pressurizada</div>
+        <div class="antt-note">
+          Coeficientes editáveis das tabelas do anexo. Na aba Tarifa, o cálculo considera composição veicular: Tabela A para operação normal e Tabela C quando Alto Desemp. = Sim.
+        </div>
+        <div class="antt-wrap" id="antt-coefs"></div>
+        <div class="antt-calc-grid">
+          <div class="antt-calc-field"><label>Distância ida</label><input id="antt-calc-ida" type="number" step="0.01" value="0" oninput="updateAnttCalc()"></div>
+          <div class="antt-calc-field"><label>Distância volta</label><input id="antt-calc-volta" type="number" step="0.01" value="0" oninput="updateAnttCalc()"></div>
+          <div class="antt-calc-field"><label>N° eixos</label><select id="antt-calc-eixos" onchange="updateAnttCalc()"><option>5</option><option>6</option><option>7</option><option>9</option></select></div>
+          <div class="antt-calc-field"><label>Retorna vazio</label><select id="antt-calc-ret" onchange="updateAnttCalc()"><option value="sim">Sim</option><option value="nao">Não</option></select></div>
+          <div class="antt-calc-field"><label>Alto desemp.</label><select id="antt-calc-alto" onchange="updateAnttCalc()"><option value="nao">Não</option><option value="sim">Sim</option></select></div>
+          <div class="antt-calc-field"><label>Frete mínimo</label><div class="antt-result" id="antt-calc-res">R$ 0,00</div></div>
+        </div>
+      </div>
+
       <div class="modal-sec">
         <div class="modal-sec-title">Configurações Alerta Frota — Faturamento Projetado</div>
         <div class="slider-row">
@@ -964,12 +999,23 @@ let PARAMS = {
   ],
   frMeta: 60000,
   frAtencao: 15,
-  frBase: 'ritmo'
+  frBase: 'ritmo',
+  antt: {
+    tipoCarga: '12 - Carga Granel Pressurizada',
+    eixos: ['5','6','7','9'],
+    tabelas: {
+      A: { label:'Tabela A — composição veicular ou caminhão simples', ccd:{'5':7.0646,'6':7.8089,'7':null,'9':9.7697}, cc:{'5':731.90,'6':757.99,'7':null,'9':1016.29} },
+      B: { label:'Tabela B — apenas unidade de tração',             ccd:{'5':5.9994,'6':6.6896,'7':null,'9':7.9200}, cc:{'5':574.29,'6':588.17,'7':null,'9':746.78} },
+      C: { label:'Tabela C — alto desempenho com composição veicular ou caminhão simples', ccd:{'5':5.8647,'6':6.5481,'7':null,'9':7.9676}, cc:{'5':241.14,'6':246.76,'7':null,'9':312.42} },
+      D: { label:'Tabela D — alto desempenho apenas unidade de tração', ccd:{'5':5.1667,'6':5.8246,'7':null,'9':6.7460}, cc:{'5':207.18,'6':210.17,'7':null,'9':254.35} }
+    }
+  }
 };
 
 
 let RAW=[], DATA=[];
 let RAW_SZC=[], SZC_DATA=[];
+let RAW_SZY=[], SZY_DATA=[], SZY_MAP={};
 const CHS={};
 
 /* ── Escopo de filial recebido do Atlas ─────────────────────
@@ -1266,6 +1312,9 @@ async function loadPDBaseFromFirestore(id) {
 async function loadSZCFromFirestore() {
   return loadPDBaseFromFirestore('szc');
 }
+async function loadSZYFromFirestore() {
+  return loadPDBaseFromFirestore('szy');
+}
 
 // ── Carregar parâmetros da nuvem ──
 async function loadParamsFromCloud() {
@@ -1277,6 +1326,7 @@ async function loadParamsFromCloud() {
     PARAMS.pa['18'].label='PR';
     PARAMS.pa['03'].label='SP';
   }
+  ensureAnttParams();
   // Última atualização
   await loadLastUpdate();
 }
@@ -1389,6 +1439,7 @@ async function loadDataFromCloud() {
         }
         setPDTimestamp(fs.ts);
         loadSZCFromFirestore().then(function(szc){ if(szc) applyAtlasSZC(szc, 'Nuvem SZC'); }).catch(function(){});
+        loadSZYFromFirestore().then(function(szy){ if(szy) applyAtlasSZY(szy, 'Nuvem SZY'); }).catch(function(){});
         return true;
       }
     } catch(_) {}
@@ -1618,6 +1669,170 @@ function fmtDia(s){
   return`${d}/${m}\n${dow}`;
 }
 function parseBR(s){ return parseFloat((s||'0').replace(/\./g,'').replace(',','.'))||0; }
+
+function D4(v){ return (v||0).toLocaleString('pt-BR',{minimumFractionDigits:4,maximumFractionDigits:4}); }
+function escHtml(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];}); }
+function escAttr(v){ return escHtml(v); }
+
+const ANTT_DEFAULTS = {
+  tipoCarga: '12 - Carga Granel Pressurizada',
+  eixos: ['5','6','7','9'],
+  tabelas: {
+    A: { label:'Tabela A — composição veicular ou caminhão simples', ccd:{'5':7.0646,'6':7.8089,'7':null,'9':9.7697}, cc:{'5':731.90,'6':757.99,'7':null,'9':1016.29} },
+    B: { label:'Tabela B — apenas unidade de tração', ccd:{'5':5.9994,'6':6.6896,'7':null,'9':7.9200}, cc:{'5':574.29,'6':588.17,'7':null,'9':746.78} },
+    C: { label:'Tabela C — alto desempenho com composição veicular ou caminhão simples', ccd:{'5':5.8647,'6':6.5481,'7':null,'9':7.9676}, cc:{'5':241.14,'6':246.76,'7':null,'9':312.42} },
+    D: { label:'Tabela D — alto desempenho apenas unidade de tração', ccd:{'5':5.1667,'6':5.8246,'7':null,'9':6.7460}, cc:{'5':207.18,'6':210.17,'7':null,'9':254.35} }
+  }
+};
+function ensureAnttParams(){
+  PARAMS.antt = PARAMS.antt || {};
+  PARAMS.antt.tipoCarga = PARAMS.antt.tipoCarga || ANTT_DEFAULTS.tipoCarga;
+  PARAMS.antt.eixos = Array.isArray(PARAMS.antt.eixos) && PARAMS.antt.eixos.length ? PARAMS.antt.eixos : [...ANTT_DEFAULTS.eixos];
+  PARAMS.antt.tabelas = PARAMS.antt.tabelas || {};
+  ['A','B','C','D'].forEach(t=>{
+    const def = ANTT_DEFAULTS.tabelas[t];
+    PARAMS.antt.tabelas[t] = PARAMS.antt.tabelas[t] || {};
+    PARAMS.antt.tabelas[t].label = PARAMS.antt.tabelas[t].label || def.label;
+    PARAMS.antt.tabelas[t].ccd = PARAMS.antt.tabelas[t].ccd || {};
+    PARAMS.antt.tabelas[t].cc  = PARAMS.antt.tabelas[t].cc  || {};
+    PARAMS.antt.eixos.forEach(e=>{
+      if(PARAMS.antt.tabelas[t].ccd[e] === undefined) PARAMS.antt.tabelas[t].ccd[e] = def.ccd[e] ?? null;
+      if(PARAMS.antt.tabelas[t].cc[e]  === undefined) PARAMS.antt.tabelas[t].cc[e]  = def.cc[e]  ?? null;
+    });
+  });
+}
+function anttFmtInput(v, dec){
+  if(v===null || v===undefined || v==='') return '';
+  return Number(v).toLocaleString('pt-BR',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+}
+function renderAnttParams(){
+  ensureAnttParams();
+  const box=document.getElementById('antt-coefs'); if(!box) return;
+  const eixos=PARAMS.antt.eixos || ['5','6','7','9'];
+  const th=eixos.map(e=>`<th>CCD ${e} eixos</th>`).join('')+eixos.map(e=>`<th>CC ${e} eixos</th>`).join('');
+  const rows=['A','B','C','D'].map(t=>{
+    const tab=PARAMS.antt.tabelas[t];
+    const ccd=eixos.map(e=>`<td><input class="antt-inp" id="antt-${t}-ccd-${e}" value="${anttFmtInput(tab.ccd[e],4)}" oninput="updateAnttCalc()"></td>`).join('');
+    const cc=eixos.map(e=>`<td><input class="antt-inp" id="antt-${t}-cc-${e}" value="${anttFmtInput(tab.cc[e],2)}" oninput="updateAnttCalc()"></td>`).join('');
+    return `<tr><td><b>${t}</b></td><td>${escHtml(tab.label)}</td>${ccd}${cc}</tr>`;
+  }).join('');
+  box.innerHTML=`<table class="antt-table"><thead><tr><th>Tabela</th><th>Aplicação</th>${th}</tr></thead><tbody>${rows}</tbody></table>`;
+  updateAnttCalc();
+}
+function readAnttCoef(tabela,tipo,eixos){
+  ensureAnttParams();
+  const id='antt-'+tabela+'-'+tipo+'-'+eixos;
+  const el=document.getElementById(id);
+  if(el) return el.value.trim()==='' ? 0 : parseBR(el.value);
+  return toN((((PARAMS.antt.tabelas||{})[tabela]||{})[tipo]||{})[eixos]);
+}
+function collectAnttParams(){
+  ensureAnttParams();
+  const eixos=PARAMS.antt.eixos || ['5','6','7','9'];
+  ['A','B','C','D'].forEach(t=>{
+    ['ccd','cc'].forEach(tipo=>{
+      eixos.forEach(e=>{
+        const el=document.getElementById('antt-'+t+'-'+tipo+'-'+e);
+        if(el) PARAMS.antt.tabelas[t][tipo][e] = el.value.trim()==='' ? null : parseBR(el.value);
+      });
+    });
+  });
+}
+function calcAnttFreteMinimo(distIda, distVolta, eixos, retornaVazio, altoDesemp){
+  const tabela = altoDesemp==='sim' ? 'C' : 'A'; // todos os fretes considerados como composição veicular
+  const ccd = readAnttCoef(tabela,'ccd',String(eixos));
+  const cc  = readAnttCoef(tabela,'cc', String(eixos));
+  const km = (toN(distIda)||0) + (retornaVazio==='sim' ? (toN(distVolta)||0) : 0);
+  if(!km || !ccd) return 0;
+  return km * ccd + (cc||0);
+}
+function updateAnttCalc(){
+  const ida=document.getElementById('antt-calc-ida');
+  const volta=document.getElementById('antt-calc-volta');
+  const eixos=document.getElementById('antt-calc-eixos');
+  const ret=document.getElementById('antt-calc-ret');
+  const alto=document.getElementById('antt-calc-alto');
+  const res=document.getElementById('antt-calc-res');
+  if(!ida||!volta||!eixos||!ret||!alto||!res) return;
+  const v=calcAnttFreteMinimo(ida.value,volta.value,eixos.value,ret.value,alto.value);
+  res.textContent = v>0 ? R(v) : '—';
+}
+
+function rowLoose(row, names){
+  const wanted=(names||[]).map(pdNormText);
+  for(const k of Object.keys(row||{})){
+    if(wanted.includes(pdNormText(k))) return row[k];
+  }
+  return '';
+}
+function normRotaKey(v){
+  const s=String(v==null?'':v).trim().toUpperCase();
+  if(!s) return '';
+  const compact=s.replace(/[^0-9A-Z]/g,'');
+  if(/^0+\d+$/.test(compact)) return String(parseInt(compact,10));
+  return compact;
+}
+function normalizeAtlasSZYRows(rows) {
+  return (rows || []).map(function(row) {
+    var out = {};
+    Object.keys(row || {}).forEach(function(k) {
+      var key = String(k).replace(/\s+/g, ' ').trim();
+      if (!key) return;
+      var v = row[k];
+      out[key] = (v === null || v === undefined) ? '' : String(v);
+    });
+    return out;
+  }).filter(function(r) {
+    return Object.values(r).some(function(v) { return v !== '' && v !== null && v !== undefined; });
+  });
+}
+function enrichSZY(recs){
+  return (recs||[]).map(row=>{
+    const codigo = String(rowLoose(row,['Codigo','Código','Cod. Rota','Cod Rota','Rota'])||'').trim();
+    const kmIda = toN(rowLoose(row,['Km Ida','KM Ida','Km IDA','Distância Ida','Distancia Ida','Ida']));
+    const kmVolta = toN(rowLoose(row,['Km Volta','KM Volta','Km VOLTA','Distância Volta','Distancia Volta','Volta']));
+    if(!codigo) return null;
+    return { codigo, key:normRotaKey(codigo), kmIda, kmVolta,
+      ufo:String(rowLoose(row,['UF Origem','Uf Origem'])||'').trim(),
+      ufd:String(rowLoose(row,['UF Destino','Uf Destino'])||'').trim(),
+      revisto:String(rowLoose(row,['Revisto'])||'').trim()
+    };
+  }).filter(Boolean);
+}
+function rebuildSZYMap(){
+  SZY_DATA = enrichSZY(RAW_SZY);
+  SZY_MAP = {};
+  SZY_DATA.forEach(r=>{
+    if(r.key) SZY_MAP[r.key]=r;
+    const raw=String(r.codigo||'').trim().toUpperCase();
+    if(raw) SZY_MAP[raw]=r;
+  });
+}
+function getSZYByRota(rota){
+  if(!SZY_DATA.length && RAW_SZY.length) rebuildSZYMap();
+  const k=normRotaKey(rota);
+  return SZY_MAP[k] || SZY_MAP[String(rota||'').trim().toUpperCase()] || null;
+}
+
+let TA_CFG={};
+try{ TA_CFG=JSON.parse(localStorage.getItem('PD_TARIFA_CFG')||'{}')||{}; }catch(_){ TA_CFG={}; }
+function taCfgKey(r){ return [r.rota,r.rem,r.dst,r.orig,r.ufo,r.dest,r.ufd,r.frt].join('§'); }
+function taCfgGet(r){
+  const k=typeof r==='string'?r:taCfgKey(r);
+  return Object.assign({eixos:'5',retornaVazio:'sim',altoDesemp:'nao'}, TA_CFG[k]||{});
+}
+function taCfgSet(k,field,value){
+  TA_CFG[k]=Object.assign({eixos:'5',retornaVazio:'sim',altoDesemp:'nao'}, TA_CFG[k]||{});
+  TA_CFG[k][field]=value;
+  try{ localStorage.setItem('PD_TARIFA_CFG', JSON.stringify(TA_CFG)); }catch(_){ }
+  if(_taUID && _taMes) buildTa(_taUID,_taMes);
+}
+function taSelect(k,field,value,opts){
+  return `<select class="sel ta-sel" data-k="${escAttr(k)}" onclick="event.stopPropagation()" onchange="taCfgSet(this.dataset.k,'${field}',this.value)">`+
+    opts.map(o=>`<option value="${o.v}" ${String(o.v)===String(value)?'selected':''}>${o.t}</option>`).join('')+
+    `</select>`;
+}
+
 
 // ═══════════════════════════════════════════════════════
 // CHARTS
@@ -2449,20 +2664,35 @@ function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
 }
 
 
+
 // ═══════════════════════════════════════════════════════
-// TARIVA — cópia da aba Rotas com histórico de variação de tarifa
+// TARIFA — cópia da aba Rotas com histórico de variação de tarifa
 // ═══════════════════════════════════════════════════════
 let _taUID='', _taMes='';
 
+function taFreteAtual(arr){
+  const ult=[...(arr||[])].sort((a,b)=>String(a.data||'').localeCompare(String(b.data||''))).pop();
+  return ult ? (ult.fat||0) : 0;
+}
+function taBuildCalc(row){
+  const cfg=taCfgGet(row);
+  const szy=getSZYByRota(row.rota);
+  const distIda=szy ? szy.kmIda : 0;
+  const distVolta=szy ? szy.kmVolta : 0;
+  const freteMin=calcAnttFreteMinimo(distIda, distVolta, cfg.eixos, cfg.retornaVazio, cfg.altoDesemp);
+  return {cfg, szy, distIda, distVolta, freteMin};
+}
+
 function buildTa(uid,mes){
+  ensureAnttParams();
   _taUID=uid; _taMes=mes;
   const d=filterByOp(uid).filter(r=>r.mes===mes);
-  const g=grp(d,r=>r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
+  const g=grp(d,r=>(r.rota||'')+'§'+r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
   const rows=Object.entries(g).map(([k,arr])=>{
-    const[rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
+    const[rota,rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
     const s=agg(arr);
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
-    return{rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj};
+    return{rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
   }).sort((a,b)=>b.f-a.f);
 
   const cnt=document.getElementById('cnt-ta');
@@ -2472,22 +2702,25 @@ function buildTa(uid,mes){
   const ct=document.getElementById('ct-tariva');
   if(ct) ct.textContent='Histórico de Variação de Tarifa — selecione uma linha';
 
-  const ft=rows.reduce((a,r)=>a+r.f,0);
   bldT('tbl-ta',rows,[
-    {h:'Remetente',       fn:r=>`<span class="nm">${r.rem}</span>`},
-    {h:'Destinatário',    fn:r=>`<span class="nm">${r.dst}</span>`},
-    {h:'Local Coleta',    fn:r=>`${r.orig}/${r.ufo}`},
-    {h:'Local Entrega',   fn:r=>`${r.dest}/${r.ufd}`},
-    {h:'Frete',           fn:r=>r.frt},
+    {h:'Rota',            fn:r=>escHtml(r.rota||'—')},
+    {h:'Remetente',       fn:r=>`<span class="nm">${escHtml(r.rem)}</span>`},
+    {h:'Destinatário',    fn:r=>`<span class="nm">${escHtml(r.dst)}</span>`},
+    {h:'Local Coleta',    fn:r=>`${escHtml(r.orig)}/${escHtml(r.ufo)}`},
+    {h:'Local Entrega',   fn:r=>`${escHtml(r.dest)}/${escHtml(r.ufd)}`},
+    {h:'Frete',           fn:r=>escHtml(r.frt)},
     {h:'Viagens',         fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
     {h:'Fat.(R$) Real.',  fn:r=>R(r.f),         n:true},
     {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`, n:true},
+    {h:'N°',              fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'eixos',c.eixos,[{v:'5',t:'5'},{v:'6',t:'6'},{v:'7',t:'7'},{v:'9',t:'9'}]);}},
+    {h:'Dist. Ida',       fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distIda):'—';}, n:true},
+    {h:'Dist. Volta',     fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distVolta):'—';}, n:true},
+    {h:'Retorna Vazio',   fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'retornaVazio',c.retornaVazio,[{v:'sim',t:'Sim'},{v:'nao',t:'Não'}]);}},
+    {h:'Alto Desemp.',    fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'altoDesemp',c.altoDesemp,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
+    {h:'Frete Mínimo',    fn:r=>{const c=taBuildCalc(r); return c.freteMin>0?R(c.freteMin):'—';}, n:true},
+    {h:'Frete Atual',     fn:r=>r.freteAtual>0?R(r.freteAtual):'—', n:true},
     {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
-    {h:'CPK',             fn:r=>D2(r.cpk),      n:true},
-    {h:'VPK',             fn:r=>D2(r.vpk),      n:true},
-    {h:'Markup',          fn:r=>bdg(r.mkp,50),  n:true},
-    {h:'% Fat',           fn:r=>Pct(ft?r.f/ft*100:0),n:true},
   ]);
   addTarivaRowClick();
 }
@@ -2501,23 +2734,25 @@ function addTarivaRowClick(){
       tbody.querySelectorAll('tr').forEach(r=>r.style.background='');
       tr.style.background='#dbeafe';
       const t=tr.querySelectorAll('td');
-      if(t.length<5) return;
-      const rem    = t[0].textContent.trim();
-      const dst    = t[1].textContent.trim();
-      const coleta = t[2].textContent.trim();
-      const entrega= t[3].textContent.trim();
-      const frt    = t[4].textContent.trim();
+      if(t.length<6) return;
+      const rota   = t[0].textContent.trim();
+      const rem    = t[1].textContent.trim();
+      const dst    = t[2].textContent.trim();
+      const coleta = t[3].textContent.trim();
+      const entrega= t[4].textContent.trim();
+      const frt    = t[5].textContent.trim();
       const [orig,ufo] = coleta.split('/');
       const [dest,ufd] = entrega.split('/');
-      showTarivaHist(rem,dst,frt,(orig||'').trim(),(ufo||'').trim(),(dest||'').trim(),(ufd||'').trim());
+      showTarivaHist(rota==='—'?'':rota,rem,dst,frt,(orig||'').trim(),(ufo||'').trim(),(dest||'').trim(),(ufd||'').trim());
     });
   });
 }
 
-function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
+function showTarivaHist(rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
   const corte='2025-01-01';
   const allRota = filterByOp(_taUID).filter(r=>
     r.data > corte &&
+    (!rota || r.rota === rota) &&
     r.d_nome  === dstNome &&
     r.r_nome  === remNome &&
     r.frete   === frt     &&
@@ -2537,30 +2772,28 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
   }).filter(p=>p.tarifa>0).sort((a,b)=>a.data.localeCompare(b.data));
 
   const alteracoes=[];
-  let ultima=null;
+  let ref=null;
   serieDiaria.forEach(p=>{
-    const cents=Math.round(p.tarifa*100);
-    if(ultima===null){
+    if(ref===null){
       alteracoes.push({...p,tipo:'base',diff:null,diffPct:null});
-      ultima=cents;
+      ref=p;
       return;
     }
-    if(cents!==ultima){
-      const prev=alteracoes[alteracoes.length-1];
-      const diff=p.tarifa-(prev?prev.tarifa:0);
-      const diffPct=prev&&prev.tarifa>0?diff/prev.tarifa*100:null;
+    const diff=p.tarifa-ref.tarifa;
+    const diffPct=ref.tarifa>0?diff/ref.tarifa*100:0;
+    if(Math.abs(diffPct)>1){
       alteracoes.push({...p,tipo:diff>0?'alta':'queda',diff,diffPct});
-      ultima=cents;
+      ref=p;
     }
   });
 
-  // Sempre exibe também a última data de emissão registrada no período,
-  // mesmo quando ela não representa uma nova variação de tarifa.
   const ultimaEmissao=serieDiaria[serieDiaria.length-1]||null;
   if(ultimaEmissao && alteracoes.length){
     const ultimoPlotado=alteracoes[alteracoes.length-1];
     if(ultimoPlotado.data!==ultimaEmissao.data){
-      alteracoes.push({...ultimaEmissao,tipo:'ultima',diff:0,diffPct:0});
+      const diff=ultimaEmissao.tarifa-ultimoPlotado.tarifa;
+      const diffPct=ultimoPlotado.tarifa>0?diff/ultimoPlotado.tarifa*100:0;
+      alteracoes.push({...ultimaEmissao,tipo:'ultima',diff,diffPct});
     }
   }
 
@@ -2570,11 +2803,11 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
   };
 
   const ct=document.getElementById('ct-tariva');
-  const rotaLabel=`${remNome.slice(0,18)} → ${dstNome.slice(0,18)} (${frt})`;
+  const rotaLabel=`${rota?('Rota '+rota+' | '):''}${remNome.slice(0,18)} → ${dstNome.slice(0,18)} (${frt})`;
   if(ct){
     const qtd=alteracoes.filter(p=>p.tipo==='alta'||p.tipo==='queda').length;
     const ultTxt=ultimaEmissao?` | última emissão: ${fmtDataTarifa(ultimaEmissao.data)}`:'';
-    ct.textContent=`Histórico de Variação de Tarifa — ${rotaLabel} | ${qtd} alteração(ões) após 01/01/2025${ultTxt}`;
+    ct.textContent=`Histórico de Variação de Tarifa — ${rotaLabel} | ${qtd} alteração(ões) acima de 1% após 01/01/2025${ultTxt}`;
   }
 
   if(!alteracoes.length){
@@ -2588,7 +2821,6 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
   });
   const valores=alteracoes.map(p=>p.tarifa);
   const cores=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,1)':p.tipo==='queda'?'rgba(200,30,30,1)':p.tipo==='ultima'?'rgba(146,64,14,1)':'rgba(26,86,219,1)');
-  const bg=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,.12)':p.tipo==='queda'?'rgba(200,30,30,.12)':p.tipo==='ultima'?'rgba(146,64,14,.12)':'rgba(26,86,219,.12)');
 
   mkC('c-tv','line',labels,[{
     label:'Tarifa R$/t',
@@ -2614,14 +2846,13 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
             label:ctx=>{
               const p=alteracoes[ctx.dataIndex];
               const partes=[`Tarifa: R$ ${D2(p.tarifa)}/t`];
-              if(p.tipo==='alta'||p.tipo==='queda'){
+              if(p.diffPct!==null && p.diffPct!==undefined){
                 const sinal=p.diff>0?'+':'';
-                partes.push(`Variação: ${sinal}R$ ${D2(p.diff)} (${sinal}${Pct(p.diffPct||0)})`);
-              }else if(p.tipo==='ultima'){
-                partes.push('Última emissão registrada no período');
+                partes.push(`Diferença: ${sinal}${Pct(p.diffPct)}`);
               }else{
                 partes.push('Primeiro valor no período');
               }
+              if(p.tipo==='ultima') partes.push('Última emissão registrada no período');
               return partes;
             }
           }
@@ -2636,7 +2867,11 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
           font:{size:9,weight:'600'},
           formatter:(v,ctx)=>{
             const p=alteracoes[ctx.dataIndex];
-            return p?fmtDataTarifa(p.data):'';
+            if(!p) return '';
+            const diffTxt=(p.diffPct!==null && p.diffPct!==undefined)?`
+${p.diffPct>0?'+':''}${Pct(p.diffPct)}`:'
+base';
+            return `R$ ${D2(p.tarifa)}${diffTxt}`;
           }
         }
       },
@@ -2647,6 +2882,7 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
     }
   });
 }
+
 
 // ═══════════════════════════════════════════════════════
 // FROTA
@@ -3105,6 +3341,7 @@ function openParams(){
   document.getElementById('fr-atencao-val').textContent='até +'+frAt+'%';
   document.getElementById('fr-base').value=PARAMS.frBase||'ritmo';
   renderFeriados();
+  renderAnttParams();
   calcFdu();
   setSyncMsg('','Parâmetros carregados da nuvem');
   document.getElementById('modal-bg').classList.add('open');
@@ -3125,6 +3362,7 @@ async function saveParams(){
   PARAMS.frMeta   =parseInt(document.getElementById('fr-meta').value)||60000;
   PARAMS.frAtencao=parseInt(document.getElementById('fr-atencao').value)||15;
   PARAMS.frBase   =document.getElementById('fr-base').value||'ritmo';
+  collectAnttParams();
   await saveParamsToCloud();
   closeParams();
   if(DATA.length) recalc();
@@ -3162,6 +3400,7 @@ function addFeriado(){
 // INICIALIZAÇÃO — carrega parâmetros da nuvem ao abrir
 // ═══════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', ()=>{
+  ensureAnttParams();
   // Carregar parâmetros em background sem bloquear a UI
   loadParamsFromCloud().catch(()=>{});
 
@@ -3171,14 +3410,18 @@ window.addEventListener('DOMContentLoaded', ()=>{
     setTimeout(()=>{
       if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
       if (typeof tryAtlasSZC === 'function') tryAtlasSZC();
+      if (typeof tryAtlasSZY === 'function') tryAtlasSZY();
       if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
       if (typeof requestAtlasSZC === 'function') requestAtlasSZC();
+      if (typeof requestAtlasSZY === 'function') requestAtlasSZY();
     }, 150);
     setTimeout(()=>{
       if (typeof tryAtlasSZB === 'function') tryAtlasSZB();
       if (typeof tryAtlasSZC === 'function') tryAtlasSZC();
+      if (typeof tryAtlasSZY === 'function') tryAtlasSZY();
       if (typeof requestAtlasSZB === 'function') requestAtlasSZB();
       if (typeof requestAtlasSZC === 'function') requestAtlasSZC();
+      if (typeof requestAtlasSZY === 'function') requestAtlasSZY();
     }, 900);
     setTimeout(async ()=>{
       if (__ATLAS_PD_CARREGADO) return;
@@ -4011,6 +4254,27 @@ function requestAtlasSZC() {
   } catch(e) {}
 }
 
+
+function applyAtlasSZY(parentData, origem) {
+  if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
+  var rows = normalizeAtlasSZYRows(parentData.rows);
+  if (!rows.length) return false;
+  RAW_SZY = rows;
+  rebuildSZYMap();
+  if (DATA.length || RAW.length) {
+    try { recalc(); } catch(e) { console.warn('[PD Diário] recalc SZY:', e.message); }
+  }
+  return true;
+}
+function tryAtlasSZY() { return false; }
+function requestAtlasSZY() {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szy'}, '*');
+    }
+  } catch(e) {}
+}
+
 function atlasParentSZB() {
   // Segurança funcional: dentro do Atlas o PD não lê mais window.parent.ATLAS_DATA diretamente.
   // Ele solicita a base ao portal e recebe o payload já limitado pela filial ativa do perfil.
@@ -4077,6 +4341,10 @@ function applyAtlasSZB(parentData, origem) {
     requestAtlasSZC();
     loadSZCFromFirestore().then(function(szc){ if(szc) applyAtlasSZC(szc, 'Nuvem SZC'); }).catch(function(){});
   }
+  if (!tryAtlasSZY()) {
+    requestAtlasSZY();
+    loadSZYFromFirestore().then(function(szy){ if(szy) applyAtlasSZY(szy, 'Nuvem SZY'); }).catch(function(){});
+  }
   ldSet(100, 'Pronto!');
   setTimeout(ldHide, 350);
   setTimeout(triggerAI, 800);
@@ -4129,10 +4397,11 @@ async function tryAtlasSZBFromIndexedDB() {
 
 window.addEventListener('message', function(event) {
   var d = event.data || {};
-  if (d.table && d.table !== 'szb' && d.table !== 'szc') return;
+  if (d.table && !['szb','szc','szy'].includes(d.table)) return;
   if (d.type === 'ATLAS_DATA_RESPONSE' && d.payload) {
     if (d.scope) setAtlasPDScope(d.scope);
     if (d.table === 'szc') applyAtlasSZC(d.payload, 'Download Base SZC');
+    else if (d.table === 'szy') applyAtlasSZY(d.payload, 'Download Base SZY');
     else applyAtlasSZB(d.payload, 'Download Base');
     return;
   }
@@ -4140,9 +4409,12 @@ window.addEventListener('message', function(event) {
     setTimeout(function() {
       if (d.table === 'szc') {
         if (!tryAtlasSZC()) requestAtlasSZC();
+      } else if (d.table === 'szy') {
+        if (!tryAtlasSZY()) requestAtlasSZY();
       } else {
         if (!tryAtlasSZB()) requestAtlasSZB();
         if (!tryAtlasSZC()) requestAtlasSZC();
+        if (!tryAtlasSZY()) requestAtlasSZY();
       }
     }, 80);
   }
@@ -4152,11 +4424,13 @@ window.addEventListener('message', function(event) {
   setTimeout(function() {
     if (!tryAtlasSZB()) requestAtlasSZB();
     if (!tryAtlasSZC()) requestAtlasSZC();
+    if (!tryAtlasSZY()) requestAtlasSZY();
   }, 100);
   setTimeout(function() {
     if (!__ATLAS_PD_CARREGADO) {
       if (!tryAtlasSZB()) requestAtlasSZB();
       if (!tryAtlasSZC()) requestAtlasSZC();
+      if (!tryAtlasSZY()) requestAtlasSZY();
     }
   }, 900);
 })();
