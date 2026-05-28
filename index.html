@@ -622,17 +622,17 @@ const pollers = {};
 /* Módulos: src = arquivo a carregar, nav = função interna a chamar */
 const VIEWS = {
   'inicio':        {label:'Início',               chip:'VISÃO GERAL', cls:'',  src:'inicio.html',               nav:null,       perfil:null},
-  'pd-diario':     {label:'PD Diário',          chip:'FROTA',      cls:'',   src:'pd.html',                   nav:null,       perfil:null},
-  'frota':         {label:'Frota',               chip:'OPERAÇÃO',   cls:'',   src:'frota.html',                nav:null,       perfil:null},
-  'financeiro':    {label:'Financeiro',          chip:'FINANCEIRO', cls:'gn', src:'financeiro.html',           nav:null,       perfil:['admin','financeiro','gestor']},
-  'ficha':         {label:'Ficha Operacional',   chip:'MOBILE',     cls:'am', src:'ficha.html',                nav:null,       perfil:null},
-  'compras':       {label:'Compras',             chip:'COMPRAS',    cls:'am', src:'compras.html',              nav:null,       perfil:['admin','gestor','comprador']},
-  'manutencao':    {label:'Manutenção',         chip:'MANUTENÇÃO', cls:'am', src:'manutencao.html',           nav:null,       perfil:null},
-  'checklist':     {label:'Checklist',          chip:'CHECKLIST',  cls:'am', src:'checklist.html',              nav:'checklist', perfil:null},
-  'painel':        {label:'Painel Operacional',  chip:'PAINEL',     cls:'',   src:'painel.html',               nav:null,       perfil:['admin','gestor','motorista']},
-  'cpk':           {label:'CPK',                 chip:'CUSTO/KM',   cls:'gn', src:'cpk.html',                   nav:null,       perfil:null},
-  'config':        {label:'Cadastros',            chip:'ADMIN',      cls:'',   src:'cadastros.html',            nav:null,       perfil:['admin']},
-  'download-base': {label:'Download Base',       chip:'DADOS',      cls:'pu', src:null,                        nav:null,       perfil:['admin','gestor']},
+  'pd-diario':     {label:'PD Diário',           chip:'FROTA',       cls:'',   src:'pd.html',                   nav:null,       perfil:null},
+  'frota':         {label:'Frota',                chip:'OPERAÇÃO',    cls:'',   src:'frota.html',                nav:null,       perfil:null},
+  'financeiro':    {label:'Financeiro',           chip:'FINANCEIRO',  cls:'gn', src:'financeiro.html',           nav:null,       perfil:null},
+  'ficha':         {label:'Ficha Operacional',    chip:'MOBILE',      cls:'am', src:'ficha.html',                nav:null,       perfil:null},
+  'compras':       {label:'Compras',              chip:'COMPRAS',     cls:'am', src:'compras.html',              nav:null,       perfil:null},
+  'manutencao':    {label:'Manutenção',           chip:'MANUTENÇÃO',  cls:'am', src:'manutencao.html',           nav:null,       perfil:null},
+  'checklist':     {label:'Checklist',            chip:'CHECKLIST',   cls:'am', src:'checklist.html',            nav:'checklist', perfil:null},
+  'painel':        {label:'Painel Operacional',   chip:'PAINEL',      cls:'',   src:'painel.html',               nav:null,       perfil:null},
+  'cpk':           {label:'CPK',                  chip:'CUSTO/KM',    cls:'gn', src:'cpk.html',                  nav:null,       perfil:null},
+  'config':        {label:'Cadastros',            chip:'ADMIN',       cls:'',   src:'cadastros.html',            nav:null,       perfil:null},
+  'download-base': {label:'Download Base',        chip:'DADOS',       cls:'pu', src:null,                        nav:null,       perfil:null},
 };
 
 /* ══ AUTH ══ */
@@ -689,12 +689,13 @@ function showLogin() {
 
 /* ── Aplica visibilidade por perfil ── */
 function applyPerfil() {
-  Object.entries(VIEWS).forEach(([id, v]) => {
+  /* Regra única: o menu é controlado pelas permissões carregadas de
+     permissoes/{perfil}. Não manter listas fixas de perfis aqui. */
+  Object.keys(VIEWS).forEach(id => {
     const btn = document.querySelector(`[data-v="${id}"]`);
-    if (!btn) return;
-    const ok = !v.perfil || v.perfil.includes(curPerfil);
-    btn.style.display = ok ? '' : 'none';
+    if (btn) btn.style.display = '';
   });
+  if (_permsLoaded) applyDynamicPermissions();
 }
 
 /* ══ LOGIN ══ */
@@ -730,24 +731,16 @@ document.getElementById('lc-email').addEventListener('keydown',e=>{if(e.key==='E
 function go(viewId, el) {
   const v = VIEWS[viewId];
   if (!v) return;
-  /* Verifica permissão hardcoded (VIEWS.perfil) */
-  if (v.perfil && !v.perfil.includes(curPerfil)) return;
-  /* Verifica permissão dinâmica do Firestore (ATLAS_PERMS), exceto admin */
+  /* Regra única: a navegação usa as permissões dinâmicas em permissoes/{perfil}. */
   if (curPerfil !== 'admin') {
-    const dynTelaMap = {
-      'pd-diario':'pd_diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
-      'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
-      'cpk':'cpk', 'config':'cadastros', 'download-base':'download_base'
-    };
-    const permKey = dynTelaMap[viewId];
+    const permKey = atlasPermKeyForView(viewId);
     if (permKey) {
-      // Permissões ainda não carregaram: guarda a navegação para depois
+      // Permissões ainda não carregaram: guarda a navegação para depois.
       if (!_permsLoaded) { _pendingNav = viewId; return; }
-      // Permissões carregadas: bloqueia se não autorizado
-      if (_dynamicPermsAvailable) {
-        const telas = ATLAS_PERMS.telas || {};
-        if (!telas[permKey]) return;
-      }
+      // Se não existe permissão carregada/fallback para este perfil, bloqueia.
+      if (!_dynamicPermsAvailable) return;
+      const telas = ATLAS_PERMS.telas || {};
+      if (!telas[permKey]) return;
     }
   }
 
@@ -1660,11 +1653,23 @@ function toast(msg,tp=''){
 let ATLAS_PERMS = {}; // Carregado do Firestore após login
 let _permsLoaded = false; // Flag: permissões do Firestore já foram carregadas
 let _pendingNav = null;   // View pendente enquanto permissões carregam
-let _dynamicPermsAvailable = false; // Evita mexer em perfis legados sem tela de permissões
+let _dynamicPermsAvailable = false; // Há regra dinâmica válida para o perfil atual
+
+function atlasViewPermMap() {
+  return {
+    'pd_diario':'pd-diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
+    'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
+    'cpk':'cpk', 'cadastros':'config', 'download_base':'download-base',
+    'permissoes':'config'
+  };
+}
+function atlasPermKeyForView(viewId) {
+  return Object.keys(atlasViewPermMap()).find(k => atlasViewPermMap()[k] === viewId) || null;
+}
 
 /* Fallback seguro: espelha os padrões da tela de Permissões.
    Se o Firestore não responder ou o documento do perfil não existir,
-   o portal não deve liberar telas por causa do VIEWS.perfil = null. */
+   o portal aplica apenas os perfis reais do sistema. */
 const ATLAS_DEFAULT_TELAS_BY_PROFILE = {
   motorista: {dashboard:true, ficha:true, checklist:true, abastecimento:true, documentos:true},
   lr:        {dashboard:true, pd_diario:true, financeiro:true, ficha:true, painel:true, compras:true, relatorios:true, cadastros:true},
@@ -1686,7 +1691,14 @@ async function loadPermissions() {
     if (snap.exists) {
       const saved = snap.data().permissoes || {};
       if (saved.telas && Object.keys(saved.telas).length > 0) {
-        ATLAS_PERMS = saved;
+        ATLAS_PERMS = {
+          telas: saved.telas || {},
+          cadastros: saved.cadastros || {},
+          acoes: saved.acoes || {},
+          botoes: saved.botoes || {},
+          abas: saved.abas || {},
+          filiais: saved.filiais || {}
+        };
         loaded = true;
       }
     }
@@ -1715,12 +1727,7 @@ function isLU(perfil) {
 
 function applyDynamicPermissions() {
   const telas = ATLAS_PERMS.telas || {};
-  const telaMap = {
-    'pd_diario':'pd-diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
-    'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
-    'cpk':'cpk', 'cadastros':'config', 'download_base':'download-base',
-    'permissoes':'config'
-  };
+  const telaMap = atlasViewPermMap();
 
   /* Esconde/mostra cada botao do menu com base nas permissoes do Firestore */
   Object.entries(telaMap).forEach(([permKey, viewId]) => {
@@ -1739,7 +1746,7 @@ function applyDynamicPermissions() {
     if (!currentAllowed) {
       document.querySelectorAll('.view').forEach(p => p.classList.remove('on'));
       document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('on'));
-      const viewOrder = ['inicio','ficha','checklist','dashboard','manutencao','painel','compras','cpk'];
+      const viewOrder = ['inicio','pd-diario','frota','financeiro','ficha','compras','manutencao','checklist','painel','cpk','config','download-base'];
       let navigated = false;
       for (const vid of viewOrder) {
         const pk = Object.keys(telaMap).find(k => telaMap[k] === vid);
