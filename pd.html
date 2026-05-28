@@ -1408,9 +1408,22 @@ function enrichSZC(recs){
 function calcDieselKPI(uid, mes, fatRealizado){
   if(!SZC_DATA.length && RAW_SZC.length) SZC_DATA = enrichSZC(RAW_SZC);
   const base = SZC_DATA.filter(r=>r.mes===mes && (uid==='all' || r.op===uid));
+
+  // Peso Diesel usa o custo total do diesel no período.
+  // As regras abaixo filtram apenas a composição do preço médio.
   const litros = base.reduce((a,r)=>a+r.litros,0);
   const valor  = base.reduce((a,r)=>a+r.valor,0);
-  const precoMedio = litros>0 ? valor/litros : 0;
+  const baseMediaQtd = base.filter(r=>r.litros>=50 && r.litros<=1200);
+  const baseMedia = baseMediaQtd.filter(function(r, _, arr){
+    if(arr.length<=1) return true;
+    const outrosLitros = arr.reduce((a,x)=>a+(x===r?0:x.litros),0);
+    const outrosValor  = arr.reduce((a,x)=>a+(x===r?0:(x.precoUnit*x.litros)),0);
+    const mediaOutros = outrosLitros>0 ? outrosValor/outrosLitros : 0;
+    return mediaOutros<=0 || r.precoUnit >= (mediaOutros*0.5);
+  });
+  const litrosMedia = baseMedia.reduce((a,r)=>a+r.litros,0);
+  const valorMedia  = baseMedia.reduce((a,r)=>a+(r.precoUnit*r.litros),0);
+  const precoMedio = litrosMedia>0 ? valorMedia/litrosMedia : 0;
   const pesoDiesel = fatRealizado>0 && valor>0 ? (valor/fatRealizado)*100 : 0;
   return {precoMedio, pesoDiesel, litros, valor, qtd:base.length};
 }
