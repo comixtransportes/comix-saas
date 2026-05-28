@@ -36,8 +36,12 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 .hero-grid{position:absolute;inset:0;opacity:.04;background-image:repeating-linear-gradient(0deg,#fff 0,#fff 1px,transparent 1px,transparent 30px),repeating-linear-gradient(90deg,#fff 0,#fff 1px,transparent 1px,transparent 30px)}
 /* Cavalo decorativo integrado ao hero — sem fundo, sem retângulo, baixa opacidade,
    filtro de blur sutil para virar textura ao invés de elemento destacado */
-.hero-horse{position:absolute;right:-30px;bottom:-30px;width:260px;height:260px;pointer-events:none;color:#4a9eff;opacity:.07;filter:blur(.3px);mix-blend-mode:screen}
-.hero-horse svg{width:100%;height:100%;display:block}
+/* Cavalo decorativo — ESTAMPA do sistema. Aparece à direita do hero (acima
+   da fileira de KPIs), com opacidade moderada para virar identidade visual
+   sem competir com a leitura. Em telas estreitas é ocultado. */
+.hero-horse{position:absolute;right:24px;top:8px;width:230px;height:auto;pointer-events:none;color:#4a9eff;opacity:.18;z-index:1}
+.hero-horse svg{width:100%;height:auto;display:block;filter:drop-shadow(0 2px 8px rgba(74,158,255,.15))}
+@media(max-width:1000px){ .hero-horse{display:none} }
 .hero-inner{position:relative;padding:18px 24px 16px;display:flex;align-items:center;gap:16px;max-width:72%}
 .hero-av{width:52px;height:52px;border-radius:50%;background:#152236;border:2px solid #2C4363;color:#63A8FF;font-size:16px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:var(--m);flex-shrink:0;position:relative;align-self:center}
 .hero-av::after{content:'';position:absolute;inset:-5px;border-radius:50%;border:1px solid rgba(99,168,255,.15)}
@@ -527,6 +531,22 @@ window.addEventListener('message', ev => {
 /* ── Navegação ── */
 function navTo(v){ try{ window.parent.go&&window.parent.go(v); }catch(_){} }
 
+/* Abre uma OS específica no Painel Geral da Manutenção.
+   Manda postMessage ao parent (index.html), que cuida de:
+   1) navegar para a aba Manutenção,
+   2) selecionar a sub-aba "Painel Geral" (gestao),
+   3) chamar openPanel(osId) para abrir o painel lateral da OS.
+   Como cada tela é um iframe, a comunicação obrigatoriamente passa pelo index. */
+function abrirOSNoPainel(osId){
+  if(!osId) return;
+  try{
+    window.parent.postMessage({type:'ATLAS_NAV_TO_OS', osId:String(osId)}, '*');
+  }catch(e){
+    // Fallback: ao menos abre a tela de Manutenção
+    navTo('manutencao');
+  }
+}
+
 /* ── Lê SZB usando a função do index.html (parent) ──
    Estratégia em cascata:
    1. window.parent.ATLAS_DATA.szb  — já em memória no index (mais rápido)
@@ -576,12 +596,10 @@ function pD(v){
 /* ── Render a partir dos dados SZB ── */
 function render(rows, ts){
   const hoje=new Date();
-  const ant=new Date(hoje); ant.setDate(hoje.getDate()-1);
   const m30=new Date(hoje); m30.setDate(hoje.getDate()-30);
   const DC=['Dt. Emissao','Dt Emissao','Data Emissao','data'];
 
   function gD(r){ for(const c of DC){ if(r[c]) return pD(r[c]); } return null; }
-  function isAnt(r){ const d=gD(r); return d&&d.getDate()===ant.getDate()&&d.getMonth()===ant.getMonth()&&d.getFullYear()===ant.getFullYear(); }
   function isCan(r){ return String(r['Dt Cancel']||r['Cancelada']||'').trim()!==''; }
   function gV(r){ return parseFloat(String(r['Valor Total']||r['valor_total']||0).replace(',','.'))||0; }
   function gP(r){ return String(r['Placa Veicul']||r['placa']||r['Placa']||'').trim().toUpperCase(); }
@@ -596,13 +614,37 @@ function render(rows, ts){
   function isSP(f){ return f==='03'||f==='3'||/\bSP\b|SAO PAULO|SÃO PAULO/.test(f); }
   /* Rótulo amigável da filial para exibição (ex: no ranking de cavalos parados) */
   function gFLabel(f){ if(isSC(f)) return 'SC'; if(isPR(f)) return 'PR'; if(isSP(f)) return 'SP'; return f||'—'; }
+  /* Chave ISO yyyy-mm-dd da data de uma linha, para agrupar por dia */
+  function dKey(d){ return d?`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`:''; }
 
-  const antRows = rows.filter(r=>isAnt(r)&&!isCan(r));
-  const sc=[],pr=[],sp=[];
-  antRows.forEach(r=>{ const f=gF(r); if(isSC(f)) sc.push(r); else if(isPR(f)) pr.push(r); else if(isSP(f)) sp.push(r); });
+  /* Pré-processa: anexa data parseada e filial a cada linha válida (não cancelada) */
+  const validRows = rows.filter(r=>!isCan(r)).map(r=>{ const d=gD(r); return d?{r,d,dk:dKey(d),f:gF(r),v:gV(r),p:gP(r),fr:gFr(r)}:null; }).filter(Boolean);
 
-  function calcFil(rs){ const fat=rs.reduce((a,r)=>a+gV(r),0),vgn=rs.length,tar=vgn?fat/vgn:0,du=Math.max(1,ant.getDate()*(5/7)); return {fat,vgn,tar,fdu:fat/du}; }
-  const CSC=calcFil(sc),CPR=calcFil(pr),CSP=calcFil(sp);
+  /* ── Dia de REFERÊNCIA = última data com movimento na base anterior a hoje
+     (mesma regra do pd.html: datasAntesHoje[last] || ultimaData).
+     Isso evita o bug de "ontem" do calendário não bater com a data da carga. ── */
+  const hojeKey = dKey(hoje);
+  const datasHist = [...new Set(validRows.map(x=>x.dk))].filter(Boolean).sort();
+  const datasAntesHoje = datasHist.filter(dk=>dk<hojeKey);
+  const refKey = datasAntesHoje[datasAntesHoje.length-1] || datasHist[datasHist.length-1] || '';
+  const refRows = validRows.filter(x=>x.dk===refKey);
+
+  /* Label amigável do dia de referência (dd/mm) */
+  let refLabel='ontem';
+  if(refKey){ const [a,m,d]=refKey.split('-'); refLabel=`${d}/${m}`; }
+
+  /* ── Agrupa as linhas do DIA DE REFERÊNCIA por filial ── */
+  const refSC=[],refPR=[],refSP=[];
+  refRows.forEach(x=>{ if(isSC(x.f)) refSC.push(x); else if(isPR(x.f)) refPR.push(x); else if(isSP(x.f)) refSP.push(x); });
+
+  function calcFil(xs){
+    const fat=xs.reduce((a,x)=>a+x.v,0), vgn=xs.length, tar=vgn?fat/vgn:0;
+    // dias úteis decorridos no mês do dia de referência (aprox. 5/7 dos dias corridos)
+    const dRef=refKey?parseInt(refKey.split('-')[2],10):new Date().getDate();
+    const du=Math.max(1, Math.round(dRef*(5/7)));
+    return {fat,vgn,tar,fdu:fat/du};
+  }
+  const CSC=calcFil(refSC),CPR=calcFil(refPR),CSP=calcFil(refSP);
   const fatTotal=CSC.fat+CPR.fat+CSP.fat;
 
   /* Timestamp da carga */
@@ -612,11 +654,11 @@ function render(rows, ts){
     tx('h-carga','↻ Última carga: '+hh+':'+mm);
   } else { tx('h-carga','↻ Carga disponível'); }
 
-  /* Hero KPIs */
-  tx('hv-fat',fmtR(fatTotal)); pw('hbar-fat','72%');
-  tx('hs-fat','ontem · todas as filiais');
+  /* Hero KPIs — faturamento */
+  tx('hv-fat',fmtR(fatTotal)); pw('hbar-fat', fatTotal>0?'72%':'0%');
+  tx('hs-fat', refKey?(refLabel+' · todas as filiais'):'sem movimento recente');
 
-  /* Viagens */
+  /* Viagens (referência) */
   const vgnT=CSC.vgn+CPR.vgn+CSP.vgn;
   tx('vgn-total',vgnT||'—'); tx('vgn-sc',CSC.vgn||'—'); tx('vgn-pr',CPR.vgn||'—'); tx('vgn-sp',CSP.vgn||'—');
   if(vgnT){ pw('vbar-sc',(CSC.vgn/vgnT*100)+'%'); pw('vbar-pr',(CPR.vgn/vgnT*100)+'%'); pw('vbar-sp',(CSP.vgn/vgnT*100)+'%'); }
@@ -628,23 +670,35 @@ function render(rows, ts){
   pw('tbar-sc',(CSC.tar/tMax*100)+'%'); pw('tbar-pr',(CPR.tar/tMax*100)+'%'); pw('tbar-sp',(CSP.tar/tMax*100)+'%');
   tx('fat-total',fmtR(fatTotal));
 
-  /* Filial helper */
+  /* Filial helper — KPIs do topo de cada card de filial */
   function applyFil(pfx, C){
     tx(pfx+'-fat',fmtR(C.fat)); tx(pfx+'-vgn',C.vgn||'—'); tx(pfx+'-tarifa',fmtT(C.tar));
     tx(pfx+'-fdu',fmtR(C.fdu)); tx(pfx+'-fdia',fmtR(C.fdu)+' fat/dia');
   }
   applyFil('sc',CSC); applyFil('pr',CPR); applyFil('sp',CSP);
 
-  /* Frota — placas únicas dos últimos 30 dias */
-  function placas30(rs){ return new Set(rs.filter(r=>{ if(isCan(r)) return false; const d=gD(r); return d&&d>=m30; }).map(r=>gP(r)).filter(Boolean)); }
-  const pAll=placas30(rows),pSC=placas30(sc),pPR=placas30(pr),pSP=placas30(sp);
+  /* ── Frota — placas únicas dos últimos 30 dias, agrupadas por filial ──
+     Importante: aqui usamos TODAS as linhas dos 30 dias (não só do dia de
+     referência), agrupando por filial pela própria linha. Era o bug anterior:
+     a frota era derivada das linhas "de ontem", que ficavam vazias. */
+  const rows30 = validRows.filter(x=>x.d>=m30);
+  function placasDe(xs){ return new Set(xs.map(x=>x.p).filter(Boolean)); }
+  const pAll=placasDe(rows30);
+  const r30SC=rows30.filter(x=>isSC(x.f)), r30PR=rows30.filter(x=>isPR(x.f)), r30SP=rows30.filter(x=>isSP(x.f));
+  const pSC=placasDe(r30SC), pPR=placasDe(r30PR), pSP=placasDe(r30SP);
   const totAll=pAll.size,totSC=pSC.size,totPR=pPR.size,totSP=pSP.size;
-  /* Assume taxa de operação baseada na atividade do dia anterior vs total */
-  function taxaOp(subRows,subPlacas){ const atv=new Set(subRows.map(r=>gP(r)).filter(Boolean)); return subPlacas.size?atv.size/subPlacas.size:0.87; }
-  const opAll=Math.round(totAll*0.87),opSC=Math.round(totSC*taxaOp(sc,pSC)),opPR=Math.round(totPR*taxaOp(pr,pPR)),opSP=Math.round(totSP*taxaOp(sp,pSP));
-  tx('hv-frota',opAll); tx('hs-frota',(totAll?Math.round(opAll/totAll*100):0)+'% da frota ativa'); pw('hbar-frota',(totAll?opAll/totAll*100:0)+'%');
 
-  function applyFrota(pfx,op,tot,barColor){
+  /* Taxa de operação: placas que rodaram no dia de referência ÷ placas dos 30 dias.
+     Se o dia de referência não tiver linhas da filial, usa 0.87 como estimativa. */
+  function taxaOp(refXs, base30){
+    const atv=new Set(refXs.map(x=>x.p).filter(Boolean));
+    return base30.size? Math.min(1, atv.size/base30.size) : 0.87;
+  }
+  const opAll=Math.round(totAll*(refRows.length? Math.min(1,new Set(refRows.map(x=>x.p).filter(Boolean)).size/(totAll||1)) :0.87));
+  const opSC=Math.round(totSC*taxaOp(refSC,pSC)),opPR=Math.round(totPR*taxaOp(refPR,pPR)),opSP=Math.round(totSP*taxaOp(refSP,pSP));
+  tx('hv-frota',opAll||'—'); tx('hs-frota',(totAll?Math.round(opAll/totAll*100):0)+'% da frota ativa'); pw('hbar-frota',(totAll?opAll/totAll*100:0)+'%');
+
+  function applyFrota(pfx,op,tot){
     const pctV=tot?Math.round(op/tot*100):0;
     const prop=Math.round(op*.6),agr=op-prop,totP=Math.round(tot*.6),totA=tot-totP;
     tx(pfx+'-fop',op); const el=$(pfx+'-ftot'); if(el) el.textContent='/'+tot;
@@ -653,15 +707,18 @@ function render(rows, ts){
   }
   applyFrota('sc',opSC,totSC); applyFrota('pr',opPR,totPR); applyFrota('sp',opSP,totSP);
 
-  /* Cavalos parados */
+  /* Footer das filiais: faturamento do dia de referência */
+  tx('sc-fdia',fmtR(CSC.fat)); tx('pr-fdia',fmtR(CPR.fat)); tx('sp-fdia',fmtR(CSP.fat));
+  const ffSC=$('badge-sc'),ffPR=$('badge-pr'),ffSP=$('badge-sp');
+  if(ffSC) ffSC.textContent = CSC.vgn? 'ativa':'sem mov.';
+  if(ffPR) ffPR.textContent = CPR.vgn? 'ativa':'sem mov.';
+  if(ffSP) ffSP.textContent = CSP.vgn? 'ativa':'sem mov.';
+
+  /* ── Cavalos parados — última viagem de cada placa vs hoje ── */
   const placaUlt={};
-  rows.filter(r=>!isCan(r)).forEach(r=>{
-    const p=gP(r); if(!p) return;
-    const d=gD(r); if(!d) return;
-    if(!placaUlt[p]||d>placaUlt[p].d) placaUlt[p]={d,r};
-  });
-  const ranking=Object.entries(placaUlt)
-    .map(([p,v])=>({placa:p,dias:Math.floor((hoje-v.d)/864e5),filial:gFLabel(gF(v.r)),frota:gFr(v.r)}))
+  validRows.forEach(x=>{ if(!x.p) return; if(!placaUlt[x.p]||x.d>placaUlt[x.p].d) placaUlt[x.p]=x; });
+  const ranking=Object.values(placaUlt)
+    .map(x=>({placa:x.p,dias:Math.floor((hoje-x.d)/864e5),filial:gFLabel(x.f),frota:x.fr}))
     .filter(x=>x.dias>0).sort((a,b)=>b.dias-a.dias).slice(0,5);
   const criticos=ranking.filter(x=>x.dias>=7).length;
   tx('badge-crit',criticos+' críticos'); tx('hv-par',criticos); pw('hbar-par',Math.min(100,criticos*20)+'%');
@@ -804,7 +861,7 @@ function renderAprovacoes(ordens){
     const vCls  = valor>1000?'v-rd':valor>=300?'v-am':'';
     const sub   = [serv, moeda(valor), [filial,quando].filter(Boolean).join(' · ')].filter(Boolean);
     return `
-    <div class="apr-row" onclick="navTo('manutencao')">
+    <div class="apr-row" onclick="abrirOSNoPainel('${escHtml(os.id)}')">
       <div class="apr-prio" style="background:${tag.pr}"></div>
       <span class="apr-tp ${tag.cls}">${tag.tl}</span>
       <div class="apr-inf">
