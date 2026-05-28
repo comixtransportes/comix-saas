@@ -622,7 +622,7 @@ const pollers = {};
 /* Módulos: src = arquivo a carregar, nav = função interna a chamar */
 const VIEWS = {
   'inicio':        {label:'Início',               chip:'VISÃO GERAL', cls:'',  src:'inicio.html',               nav:null,       perfil:null},
-  'pd-diario':     {label:'PD Diário',           chip:'FROTA',       cls:'',   src:'pd.html',                   nav:null,       perfil:null},
+  'pd-diario':     {label:'PD Diário',            chip:'FROTA',       cls:'',   src:'pd.html',                   nav:null,       perfil:null},
   'frota':         {label:'Frota',                chip:'OPERAÇÃO',    cls:'',   src:'frota.html',                nav:null,       perfil:null},
   'financeiro':    {label:'Financeiro',           chip:'FINANCEIRO',  cls:'gn', src:'financeiro.html',           nav:null,       perfil:null},
   'ficha':         {label:'Ficha Operacional',    chip:'MOBILE',      cls:'am', src:'ficha.html',                nav:null,       perfil:null},
@@ -655,29 +655,24 @@ auth.onAuthStateChanged(async user => {
   }
 });
 
-function showApp() {
+async function showApp() {
   document.getElementById('scr-login').classList.add('off');
   document.getElementById('scr-app').classList.remove('off');
   const e = curUser.email || '';
   document.getElementById('sb-av').textContent    = e.charAt(0).toUpperCase();
   document.getElementById('sb-email').textContent = e;
   document.getElementById('sb-role').textContent  = curPerfil;
+
+  // Carrega as permissões antes de renderizar/navegar para evitar menu visível sem clique funcional.
+  await loadPermissions();
   applyPerfil();
-  // Abre a view inicial antes das permissoes dinamicas carregarem (evita tela em branco)
-  // Sem hash específico no login → abre sempre a tela Início (visão geral da operação).
+
   const _initHash = location.hash.replace('#','');
   const _initView = _initHash && VIEWS[_initHash] ? _initHash : 'inicio';
   go(_initView);
-  // Carrega permissoes do Firestore e reaplica (applyDynamicPermissions cuida do redirecionamento)
-  loadPermissions();
-  /* Pré-carrega todas as bases sincronizadas (SZB, SE1, SE2, SE5) da nuvem.
-     Faz com que o PD e o Financeiro encontrem os dados prontos ao abrir,
-     mesmo quando o usuário não carregou nada nesta sessão. Não bloqueia. */
+
   try{ atlasPreloadAllBases(); }catch(_){}
-  /* Watchers em tempo real: quando alguém em qualquer lugar sobe uma base
-     nova pelo Download Base, esta sessão recebe e propaga aos iframes. */
   try{ atlasWatchAllBases(); }catch(_){}
-  /* view inicial tratada no .then() de loadPermissions() acima */
 }
 
 function showLogin() {
@@ -732,17 +727,7 @@ function go(viewId, el) {
   const v = VIEWS[viewId];
   if (!v) return;
   /* Regra única: a navegação usa as permissões dinâmicas em permissoes/{perfil}. */
-  if (curPerfil !== 'admin') {
-    const permKey = atlasPermKeyForView(viewId);
-    if (permKey) {
-      // Permissões ainda não carregaram: guarda a navegação para depois.
-      if (!_permsLoaded) { _pendingNav = viewId; return; }
-      // Se não existe permissão carregada/fallback para este perfil, bloqueia.
-      if (!_dynamicPermsAvailable) return;
-      const telas = ATLAS_PERMS.telas || {};
-      if (!telas[permKey]) return;
-    }
-  }
+  if (!atlasIsViewAllowed(viewId)) return;
 
   /* Ativa nav */
   document.querySelectorAll('.nav-item').forEach(b=>b.classList.remove('on'));
@@ -1657,27 +1642,51 @@ let _dynamicPermsAvailable = false; // Há regra dinâmica válida para o perfil
 
 function atlasViewPermMap() {
   return {
-    'pd_diario':'pd-diario', 'frota':'frota', 'financeiro':'financeiro', 'ficha':'ficha',
-    'compras':'compras', 'manutencao':'manutencao', 'checklist':'checklist', 'painel':'painel',
-    'cpk':'cpk', 'cadastros':'config', 'download_base':'download-base',
-    'permissoes':'config'
+    'inicio':'inicio',
+    'pd_diario':'pd-diario',
+    'frota':'frota',
+    'financeiro':'financeiro',
+    'ficha':'ficha',
+    'compras':'compras',
+    'manutencao':'manutencao',
+    'checklist':'checklist',
+    'painel':'painel',
+    'cpk':'cpk',
+    'cadastros':'config',
+    'permissoes':'config',
+    'gestao_atlas':'config',
+    'download_base':'download-base'
   };
 }
+function atlasPermKeysForView(viewId) {
+  const map = atlasViewPermMap();
+  return Object.keys(map).filter(k => map[k] === viewId);
+}
 function atlasPermKeyForView(viewId) {
-  return Object.keys(atlasViewPermMap()).find(k => atlasViewPermMap()[k] === viewId) || null;
+  const keys = atlasPermKeysForView(viewId);
+  return keys.length ? keys[0] : null;
+}
+function atlasIsViewAllowed(viewId) {
+  if (curPerfil === 'admin') return true;
+  const keys = atlasPermKeysForView(viewId);
+  if (!keys.length) return true;
+  if (!_permsLoaded) { _pendingNav = viewId; return false; }
+  if (!_dynamicPermsAvailable) return false;
+  const telas = ATLAS_PERMS.telas || {};
+  return keys.some(k => !!telas[k]);
 }
 
 /* Fallback seguro: espelha os padrões da tela de Permissões.
    Se o Firestore não responder ou o documento do perfil não existir,
    o portal aplica apenas os perfis reais do sistema. */
 const ATLAS_DEFAULT_TELAS_BY_PROFILE = {
-  motorista: {dashboard:true, ficha:true, checklist:true, abastecimento:true, documentos:true},
-  lr:        {dashboard:true, pd_diario:true, financeiro:true, ficha:true, painel:true, compras:true, relatorios:true, cadastros:true},
-  lm:        {dashboard:true, pd_diario:true, manutencao:true, pneus:true, checklist:true, documentos:true},
-  consulta:  {dashboard:true, pd_diario:true, ficha:true, relatorios:true},
-  lu_sc:     {dashboard:true, pd_diario:true, ficha:true, painel:true, checklist:true, abastecimento:true, cadastros:true},
-  lu_pr:     {dashboard:true, pd_diario:true, ficha:true, painel:true, checklist:true, abastecimento:true, cadastros:true},
-  lu_sp:     {dashboard:true, pd_diario:true, ficha:true, painel:true, checklist:true, abastecimento:true, cadastros:true},
+  motorista: {inicio:true, dashboard:true, ficha:true, painel:true, checklist:true, abastecimento:true, documentos:true},
+  lr:        {inicio:true, dashboard:true, pd_diario:true, financeiro:true, frota:true, ficha:true, painel:true, compras:true, relatorios:true, cadastros:true, cpk:true, checklist:true},
+  lm:        {inicio:true, dashboard:true, pd_diario:true, manutencao:true, pneus:true, checklist:true, documentos:true, frota:true},
+  consulta:  {inicio:true, dashboard:true, pd_diario:true, ficha:true, relatorios:true},
+  lu_sc:     {inicio:true, dashboard:true, pd_diario:true, ficha:true, painel:true, checklist:true, abastecimento:true, cadastros:true},
+  lu_pr:     {inicio:true, dashboard:true, pd_diario:true, ficha:true, painel:true, checklist:true, abastecimento:true, cadastros:true},
+  lu_sp:     {inicio:true, dashboard:true, pd_diario:true, ficha:true, painel:true, checklist:true, abastecimento:true, cadastros:true},
 };
 function atlasFallbackPermsFor(perfil) {
   const telas = ATLAS_DEFAULT_TELAS_BY_PROFILE[perfil];
@@ -1686,6 +1695,8 @@ function atlasFallbackPermsFor(perfil) {
 
 async function loadPermissions() {
   let loaded = false;
+  _permsLoaded = false;
+  _dynamicPermsAvailable = false;
   try {
     const snap = await db.collection('permissoes').doc(curPerfil).get();
     if (snap.exists) {
@@ -1713,11 +1724,8 @@ async function loadPermissions() {
   }
   if (!loaded) ATLAS_PERMS = {};
   _dynamicPermsAvailable = curPerfil !== 'admin' && loaded;
-
   _permsLoaded = true;
   applyDynamicPermissions();
-  // Se havia uma navegação pendente, tenta agora que as permissões estão prontas
-  if (_pendingNav) { const v = _pendingNav; _pendingNav = null; go(v); }
 }
 
 /* ── Helper: verifica se é tipo LU ── */
@@ -1728,34 +1736,35 @@ function isLU(perfil) {
 function applyDynamicPermissions() {
   const telas = ATLAS_PERMS.telas || {};
   const telaMap = atlasViewPermMap();
+  const viewIds = [...new Set(Object.values(telaMap))];
 
-  /* Esconde/mostra cada botao do menu com base nas permissoes do Firestore */
-  Object.entries(telaMap).forEach(([permKey, viewId]) => {
+  /* Esconde/mostra cada botão do menu com base nas permissões do Firestore. */
+  viewIds.forEach(viewId => {
     const btn = document.querySelector(`[data-v="${viewId}"]`);
     if (!btn) return;
     if (curPerfil === 'admin') { btn.style.display = ''; return; }
-    if (!_dynamicPermsAvailable) return;
-    btn.style.display = telas[permKey] ? '' : 'none';
+    if (!_dynamicPermsAvailable) { btn.style.display = 'none'; return; }
+    const keys = atlasPermKeysForView(viewId);
+    btn.style.display = keys.some(k => !!telas[k]) ? '' : 'none';
   });
 
-  /* Se a view ativa foi bloqueada, navega para a primeira permitida */
+  /* Se a view ativa foi bloqueada, navega para a primeira permitida. */
   if (curPerfil !== 'admin' && _dynamicPermsAvailable) {
-    const currentHash = location.hash.replace('#','');
-    const currentPermKey = Object.keys(telaMap).find(k => telaMap[k] === currentHash);
-    const currentAllowed = !currentPermKey || !!telas[currentPermKey];
+    const currentHash = location.hash.replace('#','') || 'inicio';
+    const currentKeys = atlasPermKeysForView(currentHash);
+    const currentAllowed = !currentKeys.length || currentKeys.some(k => !!telas[k]);
     if (!currentAllowed) {
       document.querySelectorAll('.view').forEach(p => p.classList.remove('on'));
       document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('on'));
       const viewOrder = ['inicio','pd-diario','frota','financeiro','ficha','compras','manutencao','checklist','painel','cpk','config','download-base'];
-      let navigated = false;
       for (const vid of viewOrder) {
-        const pk = Object.keys(telaMap).find(k => telaMap[k] === vid);
-        if ((!pk || telas[pk]) && VIEWS[vid]) {
+        const keys = atlasPermKeysForView(vid);
+        if ((!keys.length || keys.some(k => !!telas[k])) && VIEWS[vid]) {
           const btn = document.querySelector(`[data-v="${vid}"]`);
-          if (btn && btn.style.display !== 'none') { go(vid); navigated = true; break; }
+          if (btn && btn.style.display !== 'none') { go(vid); return; }
         }
       }
-      if (!navigated) location.hash = '';
+      location.hash = '';
     }
   }
 }
