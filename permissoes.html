@@ -209,6 +209,10 @@ html,body{height:100%;font-family:var(--f);color:var(--tx);font-size:13px;backgr
       <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
       Copiar de
     </button>
+    <button class="tb-btn" onclick="saveAllPermissions()" title="Regravar todos os perfis válidos no mesmo formato">
+      <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/></svg>
+      Padronizar Firebase
+    </button>
     <button class="tb-btn primary" onclick="openSaveConfirm()">
       <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
       Salvar (Ctrl+S)
@@ -512,6 +516,60 @@ const DEFAULTS = {
   lu_sp: JSON.parse(JSON.stringify(LU_TPL)),
 };
 
+const VALID_PROFILE_IDS = USER_TYPES.map(u => u.id);
+const OBSOLETE_PROFILE_IDS = ['gestor','comprador','financeiro'];
+
+function clonePlain(obj) {
+  return JSON.parse(JSON.stringify(obj || {}));
+}
+
+function deepMergePlain(base, extra) {
+  const out = clonePlain(base);
+  if (!extra || typeof extra !== 'object') return out;
+  Object.keys(extra).forEach(k => {
+    const v = extra[k];
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out[k] = deepMergePlain(out[k] || {}, v);
+    } else if (v !== undefined) {
+      out[k] = v;
+    }
+  });
+  return out;
+}
+
+function filterByAllowedKeys(obj, allowedKeys) {
+  const src = obj || {};
+  const out = {};
+  allowedKeys.forEach(k => {
+    if (Object.prototype.hasOwnProperty.call(src, k)) out[k] = !!src[k];
+  });
+  return out;
+}
+
+function normalizePermissions(profileId, source) {
+  const base = DEFAULTS[profileId] || {telas:{},cadastros:{},acoes:{},botoes:{},filiais:{}};
+  const merged = deepMergePlain(base, source || {});
+  const normalized = {
+    telas:     filterByAllowedKeys(merged.telas,     SECTIONS.telas.items.map(i => i.id)),
+    cadastros: filterByAllowedKeys(merged.cadastros, SECTIONS.cadastros.items.map(i => i.id)),
+    acoes:     filterByAllowedKeys(merged.acoes,     SECTIONS.acoes.items.map(i => i.id)),
+    botoes:    filterByAllowedKeys(merged.botoes,    SECTIONS.botoes.items.map(i => i.id)),
+    filiais:   clonePlain(merged.filiais || {}),
+    abas:      clonePlain(merged.abas || {})
+  };
+  return normalized;
+}
+
+function buildPermissionPayload(profileId) {
+  return {
+    tipo: profileId,
+    permissoes: normalizePermissions(profileId, perms[profileId]),
+    atualizadoEm: new Date().toISOString(),
+    atualizadoPor: getUser(),
+    schema: 'atlas-permissoes-v1'
+  };
+}
+
 /* ── State ── */
 let sel       = 'admin';
 let perms     = {};
@@ -552,11 +610,11 @@ function toFirestorePlain(obj) {
 }
 
 /* ══ INIT ══ */
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   USER_TYPES.forEach(ut => {
-    perms[ut.id] = JSON.parse(JSON.stringify(DEFAULTS[ut.id] || {telas:{},cadastros:{},acoes:{},botoes:{},filiais:{}}));
+    perms[ut.id] = normalizePermissions(ut.id, DEFAULTS[ut.id] || {telas:{},cadastros:{},acoes:{},botoes:{},filiais:{}});
   });
-  loadStorage();
+  await loadStorage();
   renderProfileBar();
   selectType('admin');
   loadFiliais();       // auto-pull filiais do sistema
@@ -966,14 +1024,39 @@ function openSaveConfirm() {
 async function savePermissions() {
   closeModal('modal-save');
   try {
-    const payload = {tipo:sel, permissoes:perms[sel], atualizadoEm:new Date().toISOString(), atualizadoPor:getUser()};
-    if (fsdb) await fsdb.collection('permissoes').doc(sel).set(toFirestorePlain(payload), toFirestorePlain({merge:true}));
+    if (!VALID_PROFILE_IDS.includes(sel)) throw new Error('Perfil inválido.');
+    const payload = buildPermissionPayload(sel);
+    perms[sel] = payload.permissoes;
+    if (fsdb) await fsdb.collection('permissoes').doc(sel).set(toFirestorePlain(payload), {merge:true});
     else localStorage.setItem(`perm_${sel}`, JSON.stringify(payload));
     addLog('sistema','SALVO',true);
-    showToast(`Permissões de "${USER_TYPES.find(u=>u.id===sel)?.label||sel}" salvas!`,'gn');
+    showToast(`Permissões de "${USER_TYPES.find(u=>u.id===sel)?.label||sel}" salvas em permissoes/${sel}.`,'gn');
     try { window.parent.postMessage({type:'PERM_UPDATED',tipo:sel,permissoes:perms[sel]},'*'); } catch(e){}
   } catch(err) {
     showToast('Erro ao salvar: '+(err.message||'verifique a conexão.'),'rd');
+  }
+}
+
+async function saveAllPermissions() {
+  if (!confirm('Padronizar permissões no Firebase para todos os perfis válidos?\n\nPerfis gravados: '+VALID_PROFILE_IDS.join(', ')+'\nPerfis obsoletos ignorados: '+OBSOLETE_PROFILE_IDS.join(', '))) return;
+  try {
+    const batch = fsdb ? fsdb.batch() : null;
+    VALID_PROFILE_IDS.forEach(profileId => {
+      const payload = buildPermissionPayload(profileId);
+      perms[profileId] = payload.permissoes;
+      if (batch) {
+        batch.set(fsdb.collection('permissoes').doc(profileId), toFirestorePlain(payload), {merge:true});
+      } else {
+        localStorage.setItem(`perm_${profileId}`, JSON.stringify(payload));
+      }
+    });
+    if (batch) await batch.commit();
+    updateAllCounts();
+    showToast('Firebase padronizado para os perfis válidos. Perfis obsoletos foram ignorados.','gn');
+    try { window.parent.postMessage({type:'PERM_UPDATED',tipo:'ALL',perfis:VALID_PROFILE_IDS},'*'); } catch(e){}
+    addLog('sistema','PADRONIZAÇÃO FIREBASE',true);
+  } catch(err) {
+    showToast('Erro ao padronizar: '+(err.message||'verifique a conexão.'),'rd');
   }
 }
 
@@ -983,7 +1066,9 @@ async function loadStorage() {
     try {
       const snap = await fsdb.collection('permissoes').get();
       snap.forEach(doc => {
-        if (doc.data().permissoes && perms[doc.id]) perms[doc.id] = {...perms[doc.id],...doc.data().permissoes};
+        if (!VALID_PROFILE_IDS.includes(doc.id)) return;
+        const data = doc.data() || {};
+        if (data.permissoes) perms[doc.id] = normalizePermissions(doc.id, data.permissoes);
       });
       updateAllCounts();
     } catch(e){}
@@ -992,7 +1077,10 @@ async function loadStorage() {
   USER_TYPES.forEach(ut => {
     try {
       const s = localStorage.getItem(`perm_${ut.id}`);
-      if (s) { const p=JSON.parse(s); if (p.permissoes) perms[ut.id]={...perms[ut.id],...p.permissoes}; }
+      if (s) {
+        const p = JSON.parse(s);
+        if (p.permissoes) perms[ut.id] = normalizePermissions(ut.id, p.permissoes);
+      }
     } catch(e){}
   });
 }
@@ -1018,7 +1106,7 @@ function executeCopy() {
       if (fil && !isFilialPermitida(fil,ut)) delete copied.filiais[fid];
     });
   }
-  perms[sel] = copied;
+  perms[sel] = normalizePermissions(sel, copied);
   closeModal('modal-copy');
   renderActivePanel();
   updateAllCounts();
