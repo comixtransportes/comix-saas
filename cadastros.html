@@ -545,7 +545,12 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       </div>
       <div class="card">
         <div class="card-hdr"><div class="card-ico" style="background:var(--green-l);color:var(--green)">📋</div><h2>Usuários cadastrados</h2></div>
-        <div class="card-body"><div class="cfg-list" id="cfg_user_list"><div class="loading-state">Carregando usuários...</div></div></div>
+        <div class="card-body">
+          <div class="fr">
+            <div class="f"><label>Pesquisar usuário</label><input id="cfg_user_search" placeholder="Digite qualquer dado do usuário" oninput="cfgRenderUsuarios()"></div>
+          </div>
+          <div class="cfg-list" id="cfg_user_list"><div class="loading-state">Carregando usuários...</div></div>
+        </div>
       </div>
     </section>
 
@@ -1739,6 +1744,15 @@ async function cfgRefreshUsuarios() {
   cfgCache.usuarios = (await cfgList("usuarios")).map(cfgNormalizeUsuario).sort((a,b)=>cfgSortByName(a,b,"email"));
   cfgRenderUsuarios();
 }
+function cfgNormalizeUserSearch(value) {
+  return String(value || "").toLocaleLowerCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+function cfgUserSearchText(u) {
+  const bloqueado = u.bloqueado === true || u.status === "bloqueado";
+  const perfil = u.perfil || u.tipo || "motorista";
+  const status = bloqueado ? "bloqueado inativo" : "ativo";
+  return cfgNormalizeUserSearch([...Object.values(u || {}), perfil, status].join(" "));
+}
 function cfgRenderUsuarios() {
   const list = document.getElementById("cfg_user_list");
   if (!list) return;
@@ -1746,7 +1760,13 @@ function cfgRenderUsuarios() {
     list.innerHTML = '<div class="cfg-empty">Nenhum usuário cadastrado.</div>';
     return;
   }
-  list.innerHTML = cfgCache.usuarios.map(u => {
+  const search = cfgNormalizeUserSearch(cfgVal("cfg_user_search"));
+  const usuarios = search ? cfgCache.usuarios.filter(u => cfgUserSearchText(u).includes(search)) : cfgCache.usuarios;
+  if (!usuarios.length) {
+    list.innerHTML = '<div class="cfg-empty">Nenhum usuário encontrado para a pesquisa.</div>';
+    return;
+  }
+  list.innerHTML = usuarios.map(u => {
     const bloqueado = u.bloqueado === true || u.status === "bloqueado";
     const perfil = u.perfil || u.tipo || "motorista";
     return `<div class="cfg-list-item">
