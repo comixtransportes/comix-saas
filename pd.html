@@ -948,9 +948,124 @@ let PARAMS = {
   frBase: 'ritmo'
 };
 
+
 let RAW=[], DATA=[];
 let RAW_SZC=[], SZC_DATA=[];
 const CHS={};
+
+/* ── Escopo de filial recebido do Atlas ─────────────────────
+   O PD Diário deve montar todos os cards, gráficos, tabelas e IA apenas
+   com a(s) filial(is) ativa(s) no perfil logado. */
+const ATLAS_PD_ALL_OPS = ['17','18','03'];
+const ATLAS_PD_PROFILE_OPS = { lu_sc:['17'], lu_pr:['18'], lu_sp:['03'] };
+let ATLAS_PD_SCOPE = { perfil:'', isAdmin:false, filiais:{}, filiaisAtivas:[], pdOps:null };
+
+function pdNormText(v) {
+  return String(v == null ? '' : v)
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toUpperCase().trim();
+}
+function pdUnique(arr) { return [...new Set((arr || []).filter(Boolean))]; }
+function pdOpFromValue(v) {
+  const s = pdNormText(v);
+  if (!s) return null;
+  if (/^0?3$/.test(s) || /\bSP\b/.test(s) || /SAO PAULO/.test(s)) return '03';
+  if (/^17$/.test(s) || /\bSC\b/.test(s) || /SANTA CATARINA/.test(s)) return '17';
+  if (/^18$/.test(s) || /\bPR\b/.test(s) || /PARANA/.test(s)) return '18';
+  return null;
+}
+function pdScopeFromMessage(msg) {
+  const src = (msg && (msg.scope || msg.permissoes || msg)) || {};
+  const perfil = src.perfil || msg.perfil || ATLAS_PD_SCOPE.perfil || '';
+  const filiais = src.filiais || msg.filiais || ATLAS_PD_SCOPE.filiais || {};
+  const filiaisAtivas = Array.isArray(src.filiaisAtivas) ? src.filiaisAtivas :
+    (Array.isArray(msg.filiaisAtivas) ? msg.filiaisAtivas : Object.keys(filiais || {}).filter(k => !!filiais[k]));
+  let pdOps = Array.isArray(src.pdOps) ? src.pdOps : (Array.isArray(msg.pdOps) ? msg.pdOps : null);
+  if (pdOps) pdOps = pdUnique(pdOps.map(pdOpFromValue).filter(Boolean));
+  if ((!pdOps || !pdOps.length) && /^lu_(sc|pr|sp)$/i.test(perfil || '')) {
+    pdOps = ATLAS_PD_PROFILE_OPS[String(perfil).toLowerCase()] || [];
+  }
+  const isAdmin = !!src.isAdmin || perfil === 'admin';
+  return { perfil, isAdmin, filiais, filiaisAtivas, pdOps: isAdmin ? null : pdOps };
+}
+function setAtlasPDScope(msg) {
+  const next = pdScopeFromMessage(msg || {});
+  const before = JSON.stringify(ATLAS_PD_SCOPE || {});
+  ATLAS_PD_SCOPE = next;
+  configureUnitSelectForScope();
+  if (JSON.stringify(ATLAS_PD_SCOPE || {}) !== before && DATA.length) {
+    try { fullRebuild(); } catch(e) { console.warn('[PD Diário] rebuild por escopo:', e.message); }
+  }
+}
+function pdAllowedOps() {
+  if (!ATLAS_PD_SCOPE || ATLAS_PD_SCOPE.isAdmin) return null;
+  if (Array.isArray(ATLAS_PD_SCOPE.pdOps)) return ATLAS_PD_SCOPE.pdOps;
+  const perfil = String(ATLAS_PD_SCOPE.perfil || '').toLowerCase();
+  return ATLAS_PD_PROFILE_OPS[perfil] || null;
+}
+function pdOpsForAll() {
+  const ops = pdAllowedOps();
+  return Array.isArray(ops) && ops.length ? ops : ATLAS_PD_ALL_OPS;
+}
+function pdRowOp(row) {
+  if (!row || typeof row !== 'object') return null;
+  return pdOpFromValue(row['Operacao']) ||
+         pdOpFromValue(row['Filial']) ||
+         pdOpFromValue(row['Filial de In']) ||
+         pdOpFromValue(row['Filial incl']) ||
+         pdOpFromValue(row['Unidade']) ||
+         null;
+}
+function atlasFilterRowsForScope(rows, table) {
+  const id = String(table || 'szb').toLowerCase();
+  if (id !== 'szb' && id !== 'szc') return rows || [];
+  const ops = pdAllowedOps();
+  if (!Array.isArray(ops)) return rows || [];
+  const allowed = new Set(ops);
+  return (rows || []).filter(r => allowed.has(pdRowOp(r)));
+}
+function pdBranchLabel(op) {
+  return op === '17' ? 'SC' : op === '18' ? 'PR' : op === '03' ? 'SP' : op;
+}
+function configureUnitSelectForScope() {
+  const sel = document.getElementById('su');
+  if (!sel) return;
+  const ops = pdAllowedOps();
+  if (!Array.isArray(ops)) return; // mantém seleção completa para admin/sem escopo
+  const allowed = pdUnique(ops).filter(op => ATLAS_PD_ALL_OPS.includes(op));
+  const previous = sel.value;
+  sel.innerHTML = '';
+  if (!allowed.length) {
+    const opt = document.createElement('option');
+    opt.value = 'all'; opt.textContent = 'Sem filial ativa';
+    sel.appendChild(opt);
+    sel.value = 'all';
+    return;
+  }
+  allowed.forEach(op => {
+    const opt = document.createElement('option');
+    opt.value = op;
+    opt.textContent = pdBranchLabel(op);
+    sel.appendChild(opt);
+  });
+  if (allowed.length > 1) {
+    const opt = document.createElement('option');
+    opt.value = 'all';
+    opt.textContent = 'Todas permitidas';
+    sel.appendChild(opt);
+  }
+  sel.value = allowed.includes(previous) || (allowed.length > 1 && previous === 'all') ? previous : (allowed.length === 1 ? allowed[0] : 'all');
+}
+window.addEventListener('message', function(event) {
+  const d = event.data || {};
+  if (d.type === 'ATLAS_USER' || d.type === 'ATLAS_TAB_PERMS') setAtlasPDScope(d);
+  if (d.type === 'ATLAS_DATA_READY' && d.scope) setAtlasPDScope(d.scope);
+});
+try {
+  if (window.parent && window.parent !== window) {
+    setTimeout(function(){ window.parent.postMessage({type:'ATLAS_REQUEST_TAB_PERMS'}, '*'); }, 50);
+  }
+} catch(e) {}
 
 // ═══════════════════════════════════════════════════════
 // LOADING OVERLAY
@@ -1215,7 +1330,7 @@ async function loadDataFromCloud() {
       const fs = await loadSZBFromFirestore();
       if (fs && Array.isArray(fs.rows) && fs.rows.length > 0) {
         ldSet(78, 'Enriquecendo registros…');
-        RAW = fs.rows;
+        RAW = atlasFilterRowsForScope(fs.rows, 'szb');
         const dzH = document.getElementById('dz-h');
         if (dzH) dzH.textContent = '✓ Nuvem (Firestore) — ' + RAW.length + ' registros';
         const dz = document.getElementById('dz');
@@ -1246,7 +1361,7 @@ async function loadDataFromCloud() {
     const data = await resp.json();
     if (data && Array.isArray(data) && data.length > 0) {
       ldSet(85, 'Montando dashboard…');
-      RAW = data;
+      RAW = atlasFilterRowsForScope(data, 'szb');
       const dzH = document.getElementById('dz-h');
       if (dzH) dzH.textContent = '✓ Nuvem (legacy) — ' + RAW.length + ' registros';
       const dz = document.getElementById('dz');
@@ -1655,7 +1770,8 @@ async function buildDash(){
 // FULL REBUILD
 // ═══════════════════════════════════════════════════════
 function fullRebuild(){
-  DATA=enrich(RAW);
+  configureUnitSelectForScope();
+  DATA=enrich(atlasFilterRowsForScope(RAW, 'szb'));
   _clearFopCache();
   const meses=[...new Set(DATA.map(r=>r.mes))].filter(Boolean).sort();
   const smEl=document.getElementById('sm');
@@ -1732,7 +1848,7 @@ function buildVG(uid, mes){
   const mkp =dm.reduce((a,r)=>a+r.mkp,0)/(dm.length||1);
 
   // PA: por unidade ou soma
-  const unids=uid==='all'?['17','18','03']:[uid];
+  const unids=uid==='all'?pdOpsForAll():[uid];
   const paFat =unids.reduce((a,u)=>a+(PARAMS.pa[u]||{fat:0}).fat, 0);
   const paProd=unids.reduce((a,u)=>a+(PARAMS.pa[u]||{prod:0}).prod,0);
   // TM da PA: se filial única usa o valor da PA; se todas usa média ponderada
@@ -2645,7 +2761,7 @@ document.addEventListener('click', e=>{
 // HISTÓRICO
 // ═══════════════════════════════════════════════════════
 function buildHi(meses,uid){
-  const unids=uid==='all'?['17','18','03']:[uid];
+  const unids=uid==='all'?pdOpsForAll():[uid];
   const paFatM=unids.reduce((a,u)=>a+(PARAMS.pa[u]||{fat:0}).fat,0);
   const bm=grp(filterByOp(uid),r=>r.mes);
   const fats=meses.map(m=>(bm[m]||[]).reduce((a,r)=>a+r.fat,0));
@@ -2936,7 +3052,7 @@ function buildDataSummary(uid, mes) {
   const stdFat = Math.sqrt(fds.reduce((a,v)=>a+(v-avgFat)**2,0)/(fds.length||1));
 
   // ── PA ──
-  const unids  = uid==='all'?['17','18','03']:[uid];
+  const unids  = uid==='all'?pdOpsForAll():[uid];
   const paFat  = unids.reduce((a,u)=>a+(PARAMS.pa[u]||{fat:0}).fat,0);
   const paProd = unids.reduce((a,u)=>a+(PARAMS.pa[u]||{prod:0}).prod,0);
   const paTM   = uid==='all' ? unids.reduce((a,u)=>a+(PARAMS.pa[u]||{tm:0}).tm,0)/unids.length : (PARAMS.pa[uid]||{tm:0}).tm;
@@ -3616,17 +3732,16 @@ function normalizeAtlasSZCRows(rows) {
 }
 
 function atlasParentSZC() {
-  try {
-    if (!window.parent || window.parent === window) return null;
-    var d = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szc;
-    if (d && Array.isArray(d.rows) && d.rows.length) return d;
-  } catch(e) {}
+  // Segurança funcional: dentro do Atlas o PD não lê mais window.parent.ATLAS_DATA diretamente.
+  // Ele solicita a base ao portal e recebe o payload já limitado pela filial ativa do perfil.
   return null;
 }
 
 function applyAtlasSZC(parentData, origem) {
   if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
+  if (parentData.scope) setAtlasPDScope(parentData.scope);
   var rows = normalizeAtlasSZCRows(parentData.rows);
+  rows = atlasFilterRowsForScope(rows, 'szc');
   if (!rows.length) return false;
   RAW_SZC = rows;
   SZC_DATA = enrichSZC(RAW_SZC);
@@ -3650,11 +3765,8 @@ function requestAtlasSZC() {
 }
 
 function atlasParentSZB() {
-  try {
-    if (!window.parent || window.parent === window) return null;
-    var d = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
-    if (d && Array.isArray(d.rows) && d.rows.length) return d;
-  } catch(e) {}
+  // Segurança funcional: dentro do Atlas o PD não lê mais window.parent.ATLAS_DATA diretamente.
+  // Ele solicita a base ao portal e recebe o payload já limitado pela filial ativa do perfil.
   return null;
 }
 
@@ -3681,7 +3793,9 @@ function setAtlasSyncMsg(txt, ok) {
 
 function applyAtlasSZB(parentData, origem) {
   if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
+  if (parentData.scope) setAtlasPDScope(parentData.scope);
   var rows = normalizeAtlasSZBRows(parentData.rows);
+  rows = atlasFilterRowsForScope(rows, 'szb');
   if (!rows.length) return false;
 
   // Mesmo contrato usado após parseXLSM(file): RAW recebe registros; DATA é recriado por fullRebuild/enrich.
@@ -3770,6 +3884,7 @@ window.addEventListener('message', function(event) {
   var d = event.data || {};
   if (d.table && d.table !== 'szb' && d.table !== 'szc') return;
   if (d.type === 'ATLAS_DATA_RESPONSE' && d.payload) {
+    if (d.scope) setAtlasPDScope(d.scope);
     if (d.table === 'szc') applyAtlasSZC(d.payload, 'Download Base SZC');
     else applyAtlasSZB(d.payload, 'Download Base');
     return;
