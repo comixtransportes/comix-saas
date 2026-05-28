@@ -2554,11 +2554,27 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
     }
   });
 
+  // Sempre exibe também a última data de emissão registrada no período,
+  // mesmo quando ela não representa uma nova variação de tarifa.
+  const ultimaEmissao=serieDiaria[serieDiaria.length-1]||null;
+  if(ultimaEmissao && alteracoes.length){
+    const ultimoPlotado=alteracoes[alteracoes.length-1];
+    if(ultimoPlotado.data!==ultimaEmissao.data){
+      alteracoes.push({...ultimaEmissao,tipo:'ultima',diff:0,diffPct:0});
+    }
+  }
+
+  const fmtDataTarifa=(iso)=>{
+    const[a,m,d]=(iso||'').split('-');
+    return a&&m&&d?`${d}/${m}/${a}`:'';
+  };
+
   const ct=document.getElementById('ct-tariva');
   const rotaLabel=`${remNome.slice(0,18)} → ${dstNome.slice(0,18)} (${frt})`;
   if(ct){
-    const qtd=Math.max(alteracoes.length-1,0);
-    ct.textContent=`Histórico de Variação de Tarifa — ${rotaLabel} | ${qtd} alteração(ões) após 01/01/2025`;
+    const qtd=alteracoes.filter(p=>p.tipo==='alta'||p.tipo==='queda').length;
+    const ultTxt=ultimaEmissao?` | última emissão: ${fmtDataTarifa(ultimaEmissao.data)}`:'';
+    ct.textContent=`Histórico de Variação de Tarifa — ${rotaLabel} | ${qtd} alteração(ões) após 01/01/2025${ultTxt}`;
   }
 
   if(!alteracoes.length){
@@ -2571,8 +2587,8 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
     return `${d}/${m}/${a.slice(2)}`;
   });
   const valores=alteracoes.map(p=>p.tarifa);
-  const cores=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,1)':p.tipo==='queda'?'rgba(200,30,30,1)':'rgba(26,86,219,1)');
-  const bg=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,.12)':p.tipo==='queda'?'rgba(200,30,30,.12)':'rgba(26,86,219,.12)');
+  const cores=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,1)':p.tipo==='queda'?'rgba(200,30,30,1)':p.tipo==='ultima'?'rgba(146,64,14,1)':'rgba(26,86,219,1)');
+  const bg=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,.12)':p.tipo==='queda'?'rgba(200,30,30,.12)':p.tipo==='ultima'?'rgba(146,64,14,.12)':'rgba(26,86,219,.12)');
 
   mkC('c-tv','line',labels,[{
     label:'Tarifa R$/t',
@@ -2598,9 +2614,11 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
             label:ctx=>{
               const p=alteracoes[ctx.dataIndex];
               const partes=[`Tarifa: R$ ${D2(p.tarifa)}/t`];
-              if(p.tipo!=='base'){
+              if(p.tipo==='alta'||p.tipo==='queda'){
                 const sinal=p.diff>0?'+':'';
                 partes.push(`Variação: ${sinal}R$ ${D2(p.diff)} (${sinal}${Pct(p.diffPct||0)})`);
+              }else if(p.tipo==='ultima'){
+                partes.push('Última emissão registrada no período');
               }else{
                 partes.push('Primeiro valor no período');
               }
@@ -2612,12 +2630,13 @@ function showTarivaHist(remNome,dstNome,frt,orig,ufo,dest,ufd){
           display:true,
           align:'top',
           anchor:'end',
+          offset:4,
+          clip:false,
           color:CT,
           font:{size:9,weight:'600'},
           formatter:(v,ctx)=>{
             const p=alteracoes[ctx.dataIndex];
-            if(!p||p.tipo==='base') return 'Base';
-            return p.tipo==='alta'?'Alta':'Queda';
+            return p?fmtDataTarifa(p.data):'';
           }
         }
       },
