@@ -2085,6 +2085,29 @@ window.addEventListener('message', function(ev) {
   if (ev.data.type === 'ATLAS_NAV' && ev.data.view) {
     goTo(ev.data.view, null);
   }
+  /* A tela Início pede para abrir uma OS específica no Painel Geral.
+     Faz: troca para a aba "gestao" (Painel Geral) e chama openPanel(osId).
+     Como o OS_DB pode não estar carregado ainda no primeiro acesso, faz retry
+     curto antes de desistir e mostrar toast. */
+  if (ev.data.type === 'ATLAS_OPEN_OS' && ev.data.osId) {
+    const osId = String(ev.data.osId);
+    const tentar = (n) => {
+      const pronto = typeof OS_DB === 'object' && OS_DB[osId];
+      if (pronto) {
+        if (typeof goTo === 'function') goTo('gestao', null);
+        // pequeno delay para a aba renderizar antes de abrir o painel lateral
+        setTimeout(() => { try { openPanel(osId); } catch(_){} }, 220);
+        return;
+      }
+      if (n > 25) { // ~7.5s
+        if (typeof goTo === 'function') goTo('gestao', null);
+        if (typeof toast === 'function') toast('OS '+osId+' não encontrada na base atual.', 'am');
+        return;
+      }
+      setTimeout(() => tentar(n+1), 300);
+    };
+    tentar(0);
+  }
 });
 
 // Pede permissões ao carregar
