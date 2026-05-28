@@ -1998,6 +1998,35 @@ window.addEventListener('message', function(ev) {
     });
     if (fid) sendTabPermsToFrame(fid);
   }
+  /* Tela Início pede para abrir uma OS específica no Painel Geral da Manutenção.
+     Fluxo: navega para Manutenção, aguarda o iframe estar pronto, depois envia
+     ATLAS_OPEN_OS para o módulo de manutenção, que muda para a aba "gestao"
+     (Painel Geral) e chama openPanel(osId). */
+  if (ev.data.type === 'ATLAS_NAV_TO_OS' && ev.data.osId) {
+    const osId = String(ev.data.osId);
+    const fr = document.getElementById('fr-manutencao');
+    const jaCarregada = frFlags['manutencao'] === 'done';
+
+    // 1) navega para a tela de Manutenção (respeita permissões via go())
+    go('manutencao');
+
+    // 2) envia o pedido de abrir OS — espera o iframe estar pronto
+    function enviarPedido(){
+      try { fr && fr.contentWindow && fr.contentWindow.postMessage({type:'ATLAS_OPEN_OS', osId:osId},'*'); } catch(_){}
+    }
+    if (jaCarregada) {
+      // iframe já estava carregado: dá um respiro para o go() ativar a view e envia
+      setTimeout(enviarPedido, 120);
+    } else {
+      // primeira carga: espera o iframe terminar (load + 600ms para garantir bind do listener)
+      const tryUntilReady = (n) => {
+        if (frFlags['manutencao'] === 'done') { setTimeout(enviarPedido, 600); return; }
+        if (n > 30) return; // ~9s no total
+        setTimeout(() => tryUntilReady(n+1), 300);
+      };
+      tryUntilReady(0);
+    }
+  }
 });
 </script>
 </body>
