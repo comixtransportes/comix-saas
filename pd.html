@@ -932,7 +932,7 @@ html{ -webkit-text-size-adjust:100%; }
           <div class="antt-calc-field"><label>Distância ida</label><input id="antt-calc-ida" type="number" step="0.01" value="0" oninput="updateAnttCalc()"></div>
           <div class="antt-calc-field"><label>Distância volta</label><input id="antt-calc-volta" type="number" step="0.01" value="0" oninput="updateAnttCalc()"></div>
           <div class="antt-calc-field"><label>N° eixos</label><select id="antt-calc-eixos" onchange="updateAnttCalc()"><option>5</option><option>6</option><option selected>7</option><option>9</option></select></div>
-          <div class="antt-calc-field"><label>Retorna vazio</label><select id="antt-calc-ret" onchange="updateAnttCalc()"><option value="sim">Sim</option><option value="nao">Não</option></select></div>
+          <div class="antt-calc-field"><label>Retorna vazio</label><select id="antt-calc-ret" onchange="updateAnttCalc()"><option value="nao" selected>Não</option><option value="sim">Sim</option></select></div>
           <div class="antt-calc-field"><label>Alto desemp.</label><select id="antt-calc-alto" onchange="updateAnttCalc()"><option value="nao">Não</option><option value="sim">Sim</option></select></div>
           <div class="antt-calc-field"><label>Frete mínimo</label><div class="antt-result" id="antt-calc-res">R$ 0,00</div></div>
         </div>
@@ -1853,13 +1853,21 @@ function getSZYByRota(rota, filial){
 
 let TA_CFG={};
 try{ TA_CFG=JSON.parse(localStorage.getItem('PD_TARIFA_CFG')||'{}')||{}; }catch(_){ TA_CFG={}; }
+// Ajuste Atlas: por padrão, todas as linhas da coluna Retorna Vazio devem iniciar como "Não".
+// Também neutraliza configurações antigas salvas no navegador que tenham ficado como "Sim".
+try{
+  Object.keys(TA_CFG||{}).forEach(k=>{
+    if(TA_CFG[k] && Object.prototype.hasOwnProperty.call(TA_CFG[k],'retornaVazio')) TA_CFG[k].retornaVazio='nao';
+  });
+  localStorage.setItem('PD_TARIFA_CFG', JSON.stringify(TA_CFG));
+}catch(_){ }
 function taCfgKey(r){ return [r.op||'',r.rota,r.rem,r.dst,r.orig,r.ufo,r.dest,r.ufd,r.frt].join('§'); }
 function taCfgGet(r){
   const k=typeof r==='string'?r:taCfgKey(r);
-  return Object.assign({eixos:'7',retornaVazio:'sim',altoDesemp:'nao'}, TA_CFG[k]||{});
+  return Object.assign({eixos:'7',retornaVazio:'nao',altoDesemp:'nao'}, TA_CFG[k]||{});
 }
 function taCfgSet(k,field,value){
-  TA_CFG[k]=Object.assign({eixos:'7',retornaVazio:'sim',altoDesemp:'nao'}, TA_CFG[k]||{});
+  TA_CFG[k]=Object.assign({eixos:'7',retornaVazio:'nao',altoDesemp:'nao'}, TA_CFG[k]||{});
   TA_CFG[k][field]=value;
   try{ localStorage.setItem('PD_TARIFA_CFG', JSON.stringify(TA_CFG)); }catch(_){ }
   if(_taUID && _taMes) buildTa(_taUID,_taMes);
@@ -2798,7 +2806,7 @@ function buildTa(uid,mes){
     {h:'N°',              fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'eixos',c.eixos,[{v:'5',t:'5'},{v:'6',t:'6'},{v:'7',t:'7'},{v:'9',t:'9'}]);}},
     {h:'Dist. Ida',       fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distIda):'—';}, n:true},
     {h:'Dist. Volta',     fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distVolta):'—';}, n:true},
-    {h:'Retorna Vazio',   fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'retornaVazio',c.retornaVazio,[{v:'sim',t:'Sim'},{v:'nao',t:'Não'}]);}},
+    {h:'Retorna Vazio',   fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'retornaVazio',c.retornaVazio,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
     {h:'Alto Desemp.',    fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'altoDesemp',c.altoDesemp,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
     {h:'Frete Mínimo',    fn:r=>r.freteMin>0?R(r.freteMin):'—', n:true},
     {h:'Frete Atual',     fn:r=>r.freteAtual>0?`<span class="${r._taAbaixoMin?'ta-frete-baixo':''}">${R(r.freteAtual)}</span>`:'—', n:true},
