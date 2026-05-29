@@ -222,6 +222,10 @@ table.dt td.nm{max-width:140px;overflow:hidden;text-overflow:ellipsis;}
 
 /* ── TARIFA / ANTT ── */
 .ta-sel{font-size:10px!important;padding:2px 4px!important;min-width:46px;}
+.ta-tools{display:flex;align-items:center;gap:6px;}
+.ta-min-filter-btn{border:1px solid #991b1b;background:#fff;color:#991b1b;font-family:var(--f);font-size:11px;font-weight:600;padding:3px 8px;border-radius:3px;cursor:pointer;white-space:nowrap;}
+.ta-min-filter-btn.on{background:#991b1b;color:#fff;}
+.ta-frete-baixo{color:#991b1b;font-weight:700;}
 .antt-note{font-size:10px;color:var(--mu);line-height:1.5;margin-bottom:8px;}
 .antt-wrap{overflow-x:auto;border:1px solid var(--bd2);border-radius:4px;margin-bottom:10px;}
 .antt-table{width:100%;border-collapse:collapse;min-width:640px;background:var(--wh);}
@@ -782,7 +786,7 @@ html{ -webkit-text-size-adjust:100%; }
           </div>
         </div>
         <div class="tw">
-          <div class="th3"><div><span class="tt">Tarifa</span><span class="tc" id="cnt-ta"></span></div><input class="ts" type="text" placeholder="Buscar…" oninput="filt('tbl-ta',this.value)"></div>
+          <div class="th3"><div><span class="tt">Tarifa</span><span class="tc" id="cnt-ta"></span></div><div class="ta-tools"><input class="ts" id="ta-search" type="text" placeholder="Buscar…" oninput="applyTaFilters()"><button class="ta-min-filter-btn" id="ta-min-filter" type="button" onclick="toggleTaFreteMinFilter()">Abaixo Frete mínimo: Não</button></div></div>
           <div class="to"><table class="dt" id="tbl-ta"></table></div>
         </div>
       </div>
@@ -2702,6 +2706,34 @@ function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
 // TARIFA — cópia da aba Rotas com histórico de variação de tarifa
 // ═══════════════════════════════════════════════════════
 let _taUID='', _taMes='';
+let _taFiltroAbaixoMin=false;
+
+function taIsAbaixoMin(row){
+  return !!(row && row.freteAtual>0 && row.freteMin>0 && row.freteAtual < row.freteMin);
+}
+function updateTaFreteMinFilterBtn(){
+  const btn=document.getElementById('ta-min-filter');
+  if(!btn) return;
+  btn.textContent='Abaixo Frete mínimo: '+(_taFiltroAbaixoMin?'Sim':'Não');
+  btn.classList.toggle('on', _taFiltroAbaixoMin);
+}
+function toggleTaFreteMinFilter(){
+  _taFiltroAbaixoMin=!_taFiltroAbaixoMin;
+  updateTaFreteMinFilterBtn();
+  applyTaFilters();
+}
+function applyTaFilters(){
+  const t=document.getElementById('tbl-ta');
+  if(!t) return;
+  const q=(document.getElementById('ta-search')?.value||'').toLowerCase();
+  document.querySelectorAll('#tbl-ta tbody tr').forEach(tr=>{
+    const idx=Number(tr.dataset.ri);
+    const row=(t._view && t._view[idx]) ? t._view[idx] : null;
+    const buscaOk=tr.textContent.toLowerCase().includes(q);
+    const minOk=!_taFiltroAbaixoMin || taIsAbaixoMin(row);
+    tr.style.display=(buscaOk && minOk)?'':'none';
+  });
+}
 
 function taFreteAtual(arr){
   const ult=[...(arr||[])].sort((a,b)=>String(a.data||'').localeCompare(String(b.data||''))).pop();
@@ -2728,6 +2760,11 @@ function buildTa(uid,mes){
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
     return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
   }).sort((a,b)=>b.f-a.f);
+  rows.forEach(r=>{
+    const c=taBuildCalc(r);
+    r.freteMin=c.freteMin||0;
+    r._taAbaixoMin=taIsAbaixoMin(r);
+  });
 
   const cnt=document.getElementById('cnt-ta');
   if(cnt) cnt.textContent=' — '+rows.length+' linhas';
@@ -2752,11 +2789,13 @@ function buildTa(uid,mes){
     {h:'Dist. Volta',     fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distVolta):'—';}, n:true},
     {h:'Retorna Vazio',   fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'retornaVazio',c.retornaVazio,[{v:'sim',t:'Sim'},{v:'nao',t:'Não'}]);}},
     {h:'Alto Desemp.',    fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'altoDesemp',c.altoDesemp,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
-    {h:'Frete Mínimo',    fn:r=>{const c=taBuildCalc(r); return c.freteMin>0?R(c.freteMin):'—';}, n:true},
-    {h:'Frete Atual',     fn:r=>r.freteAtual>0?R(r.freteAtual):'—', n:true},
+    {h:'Frete Mínimo',    fn:r=>r.freteMin>0?R(r.freteMin):'—', n:true},
+    {h:'Frete Atual',     fn:r=>r.freteAtual>0?`<span class="${r._taAbaixoMin?'ta-frete-baixo':''}">${R(r.freteAtual)}</span>`:'—', n:true},
     {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
   ]);
   addTarivaRowClick();
+  updateTaFreteMinFilterBtn();
+  applyTaFilters();
 }
 
 function addTarivaRowClick(){
@@ -3323,7 +3362,10 @@ function srt(id,ci){
   t._view=sd;
   t.querySelector('tbody').outerHTML=`<tbody>${sd.map((r,idx)=>`<tr data-ri="${idx}">${t._c.map(c=>`<td class="${c.n?'n':'nm'}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
   if(id==='tbl-cl' && typeof addClRowClick==='function') addClRowClick();
-  if(id==='tbl-ta' && typeof addTarivaRowClick==='function') addTarivaRowClick();
+  if(id==='tbl-ta' && typeof addTarivaRowClick==='function'){
+    addTarivaRowClick();
+    if(typeof applyTaFilters==='function') applyTaFilters();
+  }
 }
 function filt(id,q){
   document.querySelectorAll('#'+id+' tbody tr').forEach(tr=>{
