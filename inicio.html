@@ -676,15 +676,39 @@ async function loadSZB(){
   }
 }
 
-/* Carrega uma base genérica do parent (ex.: 'szc' = diesel por placa). Silencioso. */
+/* Carrega uma base genérica do parent (ex.: 'szc' = diesel por placa).
+   Tenta variações de chave (szc/SZC/diesel) porque o index pode expor a base
+   sob um nome diferente do esperado — e LOGA as chaves disponíveis no parent,
+   para diagnosticar quando a base não chega ao iframe. */
 async function loadBaseParent(id){
+  const aliases = { szc:['szc','SZC','Szc','diesel','DIESEL'] };
+  const cands = aliases[id] || [id, id.toUpperCase(), id.toLowerCase()];
   try{
-    const mem = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA[id];
-    if(mem && Array.isArray(mem.rows) && mem.rows.length>0) return mem.rows;
-    if(typeof window.parent.atlasLoadBaseFromFirestore === 'function'){
-      const p = await window.parent.atlasLoadBaseFromFirestore(id);
-      if(p && Array.isArray(p.rows)) return p.rows;
+    const AD = window.parent && window.parent.ATLAS_DATA;
+    // Diagnóstico: o que o parent realmente expõe em memória
+    try{ console.log('[Início] ATLAS_DATA keys =', AD? Object.keys(AD) : '(sem ATLAS_DATA)'); }catch(_){}
+    if(AD){
+      for(const k of cands){
+        const mem = AD[k];
+        if(mem && Array.isArray(mem.rows) && mem.rows.length>0){
+          console.log('[Início] base "'+id+'" obtida de ATLAS_DATA["'+k+'"] ('+mem.rows.length+' linhas)');
+          return mem.rows;
+        }
+      }
     }
+    if(typeof window.parent.atlasLoadBaseFromFirestore === 'function'){
+      for(const k of cands){
+        try{
+          const p = await window.parent.atlasLoadBaseFromFirestore(k);
+          if(p && Array.isArray(p.rows) && p.rows.length>0){
+            console.log('[Início] base "'+id+'" obtida do Firestore via parent sob chave "'+k+'" ('+p.rows.length+' linhas)');
+            return p.rows;
+          }
+        }catch(e){ /* chave inexistente/bloqueada — tenta a próxima */ }
+      }
+    }
+    console.warn('[Início] base "'+id+'" NÃO encontrada no parent (nem ATLAS_DATA, nem Firestore). '
+      +'Verifique se o index.html faz whitelist/forward dessa base na ponte Firestore.');
   }catch(_){}
   return null;
 }
@@ -1123,7 +1147,13 @@ function renderDieselPorFilial(veic){
     if(peso>0){ el.textContent='Peso '+Pct(peso); el.title='Custo diesel '+fmtAbs(val)+' · Fat. mês '+fmtAbs(fat); }
     else { el.textContent='litros'; el.title=''; }
   };
-  if(!_szcRows || !_szcRows.length){ ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
+  if(!_szcRows || !_szcRows.length){
+    console.warn('[Diesel] _szcRows vazio → cards "—". A base SZC não chegou ao iframe (problema de ponte/whitelist no parent), não de cálculo.');
+    ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return;
+  }
+  console.group('[Diesel] diagnóstico');
+  console.log('linhas SZC recebidas:', _szcRows.length);
+  console.log('colunas reais da 1ª linha:', Object.keys(_szcRows[0]));
 
   /* Normalização e detecção de filial pela operação (igual ao pdOpFromValue do PD) */
   const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
@@ -1137,22 +1167,27 @@ function renderDieselPorFilial(veic){
   const placaFilial={};
   (veic||[]).forEach(v=>{ if(v.unidade_slug) placaFilial[np(v.placa)]=v.unidade_slug; });
 
-  /* enrichSZC — mesmos filtros do PD */
+  /* enrichSZC — mesmos filtros do PD (com contadores de descarte por etapa) */
+  const drop={data:0,comb:0,invalido:0,semFilial:0}; let semFilialAmostra=null;
   const recs=_szcRows.map(r=>{
-    const d=szbParseDate(r['Data Emissao']||r['Dt. Emissao']); if(!d) return null;
+    const d=szbParseDate(r['Data Emissao']||r['Dt. Emissao']); if(!d){ drop.data++; return null; }
     const comb=String(r['Combustivel']||'').trim();
-    if(!/diesel/i.test(comb) || /arla/i.test(comb)) return null;        // só diesel (exclui Arla)
+    if(!/diesel/i.test(comb) || /arla/i.test(comb)){ drop.comb++; return null; }   // só diesel (exclui Arla)
     const litros=toNum(r['Qtd Litros']);
     const unitVenda=toNum(r['Unit Venda']);
     const valor=toNum(r['Valor']);
     const precoUnit=litros>0 ? valor/litros : unitVenda;
-    if(litros<=0 || valor<=0 || precoUnit<=0) return null;              // descarta linhas inválidas
+    if(litros<=0 || valor<=0 || precoUnit<=0){ drop.invalido++; return null; }      // descarta linhas inválidas
     const filial = opSlug(r['Operacao']) || opSlug(r['Filial de In']) || opSlug(r['Filial incl'])
                 || opSlug(r['Filial']) || opSlug(r['Unidade'])
                 || placaFilial[np(r['Veiculo']||r['Placa Veicul']||r['Placa'])] || null;
+    if(!filial){ drop.semFilial++; if(!semFilialAmostra) semFilialAmostra=r; }
     return { filial, litros, valor, mes:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0') };
   }).filter(Boolean);
-  if(!recs.length){ ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
+  console.log('descartes → sem data:'+drop.data+' | não-diesel/Arla:'+drop.comb+' | inválida(litros/valor/preço):'+drop.invalido);
+  console.log('linhas válidas:', recs.length, '| sem filial detectada:', drop.semFilial);
+  if(semFilialAmostra) console.log('amostra de linha SEM filial (campos de operação não bateram):', semFilialAmostra);
+  if(!recs.length){ console.warn('[Diesel] nenhuma linha sobreviveu aos filtros → verifique os NOMES das colunas acima.'); console.groupEnd(); ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
 
   /* Mês de referência = o mesmo dos cards (SZB); fallback no mês mais recente do SZC */
   const mesRef = _refMonthKey || recs.map(r=>r.mes).sort().slice(-1)[0];
@@ -1174,6 +1209,11 @@ function renderDieselPorFilial(veic){
 
   set('sc',litrosAcc.SC); set('sp',litrosAcc.SP); set('pr',litrosAcc.PR);
   setPeso('sc',valAcc.SC,fatAcc.SC); setPeso('sp',valAcc.SP,fatAcc.SP); setPeso('pr',valAcc.PR,fatAcc.PR);
+  console.log('mês de referência (mesRef):', mesRef);
+  console.log('meses presentes no SZC:', [...new Set(recs.map(r=>r.mes))].sort());
+  console.log('litros no mês →', litrosAcc, '| custo diesel →', valAcc);
+  console.log('faturamento mês por filial (peso) →', fatAcc);
+  console.groupEnd();
 }
 
 /* Classifica a filial a partir do campo Operacao/Filial do SZB (17=SC,18=PR,03=SP) */
