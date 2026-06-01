@@ -624,6 +624,13 @@ window.addEventListener('message', ev => {
     console.log('[Início] ATLAS_DATA_READY szb recebido — re-tentando render');
     loadSZB().then(p=>{ if(p&&p.rows&&p.rows.length) render(p.rows,p.ts); }).catch(()=>{});
   }
+  /* Portal respondeu o ATLAS_REQUEST_DATA da SZC (push com linhas) OU sinalizou
+     que a SZC ficou pronta — em ambos os casos recarrega o diesel dos cards */
+  if((d.type==='ATLAS_DATA_READY' || d.type==='ATLAS_DATA') && d.table==='szc'){
+    const rows = Array.isArray(d.rows) ? d.rows : (d.payload && Array.isArray(d.payload.rows) ? d.payload.rows : null);
+    if(rows && rows.length){ _szcRows=rows; tryRenderFrota(); }
+    else { loadSZCRows().then(r=>{ if(r&&r.length){ _szcRows=r; tryRenderFrota(); } }).catch(()=>{}); }
+  }
 });
 
 /* ── Navegação ── */
@@ -710,6 +717,43 @@ async function loadBaseParent(id){
     console.warn('[Início] base "'+id+'" NÃO encontrada no parent (nem ATLAS_DATA, nem Firestore). '
       +'Verifique se o index.html faz whitelist/forward dessa base na ponte Firestore.');
   }catch(_){}
+  return null;
+}
+
+/* Carrega a base SZC (diesel) de bases_cloud/szc — MESMO local que o pd.html lê
+   (loadPDBaseFromFirestore('szc')). Como o iframe não tem Firestore direto, usa a
+   ponte getCollection sobre a subcoleção de chunks: bases_cloud/szc/chunks.
+   Estratégias em ordem; a primeira que trouxer linhas vence. */
+async function loadSZCRows(){
+  // 1) Ponte → subcoleção de chunks (caminho real do PD)
+  try{
+    const res = await fsParent('getCollection', { collection:'bases_cloud/szc/chunks', limit:5000 });
+    const docs = (res && res.docs) || [];
+    if(docs.length){
+      docs.sort((a,b)=>(parseInt(a.id,10)||0)-(parseInt(b.id,10)||0));
+      const rows=[];
+      docs.forEach(d=>{ const r=d.data && d.data.rows; if(Array.isArray(r)) rows.push(...r); });
+      if(rows.length){ console.log('[Início] SZC: '+rows.length+' linhas de bases_cloud/szc/chunks (ponte)'); return rows; }
+    }
+  }catch(e){ console.warn('[Início] SZC via ponte chunks falhou:', e.message); }
+
+  // 2) Doc único bases_cloud/szc (caso a base não esteja chunked)
+  try{
+    const res = await fsParent('getCollection', { collection:'bases_cloud', limit:50 });
+    const docs = (res && res.docs) || [];
+    const szc = docs.find(d=>String(d.id).toLowerCase()==='szc');
+    if(szc && szc.data && Array.isArray(szc.data.rows) && szc.data.rows.length){
+      console.log('[Início] SZC: '+szc.data.rows.length+' linhas do doc bases_cloud/szc (ponte)'); return szc.data.rows;
+    }
+  }catch(e){ /* segue para o fallback */ }
+
+  // 3) Fallback: parent expõe ATLAS_DATA['szc'] ou atlasLoadBaseFromFirestore('szc')
+  const viaParent = await loadBaseParent('szc');
+  if(viaParent && viaParent.length){ console.log('[Início] SZC: '+viaParent.length+' linhas via loadBaseParent'); return viaParent; }
+
+  // 4) Best-effort: pede a base ao portal (resposta assíncrona tratada no listener)
+  try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szc'}, '*'); }catch(_){}
+  console.warn('[Início] SZC ainda não disponível — nova tentativa em instantes.');
   return null;
 }
 
@@ -1056,8 +1100,9 @@ function renderFrotaResumo(){
   }
   applyFrota('sc',R.byUnit.SC); applyFrota('sp',R.byUnit.SP); applyFrota('pr',R.byUnit.PR);
 
-  /* Diesel (litros) do mês atual por filial — base SZC, atribuída pela placa→filial */
-  renderDieselPorFilial(veic);
+  /* Diesel (litros) + Peso Diesel do mês por filial — base SZC (bases_cloud),
+     atribuição pela Operação do próprio SZC (17=SC, 18=PR, 03=SP), igual ao PD */
+  renderDieselPorFilial();
 
   /* Dias sem viagem (dias úteis) → cavalos parados + ranking */
   const diasMap=calcDiasSemViagem(veic);
@@ -1131,15 +1176,74 @@ function tryRenderFrota(){
   if(_veiculos && _szbRaw){ try{ renderFrotaResumo(); }catch(e){ console.warn('[Início] renderFrotaResumo:', e.message); } }
 }
 
-/* Diesel (mês) por filial — REPLICA a ingestão da tela PD (enrichSZC + calcDieselKPI).
-   Regras idênticas ao PD:
-   • só conta linha cujo "Combustivel" contém "diesel" e NÃO é Arla;
-   • exige Qtd Litros > 0, Valor > 0 e preço unitário > 0 (valor/litros ou Unit Venda);
-   • a FILIAL vem do próprio SZC (Operacao / Filial de In / Filial incl / Filial / Unidade),
-     códigos 17=SC, 18=PR, 03=SP — não mais pela placa do cadastro;
-   • "Diesel (mês)" = soma de litros do mês de referência;
-   • "Peso Diesel" = custo do diesel no mês ÷ faturamento realizado do mês × 100. */
-function renderDieselPorFilial(veic){
+/* ════════════════════════════════════════════════════════════════════
+   SZC (diesel) — PORTE FIEL do pd.html.
+   Helpers copiados 1:1 do PD para garantir números idênticos:
+   atlasExcelDateToISO + normalizeAtlasSZCRows + pdOpFromValue + enrichSZC.
+══════════════════════════════════════════════════════════════════════ */
+function szcExcelDateToISO(v){
+  if(v===null||v===undefined||v==='') return '';
+  if(v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0,10);
+  if(typeof v==='number' && isFinite(v)){
+    return new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000).toISOString().slice(0,10);
+  }
+  let s=String(v).trim(); if(!s) return '';
+  if(/^\d+(?:\.\d+)?$/.test(s)){ const serial=Number(s);
+    if(serial>20000 && serial<90000) return new Date(Date.UTC(1899,11,30)+Math.round(serial)*86400000).toISOString().slice(0,10);
+  }
+  const iso=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(iso) return iso[0];
+  const br=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if(br){ const ano=br[3].length===2?'20'+br[3]:br[3]; return ano+'-'+String(br[2]).padStart(2,'0')+'-'+String(br[1]).padStart(2,'0'); }
+  return s.slice(0,10);
+}
+/* Limpa chaves (espaços do Excel) e ISO-ifica 'Data Emissao' — igual ao PD */
+function normalizeAtlasSZCRows(rows){
+  return (rows||[]).map(row=>{
+    const out={};
+    Object.keys(row||{}).forEach(k=>{
+      const key=String(k).replace(/\s+/g,' ').trim(); if(!key) return;
+      const v=row[k];
+      if(key==='Data Emissao') out[key]=szcExcelDateToISO(v);
+      else if(v===null||v===undefined) out[key]='';
+      else out[key]=String(v);
+    });
+    return out;
+  }).filter(r=>Object.values(r).some(v=>v!=='' && v!=null));
+}
+/* Operação → código de filial ('17'=SC, '18'=PR, '03'=SP) — pdOpFromValue do PD */
+function szcNormText(v){ return String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim(); }
+function szcOpFromValue(v){ const s=szcNormText(v); if(!s) return null;
+  if(/(^|\D)0?3($|\D)/.test(s)||/\bSP\b/.test(s)||/SAO PAULO/.test(s)) return '03';
+  if(/(^|\D)17($|\D)/.test(s)||/\bSC\b/.test(s)||/SANTA CATARINA/.test(s)) return '17';
+  if(/(^|\D)18($|\D)/.test(s)||/\bPR\b/.test(s)||/PARANA/.test(s)) return '18';
+  return null; }
+/* Operação da linha (mesma prioridade de campos do PD) → código */
+function szcOpFromRow(row){
+  return szcOpFromValue(row['Operacao']) || szcOpFromValue(row['Filial']) ||
+         szcOpFromValue(row['Filial de In']) || szcOpFromValue(row['Filial incl']) ||
+         szcOpFromValue(row['Unidade']) || null;
+}
+const SZC_COD2SLUG = { '17':'SC', '18':'PR', '03':'SP' };
+/* enrichSZC — VERBATIM do pd.html (filtros + preço unitário) */
+function enrichSZC(recs){
+  return (recs||[]).map(row=>{
+    const data=row['Data Emissao'] ? String(row['Data Emissao']).slice(0,10) : null;
+    if(!data) return null;
+    const combustivel=String(row['Combustivel']||'').trim();
+    if(!/diesel/i.test(combustivel) || /arla/i.test(combustivel)) return null;
+    const litros=toNum(row['Qtd Litros']);
+    const unitVenda=toNum(row['Unit Venda']);
+    const valor=toNum(row['Valor']);
+    const precoUnit=litros>0 ? valor/litros : unitVenda;
+    if(litros<=0 || valor<=0 || precoUnit<=0) return null;
+    return { cod: szcOpFromRow(row), data, mes:data.slice(0,7), litros, valor, precoUnit };
+  }).filter(Boolean);
+}
+
+/* Diesel (mês) + Peso Diesel por filial — mesma matemática do calcDieselKPI do PD.
+   • "Diesel (mês)" = Σ litros do mês de referência (por filial);
+   • "Peso Diesel"  = Σ custo diesel ÷ faturamento realizado do mês × 100. */
+function renderDieselPorFilial(){
   const set=(pfx,v)=>{ const el=$(pfx+'-diesel'); if(el) el.textContent = (v>0? Math.round(v).toLocaleString('pt-BR')+' L' : '—'); };
   const setPeso=(pfx,val,fat)=>{
     const el=$(pfx+'-diesel-peso'); if(!el) return;
@@ -1147,57 +1251,20 @@ function renderDieselPorFilial(veic){
     if(peso>0){ el.textContent='Peso '+Pct(peso); el.title='Custo diesel '+fmtAbs(val)+' · Fat. mês '+fmtAbs(fat); }
     else { el.textContent='litros'; el.title=''; }
   };
-  if(!_szcRows || !_szcRows.length){
-    console.warn('[Diesel] _szcRows vazio → cards "—". A base SZC não chegou ao iframe (problema de ponte/whitelist no parent), não de cálculo.');
-    ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return;
-  }
-  console.group('[Diesel] diagnóstico');
-  console.log('linhas SZC recebidas:', _szcRows.length);
-  console.log('colunas reais da 1ª linha:', Object.keys(_szcRows[0]));
+  if(!_szcRows || !_szcRows.length){ ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
 
-  /* Normalização e detecção de filial pela operação (igual ao pdOpFromValue do PD) */
-  const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
-  const opSlug=v=>{ const s=norm(v); if(!s) return null;
-    if(/^0?3$/.test(s)||/\bSP\b/.test(s)||/SAO PAULO/.test(s)) return 'SP';
-    if(/^17$/.test(s)||/\bSC\b/.test(s)||/SANTA CATARINA/.test(s)) return 'SC';
-    if(/^18$/.test(s)||/\bPR\b/.test(s)||/PARANA/.test(s)) return 'PR';
-    return null; };
-  /* Fallback opcional placa→filial (só usado quando a linha do SZC não traz a operação) */
-  const np=s=>norm(s).replace(/[-\s]/g,'');
-  const placaFilial={};
-  (veic||[]).forEach(v=>{ if(v.unidade_slug) placaFilial[np(v.placa)]=v.unidade_slug; });
-
-  /* enrichSZC — mesmos filtros do PD (com contadores de descarte por etapa) */
-  const drop={data:0,comb:0,invalido:0,semFilial:0}; let semFilialAmostra=null;
-  const recs=_szcRows.map(r=>{
-    const d=szbParseDate(r['Data Emissao']||r['Dt. Emissao']); if(!d){ drop.data++; return null; }
-    const comb=String(r['Combustivel']||'').trim();
-    if(!/diesel/i.test(comb) || /arla/i.test(comb)){ drop.comb++; return null; }   // só diesel (exclui Arla)
-    const litros=toNum(r['Qtd Litros']);
-    const unitVenda=toNum(r['Unit Venda']);
-    const valor=toNum(r['Valor']);
-    const precoUnit=litros>0 ? valor/litros : unitVenda;
-    if(litros<=0 || valor<=0 || precoUnit<=0){ drop.invalido++; return null; }      // descarta linhas inválidas
-    const filial = opSlug(r['Operacao']) || opSlug(r['Filial de In']) || opSlug(r['Filial incl'])
-                || opSlug(r['Filial']) || opSlug(r['Unidade'])
-                || placaFilial[np(r['Veiculo']||r['Placa Veicul']||r['Placa'])] || null;
-    if(!filial){ drop.semFilial++; if(!semFilialAmostra) semFilialAmostra=r; }
-    return { filial, litros, valor, mes:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0') };
-  }).filter(Boolean);
-  console.log('descartes → sem data:'+drop.data+' | não-diesel/Arla:'+drop.comb+' | inválida(litros/valor/preço):'+drop.invalido);
-  console.log('linhas válidas:', recs.length, '| sem filial detectada:', drop.semFilial);
-  if(semFilialAmostra) console.log('amostra de linha SEM filial (campos de operação não bateram):', semFilialAmostra);
-  if(!recs.length){ console.warn('[Diesel] nenhuma linha sobreviveu aos filtros → verifique os NOMES das colunas acima.'); console.groupEnd(); ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
+  const recs = enrichSZC(normalizeAtlasSZCRows(_szcRows));
+  if(!recs.length){ ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
 
   /* Mês de referência = o mesmo dos cards (SZB); fallback no mês mais recente do SZC */
   const mesRef = _refMonthKey || recs.map(r=>r.mes).sort().slice(-1)[0];
 
-  const litrosAcc={SC:0,SP:0,PR:0};   // total de litros consumidos no mês (= calcDieselKPI.litros)
-  const valAcc={SC:0,SP:0,PR:0};      // custo do diesel no mês (= calcDieselKPI.valor)
+  const litrosAcc={SC:0,SP:0,PR:0};   // = calcDieselKPI.litros
+  const valAcc={SC:0,SP:0,PR:0};      // = calcDieselKPI.valor (custo diesel)
   recs.forEach(r=>{
-    if(!r.filial || litrosAcc[r.filial]==null || r.mes!==mesRef) return;
-    litrosAcc[r.filial]+=r.litros;
-    valAcc[r.filial]+=r.valor;
+    if(r.mes!==mesRef) return;
+    const slug=SZC_COD2SLUG[r.cod]; if(!slug) return;
+    litrosAcc[slug]+=r.litros; valAcc[slug]+=r.valor;
   });
 
   /* Faturamento realizado do mês por filial — mesma base dos cards (= fatRealizado do PD) */
@@ -1209,11 +1276,7 @@ function renderDieselPorFilial(veic){
 
   set('sc',litrosAcc.SC); set('sp',litrosAcc.SP); set('pr',litrosAcc.PR);
   setPeso('sc',valAcc.SC,fatAcc.SC); setPeso('sp',valAcc.SP,fatAcc.SP); setPeso('pr',valAcc.PR,fatAcc.PR);
-  console.log('mês de referência (mesRef):', mesRef);
-  console.log('meses presentes no SZC:', [...new Set(recs.map(r=>r.mes))].sort());
-  console.log('litros no mês →', litrosAcc, '| custo diesel →', valAcc);
-  console.log('faturamento mês por filial (peso) →', fatAcc);
-  console.groupEnd();
+  console.log('[Diesel] mesRef='+mesRef+' | litros='+JSON.stringify(litrosAcc)+' | custo='+JSON.stringify(valAcc)+' | fat='+JSON.stringify(fatAcc));
 }
 
 /* Classifica a filial a partir do campo Operacao/Filial do SZB (17=SC,18=PR,03=SP) */
@@ -1550,13 +1613,14 @@ document.addEventListener('DOMContentLoaded', async ()=>{
      (mesma fonte da aba Dashboard/Alocação do módulo Frota) */
   tryLoadVeiculos(1);
 
-  /* Base de diesel (SZC) — para o KPI "Diesel (mês)" dos cards de filial.
-     Silenciosa: se não houver base, os cards mostram "—". */
+  /* Base de diesel (SZC) — para "Diesel (mês)" + "Peso Diesel" dos cards.
+     A SZC vive em bases_cloud/szc (NÃO em bases_szb), então é lida pela ponte
+     getCollection na subcoleção de chunks — mesmo local que o pd.html usa. */
   (async function loadDiesel(att){
     att=att||1;
-    const rows=await loadBaseParent('szc');
+    const rows=await loadSZCRows();
     if(rows && rows.length){ _szcRows=rows; tryRenderFrota(); }
-    else if(att<3) setTimeout(()=>loadDiesel(att+1), att===1?2000:4000);
+    else if(att<5) setTimeout(()=>loadDiesel(att+1), att===1?1500:3000);
   })(1);
 
   /* Tenta carregar o SZB com até 3 tentativas espaçadas.
