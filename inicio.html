@@ -820,8 +820,9 @@ function pD(v){
   if(typeof v==='number' || /^\d+(?:[.,]\d+)?$/.test(String(v).trim())){
     const n=Number(String(v).trim().replace(',','.'));
     if(isFinite(n) && n>20000 && n<90000){
-      const d=new Date(Date.UTC(1899,11,30)+Math.round(n)*86400000);
-      return isNaN(d.getTime())?null:d;
+      const utc=new Date(Date.UTC(1899,11,30)+Math.round(n)*86400000);
+      if(isNaN(utc.getTime())) return null;
+      return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate());
     }
   }
   const s=String(v).replace(/\D/g,' ').trim().split(/\s+/);
@@ -1040,7 +1041,12 @@ function szbParseDate(val){
   if(val instanceof Date) return isNaN(val.getTime())?null:val;
   if(typeof val==='number' && isFinite(val) && val>0){
     try{ if(typeof XLSX!=='undefined' && XLSX.SSF && XLSX.SSF.parse_date_code){ const o=XLSX.SSF.parse_date_code(val); if(o&&o.y) return new Date(o.y,(o.m||1)-1,o.d||1); } }catch(_){}
-    const d=new Date((val-25569)*86400*1000); return isNaN(d.getTime())?null:d;
+    /* Fallback SEM SheetJS: monta a data em horário LOCAL (lê componentes UTC e
+       reconstrói), igual ao XLSX.SSF do frota.html. Sem isto, em UTC-3 a data
+       caía 1 dia antes → "dias sem viagem" ficava +1 vs a tela Frota. */
+    const utc=new Date(Date.UTC(1899,11,30)+Math.round(val)*86400000);
+    if(isNaN(utc.getTime())) return null;
+    return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate());
   }
   if(typeof val==='string'){
     const s=val.trim(); if(!s||s==='0'||s==='00/00/0000') return null;
@@ -1253,18 +1259,14 @@ function normalizeAtlasSZCRows(rows){
     return out;
   }).filter(r=>Object.values(r).some(v=>v!=='' && v!=null));
 }
-/* Operação → código de filial ('17'=SC, '18'=PR, '03'=SP) — pdOpFromValue do PD */
-function szcNormText(v){ return String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim(); }
-function szcOpFromValue(v){ const s=szcNormText(v); if(!s) return null;
-  if(/(^|\D)0?3($|\D)/.test(s)||/\bSP\b/.test(s)||/SAO PAULO/.test(s)) return '03';
-  if(/(^|\D)17($|\D)/.test(s)||/\bSC\b/.test(s)||/SANTA CATARINA/.test(s)) return '17';
-  if(/(^|\D)18($|\D)/.test(s)||/\bPR\b/.test(s)||/PARANA/.test(s)) return '18';
-  return null; }
-/* Operação da linha (mesma prioridade de campos do PD) → código */
+/* Operação da linha → código de filial, com o MESMO critério do PD:
+   o PD guarda op = String(Operacao||Filial de In||Filial incl||Filial).trim()
+   e no calcDieselKPI casa por igualdade EXATA (r.op===uid). Reproduzir isso
+   (em vez de regex tolerante) é o que faz litros/custo baterem com o PD —
+   senão capturávamos linhas a mais (ex.: "SC", "0117") e o Peso vinha alto. */
 function szcOpFromRow(row){
-  return szcOpFromValue(row['Operacao']) || szcOpFromValue(row['Filial']) ||
-         szcOpFromValue(row['Filial de In']) || szcOpFromValue(row['Filial incl']) ||
-         szcOpFromValue(row['Unidade']) || null;
+  const op = String(row['Operacao'] || row['Filial de In'] || row['Filial incl'] || row['Filial'] || '').trim();
+  return (op==='17'||op==='18'||op==='03') ? op : null;
 }
 const SZC_COD2SLUG = { '17':'SC', '18':'PR', '03':'SP' };
 /* enrichSZC — VERBATIM do pd.html (filtros + preço unitário) */
@@ -1316,16 +1318,39 @@ function renderDieselPorFilial(){
     litrosAcc[slug]+=r.litros; valAcc[slug]+=r.valor;
   });
 
-  /* Faturamento realizado do mês por filial — mesma base dos cards (= fatRealizado do PD) */
-  let fatAcc = (_monthFatFilial && (_monthFatFilial.SC||_monthFatFilial.SP||_monthFatFilial.PR))
-    ? _monthFatFilial : {SC:0,SP:0,PR:0};
+  /* Faturamento realizado do mês por filial — calculado com as MESMAS regras do
+     enrich() do pd.html (não cancelado, Valor Total, placa≠AAA-9999, Operacao
+     exata, mês de Dt. Emissao), para o Peso Diesel bater 1:1 com o PD. */
+  let fatAcc = fatRealizadoPD(mesRef);
   if(!(fatAcc.SC||fatAcc.SP||fatAcc.PR)){
-    (_szbRows||[]).forEach(x=>{ if(x.dk && x.dk.slice(0,7)===mesRef){ const u=classFilialSZB(x.f); if(u&&fatAcc[u]!=null) fatAcc[u]+=x.v; } });
+    /* Fallback (se _szbRaw indisponível): mês por filial já calculado dos cards */
+    fatAcc = (_monthFatFilial && (_monthFatFilial.SC||_monthFatFilial.SP||_monthFatFilial.PR)) ? _monthFatFilial : {SC:0,SP:0,PR:0};
   }
 
   set('sc',litrosAcc.SC); set('sp',litrosAcc.SP); set('pr',litrosAcc.PR);
   setPeso('sc',valAcc.SC,fatAcc.SC); setPeso('sp',valAcc.SP,fatAcc.SP); setPeso('pr',valAcc.PR,fatAcc.PR);
   console.log('[Diesel] mesRef='+mesRef+' | litros='+JSON.stringify(litrosAcc)+' | custo='+JSON.stringify(valAcc)+' | fat='+JSON.stringify(fatAcc));
+}
+
+/* Faturamento realizado por filial no mês — PORTE FIEL do enrich() do pd.html.
+   Usado como denominador do Peso Diesel para casar com o PD. */
+function fatRealizadoPD(mesRef){
+  const out={SC:0,SP:0,PR:0};
+  (_szbRaw||[]).forEach(row=>{
+    if(!row) return;
+    if(row['Dt Cancel']) return;                                 // PD: descarta cancelado (truthy)
+    const fat=toNum(row['Valor Total']); if(!fat) return;        // PD: exige Valor Total
+    if(!row['Dt. Emissao']) return;
+    const placa=String(row['Placa Veicul']||'').trim().toUpperCase();
+    if(placa==='AAA-9999') return;                               // PD: placa excluída
+    const op=String(row['Operacao']||'').trim();                 // PD enrich: op = Operacao
+    const slug=SZC_COD2SLUG[op]; if(!slug) return;               // casa exata 17/18/03
+    const dt=pD(row['Dt. Emissao']); if(!dt) return;
+    const mes=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
+    if(mes!==mesRef) return;
+    out[slug]+=fat;
+  });
+  return out;
 }
 
 /* Classifica a filial a partir do campo Operacao/Filial do SZB (17=SC,18=PR,03=SP) */
@@ -1537,15 +1562,24 @@ async function loadAprovacoes(){
   return ordens;
 }
 
-/* Mesma regra de pendência usada em manutencao.renderAprovacoesReais() */
+/* Pendência de aprovação: uma OS só fica na fila enquanto AINDA aguarda ação.
+   Sai da fila assim que passa pelo gate (aprovada, liberada, em execução, etc.)
+   — antes ela só saía em "concluída/cancelada", então OS já aprovadas ficavam. */
 function filtrarPendentes(ordens){
   return ordens.filter(os=>{
-    const nivel  = os.nivel || nivelAprovacao(os.valorTotal||0);
     const status = String(os.status||'').toLowerCase();
-    const exige  = /aprova/i.test(nivel) || /aprova|aguard/i.test(status) || Number(os.valorTotal||0)>=300;
-    const final  = /aprovad/i.test(status) && !/conclu/i.test(status);
-    os._tipoAprov = final ? 'Finalizar OS' : nivel;
-    return exige && !/conclu|cancel/i.test(status);
+    const nivel  = os.nivel || nivelAprovacao(os.valorTotal||0);
+    /* Já resolvida / fora do gate de aprovação → não é mais "pendente".
+       Obs.: "aprovaÇÃO" (aguardando) NÃO casa /aprovad/, então segue pendente. */
+    const jaResolvida =
+      /conclu|cancel|aprovad|reprovad|rejeitad|recusad|negad|liberad|autorizad|finaliz|encerrad|execu|fechad|pag[oa]\b/.test(status)
+      || os.aprovadoPor || os.aprovadaPor || os.aprovadoEm || os.aprovadaEm
+      || os.dataAprovacao || os.aprovacao===true || os.aprovado===true || os.aprovada===true;
+    if(jaResolvida) return false;
+    const exige = /aprova|aguard|pendente|aberta|nova|an[aá]lise/.test(status)
+      || /aprova/i.test(nivel) || Number(os.valorTotal||0)>=300;
+    os._tipoAprov = nivel;
+    return exige;
   });
 }
 
