@@ -720,12 +720,45 @@ async function loadBaseParent(id){
   return null;
 }
 
-/* Carrega a base SZC (diesel) de bases_cloud/szc — MESMO local que o pd.html lê
-   (loadPDBaseFromFirestore('szc')). Como o iframe não tem Firestore direto, usa a
-   ponte getCollection sobre a subcoleção de chunks: bases_cloud/szc/chunks.
+/* Firebase do PORTAL (parent) — mesma 1ª escolha do pdGetFirebase() do PD.
+   Dentro do iframe Atlas o index já tem o firebase compat autenticado em
+   window.parent.firebase; reaproveitamos essa instância (sem novo login). */
+let _iniFb = null;
+function iniGetFirebase(){
+  if(_iniFb!==null) return _iniFb;
+  try{ if(window.self!==window.top && window.parent && window.parent.firebase){ _iniFb=window.parent.firebase; return _iniFb; } }catch(_){}
+  _iniFb=false; return _iniFb;
+}
+/* Lê uma base de bases_cloud/{id} DIRETO no Firestore do parent — porte fiel do
+   loadPDBaseFromFirestore('szc') do pd.html (meta.numChunks → chunks/{i}.rows). */
+async function loadCloudBaseDirect(id){
+  const fb = iniGetFirebase();
+  if(!fb || !id) return null;
+  id = String(id).toLowerCase();
+  try{
+    const db = fb.firestore();
+    const docRef = db.collection('bases_cloud').doc(id);
+    const metaSnap = await docRef.get();
+    if(!metaSnap.exists) return null;
+    const meta = metaSnap.data() || {};
+    const n = meta.numChunks || 0;
+    if(!n) return null;
+    const proms=[]; for(let i=0;i<n;i++) proms.push(docRef.collection('chunks').doc(String(i)).get());
+    const snaps = await Promise.all(proms);
+    const rows=[];
+    for(const s of snaps){ if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) rows.push(...r); } }
+    return rows.length ? rows : null;
+  }catch(e){ console.warn('[Início] leitura direta bases_cloud/'+id+' falhou:', e.message); return null; }
+}
+
+/* Carrega a base SZC (diesel) de bases_cloud/szc — MESMO local que o pd.html lê.
    Estratégias em ordem; a primeira que trouxer linhas vence. */
 async function loadSZCRows(){
-  // 1) Ponte → subcoleção de chunks (caminho real do PD)
+  // 1) DIRETO no Firestore do parent (caminho idêntico ao PD — mais confiável)
+  const direct = await loadCloudBaseDirect('szc');
+  if(direct && direct.length){ console.log('[Início] SZC: '+direct.length+' linhas de bases_cloud/szc (Firestore direto do parent)'); return direct; }
+
+  // 2) Ponte → subcoleção de chunks (caso o parent não exponha firebase)
   try{
     const res = await fsParent('getCollection', { collection:'bases_cloud/szc/chunks', limit:5000 });
     const docs = (res && res.docs) || [];
@@ -737,7 +770,7 @@ async function loadSZCRows(){
     }
   }catch(e){ console.warn('[Início] SZC via ponte chunks falhou:', e.message); }
 
-  // 2) Doc único bases_cloud/szc (caso a base não esteja chunked)
+  // 3) Doc único bases_cloud/szc (caso a base não esteja chunked)
   try{
     const res = await fsParent('getCollection', { collection:'bases_cloud', limit:50 });
     const docs = (res && res.docs) || [];
@@ -747,7 +780,7 @@ async function loadSZCRows(){
     }
   }catch(e){ /* segue para o fallback */ }
 
-  // 3) Fallback: parent expõe ATLAS_DATA['szc'] ou atlasLoadBaseFromFirestore('szc')
+  // 4) Fallback: parent expõe ATLAS_DATA['szc'] ou atlasLoadBaseFromFirestore('szc')
   const viaParent = await loadBaseParent('szc');
   if(viaParent && viaParent.length){ console.log('[Início] SZC: '+viaParent.length+' linhas via loadBaseParent'); return viaParent; }
 
