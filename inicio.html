@@ -40,16 +40,18 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
    fundindo na lateral direita via gradient-mask em vez de
    ficar como bloco/figura sobreposta.
 ════════════════════════════════════════════════════════ */
-.hero{position:relative;background:linear-gradient(125deg,var(--hd1) 0%,var(--hd2) 55%,var(--hd3) 100%);overflow:visible;flex-shrink:0;border-bottom:1px solid #000}
+.hero{position:relative;background:linear-gradient(125deg,var(--hd1) 0%,var(--hd2) 55%,var(--hd3) 100%);overflow:hidden;flex-shrink:0;border-bottom:1px solid #000}
 .hero-accent{position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent 0%,var(--ac) 18%,var(--ac-lt) 50%,var(--ac) 82%,transparent 100%);opacity:.7}
 .hero-grid{position:absolute;inset:0;opacity:.025;background-image:linear-gradient(0deg,#fff 1px,transparent 1px),linear-gradient(90deg,#fff 1px,transparent 1px);background-size:40px 40px;pointer-events:none}
 
-/* Marca d'água do cavalo — silhueta INTEIRA (dimensionada pela altura, nunca cortada).
-   Pode vazar levemente para fora do hero; opacidade baixa evita poluir a tela. */
-.hero-horse{position:absolute;right:18px;top:0;bottom:0;z-index:1;pointer-events:none;
-  display:flex;align-items:flex-start;justify-content:flex-end;
-  transform:translateY(20%)}
-.hero-horse svg{height:115%;width:auto;max-width:none;color:var(--ac-lt);opacity:.26;display:block;filter:drop-shadow(0 3px 16px rgba(59,130,246,.16))}
+/* Marca d'água do cavalo — silhueta dimensionada pela ALTURA do hero, ancorada
+   na base. Como a viewBox do símbolo é justa ao caminhão, height:100% exibe o
+   desenho INTEIRO (cabine + rodas) sem corte. O hero usa overflow:hidden, então
+   nada vaza para o corpo. Para ampliar mais seria preciso aumentar a altura do
+   hero — aqui o caminhão já ocupa toda a altura disponível. */
+.hero-horse{position:absolute;right:1.5%;top:0;bottom:0;z-index:1;pointer-events:none;
+  display:flex;align-items:flex-end;justify-content:flex-end}
+.hero-horse svg{height:100%;width:auto;max-width:none;color:var(--ac-lt);opacity:.24;display:block;filter:drop-shadow(0 3px 16px rgba(59,130,246,.16))}
 @media(max-width:1100px){ .hero-horse{display:none} }
 
 .hero-inner{position:relative;padding:34px 26px 28px;display:flex;align-items:center;gap:18px;z-index:2;max-width:62%}
@@ -1092,9 +1094,14 @@ function tryRenderFrota(){
   if(_veiculos && _szbRaw){ try{ renderFrotaResumo(); }catch(e){ console.warn('[Início] renderFrotaResumo:', e.message); } }
 }
 
-/* Diesel (litros) consumido no mês atual, por filial.
-   SZC tem Veiculo (placa) + Data Emissao + Qtd Litros. Atribuímos a filial pela
-   placa do cadastro de veículos. Mês atual = mês da emissão mais recente do SZC. */
+/* Diesel (mês) por filial — REPLICA a ingestão da tela PD (enrichSZC + calcDieselKPI).
+   Regras idênticas ao PD:
+   • só conta linha cujo "Combustivel" contém "diesel" e NÃO é Arla;
+   • exige Qtd Litros > 0, Valor > 0 e preço unitário > 0 (valor/litros ou Unit Venda);
+   • a FILIAL vem do próprio SZC (Operacao / Filial de In / Filial incl / Filial / Unidade),
+     códigos 17=SC, 18=PR, 03=SP — não mais pela placa do cadastro;
+   • "Diesel (mês)" = soma de litros do mês de referência;
+   • "Peso Diesel" = custo do diesel no mês ÷ faturamento realizado do mês × 100. */
 function renderDieselPorFilial(veic){
   const set=(pfx,v)=>{ const el=$(pfx+'-diesel'); if(el) el.textContent = (v>0? Math.round(v).toLocaleString('pt-BR')+' L' : '—'); };
   const setPeso=(pfx,val,fat)=>{
@@ -1104,44 +1111,55 @@ function renderDieselPorFilial(veic){
     else { el.textContent='litros'; el.title=''; }
   };
   if(!_szcRows || !_szcRows.length){ ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
-  const norm=s=>String(s||'').toUpperCase().replace(/[-\s]/g,'');
+
+  /* Normalização e detecção de filial pela operação (igual ao pdOpFromValue do PD) */
+  const norm=s=>String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
+  const opSlug=v=>{ const s=norm(v); if(!s) return null;
+    if(/^0?3$/.test(s)||/\bSP\b/.test(s)||/SAO PAULO/.test(s)) return 'SP';
+    if(/^17$/.test(s)||/\bSC\b/.test(s)||/SANTA CATARINA/.test(s)) return 'SC';
+    if(/^18$/.test(s)||/\bPR\b/.test(s)||/PARANA/.test(s)) return 'PR';
+    return null; };
+  /* Fallback opcional placa→filial (só usado quando a linha do SZC não traz a operação) */
+  const np=s=>norm(s).replace(/[-\s]/g,'');
   const placaFilial={};
-  veic.forEach(v=>{ if(v.unidade_slug) placaFilial[norm(v.placa)]=v.unidade_slug; });
+  (veic||[]).forEach(v=>{ if(v.unidade_slug) placaFilial[np(v.placa)]=v.unidade_slug; });
 
-  const recs=_szcRows.map(r=>{ const d=szbParseDate(r['Data Emissao']||r['Dt. Emissao']); return d?{
-      placa:norm(r['Veiculo']||r['Placa Veicul']||r['Placa']),
-      litros:toNum(r['Qtd Litros']||r['Litros']||r['Quantidade']),
-      valor:toNum(r['Valor']||r['Valor Total']||0),
-      comb:String(r['Combustivel']||'').trim(),
-      mes:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0') }:null; }).filter(Boolean);
+  /* enrichSZC — mesmos filtros do PD */
+  const recs=_szcRows.map(r=>{
+    const d=szbParseDate(r['Data Emissao']||r['Dt. Emissao']); if(!d) return null;
+    const comb=String(r['Combustivel']||'').trim();
+    if(!/diesel/i.test(comb) || /arla/i.test(comb)) return null;        // só diesel (exclui Arla)
+    const litros=toNum(r['Qtd Litros']);
+    const unitVenda=toNum(r['Unit Venda']);
+    const valor=toNum(r['Valor']);
+    const precoUnit=litros>0 ? valor/litros : unitVenda;
+    if(litros<=0 || valor<=0 || precoUnit<=0) return null;              // descarta linhas inválidas
+    const filial = opSlug(r['Operacao']) || opSlug(r['Filial de In']) || opSlug(r['Filial incl'])
+                || opSlug(r['Filial']) || opSlug(r['Unidade'])
+                || placaFilial[np(r['Veiculo']||r['Placa Veicul']||r['Placa'])] || null;
+    return { filial, litros, valor, mes:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0') };
+  }).filter(Boolean);
   if(!recs.length){ ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
-  const mesAtual=recs.map(r=>r.mes).sort().slice(-1)[0];
-  /* Mês usado para o Peso Diesel: o mesmo dos cards (faturamento), com fallback no SZC */
-  const mesPeso = _refMonthKey || mesAtual;
 
-  /* Litros do mês por filial (comportamento original, sem filtro de combustível) */
-  const acc={SC:0,SP:0,PR:0};
-  /* Custo do DIESEL por filial no mês — exclui apenas combustíveis claramente não-diesel
-     (Arla, gasolina, etanol/álcool, GNV). Linhas sem combustível informado contam. */
-  const valAcc={SC:0,SP:0,PR:0};
-  const naoDiesel=/arla|gasolin|etanol|álcool|alcool|\bgnv\b/i;
+  /* Mês de referência = o mesmo dos cards (SZB); fallback no mês mais recente do SZC */
+  const mesRef = _refMonthKey || recs.map(r=>r.mes).sort().slice(-1)[0];
+
+  const litrosAcc={SC:0,SP:0,PR:0};   // total de litros consumidos no mês (= calcDieselKPI.litros)
+  const valAcc={SC:0,SP:0,PR:0};      // custo do diesel no mês (= calcDieselKPI.valor)
   recs.forEach(r=>{
-    const f=placaFilial[r.placa]; if(!f||acc[f]==null) return;
-    if(r.mes===mesAtual) acc[f]+=r.litros;            // litros do mês mais recente do SZC
-    if(r.mes===mesPeso){                               // custo do diesel no mês dos cards
-      const ehDiesel = r.comb ? !naoDiesel.test(r.comb) : true;
-      if(ehDiesel) valAcc[f]+=r.valor;
-    }
+    if(!r.filial || litrosAcc[r.filial]==null || r.mes!==mesRef) return;
+    litrosAcc[r.filial]+=r.litros;
+    valAcc[r.filial]+=r.valor;
   });
 
-  /* Faturamento do mês por filial — mesma base dos cards (denominador do Peso Diesel) */
+  /* Faturamento realizado do mês por filial — mesma base dos cards (= fatRealizado do PD) */
   let fatAcc = (_monthFatFilial && (_monthFatFilial.SC||_monthFatFilial.SP||_monthFatFilial.PR))
     ? _monthFatFilial : {SC:0,SP:0,PR:0};
   if(!(fatAcc.SC||fatAcc.SP||fatAcc.PR)){
-    (_szbRows||[]).forEach(x=>{ if(x.dk && x.dk.slice(0,7)===mesPeso){ const u=classFilialSZB(x.f); if(u&&fatAcc[u]!=null) fatAcc[u]+=x.v; } });
+    (_szbRows||[]).forEach(x=>{ if(x.dk && x.dk.slice(0,7)===mesRef){ const u=classFilialSZB(x.f); if(u&&fatAcc[u]!=null) fatAcc[u]+=x.v; } });
   }
 
-  set('sc',acc.SC); set('sp',acc.SP); set('pr',acc.PR);
+  set('sc',litrosAcc.SC); set('sp',litrosAcc.SP); set('pr',litrosAcc.PR);
   setPeso('sc',valAcc.SC,fatAcc.SC); setPeso('sp',valAcc.SP,fatAcc.SP); setPeso('pr',valAcc.PR,fatAcc.PR);
 }
 
