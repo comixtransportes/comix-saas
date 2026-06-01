@@ -1762,5 +1762,53 @@ document.addEventListener('DOMContentLoaded', async ()=>{
 
 setInterval(()=>tx('h-hora',horaFmt()),60000);
 </script>
+<script>
+/* ════════════════════════════════════════════════════════════════
+   AJUSTE-À-LARGURA ATLAS — renderização idêntica entre usuários.
+   Desfaz o efeito de zoom do navegador (Ctrl +/-) e de escala de tela
+   do SO (Windows 125%/150%, etc.) encaixando o layout desktop numa
+   largura de referência fixa. Resultado: todos veem a MESMA composição
+   (3 cards inteiros, sem corte), independente da config da máquina.
+
+   • Só REDUZ (nunca amplia): em telas largas o suficiente o zoom = 1,
+     então quem já vê certo (referência) NÃO muda nada.
+   • Não atua em ≤1100px: deixa o @media mobile/tablet reflowar normal.
+   • DESIGN_MIN = largura mínima em que as 3 colunas cabem sem corte.
+     É o único número a ajustar caso queira a régua mais/menos agressiva.
+   ════════════════════════════════════════════════════════════════ */
+(function(){
+  var DESIGN_MIN = 1366;            // largura de referência do layout desktop
+  var BREAK_MOBILE = 1100;          // abaixo disso, o @media reflowa sozinho
+  function fitWidth(){
+    var pg = document.querySelector('.page');
+    if(!pg) return;
+    var w = window.innerWidth || document.documentElement.clientWidth;
+    if(w <= BREAK_MOBILE){          // mobile/tablet: limpa qualquer escala
+      pg.style.zoom = '';
+      pg.style.width = '';
+      pg.style.height = '';
+      return;
+    }
+    var z = Math.min(1, w / DESIGN_MIN);
+    if(z >= 0.999){                 // largura suficiente → nada a fazer
+      pg.style.zoom = '';
+      pg.style.width = '';
+      pg.style.height = '';
+      return;
+    }
+    /* Dá ao layout a largura de referência (pré-zoom) e encaixa via zoom.
+       O calc compensa a escala para preencher 100% sem faixa cinza. */
+    pg.style.zoom = z;
+    pg.style.width = 'calc(100% / ' + z + ')';
+    pg.style.height = 'calc(100vh / ' + z + ')';
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', fitWidth);
+  } else { fitWidth(); }
+  window.addEventListener('load', function(){ setTimeout(fitWidth, 60); });
+  window.addEventListener('resize', fitWidth);
+  window.addEventListener('orientationchange', function(){ setTimeout(fitWidth, 200); });
+})();
+</script>
 </body>
 </html>
