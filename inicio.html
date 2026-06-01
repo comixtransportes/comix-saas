@@ -813,7 +813,17 @@ function ontemLabel(){ const d=new Date(); d.setDate(d.getDate()-1); return Stri
 
 /* ── Parse de data do Protheus ── */
 function pD(v){
-  if(!v) return null;
+  if(v==null||v==='') return null;
+  /* Serial Excel (número ou string numérica pura), ex.: 46170 → 2026-05-28.
+     SEM isto, Date.parse("46170") era lido como ANO 46170 e quebrava o mês
+     de referência (_refMonthKey="46170-0"), zerando o Diesel/Peso dos cards. */
+  if(typeof v==='number' || /^\d+(?:[.,]\d+)?$/.test(String(v).trim())){
+    const n=Number(String(v).trim().replace(',','.'));
+    if(isFinite(n) && n>20000 && n<90000){
+      const d=new Date(Date.UTC(1899,11,30)+Math.round(n)*86400000);
+      return isNaN(d.getTime())?null:d;
+    }
+  }
   const s=String(v).replace(/\D/g,' ').trim().split(/\s+/);
   if(s.length>=3){
     if(s[2]&&s[2].length===4) return new Date(+s[2],+s[1]-1,+s[0]);
@@ -1289,8 +1299,14 @@ function renderDieselPorFilial(){
   const recs = enrichSZC(normalizeAtlasSZCRows(_szcRows));
   if(!recs.length){ ['sc','sp','pr'].forEach(p=>{ set(p,0); setPeso(p,0,0); }); return; }
 
-  /* Mês de referência = o mesmo dos cards (SZB); fallback no mês mais recente do SZC */
-  const mesRef = _refMonthKey || recs.map(r=>r.mes).sort().slice(-1)[0];
+  /* Mês de referência robusto. _refMonthKey deveria ser "YYYY-MM"; se vier
+     malformado (ex.: serial Excel "46170-0") ou sem linhas SZC correspondentes,
+     cai para o mês mais recente do próprio SZC — assim nunca zera tendo dado. */
+  const szcMonths = [...new Set(recs.map(r=>r.mes))].filter(m=>/^\d{4}-\d{2}$/.test(m)).sort();
+  let mesRef = /^\d{4}-\d{2}$/.test(String(_refMonthKey||'')) ? _refMonthKey : null;
+  if(!mesRef){ const m=String(_refMonthKey||'').match(/(\d{4,6})/);
+    if(m){ const n=+m[1]; if(n>20000&&n<90000) mesRef=new Date(Date.UTC(1899,11,30)+n*86400000).toISOString().slice(0,7); } }
+  if(!mesRef || !recs.some(r=>r.mes===mesRef)) mesRef = szcMonths[szcMonths.length-1] || mesRef;
 
   const litrosAcc={SC:0,SP:0,PR:0};   // = calcDieselKPI.litros
   const valAcc={SC:0,SP:0,PR:0};      // = calcDieselKPI.valor (custo diesel)
