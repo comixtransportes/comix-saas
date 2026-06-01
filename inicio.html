@@ -891,6 +891,12 @@ function render(rows, ts){
   /* Guarda para o Peso Diesel usar o MESMO faturamento mensal por filial */
   _monthFatFilial = monthFat; _refMonthKey = refMonth;
 
+  /* Faturamento + dias apontados por filial COM AS REGRAS DO PD (Operacao exata,
+     Valor Total, placa≠AAA-9999) → usado no Fat/dia útil e no Peso Diesel, para
+     casar 1:1 com a tela PD. Fat/dia útil = fat ÷ dias DISTINTOS com movimento. */
+  const fatPD = fatDiasApPD(rows, refMonth);
+  _fatRealFilial = {SC:fatPD.SC.fat, SP:fatPD.SP.fat, PR:fatPD.PR.fat};
+
   function calcFil(xs){
     const fat=xs.reduce((a,x)=>a+x.v,0), vgn=xs.length, tar=vgn?fat/vgn:0;
     const prod=xs.reduce((a,x)=>a+(x.pt||0),0);
@@ -914,14 +920,14 @@ function render(rows, ts){
   /* Filial helper — KPIs do topo de cada card de filial.
      Faturamento = total do dia anterior (dia de referência).
      Fat/dia útil = faturamento do mês ÷ dias úteis decorridos no mês. */
-  function applyFil(pfx, C, mFat){
+  function applyFil(pfx, C, pd){
     tx(pfx+'-fat',fmtAbs(C.fat));
     tx(pfx+'-vgn',C.vgn||'—');
     tx(pfx+'-tarifa',fmtT(C.tar));
-    tx(pfx+'-fdu',fmtAbs((mFat||0)/duMes));
+    tx(pfx+'-fdu', (pd && pd.dias>0 && pd.fat>0) ? fmtAbs(pd.fat/pd.dias) : '—');
     tx(pfx+'-prod', C.prod>0 ? D1(C.prod)+' t' : '—');
   }
-  applyFil('sc',CSC,monthFat.SC); applyFil('pr',CPR,monthFat.PR); applyFil('sp',CSP,monthFat.SP);
+  applyFil('sc',CSC,fatPD.SC); applyFil('pr',CPR,fatPD.PR); applyFil('sp',CSP,fatPD.SP);
 
   /* Badge "ativa/sem mov." — usa classe ok quando há movimento, neutral senão */
   function setBadge(id, ok){
@@ -956,6 +962,7 @@ function render(rows, ts){
 ══════════════════════════════════════════════════════════════════ */
 let _szbRows = null;       // linhas válidas do SZB (parse próprio — financeiro)
 let _monthFatFilial = {SC:0,SP:0,PR:0}; // faturamento acumulado do mês por filial
+let _fatRealFilial = {SC:0,SP:0,PR:0};  // faturamento mês por filial (regras PD) — Peso/Fat-dia
 let _refMonthKey = '';     // mês de referência (YYYY-MM) usado nos cards
 let _szbRaw  = null;       // linhas cruas do SZB (algoritmo de dias do Frota)
 let _szcRows = null;       // linhas cruas do SZC (diesel por placa)
@@ -1159,7 +1166,7 @@ function renderFrotaResumo(){
   const FILIAL_NOME={SC:'Santa Catarina',SP:'São Paulo',PR:'Paraná'};
   const cavalosComDias=veic.filter(v=>v.categoria==='cavalo' && diasMap[v.id]!=null)
     .map(v=>({placa:v.placa,frota:v.frota,filial:FILIAL_NOME[v.unidade_slug]||'—',
-              agregado:v.vinculo==='AGREGADO',dias:diasMap[v.id],
+              agregado:v.vinculo==='AGREGADO',dias:diasMap[v.id],disp:v.disponibilidade,
               modelo:v.modelo||'',ano:v.ano||'',motorista:_ultMotorista[v.id]||''}));
 
   /* Cavalos parados (>7 dias) separados em próprios e agregados */
@@ -1173,8 +1180,10 @@ function renderFrotaResumo(){
   pw('hbar-par',Math.min(100,paradosArr.length*8)+'%');
 
   /* Ranking — APENAS frota própria (sem agregados), ordenado por dias sem viagem.
-     Lista completa (rolável) — não corta mais em 5. */
-  const proprios=cavalosComDias.filter(c=>!c.agregado);
+     Exclui placas em DISPONÍVEL/RESERVA (não são inoperância real — são reservas
+     intencionais), espelhando o agrupamento da tela Frota. */
+  const FORA_RANKING=['disponivel','reserva'];
+  const proprios=cavalosComDias.filter(c=>!c.agregado && !FORA_RANKING.includes(c.disp));
   const ranking=proprios.slice().sort((a,b)=>b.dias-a.dias);
   const criticos=ranking.filter(c=>c.dias>=LIMITE).length;
   tx('badge-crit', criticos>0 ? (criticos+' crítico'+(criticos>1?'s':'')) : (ranking.length+' placa'+(ranking.length!==1?'s':'')));
@@ -1334,23 +1343,34 @@ function renderDieselPorFilial(){
 
 /* Faturamento realizado por filial no mês — PORTE FIEL do enrich() do pd.html.
    Usado como denominador do Peso Diesel para casar com o PD. */
-function fatRealizadoPD(mesRef){
-  const out={SC:0,SP:0,PR:0};
-  (_szbRaw||[]).forEach(row=>{
+/* Faturamento realizado + dias apontados por filial no mês — PORTE FIEL do
+   enrich()+buildVG do pd.html. É a fonte única do Peso Diesel (fat) e do
+   Fat/dia útil (fat ÷ dias com movimento). Regras do PD: não cancelado,
+   Valor Total, placa≠AAA-9999, Operacao EXATA (17/18/03), mês de Dt. Emissao.
+   diasAp = nº de DIAS DISTINTOS com movimento (não dias úteis decorridos). */
+function fatDiasApPD(rows, mesRef){
+  const acc={SC:{fat:0,d:new Set()},SP:{fat:0,d:new Set()},PR:{fat:0,d:new Set()}};
+  (rows||[]).forEach(row=>{
     if(!row) return;
-    if(row['Dt Cancel']) return;                                 // PD: descarta cancelado (truthy)
-    const fat=toNum(row['Valor Total']); if(!fat) return;        // PD: exige Valor Total
+    if(row['Dt Cancel']) return;
+    const fat=toNum(row['Valor Total']); if(!fat) return;
     if(!row['Dt. Emissao']) return;
     const placa=String(row['Placa Veicul']||'').trim().toUpperCase();
-    if(placa==='AAA-9999') return;                               // PD: placa excluída
-    const op=String(row['Operacao']||'').trim();                 // PD enrich: op = Operacao
-    const slug=SZC_COD2SLUG[op]; if(!slug) return;               // casa exata 17/18/03
+    if(placa==='AAA-9999') return;
+    const op=String(row['Operacao']||'').trim();
+    const slug=SZC_COD2SLUG[op]; if(!slug) return;
     const dt=pD(row['Dt. Emissao']); if(!dt) return;
-    const mes=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0');
-    if(mes!==mesRef) return;
-    out[slug]+=fat;
+    const dk=dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+    if(dk.slice(0,7)!==mesRef) return;
+    acc[slug].fat+=fat; acc[slug].d.add(dk);
   });
-  return out;
+  return {SC:{fat:acc.SC.fat,dias:acc.SC.d.size}, SP:{fat:acc.SP.fat,dias:acc.SP.d.size}, PR:{fat:acc.PR.fat,dias:acc.PR.d.size}};
+}
+/* Só o faturamento por filial (denominador do Peso) — usa _szbRaw como fallback */
+function fatRealizadoPD(mesRef){
+  if(_fatRealFilial && (_fatRealFilial.SC||_fatRealFilial.SP||_fatRealFilial.PR)) return _fatRealFilial;
+  const m=fatDiasApPD(_szbRaw, mesRef);
+  return {SC:m.SC.fat, SP:m.SP.fat, PR:m.PR.fat};
 }
 
 /* Classifica a filial a partir do campo Operacao/Filial do SZB (17=SC,18=PR,03=SP) */
@@ -1562,24 +1582,27 @@ async function loadAprovacoes(){
   return ordens;
 }
 
-/* Pendência de aprovação: uma OS só fica na fila enquanto AINDA aguarda ação.
-   Sai da fila assim que passa pelo gate (aprovada, liberada, em execução, etc.)
-   — antes ela só saía em "concluída/cancelada", então OS já aprovadas ficavam. */
+/* Fila de aprovação = SÓ OS que exigem aprovação MANUAL e ainda não passaram
+   pelo gate. Critério alinhado ao fluxo do manutencao.html:
+   • aprovarOS() grava status "Aguardando finalizar" → já aprovada, sai da fila;
+   • nível "Automática" (valor < limite) NÃO exige aprovação → nunca entra;
+   • só "Aprovação técnica" / "técnica + financeira" entram, enquanto não
+     aprovadas/reprovadas/em execução/concluídas/canceladas. */
 function filtrarPendentes(ordens){
   return ordens.filter(os=>{
     const status = String(os.status||'').toLowerCase();
     const nivel  = os.nivel || nivelAprovacao(os.valorTotal||0);
-    /* Já resolvida / fora do gate de aprovação → não é mais "pendente".
-       Obs.: "aprovaÇÃO" (aguardando) NÃO casa /aprovad/, então segue pendente. */
+    // Exige aprovação manual? "Automática" não casa /aprova/.
+    const exigeAprovacao = /aprova/i.test(nivel);
+    if(!exigeAprovacao) return false;
+    // Já passou do gate (aprovada, aguardando finalizar, em execução, etc.)?
     const jaResolvida =
-      /conclu|cancel|aprovad|reprovad|rejeitad|recusad|negad|liberad|autorizad|finaliz|encerrad|execu|fechad|pag[oa]\b/.test(status)
+      /conclu|cancel|aprovad|reprovad|rejeitad|recusad|negad|aguardando finalizar|finaliz|encerrad|execu|fechad|pag[oa]\b/.test(status)
       || os.aprovadoPor || os.aprovadaPor || os.aprovadoEm || os.aprovadaEm
       || os.dataAprovacao || os.aprovacao===true || os.aprovado===true || os.aprovada===true;
     if(jaResolvida) return false;
-    const exige = /aprova|aguard|pendente|aberta|nova|an[aá]lise/.test(status)
-      || /aprova/i.test(nivel) || Number(os.valorTotal||0)>=300;
     os._tipoAprov = nivel;
-    return exige;
+    return true;
   });
 }
 
