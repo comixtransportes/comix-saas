@@ -68,7 +68,7 @@ html{-webkit-text-size-adjust:100%;-moz-text-size-adjust:100%;text-size-adjust:1
   0%,100%{transform:translateY(-3px)}
   50%{transform:translateY(5px)}}
 @media(prefers-reduced-motion:reduce){ .hero-horse svg{animation:none} }
-@media(max-width:1100px){ .hero-horse{display:none} }
+@media(max-width:1400px){ .hero-horse{display:none} }
 
 .hero-inner{position:relative;padding:34px 26px 28px;display:flex;align-items:center;gap:18px;z-index:2;max-width:62%}
 .hero-av{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.04);border:1px solid var(--hbd2);color:var(--ac-lt);font-size:18px;font-weight:600;display:flex;align-items:center;justify-content:center;font-family:var(--m);flex-shrink:0;letter-spacing:.5px}
@@ -110,7 +110,7 @@ html{-webkit-text-size-adjust:100%;-moz-text-size-adjust:100%;text-size-adjust:1
    Linha 2: Ranking inatividade × Fila aprovação × Tarifas
    (Paraná e Ranking trocados de posição vs versão anterior)
 ════════════════════════════════════════════════════════ */
-.body{flex:1;display:grid;grid-template-columns:repeat(12,1fr);grid-template-rows:auto minmax(0,1fr);gap:10px;padding:10px 12px;overflow:hidden;min-height:0}
+.body{flex:1;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:auto minmax(0,1fr);gap:10px;padding:10px 12px;overflow:hidden;min-height:0}
 .body > .filial-sp{grid-column:1/5;grid-row:1}
 .body > .filial-sc{grid-column:5/9;grid-row:1}
 .body > .filial-pr{grid-column:9/13;grid-row:1}
@@ -163,7 +163,7 @@ html{-webkit-text-size-adjust:100%;-moz-text-size-adjust:100%;text-size-adjust:1
 .filial-badge.am{background:var(--am-bg);color:var(--am);border:1px solid var(--am-bd)}
 .filial-badge.neutral{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0}
 
-.filial-pd{display:grid;grid-template-columns:repeat(5,1fr);gap:1px;background:var(--bd2);flex-shrink:0}
+.filial-pd{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:1px;background:var(--bd2);flex-shrink:0}
 .pd-kpi{background:var(--wh);padding:8px 8px;overflow:hidden}
 .pd-kl{font-size:8.5px;font-weight:600;color:var(--mu);text-transform:uppercase;letter-spacing:.7px;margin-bottom:3px;font-family:var(--m)}
 .pd-kv{font-size:13px;font-weight:600;font-family:var(--m);color:var(--tx);line-height:1;letter-spacing:-.3px;white-space:nowrap;font-variant-numeric:tabular-nums}
@@ -288,9 +288,14 @@ html{-webkit-text-size-adjust:100%;-moz-text-size-adjust:100%;text-size-adjust:1
 
 /* ── RESPONSIVO ──
    O dashboard é desktop-first (abre em iframe com largura controlada pelo portal).
-   Abaixo de 1100px reorganizamos o grid de 6 colunas para 2 colunas, e abaixo de
-   700px para 1 coluna, liberando scroll vertical para não cortar conteúdo. */
-@media(max-width:1100px){
+   • Abaixo de 1400px (resoluções menores que a ideal) reorganizamos as 3 filiais
+     para 2 colunas em TAMANHO CHEIO e liberamos rolagem vertical — assim nada é
+     cortado nem espremido, e o conteúdo mantém o tamanho legível.
+   • Abaixo de 700px vai para 1 coluna.
+   • max-height: telas BAIXAS (mesmo largas) soltam o "cockpit" de altura fixa para
+     rolagem natural, evitando que a fileira de baixo (Ranking/Fila/Tarifas) fique
+     espremida/cortada. */
+@media(max-width:1400px){
   html,body{overflow:auto}
   .page{height:auto;min-height:100vh}
   .hero-inner{max-width:100%}
@@ -303,6 +308,14 @@ html{-webkit-text-size-adjust:100%;-moz-text-size-adjust:100%;text-size-adjust:1
   .body > .card-tarifas{grid-column:auto!important;grid-row:auto!important}
   .body > .card-aprovacoes{grid-column:1/3!important}
   .body > .card-tarifas{grid-column:1/3!important}
+  .card,.filial-card{min-height:200px}
+  .card-cavalos{min-height:240px}
+}
+/* Telas baixas (qualquer largura): solta o cockpit e deixa rolar — descomprime a base. */
+@media(max-height:940px){
+  html,body{overflow:auto}
+  .page{height:auto;min-height:100vh}
+  .body{grid-template-rows:auto auto;overflow:visible;height:auto;min-height:0}
   .card,.filial-card{min-height:200px}
   .card-cavalos{min-height:240px}
 }
@@ -1761,54 +1774,6 @@ document.addEventListener('DOMContentLoaded', async ()=>{
 });
 
 setInterval(()=>tx('h-hora',horaFmt()),60000);
-</script>
-<script>
-/* ════════════════════════════════════════════════════════════════
-   AJUSTE-À-LARGURA ATLAS — renderização idêntica entre usuários.
-   Desfaz o efeito de zoom do navegador (Ctrl +/-) e de escala de tela
-   do SO (Windows 125%/150%, etc.) encaixando o layout desktop numa
-   largura de referência fixa. Resultado: todos veem a MESMA composição
-   (3 cards inteiros, sem corte), independente da config da máquina.
-
-   • Só REDUZ (nunca amplia): em telas largas o suficiente o zoom = 1,
-     então quem já vê certo (referência) NÃO muda nada.
-   • Não atua em ≤1100px: deixa o @media mobile/tablet reflowar normal.
-   • DESIGN_MIN = largura mínima em que as 3 colunas cabem sem corte.
-     É o único número a ajustar caso queira a régua mais/menos agressiva.
-   ════════════════════════════════════════════════════════════════ */
-(function(){
-  var DESIGN_MIN = 1366;            // largura de referência do layout desktop
-  var BREAK_MOBILE = 1100;          // abaixo disso, o @media reflowa sozinho
-  function fitWidth(){
-    var pg = document.querySelector('.page');
-    if(!pg) return;
-    var w = window.innerWidth || document.documentElement.clientWidth;
-    if(w <= BREAK_MOBILE){          // mobile/tablet: limpa qualquer escala
-      pg.style.zoom = '';
-      pg.style.width = '';
-      pg.style.height = '';
-      return;
-    }
-    var z = Math.min(1, w / DESIGN_MIN);
-    if(z >= 0.999){                 // largura suficiente → nada a fazer
-      pg.style.zoom = '';
-      pg.style.width = '';
-      pg.style.height = '';
-      return;
-    }
-    /* Dá ao layout a largura de referência (pré-zoom) e encaixa via zoom.
-       O calc compensa a escala para preencher 100% sem faixa cinza. */
-    pg.style.zoom = z;
-    pg.style.width = 'calc(100% / ' + z + ')';
-    pg.style.height = 'calc(100vh / ' + z + ')';
-  }
-  if(document.readyState === 'loading'){
-    document.addEventListener('DOMContentLoaded', fitWidth);
-  } else { fitWidth(); }
-  window.addEventListener('load', function(){ setTimeout(fitWidth, 60); });
-  window.addEventListener('resize', fitWidth);
-  window.addEventListener('orientationchange', function(){ setTimeout(fitWidth, 200); });
-})();
 </script>
 </body>
 </html>
