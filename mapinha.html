@@ -324,7 +324,7 @@ window.addEventListener('message', ev => {
   if (m.type === 'ATLAS_USER'){ ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...m }; applyPerm(); refreshAll(); }
   if ((m.type === 'ATLAS_DATA_RESPONSE' || m.type === 'ATLAS_DATA_READY') && String(m.table).toLowerCase()==='szb'){
     const rows = (m.payload && m.payload.rows) || (m.rows) || null;
-    if (rows && rows.length){ SZB.rows = rows; SZB.loaded = true; onSZBLoaded(); }
+    if (rows && rows.length){ setSZBRows(rows); }
   }
   if (m.type === 'ATLAS_FIRESTORE_RESPONSE' && m.requestId){
     const p = _fsPending[m.requestId]; if(!p) return;
@@ -374,6 +374,35 @@ function siglaDeOp(op){ return OPCODE_SIGLA[normOpKey(op)] || upper(op); }
    SZB — receita/produção/dias derivados (MESMA metodologia do pd.html)
    ══════════════════════════════════════════════════════════════════ */
 const SZB = { rows:null, loaded:false, _requested:false };
+/* converte data (serial Excel / ISO / BR) → 'YYYY-MM-DD' — idêntico ao PD */
+function atlasExcelDateToISO(v){
+  if(v===null||v===undefined||v==='') return '';
+  if(v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0,10);
+  if(typeof v==='number' && isFinite(v)){ const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000); return d.toISOString().slice(0,10); }
+  const s=String(v).trim(); if(!s) return '';
+  if(/^\d+(?:\.\d+)?$/.test(s)){ const serial=Number(s); if(serial>20000&&serial<90000){ const ds=new Date(Date.UTC(1899,11,30)+Math.round(serial)*86400000); return ds.toISOString().slice(0,10); } }
+  const iso=s.match(/^(\d{4})-(\d{2})-(\d{2})/); if(iso) return iso[0];
+  const br=s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if(br){ const ano=br[3].length===2?'20'+br[3]:br[3]; return ano+'-'+String(br[2]).padStart(2,'0')+'-'+String(br[1]).padStart(2,'0'); }
+  return s.slice(0,10);
+}
+/* normaliza linhas SZB (trim de chaves + datas ISO) — idêntico ao PD */
+function normalizeAtlasSZBRows(rows){
+  const dateCols=new Set(['Dt. Emissao','Dt Cancel']);
+  return (rows||[]).map(function(row){
+    const out={};
+    Object.keys(row||{}).forEach(function(k){
+      const key=String(k).replace(/\s+/g,' ').trim(); if(!key) return;
+      const v=row[k];
+      if(dateCols.has(key)) out[key]=atlasExcelDateToISO(v);
+      else if(v===null||v===undefined) out[key]='';
+      else out[key]=String(v);
+    });
+    return out;
+  }).filter(function(r){ return Object.values(r).some(function(v){ return v!==''&&v!==null&&v!==undefined; }); });
+}
+/* setter único: normaliza uma vez e dispara o preenchimento */
+function setSZBRows(raw){ if(!raw||!raw.length) return false; SZB.rows=normalizeAtlasSZBRows(raw); SZB.loaded=true; onSZBLoaded(); return true; }
 /* parser de número BR — idêntico ao toN() do PD */
 function toNum(v){
   try{
@@ -428,7 +457,7 @@ function derivarReceitaSZB(filial, mesRef){
 function ensureSZB(){
   if(SZB.loaded) return;
   try{ const pd=window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
-       if(pd && pd.rows && pd.rows.length){ SZB.rows=pd.rows; SZB.loaded=true; onSZBLoaded(); return; } }catch(_){}
+       if(pd && pd.rows && pd.rows.length){ setSZBRows(pd.rows); return; } }catch(_){}
   fillSZBInfo('carregando');
   if(!SZB._requested){ SZB._requested=true;
     try{ window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szb'},'*'); }catch(_){}
@@ -436,7 +465,7 @@ function ensureSZB(){
     let tries=0; const iv=setInterval(()=>{
       if(SZB.loaded || tries++>20){ clearInterval(iv); return; }
       try{ const pd=window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
-           if(pd && pd.rows && pd.rows.length){ clearInterval(iv); SZB.rows=pd.rows; SZB.loaded=true; onSZBLoaded(); } }catch(_){}
+           if(pd && pd.rows && pd.rows.length){ clearInterval(iv); setSZBRows(pd.rows); } }catch(_){}
     },500);
   }
 }
