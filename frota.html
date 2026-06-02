@@ -2644,7 +2644,18 @@ function openMotoristaModal(cavaloId) {
   document.getElementById("mm-cavalo").value = cavaloId;
   document.getElementById("mm-titulo").textContent = "Motorista de " + (v.frota || v.placa);
   const sel = document.getElementById("mm-select");
-  const motoristasOrd = STATE.motoristas.slice().sort((a,b) => (a.nome||"").localeCompare(b.nome||""));
+  // Motoristas já alocados em OUTROS veículos não podem ser selecionados aqui
+  const atual = v.motorista ? String(v.motorista).trim().toUpperCase() : null;
+  const ocupados = new Set();
+  STATE.veiculos.forEach(x => {
+    if (x.id !== cavaloId && x.motorista) ocupados.add(String(x.motorista).trim().toUpperCase());
+  });
+  const motoristasOrd = STATE.motoristas.slice()
+    .filter(m => {
+      const nome = String(m.nome || m.id || "").trim().toUpperCase();
+      return nome === atual || !ocupados.has(nome); // mantém o motorista atual deste veículo
+    })
+    .sort((a,b) => (a.nome||"").localeCompare(b.nome||""));
   sel.innerHTML = '<option value="">— Sem motorista —</option>' +
     motoristasOrd.map(m => `<option value="${escapeHtml(m.nome||m.id)}">${escapeHtml(m.nome||m.id)}</option>`).join("");
   if (v.motorista) sel.value = v.motorista;
@@ -2659,6 +2670,18 @@ async function applyMotorista() {
   const motorista = custom ? custom.toUpperCase() : sel;
   const v = findVeiculo(cavaloId);
   if (!v) return;
+  // Garante que o motorista não esteja alocado em outro veículo
+  if (motorista) {
+    const alvo = String(motorista).trim().toUpperCase();
+    const conflito = STATE.veiculos.find(x =>
+      x.id !== cavaloId && x.motorista &&
+      String(x.motorista).trim().toUpperCase() === alvo
+    );
+    if (conflito) {
+      showToast("Motorista já alocado em " + (conflito.frota || conflito.placa), "error");
+      return;
+    }
+  }
   const aloc = STATE.alocacoes[cavaloId] || {};
   const patch = { ...aloc, motorista: motorista || null };
   try {
