@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=0.5">
+<title>COMIX Atlas — Mapinha (DRE Operacional)</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Firebase SDK — mesma versão/config do index.html / manutencao.html -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+/* ══ FIREBASE — Atlas Mapinha ══ */
+(function(){
+  const cfg = {
+    apiKey:            "AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",
+    authDomain:        "comix-relatorios.firebaseapp.com",
+    projectId:         "comix-relatorios",
+    storageBucket:     "comix-relatorios.firebasestorage.app",
+    messagingSenderId: "586258388438",
+    appId:             "1:586258388438:web:3b9da22e650e88ddcf4077"
+  };
+  if (!firebase.apps.length) firebase.initializeApp(cfg);
+  window._mapDB = firebase.firestore();
+})();
+</script>
+<style>
+/* ══ TOKENS — espelho do index.html / manutencao.html ══ */
+:root{
+  --bg:#f0f2f5;--wh:#fff;--bd:#d1d9e6;--bd2:#e4e9f2;--tx:#192135;--mu:#6b7a96;
+  --ac:#1a56db;--ac-h:#1746b8;--ac-bg:#eff4ff;
+  --gn:#057a55;--gn-bg:#ecfdf5;--gn-bd:#a7f3d0;
+  --am:#b45309;--am-bg:#fffbeb;--am-bd:#fcd34d;
+  --rd:#c81e1e;--rd-bg:#fee2e2;--rd-bd:#fca5a5;
+  --pu:#6d28d9;--pu-bg:#ede9fe;--pu-bd:#c4b5fd;
+  --cy:#0e7490;--cy-bg:#ecfeff;--cy-bd:#a5f3fc;
+  --hd:#1e2d45;--ht:#e8edf5;
+  --f:'IBM Plex Sans',sans-serif;--m:'IBM Plex Mono',monospace;
+  --shd:0 1px 3px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.06);
+  --shd-l:0 8px 40px rgba(0,0,0,.14);--r:6px;--rs:4px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--f);background:var(--bg);color:var(--tx);font-size:13px;line-height:1.45;padding:14px}
+h1,h2,h3{font-weight:600;letter-spacing:-.01em}
+.mono{font-family:var(--m)}
+.muted{color:var(--mu)}
+.right{text-align:right}
+
+/* Topbar */
+.top{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:12px}
+.top h1{font-size:18px}
+.top h1 small{font-weight:400;color:var(--mu);font-size:12px;margin-left:6px}
+.ctrls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+select,input[type=text],input[type=number],input[type=date]{
+  font-family:var(--f);font-size:12.5px;color:var(--tx);background:var(--wh);
+  border:1px solid var(--bd);border-radius:var(--r);padding:6px 9px;outline:none}
+select:focus,input:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac-bg)}
+label.fld{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--mu);font-weight:500}
+
+/* Status pill */
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid transparent}
+.pill.rascunho{background:var(--am-bg);color:var(--am);border-color:var(--am-bd)}
+.pill.fechado{background:var(--gn-bg);color:var(--gn);border-color:var(--gn-bd)}
+.pill.reaberto{background:var(--cy-bg);color:var(--cy);border-color:var(--cy-bd)}
+.pill.cancelado{background:var(--rd-bg);color:var(--rd);border-color:var(--rd-bd)}
+
+/* Tabs */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--bd);margin-bottom:14px}
+.tab{padding:9px 16px;font-size:13px;font-weight:500;color:var(--mu);cursor:pointer;border-bottom:2px solid transparent;background:none;border-top:none;border-left:none;border-right:none}
+.tab.on{color:var(--ac);border-bottom-color:var(--ac)}
+.tab:hover:not(.on){color:var(--tx)}
+.view{display:none}.view.on{display:block}
+
+/* Buttons */
+.btn{font-family:var(--f);font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:var(--r);border:1px solid var(--bd);background:var(--wh);color:var(--tx);cursor:pointer;transition:.12s}
+.btn:hover{background:var(--ht)}
+.btn.pri{background:var(--ac);border-color:var(--ac);color:#fff}.btn.pri:hover{background:var(--ac-h)}
+.btn.ok{background:var(--gn);border-color:var(--gn);color:#fff}.btn.ok:hover{filter:brightness(.95)}
+.btn.warn{background:var(--am);border-color:var(--am);color:#fff}
+.btn.sm{padding:5px 9px;font-size:11px;font-weight:500}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* Cards */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:10px;margin-bottom:16px}
+.card{background:var(--wh);border:1px solid var(--bd);border-radius:var(--r);padding:12px 13px;box-shadow:var(--shd)}
+.card .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mu);font-weight:600}
+.card .v{font-size:19px;font-weight:700;font-family:var(--m);margin-top:4px}
+.card .s{font-size:11px;color:var(--mu);margin-top:2px}
+.card.acc{border-left:3px solid var(--ac)}
+.card.good .v{color:var(--gn)}.card.bad .v{color:var(--rd)}
+
+/* Panel */
+.panel{background:var(--wh);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--shd);margin-bottom:14px}
+.panel-h{padding:11px 14px;border-bottom:1px solid var(--bd2);display:flex;justify-content:space-between;align-items:center}
+.panel-h h3{font-size:13px}
+.panel-b{padding:14px}
+
+/* DRE table */
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{padding:7px 10px;text-align:left;border-bottom:1px solid var(--bd2)}
+th{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--mu);background:#fafbfc;font-weight:600;position:sticky;top:0}
+td.num,th.num{text-align:right;font-family:var(--m)}
+tr.grp td{background:#f7f9fc;font-weight:600}
+tr.res td{background:var(--hd);color:#fff;font-weight:700}
+tr.res td .mono{color:#fff}
+tr:hover td{background:var(--ac-bg)}
+tr.grp:hover td,tr.res:hover td{background:inherit}
+.neg{color:var(--rd)}
+.tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:var(--rs);font-weight:600}
+.tag.man{background:var(--ac-bg);color:var(--ac)}
+.tag.os{background:var(--pu-bg);color:var(--pu);cursor:pointer}
+
+/* Grid form */
+.frm{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;align-items:end}
+
+/* Toast */
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--hd);color:#fff;padding:10px 18px;border-radius:var(--r);font-size:12.5px;font-weight:500;box-shadow:var(--shd-l);opacity:0;transition:.25s;z-index:9999;pointer-events:none}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.gn{background:var(--gn)}.toast.rd{background:var(--rd)}.toast.am{background:var(--am)}.toast.ac{background:var(--ac)}
+.empty{text-align:center;color:var(--mu);padding:26px;font-size:12.5px}
+.lock-note{font-size:11px;color:var(--am);background:var(--am-bg);border:1px solid var(--am-bd);border-radius:var(--rs);padding:6px 10px;margin-bottom:10px}
+canvas{max-width:100%}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <h1>Mapinha <small id="sub">DRE operacional por filial</small></h1>
+  <div class="ctrls">
+    <label class="fld">Filial
+      <select id="selFilial" onchange="onScopeChange()"></select>
+    </label>
+    <label class="fld">Mês
+      <input type="month" id="selMes" onchange="onScopeChange()">
+    </label>
+    <span id="statusPill" class="pill rascunho">—</span>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab on" data-v="lanc" onclick="tab('lanc')">Lançamentos</button>
+  <button class="tab" data-v="dre" onclick="tab('dre')">DRE</button>
+  <button class="tab" data-v="prem" onclick="tab('prem')">Premissas</button>
+  <button class="tab" data-v="cons" onclick="tab('cons')">Consolidado</button>
+</div>
+
+<!-- ══ LANÇAMENTOS ══ -->
+<section class="view on" id="v-lanc">
+  <div id="lockBanner"></div>
+  <div class="cards" id="lancCards"></div>
+
+  <div class="panel">
+    <div class="panel-h"><h3>Receita & Impostos (entrada manual)</h3></div>
+    <div class="panel-b">
+      <div class="frm">
+        <label class="fld">Fat. Bruto (R$)<input type="number" id="recFat" step="0.01" oninput="liveDre()"></label>
+        <label class="fld">Produção (t)<input type="number" id="recProd" step="0.01" oninput="liveDre()"></label>
+        <label class="fld">Dias úteis<input type="number" id="recDU" step="1"></label>
+        <label class="fld">Dias trab.<input type="number" id="recDT" step="1"></label>
+        <label class="fld">ICMS (R$)<input type="number" id="impICMS" step="0.01" oninput="liveDre()"></label>
+        <label class="fld">PIS/COFINS (R$)<input type="number" id="impPIS" step="0.01" oninput="liveDre()"></label>
+        <label class="fld">IR/CS (R$)<input type="number" id="impIR" step="0.01" oninput="liveDre()"></label>
+        <label class="fld">ISS/Outros (R$)<input type="number" id="impISS" step="0.01" oninput="liveDre()"></label>
+        <button class="btn pri" onclick="saveCabecalho()">Salvar receita/impostos</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h">
+      <h3>Novo lançamento manual</h3>
+    </div>
+    <div class="panel-b">
+      <div class="frm">
+        <label class="fld">Data<input type="date" id="lcData"></label>
+        <label class="fld">Fornecedor<input type="text" id="lcForn"></label>
+        <label class="fld">N.F.<input type="text" id="lcNF"></label>
+        <label class="fld">Placa<input type="text" id="lcPlaca" placeholder="(opcional)"></label>
+        <label class="fld">Centro de custo
+          <select id="lcCC"></select>
+        </label>
+        <label class="fld">Valor (R$)<input type="number" id="lcValor" step="0.01"></label>
+        <button class="btn pri" onclick="addLancamento()">Adicionar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h">
+      <h3>Lançamentos do mês</h3>
+      <div class="ctrls">
+        <select id="filtroOrigem" onchange="renderLancamentos()">
+          <option value="">Todas as origens</option>
+          <option value="manual">Manual</option>
+          <option value="manutencao">Manutenção (OS)</option>
+        </select>
+      </div>
+    </div>
+    <div class="panel-b" style="overflow:auto;max-height:440px">
+      <table>
+        <thead><tr>
+          <th>Data</th><th>Fornecedor</th><th>N.F.</th><th>Placa</th><th>Centro de custo</th>
+          <th class="num">Valor</th><th>Origem</th><th></th>
+        </tr></thead>
+        <tbody id="lancTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <button class="btn" id="btnValidar" onclick="validar()">Validar fechamento</button>
+    <button class="btn ok" id="btnFechar" onclick="fechar()">Fechar Mapinha</button>
+    <button class="btn warn" id="btnReabrir" onclick="reabrir()" style="display:none">Reabrir (controlado)</button>
+  </div>
+</section>
+
+<!-- ══ DRE ══ -->
+<section class="view" id="v-dre">
+  <div class="panel">
+    <div class="panel-h"><h3 id="dreTitle">DRE</h3></div>
+    <div class="panel-b" style="overflow:auto">
+      <table>
+        <thead><tr>
+          <th>Linha</th>
+          <th class="num">Realizado</th><th class="num">% Fat.</th>
+          <th class="num">Meta (PA)</th><th class="num">% Real x Meta</th>
+        </tr></thead>
+        <tbody id="dreTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ══ PREMISSAS ══ -->
+<section class="view" id="v-prem">
+  <div class="lock-note" id="premVigInfo"></div>
+
+  <div class="panel">
+    <div class="panel-h"><h3>Metas (Pactuado / PA)</h3></div>
+    <div class="panel-b">
+      <div class="frm">
+        <label class="fld">Meta Fat. Bruto<input type="number" id="mtFat" step="0.01"></label>
+        <label class="fld">Meta Produção (t)<input type="number" id="mtProd" step="0.01"></label>
+        <label class="fld">Meta Diesel<input type="number" id="mtDiesel" step="0.01"></label>
+        <label class="fld">Meta Agregados<input type="number" id="mtAgreg" step="0.01"></label>
+        <label class="fld">Meta C.O<input type="number" id="mtCO" step="0.01"></label>
+        <label class="fld">Meta C.P<input type="number" id="mtCP" step="0.01"></label>
+        <label class="fld">Meta C.E<input type="number" id="mtCE" step="0.01"></label>
+        <label class="fld">Meta Result. Fin.<input type="number" id="mtRF" step="0.01"></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h"><h3>Folha (C.P) — por função</h3>
+      <button class="btn sm" onclick="addFolhaRow()">+ função</button></div>
+    <div class="panel-b" style="overflow:auto">
+      <table>
+        <thead><tr><th>Função</th><th class="num">Qtd</th><th class="num">Salário</th><th></th></tr></thead>
+        <tbody id="folhaTbody"></tbody>
+      </table>
+      <div class="frm" style="margin-top:10px;max-width:240px">
+        <label class="fld">Encargos (%)<input type="number" id="prEnc" step="0.01" placeholder="ex: 70"></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h"><h3>Frota (C.E) — por equipamento</h3>
+      <button class="btn sm" onclick="addFrotaRow()">+ equipamento</button></div>
+    <div class="panel-b" style="overflow:auto">
+      <table>
+        <thead><tr><th>Tipo</th><th class="num">Qtd</th><th class="num">Valor CE unit.</th><th></th></tr></thead>
+        <tbody id="frotaTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:8px">
+    <button class="btn pri" onclick="savePremissa()">Salvar premissa (vigência do mês)</button>
+    <span class="muted" style="align-self:center;font-size:11px">Salva como vigência a partir do mês selecionado; meses seguintes herdam até nova alteração.</span>
+  </div>
+</section>
+
+<!-- ══ CONSOLIDADO ══ -->
+<section class="view" id="v-cons">
+  <div class="panel">
+    <div class="panel-h"><h3>Resultado Financeiro — série histórica (meses fechados)</h3>
+      <select id="consFilial" onchange="renderConsolidado()"><option value="">Todas as filiais</option></select></div>
+    <div class="panel-b"><canvas id="consChart" height="110"></canvas></div>
+  </div>
+  <div class="panel">
+    <div class="panel-h"><h3>Meses fechados</h3></div>
+    <div class="panel-b" style="overflow:auto;max-height:420px">
+      <table>
+        <thead><tr><th>Filial</th><th>Mês</th><th class="num">Fat. Bruto</th><th class="num">Fat. Líq.</th>
+          <th class="num">Result. Fin.</th><th class="num">Margem</th><th>Status</th></tr></thead>
+        <tbody id="consTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<div id="toast-el" class="toast"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   PONTE FIRESTORE (mesmo contrato do manutencao.html / index.html)
+   ══════════════════════════════════════════════════════════════════ */
+let ATLAS_CURRENT_USER = { email:'', uid:'', nome:'', perfil:'admin', filiais:[] };
+const _fsPending = {}; let _fsSeq = 0;
+
+function atlasHasParentBridge(){ return !!(window.parent && window.parent !== window); }
+window.addEventListener('message', ev => {
+  const m = ev.data || {};
+  if (m.type === 'ATLAS_USER'){ ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...m }; applyPerm(); refreshAll(); }
+  if (m.type === 'ATLAS_FIRESTORE_RESPONSE' && m.requestId){
+    const p = _fsPending[m.requestId]; if(!p) return;
+    clearTimeout(p.timer); delete _fsPending[m.requestId];
+    m.ok ? p.resolve(m.result||{}) : p.reject(new Error(m.error||'Falha na ponte'));
+  }
+});
+function atlasParent(action, payload={}, timeout=9000){
+  if(!atlasHasParentBridge()) return Promise.reject(new Error('Ponte indisponível'));
+  const requestId = 'mapfs-'+Date.now()+'-'+(_fsSeq++);
+  return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{ delete _fsPending[requestId]; reject(new Error('Timeout na ponte')); },timeout);
+    _fsPending[requestId]={resolve,reject,timer};
+    window.parent.postMessage({type:'ATLAS_FIRESTORE_REQUEST',requestId,action,...payload},'*');
+  });
+}
+async function fsGetCollection(collection,opts={}){
+  if(atlasHasParentBridge()){ try{ const r=await atlasParent('getCollection',{collection,...opts}); return r.docs||[]; }catch(e){ console.warn(e);} }
+  const db=window._mapDB;
+  if(db){ let ref=db.collection(collection); if(opts.orderBy)ref=ref.orderBy(opts.orderBy,opts.orderDir||'asc'); if(opts.limit)ref=ref.limit(+opts.limit);
+    const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); }
+  return [];
+}
+async function fsGetDoc(collection,docId){
+  if(atlasHasParentBridge()){ try{ const r=await atlasParent('getDoc',{collection,docId}); return r.exists?{id:r.id,data:r.data||{}}:null; }catch(e){ console.warn(e);} }
+  const db=window._mapDB; if(db){ const s=await db.collection(collection).doc(docId).get(); return s.exists?{id:s.id,data:s.data()}:null; }
+  return null;
+}
+async function fsSetDoc(collection,docId,data,opts={}){
+  if(atlasHasParentBridge()){ try{ const r=await atlasParent('setDoc',{collection,docId,data,merge:!!opts.merge}); return {id:r.id||docId}; }catch(e){ console.warn(e);} }
+  const db=window._mapDB; if(db){ await db.collection(collection).doc(docId).set(data,{merge:!!opts.merge}); return {id:docId}; }
+  throw new Error('Firestore indisponível');
+}
+
+/* ══ HELPERS ══ */
+function moeda(v){ return Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
+function num(v){ return Number(v||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function pct(v){ return (Number(v||0)*100).toLocaleString('pt-BR',{maximumFractionDigits:1})+'%'; }
+function toast(msg,type='ac'){ const t=document.getElementById('toast-el'); t.textContent=msg; t.className='toast '+type+' on'; setTimeout(()=>t.classList.remove('on'),3200); }
+function dtFrom(v){ if(!v)return null; if(v.toDate)return v.toDate(); const d=new Date(v); return isNaN(d)?null:d; }
+function mesRefDe(v){ const d=dtFrom(v); if(!d)return null; return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+function upper(v){ return String(v||'').trim().toLocaleUpperCase('pt-BR'); }
+const OPCODE_SIGLA = { '17':'SC','18':'PR','03':'SP' };
+function siglaDeOp(op){ return OPCODE_SIGLA[String(op||'').padStart(2,'0')] || upper(op); }
+
+/* Mapa código centro de custo → grupo DRE (fallback se cadastro não trouxer grupoDre) */
+const GRUPO_FALLBACK = {
+  '01.01':'DIESEL','02.01':'DIESEL','02.02':'DIESEL','04.01':'DIESEL','04.02':'DIESEL','21.01':'DIESEL','22.01':'DIESEL',
+  '03.01':'CO','05.01':'CO','06.01':'CO','07.01':'CO','08.01':'CO','09.01':'CO','10.01':'CO','11.01':'CO','12.01':'CO','23.01':'CO',
+  '13.01':'CP','14.01':'CP','15.01':'CP',
+  '16.01':'PEDAGIO','17.01':'AGREGADOS',
+  '18.01':'CAPEX','19.01':'CONTROLE','20.01':'CONTROLE','24.01':'CONTROLE'
+};
+/* Centros de custo alimentados automaticamente pela Manutenção */
+const CC_MANUTENCAO = new Set(['03.01','05.01','06.01','07.01','10.01','11.01','12.01','23.01']);
+
+/* ══ ESTADO ══ */
+const ST = {
+  filiais:[], centrosCusto:[], grupoMap:{},      // código -> grupo
+  filial:'', mesRef:'',
+  cabecalho:null,                                  // mapinha_mensal doc
+  lancManuais:[],                                  // mapinha_lancamentos (manual)
+  lancOS:[],                                       // derivados de ordens_servico (ao vivo)
+  premissa:null,                                   // resolvida por carry-forward
+  consolidado:[]                                   // meses fechados (mapinha_mensal)
+};
+
+function isAdminOuLR(){ const p=(ATLAS_CURRENT_USER.perfil||'').toLowerCase(); return /admin|^lr$|gestor/.test(p); }
+function filiaisPermitidas(){
+  if(isAdminOuLR()) return ST.filiais.map(f=>f.sigla);
+  const fs = ATLAS_CURRENT_USER.filiais||[];
+  return fs.length?fs.map(upper):ST.filiais.map(f=>f.sigla);
+}
+function podeEditar(){ const s=(ST.cabecalho&&ST.cabecalho.status)||'rascunho'; return s==='rascunho'||s==='reaberto'; }
+
+/* ══ BOOT ══ */
+function tab(v){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.v===v));
+  document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
+  if(v==='cons') loadConsolidado();
+}
+
+async function boot(){
+  // cadastros
+  const [fil, cc] = await Promise.all([ fsGetCollection('filiais'), fsGetCollection('centros_custo') ]);
+  ST.filiais = fil.map(d=>({ id:d.id, sigla:upper(d.data.sigla||d.data.nome||d.id), nome:d.data.nome||d.id }))
+                  .sort((a,b)=>a.sigla.localeCompare(b.sigla));
+  ST.centrosCusto = cc.map(d=>({ codigo:d.data.codigo||d.id, nome:d.data.nome||'', grupo:(d.data.grupoDre||GRUPO_FALLBACK[d.data.codigo]||'CONTROLE') }))
+                      .filter(c=>/^\d{2}\.\d{2}$/.test(c.codigo))
+                      .sort((a,b)=>a.codigo.localeCompare(b.codigo));
+  ST.grupoMap = {}; ST.centrosCusto.forEach(c=>ST.grupoMap[c.codigo]=c.grupo);
+
+  // selects
+  const sf=document.getElementById('selFilial'), cf=document.getElementById('consFilial');
+  const perm = filiaisPermitidas();
+  sf.innerHTML=''; ST.filiais.filter(f=>perm.includes(f.sigla)).forEach(f=>{
+    sf.appendChild(new Option(f.sigla+' — '+f.nome, f.sigla)); cf.appendChild(new Option(f.sigla, f.sigla));
+  });
+  const cc2=document.getElementById('lcCC'); cc2.innerHTML='<option value="">Selecione…</option>';
+  ST.centrosCusto.forEach(c=> cc2.appendChild(new Option(c.codigo+' '+c.nome, c.codigo)) );
+
+  // escopo inicial
+  ST.filial = sf.value || (ST.filiais[0]&&ST.filiais[0].sigla) || '';
+  const now=new Date(); document.getElementById('selMes').value = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  ST.mesRef = document.getElementById('selMes').value;
+  document.getElementById('lcData').value = ST.mesRef+'-01';
+  applyPerm();
+  await refreshAll();
+}
+
+function applyPerm(){
+  document.getElementById('btnReabrir').style.display = isAdminOuLR() ? '' : 'none';
+}
+
+async function onScopeChange(){
+  ST.filial = document.getElementById('selFilial').value;
+  ST.mesRef = document.getElementById('selMes').value;
+  await refreshAll();
+}
+
+async function refreshAll(){
+  if(!ST.filial||!ST.mesRef) return;
+  await Promise.all([ loadCabecalho(), loadLancManuais(), loadLancOS(), loadPremissa() ]);
+  renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm();
+}
+
+/* ── Cabeçalho (mapinha_mensal) ── */
+function mapId(){ return 'MAP_'+ST.filial+'_'+ST.mesRef; }
+async function loadCabecalho(){
+  const d = await fsGetDoc('mapinha_mensal', mapId());
+  ST.cabecalho = d ? d.data : { filial:ST.filial, mesRef:ST.mesRef, status:'rascunho', receita:{}, impostos:{} };
+}
+function renderStatus(){
+  const s=(ST.cabecalho.status||'rascunho');
+  const p=document.getElementById('statusPill'); p.className='pill '+s; p.textContent=s.charAt(0).toUpperCase()+s.slice(1);
+  document.getElementById('sub').textContent = ST.filial+' · '+ST.mesRef;
+  const ed=podeEditar();
+  ['recFat','recProd','recDU','recDT','impICMS','impPIS','impIR','impISS','lcData','lcForn','lcNF','lcPlaca','lcCC','lcValor']
+    .forEach(id=>{ const el=document.getElementById(id); if(el) el.disabled=!ed; });
+  document.getElementById('btnFechar').disabled = !ed;
+  const banner=document.getElementById('lockBanner');
+  banner.innerHTML = ed ? '' : '<div class="lock-note">🔒 Mapinha '+s+'. Edição bloqueada — use "Reabrir (controlado)" para ajustar.</div>';
+}
+function fillCabecalhoForm(){
+  const r=ST.cabecalho.receita||{}, i=ST.cabecalho.impostos||{};
+  document.getElementById('recFat').value = r.fatBruto||'';
+  document.getElementById('recProd').value= r.producaoT||'';
+  document.getElementById('recDU').value  = r.diasUteis||'';
+  document.getElementById('recDT').value  = r.diasTrab||'';
+  document.getElementById('impICMS').value= i.icms||'';
+  document.getElementById('impPIS').value = i.pisCofins||'';
+  document.getElementById('impIR').value  = i.irCs||'';
+  document.getElementById('impISS').value = i.iss||'';
+}
+async function saveCabecalho(){
+  if(!podeEditar()) return toast('Mapinha bloqueado.','am');
+  ST.cabecalho.receita = {
+    fatBruto:+document.getElementById('recFat').value||0,
+    producaoT:+document.getElementById('recProd').value||0,
+    diasUteis:+document.getElementById('recDU').value||0,
+    diasTrab:+document.getElementById('recDT').value||0
+  };
+  ST.cabecalho.impostos = {
+    icms:+document.getElementById('impICMS').value||0,
+    pisCofins:+document.getElementById('impPIS').value||0,
+    irCs:+document.getElementById('impIR').value||0,
+    iss:+document.getElementById('impISS').value||0
+  };
+  ST.cabecalho.filial=ST.filial; ST.cabecalho.mesRef=ST.mesRef;
+  ST.cabecalho.ano=+ST.mesRef.slice(0,4); ST.cabecalho.mes=+ST.mesRef.slice(5,7);
+  if(!ST.cabecalho.status) ST.cabecalho.status='rascunho';
+  ST.cabecalho.atualizadoEm=new Date().toISOString();
+  ST.cabecalho.atualizadoPor=userMin();
+  await fsSetDoc('mapinha_mensal', mapId(), ST.cabecalho, {merge:true});
+  toast('Receita/impostos salvos.','gn'); renderLancCards(); renderDre();
+}
+function userMin(){ return { uid:ATLAS_CURRENT_USER.uid||'', email:ATLAS_CURRENT_USER.email||'', nome:ATLAS_CURRENT_USER.nome||'' }; }
+
+/* ── Lançamentos manuais (mapinha_lancamentos) ── */
+async function loadLancManuais(){
+  const all = await fsGetCollection('mapinha_lancamentos');
+  ST.lancManuais = all.map(d=>({id:d.id,...d.data}))
+    .filter(l=> l.filial===ST.filial && l.mesRef===ST.mesRef && l.origem!=='manutencao' && l.status!=='estornado');
+}
+async function addLancamento(){
+  if(!podeEditar()) return toast('Mapinha bloqueado.','am');
+  const cc=document.getElementById('lcCC').value;
+  const valor=+document.getElementById('lcValor').value||0;
+  if(!cc) return toast('Selecione o centro de custo.','am');
+  if(!valor) return toast('Informe o valor.','am');
+  const seq = Date.now().toString(36);
+  const docId = 'LCM_'+ST.filial+'_'+ST.mesRef+'_'+seq;
+  const cci = ST.centrosCusto.find(c=>c.codigo===cc)||{};
+  const payload = {
+    filial:ST.filial, mesRef:ST.mesRef,
+    data:document.getElementById('lcData').value||ST.mesRef+'-01',
+    fornecedor:upper(document.getElementById('lcForn').value),
+    nf:document.getElementById('lcNF').value.trim(),
+    placa:upper(document.getElementById('lcPlaca').value),
+    centroCusto:cc, centroCustoNome:cci.nome||'', grupoDre:cci.grupo||GRUPO_FALLBACK[cc]||'CONTROLE',
+    valor, origem:'manual', status:'ativo',
+    criadoPor:userMin(), criadoEm:new Date().toISOString()
+  };
+  await fsSetDoc('mapinha_lancamentos', docId, payload);
+  toast('Lançamento adicionado.','gn');
+  ['lcForn','lcNF','lcPlaca','lcValor'].forEach(id=>document.getElementById(id).value='');
+  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre();
+}
+async function estornarLanc(id){
+  if(!podeEditar()) return toast('Mapinha bloqueado.','am');
+  if(!confirm('Estornar este lançamento? (mantém histórico, não exclui)')) return;
+  await fsSetDoc('mapinha_lancamentos', id, { status:'estornado', estornadoEm:new Date().toISOString(), estornadoPor:userMin() }, {merge:true});
+  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre(); toast('Lançamento estornado.','am');
+}
+
+/* ── Derivar custos de OS concluídas (ao vivo) ──
+   Lê ordens_servico do período; se a OS tiver notas[] (NF por linha), gera 1 lançamento por NF;
+   senão, 1 lançamento com valorTotal. Centro de custo é o da OS (header). */
+async function loadLancOS(){
+  const oss = await fsGetCollection('ordens_servico');
+  const out=[];
+  oss.map(d=>({id:d.id,...d.data})).forEach(o=>{
+    const concl = /conclu/i.test(o.status||'');
+    if(!concl) return;
+    const fil = upper(o.unidade||o.filial||'');
+    const mr  = mesRefDe(o.finalizadoEm||o.atualizadoEm||o.criadoEm);
+    if(fil!==ST.filial || mr!==ST.mesRef) return;
+    const cc = o.centroCusto || '06.01';
+    const cci = ST.centrosCusto.find(c=>c.codigo===cc)||{};
+    const base = { filial:fil, mesRef:mr, placa:upper(o.veiculo||o.placa||''), centroCusto:cc,
+                   centroCustoNome:cci.nome||'', grupoDre:cci.grupo||GRUPO_FALLBACK[cc]||'CO',
+                   origem:'manutencao', osId:o.id, data:(dtFrom(o.finalizadoEm)||new Date()).toISOString().slice(0,10) };
+    const notas = Array.isArray(o.notas)&&o.notas.length ? o.notas : null;
+    if(notas){
+      notas.forEach((n,ix)=> out.push({ id:'LCM_OS_'+o.id+'_'+(n.nf||ix), ...base,
+        fornecedor:upper(n.fornecedor||o.prestador||''), nf:String(n.nf||''), valor:+n.valor||0 }));
+    } else {
+      out.push({ id:'LCM_OS_'+o.id, ...base, fornecedor:upper(o.prestador||''), nf:String(o.nfNumero||''), valor:+o.valorTotal||0 });
+    }
+  });
+  ST.lancOS = out;
+}
+
+function lancVisiveis(){ return [...ST.lancManuais, ...ST.lancOS]; }
+
+function renderLancamentos(){
+  const f=document.getElementById('filtroOrigem').value;
+  const rows = lancVisiveis().filter(l=>!f||l.origem===f)
+    .sort((a,b)=> String(a.data).localeCompare(String(b.data)));
+  const tb=document.getElementById('lancTbody');
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="8" class="empty">Nenhum lançamento neste mês.</td></tr>'; return; }
+  tb.innerHTML = rows.map(l=>{
+    const dt=dtFrom(l.data); const ds=dt?dt.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}):'—';
+    const origem = l.origem==='manutencao'
+      ? `<span class="tag os" onclick="abrirOS('${l.osId}')">OS ${l.osId||''}</span>`
+      : `<span class="tag man">manual</span>`;
+    const acao = (l.origem==='manual'&&podeEditar()) ? `<button class="btn sm" onclick="estornarLanc('${l.id}')">estornar</button>` : '';
+    const neg = l.valor<0?'neg':'';
+    return `<tr><td>${ds}</td><td>${l.fornecedor||'—'}</td><td>${l.nf||'—'}</td><td>${l.placa||'—'}</td>
+      <td>${l.centroCusto} ${l.centroCustoNome||''}</td>
+      <td class="num ${neg}">${moeda(l.valor)}</td><td>${origem}</td><td>${acao}</td></tr>`;
+  }).join('');
+}
+function abrirOS(osId){
+  if(!osId) return;
+  // reaproveita o padrão de navegação cross-iframe do Atlas
+  try{ window.parent.postMessage({type:'ATLAS_NAV_TO_OS', osId},'*'); }catch(_){}
+}
+
+/* ══ DRE ══ */
+function somaGrupo(g){ return lancVisiveis().filter(l=>l.grupoDre===g).reduce((s,l)=>s+(+l.valor||0),0); }
+function custoPessoalFolha(){
+  const p=ST.premissa; if(!p||!Array.isArray(p.folha)) return 0;
+  const enc=1+((+p.encargosPct||0)/100);
+  return p.folha.reduce((s,f)=> s + (+f.qtd||0)*(+f.salario||0), 0) * enc;
+}
+function custoEquipFrota(){
+  const p=ST.premissa; if(!p||!Array.isArray(p.frota)) return 0;
+  return p.frota.reduce((s,f)=> s + (+f.qtd||0)*(+f.valorCE||0), 0);
+}
+function calcDRE(){
+  const r=ST.cabecalho.receita||{}, im=ST.cabecalho.impostos||{};
+  const fat=+r.fatBruto||0, prod=+r.producaoT||0;
+  const imp=(+im.icms||0)+(+im.pisCofins||0)+(+im.irCs||0)+(+im.iss||0);
+  const fl=fat-imp;
+  const diesel=somaGrupo('DIESEL'), agreg=somaGrupo('AGREGADOS'), pedagio=somaGrupo('PEDAGIO');
+  const coLanc=somaGrupo('CO'); const co=coLanc;
+  const cpLanc=somaGrupo('CP'); const cp=custoPessoalFolha()+cpLanc;
+  const ce=custoEquipFrota();
+  const rf=fl-diesel-agreg-pedagio-co-cp-ce;
+  return { fat, prod, pm: prod?fat/prod:0, imp, fl, diesel, agreg, pedagio, co, cp, ce, rf,
+           margem: fat? rf/fat : 0 };
+}
+function renderDre(){
+  document.getElementById('dreTitle').textContent = 'DRE — '+ST.filial+' · '+ST.mesRef;
+  const d=calcDRE(); const m=(ST.premissa&&ST.premissa.metas)||{};
+  const fatPct=v=> d.fat? v/d.fat : 0;
+  const linha=(nome,val,meta,cls='')=>{
+    const realxmeta = meta? val/meta : 0;
+    return `<tr class="${cls}"><td>${nome}</td>
+      <td class="num ${val<0?'neg':''}">${moeda(val)}</td>
+      <td class="num">${nome==='Fat. Bruto'?'—':pct(fatPct(val))}</td>
+      <td class="num">${meta?moeda(meta):'—'}</td>
+      <td class="num">${meta?pct(realxmeta):'—'}</td></tr>`;
+  };
+  const tb=document.getElementById('dreTbody');
+  tb.innerHTML =
+    linha('Fat. Bruto', d.fat, m.fatBruto,'grp') +
+    `<tr><td>Produção (t)</td><td class="num">${num(d.prod)}</td><td class="num">—</td><td class="num">${m.producaoT?num(m.producaoT):'—'}</td><td class="num">${m.producaoT?pct(m.producaoT?d.prod/m.producaoT:0):'—'}</td></tr>` +
+    `<tr><td>Preço Médio</td><td class="num">${moeda(d.pm)}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>` +
+    linha('(–) Impostos', d.imp) +
+    linha('= Fat. Líquido', d.fl,'','grp') +
+    linha('(–) Diesel', d.diesel, m.diesel) +
+    linha('(–) Agregados', d.agreg, m.agreg) +
+    linha('(–) Pedágio', d.pedagio) +
+    linha('(–) Custo Operacional', d.co, m.co) +
+    linha('(–) Custo de Pessoal', d.cp, m.cp) +
+    linha('(–) Custo de Equip.', d.ce, m.ce) +
+    `<tr class="res"><td>= Resultado Financeiro</td><td class="num">${moeda(d.rf)}</td><td class="num">${pct(d.margem)}</td><td class="num">${m.resultadoFinanceiro?moeda(m.resultadoFinanceiro):'—'}</td><td class="num">${m.resultadoFinanceiro?pct(m.resultadoFinanceiro?d.rf/m.resultadoFinanceiro:0):'—'}</td></tr>`;
+}
+function liveDre(){
+  // recalcula DRE em tempo real a partir dos inputs sem salvar
+  ST.cabecalho.receita={ fatBruto:+document.getElementById('recFat').value||0, producaoT:+document.getElementById('recProd').value||0,
+    diasUteis:+document.getElementById('recDU').value||0, diasTrab:+document.getElementById('recDT').value||0 };
+  ST.cabecalho.impostos={ icms:+document.getElementById('impICMS').value||0, pisCofins:+document.getElementById('impPIS').value||0,
+    irCs:+document.getElementById('impIR').value||0, iss:+document.getElementById('impISS').value||0 };
+  renderLancCards(); renderDre();
+}
+function renderLancCards(){
+  const d=calcDRE();
+  const c=document.getElementById('lancCards');
+  c.innerHTML =
+    card('Fat. Bruto', moeda(d.fat),'acc') +
+    card('Fat. Líquido', moeda(d.fl)) +
+    card('Custo Operacional', moeda(d.co), '', 'Manutenção + manual') +
+    card('Result. Financeiro', moeda(d.rf), d.rf>=0?'good':'bad', pct(d.margem)+' margem');
+}
+function card(k,v,cls='',s=''){ return `<div class="card ${cls}"><div class="k">${k}</div><div class="v">${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`; }
+
+/* ══ PREMISSAS (carry-forward por vigência mensal) ══ */
+async function loadPremissa(){
+  const all = await fsGetCollection('mapinha_premissas');
+  const cands = all.map(d=>({id:d.id,...d.data}))
+    .filter(p=> p.filial===ST.filial && p.vigencia && p.vigencia<=ST.mesRef)
+    .sort((a,b)=> b.vigencia.localeCompare(a.vigencia));
+  ST.premissa = cands[0] || { filial:ST.filial, vigencia:null, folha:[], frota:[], encargosPct:0, metas:{} };
+}
+function fillPremissaForm(){
+  const p=ST.premissa, m=p.metas||{};
+  const info=document.getElementById('premVigInfo');
+  info.textContent = p.vigencia ? `Premissa vigente desde ${p.vigencia} (herdada). Salvar abaixo cria nova vigência a partir de ${ST.mesRef}.`
+                                : `Nenhuma premissa cadastrada para ${ST.filial}. Salvar cria a vigência ${ST.mesRef}.`;
+  document.getElementById('mtFat').value=m.fatBruto||''; document.getElementById('mtProd').value=m.producaoT||'';
+  document.getElementById('mtDiesel').value=m.diesel||''; document.getElementById('mtAgreg').value=m.agreg||'';
+  document.getElementById('mtCO').value=m.co||''; document.getElementById('mtCP').value=m.cp||'';
+  document.getElementById('mtCE').value=m.ce||''; document.getElementById('mtRF').value=m.resultadoFinanceiro||'';
+  document.getElementById('prEnc').value=p.encargosPct||'';
+  renderFolha(); renderFrota();
+}
+function renderFolha(){
+  const tb=document.getElementById('folhaTbody'); const arr=ST.premissa.folha||[];
+  tb.innerHTML = arr.length? arr.map((f,i)=>`<tr>
+    <td><input type="text" value="${f.funcao||''}" onchange="ST.premissa.folha[${i}].funcao=this.value"></td>
+    <td class="num"><input type="number" step="0.1" value="${f.qtd||0}" style="width:80px" onchange="ST.premissa.folha[${i}].qtd=+this.value"></td>
+    <td class="num"><input type="number" step="0.01" value="${f.salario||0}" style="width:110px" onchange="ST.premissa.folha[${i}].salario=+this.value"></td>
+    <td><button class="btn sm" onclick="ST.premissa.folha.splice(${i},1);renderFolha()">×</button></td></tr>`).join('')
+    : '<tr><td colspan="4" class="empty">Sem funções cadastradas.</td></tr>';
+}
+function addFolhaRow(){ (ST.premissa.folha=ST.premissa.folha||[]).push({funcao:'',qtd:1,salario:0}); renderFolha(); }
+function renderFrota(){
+  const tb=document.getElementById('frotaTbody'); const arr=ST.premissa.frota||[];
+  tb.innerHTML = arr.length? arr.map((f,i)=>`<tr>
+    <td><input type="text" value="${f.tipo||''}" onchange="ST.premissa.frota[${i}].tipo=this.value"></td>
+    <td class="num"><input type="number" step="1" value="${f.qtd||0}" style="width:80px" onchange="ST.premissa.frota[${i}].qtd=+this.value"></td>
+    <td class="num"><input type="number" step="0.01" value="${f.valorCE||0}" style="width:110px" onchange="ST.premissa.frota[${i}].valorCE=+this.value"></td>
+    <td><button class="btn sm" onclick="ST.premissa.frota.splice(${i},1);renderFrota()">×</button></td></tr>`).join('')
+    : '<tr><td colspan="4" class="empty">Sem equipamentos cadastrados.</td></tr>';
+}
+function addFrotaRow(){ (ST.premissa.frota=ST.premissa.frota||[]).push({tipo:'',qtd:1,valorCE:0}); renderFrota(); }
+async function savePremissa(){
+  if(!isAdminOuLR() && !(ATLAS_CURRENT_USER.filiais||[]).map(upper).includes(ST.filial))
+    return toast('Sem permissão para esta filial.','am');
+  const metas={ fatBruto:+document.getElementById('mtFat').value||0, producaoT:+document.getElementById('mtProd').value||0,
+    diesel:+document.getElementById('mtDiesel').value||0, agreg:+document.getElementById('mtAgreg').value||0,
+    co:+document.getElementById('mtCO').value||0, cp:+document.getElementById('mtCP').value||0,
+    ce:+document.getElementById('mtCE').value||0, resultadoFinanceiro:+document.getElementById('mtRF').value||0 };
+  const payload={ filial:ST.filial, vigencia:ST.mesRef, metas, encargosPct:+document.getElementById('prEnc').value||0,
+    folha:(ST.premissa.folha||[]).filter(f=>f.funcao), frota:(ST.premissa.frota||[]).filter(f=>f.tipo),
+    atualizadoPor:userMin(), atualizadoEm:new Date().toISOString() };
+  await fsSetDoc('mapinha_premissas', 'PREM_'+ST.filial+'_'+ST.mesRef, payload);
+  toast('Premissa salva (vigência '+ST.mesRef+').','gn');
+  await loadPremissa(); fillPremissaForm(); renderDre(); renderLancCards();
+}
+
+/* ══ VALIDAÇÃO / FECHAMENTO ══ */
+function validacoes(){
+  const r=ST.cabecalho.receita||{}; const erros=[];
+  if(!(+r.fatBruto>0)) erros.push('Fat. Bruto deve ser > 0');
+  if(!(+r.producaoT>0)) erros.push('Produção (t) deve ser > 0');
+  if(!ST.premissa || !ST.premissa.vigencia) erros.push('Premissa (folha/frota/metas) não cadastrada para a filial');
+  return erros;
+}
+function validar(){
+  const e=validacoes();
+  if(e.length) return toast('Pendências: '+e.join(' · '),'am');
+  toast('Tudo certo para fechar.','gn');
+}
+async function fechar(){
+  if(!podeEditar()) return toast('Mapinha já fechado.','am');
+  const e=validacoes();
+  if(e.length) return toast('Não é possível fechar: '+e.join(' · '),'rd');
+  if(!confirm('Fechar o Mapinha de '+ST.filial+' · '+ST.mesRef+'? O resultado será congelado.')) return;
+  const d=calcDRE();
+  ST.cabecalho.status='fechado';
+  ST.cabecalho.totais={ fatBruto:d.fat, producaoT:d.prod, precoMedio:d.pm, totalImpostos:d.imp, fatLiquido:d.fl,
+    diesel:d.diesel, agregados:d.agreg, pedagio:d.pedagio, custoOperacional:d.co, custoPessoal:d.cp, custoEquip:d.ce,
+    resultadoFinanceiro:d.rf, margemPct:d.margem };
+  ST.cabecalho.fechadoPor=userMin(); ST.cabecalho.fechadoEm=new Date().toISOString();
+  ST.cabecalho.historico=[...(ST.cabecalho.historico||[]),{acao:'fechado',por:userMin(),em:new Date().toISOString()}];
+  await fsSetDoc('mapinha_mensal', mapId(), ST.cabecalho, {merge:true});
+  toast('Mapinha fechado e resultado congelado.','gn');
+  renderStatus();
+}
+async function reabrir(){
+  if(!isAdminOuLR()) return toast('Apenas Admin/LR podem reabrir.','am');
+  const s=ST.cabecalho.status; if(s!=='fechado'&&s!=='cancelado') return toast('Só é possível reabrir um Mapinha fechado.','am');
+  const motivo=prompt('Motivo da reabertura (auditoria):'); if(motivo===null) return;
+  ST.cabecalho.status='reaberto'; ST.cabecalho.motivoReabertura=motivo;
+  ST.cabecalho.reabertoPor=userMin(); ST.cabecalho.reabertoEm=new Date().toISOString();
+  ST.cabecalho.historico=[...(ST.cabecalho.historico||[]),{acao:'reaberto',por:userMin(),em:new Date().toISOString(),motivo}];
+  await fsSetDoc('mapinha_mensal', mapId(), ST.cabecalho, {merge:true});
+  toast('Mapinha reaberto para ajuste.','cy'); renderStatus();
+}
+
+/* ══ CONSOLIDADO ══ */
+let _consChart=null;
+async function loadConsolidado(){
+  const all = await fsGetCollection('mapinha_mensal');
+  const perm = filiaisPermitidas();
+  ST.consolidado = all.map(d=>d.data)
+    .filter(m=> (m.status==='fechado'||m.status==='reaberto') && perm.includes(m.filial))
+    .sort((a,b)=> (a.mesRef+a.filial).localeCompare(b.mesRef+b.filial));
+  renderConsolidado();
+}
+function renderConsolidado(){
+  const ff=document.getElementById('consFilial').value;
+  const rows=ST.consolidado.filter(m=>!ff||m.filial===ff);
+  const tb=document.getElementById('consTbody');
+  tb.innerHTML = rows.length? rows.map(m=>{ const t=m.totais||{};
+    return `<tr><td>${m.filial}</td><td>${m.mesRef}</td>
+      <td class="num">${moeda(t.fatBruto)}</td><td class="num">${moeda(t.fatLiquido)}</td>
+      <td class="num ${t.resultadoFinanceiro<0?'neg':''}">${moeda(t.resultadoFinanceiro)}</td>
+      <td class="num">${pct(t.margemPct)}</td><td><span class="pill ${m.status}">${m.status}</span></td></tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty">Nenhum mês fechado ainda.</td></tr>';
+  // gráfico RF por mês (agrega filiais se "Todas")
+  const byMes={}; rows.forEach(m=>{ byMes[m.mesRef]=(byMes[m.mesRef]||0)+(+((m.totais||{}).resultadoFinanceiro)||0); });
+  const labels=Object.keys(byMes).sort(); const data=labels.map(l=>byMes[l]);
+  const ctx=document.getElementById('consChart'); if(!ctx) return;
+  if(_consChart) _consChart.destroy();
+  _consChart=new Chart(ctx,{ type:'line', data:{ labels, datasets:[{ label:'Resultado Financeiro', data,
+    borderColor:'#1a56db', backgroundColor:'rgba(26,86,219,.08)', fill:true, tension:.25, pointRadius:3 }] },
+    options:{ responsive:true, plugins:{legend:{display:false}},
+      scales:{ y:{ ticks:{ callback:v=>'R$ '+(v/1000).toFixed(0)+'k' } } } } });
+}
+
+/* ══ START ══ */
+window.addEventListener('DOMContentLoaded', ()=>{ try{ window.parent.postMessage({type:'ATLAS_REQUEST_USER'},'*'); }catch(_){} boot(); });
+</script>
+</body>
+</html>
