@@ -423,16 +423,34 @@ function derivarReceitaSZB(filial, mesRef){
   return { fatBruto:Math.round(fat*100)/100, producaoT:Math.round(prod*1000)/1000,
            diasTrab:datas.size, diasUteis:diasUteisDoMes(mesRef) };
 }
-/* pega a SZB: 1) memória do portal (mesma origem); 2) pede via postMessage */
+/* pega a SZB: 1) memória do portal; 2) Firestore direto (mesmo caminho do PD); 3) postMessage */
 function ensureSZB(){
-  if(SZB.loaded) return;
+  if(SZB.loaded || SZB._loading) return;
   try{ const pd=window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
        if(pd && pd.rows && pd.rows.length){ SZB.rows=pd.rows; SZB.loaded=true; onSZBLoaded(); return; } }catch(_){}
-  if(!SZB._requested){ SZB._requested=true;
-    try{ window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szb'},'*'); }catch(_){}
-  }
+  SZB._loading=true; fillSZBInfo('carregando');
+  if(!SZB._requested){ SZB._requested=true; try{ window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szb'},'*'); }catch(_){} }
+  loadSZBDireto().then(rows=>{
+    SZB._loading=false;
+    if(rows && rows.length && !SZB.loaded){ SZB.rows=rows; SZB.loaded=true; onSZBLoaded(); }
+    else if(!SZB.loaded){ fillSZBInfo('carregando'); }
+  }).catch(()=>{ SZB._loading=false; });
 }
-function onSZBLoaded(){ const el=document.getElementById('btnPullSZB'); if(el) el.disabled=false; pullReceitaSZB(false); }
+/* leitura direta chunked de bases_szb/meta + chunks — idêntica ao PD */
+async function loadSZBDireto(){
+  try{
+    const db = window._mapDB || (window.firebase && firebase.firestore && firebase.firestore());
+    if(!db) return null;
+    const meta = await db.collection('bases_szb').doc('meta').get();
+    if(!meta.exists) return null;
+    const n = meta.data().numChunks||0; if(!n) return null;
+    const snaps = await Promise.all(Array.from({length:n},(_,i)=>
+      db.collection('bases_szb').doc('meta').collection('chunks').doc(String(i)).get()));
+    const rows=[]; snaps.forEach(s=>{ if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) rows.push(...r); } });
+    return rows.length?rows:null;
+  }catch(e){ console.warn('[Mapinha] SZB Firestore direto falhou:', e.message); return null; }
+}
+function onSZBLoaded(){ const el=document.getElementById('btnPullSZB'); if(el) el.disabled = !podeEditar(); pullReceitaSZB(false); }
 
 /* preenche os campos de receita a partir do SZB.
    force=true: sempre sobrescreve (botão). force=false: só se ainda for fonte 'szb' (não manual). */
@@ -443,27 +461,38 @@ function pullReceitaSZB(force){
   ensureSZB();
   const d = derivarReceitaSZB(ST.filial, ST.mesRef);
   if(!d){ fillSZBInfo(SZB.loaded?'vazio':'carregando'); return; }
-  if(!podeEditar()){ fillSZBInfo('szb', d); return; }
-  document.getElementById('recFat').value  = d.fatBruto||'';
-  document.getElementById('recProd').value = d.producaoT||'';
-  document.getElementById('recDU').value   = d.diasUteis||'';
-  document.getElementById('recDT').value   = d.diasTrab||'';
-  ST.cabecalho.receita = { ...(ST.cabecalho.receita||{}),
-    fatBruto:d.fatBruto, producaoT:d.producaoT, diasUteis:d.diasUteis, diasTrab:d.diasTrab, fonte:'szb' };
-  fillSZBInfo('szb', d); renderLancCards(); renderDre();
-  if(force) toast('Receita puxada do SZB.','gn');
+  const vazio = !(d.fatBruto>0) && d.diasTrab===0;
+  if(!podeEditar()){ fillSZBInfo(vazio?'vazio':'szb', d); return; }
+  if(!vazio){
+    document.getElementById('recFat').value  = d.fatBruto||'';
+    document.getElementById('recProd').value = d.producaoT||'';
+    document.getElementById('recDU').value   = d.diasUteis||'';
+    document.getElementById('recDT').value   = d.diasTrab||'';
+    ST.cabecalho.receita = { ...(ST.cabecalho.receita||{}),
+      fatBruto:d.fatBruto, producaoT:d.producaoT, diasUteis:d.diasUteis, diasTrab:d.diasTrab, fonte:'szb' };
+    renderLancCards(); renderDre();
+  }
+  fillSZBInfo(vazio?'vazio':'szb', d);
+  if(force) toast(vazio?'SZB sem registros para esta filial/mês.':'Receita puxada do SZB.', vazio?'am':'gn');
 }
 function onReceitaEdit(){ // qualquer edição manual marca a fonte como 'manual'
   ST.cabecalho.receita = { ...(ST.cabecalho.receita||{}), fonte:'manual' }; fillSZBInfo('manual'); liveDre();
 }
 function fillSZBInfo(estado, d){
   const info=document.getElementById('szbInfo'), banner=document.getElementById('szbBanner');
-  const msgs={ szb:'✓ Fat. Bruto e Produção puxados do SZB (mesma base do PD).',
-               manual:'✎ Valores editados manualmente — não serão sobrescritos pelo SZB.',
-               carregando:'⏳ Buscando SZB no portal…', vazio:'⚠️ SZB carregado, mas sem registros para esta filial/mês.' };
-  if(info) info.textContent = (estado==='szb'&&d)? `SZB · ${d.diasTrab} dias trab. · ${d.diasUteis} úteis` : '';
+  const total = SZB.rows ? SZB.rows.length : 0;
+  const msgs={
+    szb:'✓ Fat. Bruto e Produção puxados do SZB (mesma base do PD).',
+    manual:'✎ Valores editados manualmente — não serão sobrescritos pelo SZB.',
+    carregando:'⏳ Buscando SZB no portal…',
+    vazio:`⚠️ SZB carregado (${total.toLocaleString('pt-BR')} registros), mas 0 para ${ST.filial} em ${ST.mesRef}. `
+        + `Confira se há nota nesse mês para essa filial, ou se a sigla da filial bate com o op-code (17=SC, 18=PR, 03=SP).`
+  };
+  if(info) info.textContent = (estado==='szb'&&d)? `SZB · ${d.diasTrab} dias trab. · ${d.diasUteis} úteis` : (total?`SZB: ${total.toLocaleString('pt-BR')} reg.`:'');
   if(banner) banner.innerHTML = estado==='manual'
     ? `<div class="lock-note" style="color:var(--ac);background:var(--ac-bg);border-color:var(--ac)">${msgs.manual}</div>`
+    : estado==='vazio'
+    ? `<div class="lock-note">${msgs.vazio}</div>`
     : (msgs[estado] ? `<div class="lock-note" style="color:var(--gn);background:var(--gn-bg);border-color:var(--gn-bd)">${msgs[estado]}</div>` : '');
 }
 
@@ -525,7 +554,8 @@ async function boot(){
 
   // escopo inicial
   ST.filial = sf.value || (ST.filiais[0]&&ST.filiais[0].sigla) || '';
-  const now=new Date(); document.getElementById('selMes').value = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+  const now=new Date(); const ref=new Date(now.getFullYear(), now.getMonth()-1, 1); // mês anterior
+  document.getElementById('selMes').value = ref.getFullYear()+'-'+String(ref.getMonth()+1).padStart(2,'0');
   ST.mesRef = document.getElementById('selMes').value;
   document.getElementById('lcData').value = ST.mesRef+'-01';
   applyPerm();
