@@ -342,19 +342,19 @@ function atlasParent(action, payload={}, timeout=9000){
   });
 }
 async function fsGetCollection(collection,opts={}){
-  if(atlasHasParentBridge()){ try{ const r=await atlasParent('getCollection',{collection,...opts}); return r.docs||[]; }catch(e){ console.warn(e);} }
-  const db=window._mapDB;
-  if(db){ let ref=db.collection(collection); if(opts.orderBy)ref=ref.orderBy(opts.orderBy,opts.orderDir||'asc'); if(opts.limit)ref=ref.limit(+opts.limit);
-    const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); }
+  if(atlasHasParentBridge()){ try{ const r=await atlasParent('getCollection',{collection,...opts}); return r.docs||[]; }catch(e){ console.warn('[Mapinha] getCollection '+collection+':', e.message); return []; } }
+  try{ const db=window._mapDB;
+    if(db){ let ref=db.collection(collection); if(opts.orderBy)ref=ref.orderBy(opts.orderBy,opts.orderDir||'asc'); if(opts.limit)ref=ref.limit(+opts.limit);
+      const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); } }catch(e){ console.warn('[Mapinha] getCollection direto '+collection+':', e.message); }
   return [];
 }
 async function fsGetDoc(collection,docId){
-  if(atlasHasParentBridge()){ try{ const r=await atlasParent('getDoc',{collection,docId}); return r.exists?{id:r.id,data:r.data||{}}:null; }catch(e){ console.warn(e);} }
-  const db=window._mapDB; if(db){ const s=await db.collection(collection).doc(docId).get(); return s.exists?{id:s.id,data:s.data()}:null; }
+  if(atlasHasParentBridge()){ try{ const r=await atlasParent('getDoc',{collection,docId}); return r.exists?{id:r.id,data:r.data||{}}:null; }catch(e){ console.warn('[Mapinha] getDoc '+collection+':', e.message); return null; } }
+  try{ const db=window._mapDB; if(db){ const s=await db.collection(collection).doc(docId).get(); return s.exists?{id:s.id,data:s.data()}:null; } }catch(e){ console.warn('[Mapinha] getDoc direto '+collection+':', e.message); }
   return null;
 }
 async function fsSetDoc(collection,docId,data,opts={}){
-  if(atlasHasParentBridge()){ try{ const r=await atlasParent('setDoc',{collection,docId,data,merge:!!opts.merge}); return {id:r.id||docId}; }catch(e){ console.warn(e);} }
+  if(atlasHasParentBridge()){ const r=await atlasParent('setDoc',{collection,docId,data,merge:!!opts.merge}); return {id:(r&&r.id)||docId}; }
   const db=window._mapDB; if(db){ await db.collection(collection).doc(docId).set(data,{merge:!!opts.merge}); return {id:docId}; }
   throw new Error('Firestore indisponível');
 }
@@ -423,32 +423,22 @@ function derivarReceitaSZB(filial, mesRef){
   return { fatBruto:Math.round(fat*100)/100, producaoT:Math.round(prod*1000)/1000,
            diasTrab:datas.size, diasUteis:diasUteisDoMes(mesRef) };
 }
-/* pega a SZB: 1) memória do portal; 2) Firestore direto (mesmo caminho do PD); 3) postMessage */
+/* pega a SZB pelo portal autenticado: 1) memória do portal (mesma origem); 2) postMessage.
+   (Não lemos bases_szb direto: o iframe não tem sessão autenticada — quem lê é o portal.) */
 function ensureSZB(){
-  if(SZB.loaded || SZB._loading) return;
+  if(SZB.loaded) return;
   try{ const pd=window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
        if(pd && pd.rows && pd.rows.length){ SZB.rows=pd.rows; SZB.loaded=true; onSZBLoaded(); return; } }catch(_){}
-  SZB._loading=true; fillSZBInfo('carregando');
-  if(!SZB._requested){ SZB._requested=true; try{ window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szb'},'*'); }catch(_){} }
-  loadSZBDireto().then(rows=>{
-    SZB._loading=false;
-    if(rows && rows.length && !SZB.loaded){ SZB.rows=rows; SZB.loaded=true; onSZBLoaded(); }
-    else if(!SZB.loaded){ fillSZBInfo('carregando'); }
-  }).catch(()=>{ SZB._loading=false; });
-}
-/* leitura direta chunked de bases_szb/meta + chunks — idêntica ao PD */
-async function loadSZBDireto(){
-  try{
-    const db = window._mapDB || (window.firebase && firebase.firestore && firebase.firestore());
-    if(!db) return null;
-    const meta = await db.collection('bases_szb').doc('meta').get();
-    if(!meta.exists) return null;
-    const n = meta.data().numChunks||0; if(!n) return null;
-    const snaps = await Promise.all(Array.from({length:n},(_,i)=>
-      db.collection('bases_szb').doc('meta').collection('chunks').doc(String(i)).get()));
-    const rows=[]; snaps.forEach(s=>{ if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) rows.push(...r); } });
-    return rows.length?rows:null;
-  }catch(e){ console.warn('[Mapinha] SZB Firestore direto falhou:', e.message); return null; }
+  fillSZBInfo('carregando');
+  if(!SZB._requested){ SZB._requested=true;
+    try{ window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szb'},'*'); }catch(_){}
+    // re-tenta a memória do portal em caso de corrida (portal carregando SZB)
+    let tries=0; const iv=setInterval(()=>{
+      if(SZB.loaded || tries++>20){ clearInterval(iv); return; }
+      try{ const pd=window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
+           if(pd && pd.rows && pd.rows.length){ clearInterval(iv); SZB.rows=pd.rows; SZB.loaded=true; onSZBLoaded(); } }catch(_){}
+    },500);
+  }
 }
 function onSZBLoaded(){ const el=document.getElementById('btnPullSZB'); if(el) el.disabled = !podeEditar(); pullReceitaSZB(false); }
 
