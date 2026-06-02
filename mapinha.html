@@ -151,13 +151,13 @@ canvas{max-width:100%}
   <div class="cards" id="lancCards"></div>
 
   <div class="panel">
-    <div class="panel-h"><h3>Receita & Impostos (SZB + entrada manual)</h3></div>
+    <div class="panel-h"><h3>Receita & Impostos (entrada manual)</h3></div>
     <div class="panel-b">
       <div class="frm">
-        <label class="fld">Fat. Bruto (R$)<input type="number" id="recFat" step="0.01" readonly oninput="liveDre()"></label>
-        <label class="fld">Produção (t)<input type="number" id="recProd" step="0.01" readonly oninput="liveDre()"></label>
-        <label class="fld">Dias úteis<input type="number" id="recDU" step="1" readonly></label>
-        <label class="fld">Dias trab.<input type="number" id="recDT" step="1" readonly></label>
+        <label class="fld">Fat. Bruto (R$)<input type="number" id="recFat" step="0.01" oninput="liveDre()"></label>
+        <label class="fld">Produção (t)<input type="number" id="recProd" step="0.01" oninput="liveDre()"></label>
+        <label class="fld">Dias úteis<input type="number" id="recDU" step="1"></label>
+        <label class="fld">Dias trab.<input type="number" id="recDT" step="1"></label>
         <label class="fld">ICMS (R$)<input type="number" id="impICMS" step="0.01" oninput="liveDre()"></label>
         <label class="fld">PIS/COFINS (R$)<input type="number" id="impPIS" step="0.01" oninput="liveDre()"></label>
         <label class="fld">IR/CS (R$)<input type="number" id="impIR" step="0.01" oninput="liveDre()"></label>
@@ -359,117 +359,6 @@ function upper(v){ return String(v||'').trim().toLocaleUpperCase('pt-BR'); }
 const OPCODE_SIGLA = { '17':'SC','18':'PR','03':'SP' };
 function siglaDeOp(op){ return OPCODE_SIGLA[String(op||'').padStart(2,'0')] || upper(op); }
 
-/* Receita automática via SZB (mesma base usada pelo PD Diário) */
-const OP_POR_SIGLA = { SC:'17', PR:'18', SP:'03' };
-const FERIADOS_PADRAO = [
-  '2026-01-01','2026-02-16','2026-02-17','2026-04-03','2026-04-21','2026-05-01',
-  '2026-06-04','2026-09-07','2026-10-12','2026-11-02','2026-11-15','2026-12-25'
-];
-let _szbCache = null;
-
-function normTxt(v){
-  return String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();
-}
-function opFromValue(v){
-  const s=normTxt(v);
-  if(!s) return null;
-  if(/^0?3$/.test(s)||/\bSP\b/.test(s)||/SAO PAULO/.test(s)) return '03';
-  if(/^17$/.test(s)||/\bSC\b/.test(s)||/SANTA CATARINA/.test(s)) return '17';
-  if(/^18$/.test(s)||/\bPR\b/.test(s)||/PARANA/.test(s)) return '18';
-  return null;
-}
-function rowOpSZB(row){
-  if(!row||typeof row!=='object') return null;
-  return opFromValue(row['Operacao'])||opFromValue(row['Filial'])||opFromValue(row['Filial de In'])||opFromValue(row['Filial incl'])||opFromValue(row['Unidade']);
-}
-function toNumSZB(v){
-  if(v==null||v==='') return 0;
-  if(typeof v==='number') return isFinite(v)?v:0;
-  let s=String(v).trim();
-  if(!s) return 0;
-  if(s.includes(',')&&s.includes('.')) s=s.replace(/\./g,'').replace(',','.');
-  else s=s.replace(',','.');
-  return parseFloat(s)||0;
-}
-function dtSZB(v){
-  if(!v) return null;
-  if(v.toDate) v=v.toDate();
-  if(v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
-  const s=String(v).trim();
-  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
-  const d=new Date(s);
-  return isNaN(d)?null:d.toISOString().slice(0,10);
-}
-function diasUteisMesSZB(mesRef){
-  const [ano,mes]=mesRef.split('-').map(Number);
-  const ultimo=new Date(ano,mes,0).getDate();
-  const ferSet=new Set(FERIADOS_PADRAO);
-  let total=0;
-  for(let d=1;d<=ultimo;d++){
-    const iso=`${ano}-${String(mes).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const dow=new Date(ano,mes-1,d).getDay();
-    if(dow!==0 && !ferSet.has(iso)) total++;
-  }
-  return total;
-}
-async function loadSZBRows(){
-  if(_szbCache) return _szbCache;
-  const db=window._mapDB;
-  if(!db) return [];
-  try{
-    const metaSnap=await db.collection('bases_szb').doc('meta').get();
-    if(!metaSnap.exists) return [];
-    const meta=metaSnap.data()||{};
-    const n=+meta.numChunks||0;
-    if(!n) return [];
-    const reqs=[];
-    for(let i=0;i<n;i++) reqs.push(db.collection('bases_szb').doc('meta').collection('chunks').doc(String(i)).get());
-    const snaps=await Promise.all(reqs);
-    const rows=[];
-    snaps.forEach(s=>{ const r=s.exists&&(s.data()||{}).rows; if(Array.isArray(r)) rows.push(...r); });
-    _szbCache=rows;
-    return rows;
-  }catch(e){
-    console.warn('[Mapinha] Falha ao carregar SZB do Firestore:', e.message);
-    return [];
-  }
-}
-async function calcReceitaSZB(){
-  const rows=await loadSZBRows();
-  const op=OP_POR_SIGLA[upper(ST.filial)]||opFromValue(ST.filial);
-  const diasUteis=diasUteisMesSZB(ST.mesRef);
-  if(!rows.length||!op) return null;
-  let fatBruto=0, producaoT=0;
-  const datas=new Set();
-  rows.forEach(row=>{
-    if(row['Dt Cancel']) return;
-    if(rowOpSZB(row)!==op) return;
-    const data=dtSZB(row['Dt. Emissao']);
-    if(!data||data.slice(0,7)!==ST.mesRef) return;
-    const fat=toNumSZB(row['Valor Total']);
-    if(!fat) return;
-    const placa=upper(row['Placa Veicul']||'');
-    if(placa==='AAA-9999') return;
-    fatBruto+=fat;
-    producaoT+=toNumSZB(row['Peso Liquido'])/1000;
-    datas.add(data);
-  });
-  return { fatBruto, producaoT, diasUteis, diasTrab:datas.size };
-}
-async function syncReceitaSZB(){
-  if(!podeEditar()) return;
-  const auto=await calcReceitaSZB();
-  if(!auto) return;
-  const r=ST.cabecalho.receita||{};
-  ST.cabecalho.receita={
-    ...r,
-    fatBruto:auto.fatBruto,
-    producaoT:auto.producaoT,
-    diasUteis:auto.diasUteis,
-    diasTrab:auto.diasTrab
-  };
-}
-
 /* Mapa código centro de custo → grupo DRE (fallback se cadastro não trouxer grupoDre) */
 const GRUPO_FALLBACK = {
   '01.01':'DIESEL','02.01':'DIESEL','02.02':'DIESEL','04.01':'DIESEL','04.02':'DIESEL','21.01':'DIESEL','22.01':'DIESEL',
@@ -548,7 +437,6 @@ async function onScopeChange(){
 async function refreshAll(){
   if(!ST.filial||!ST.mesRef) return;
   await Promise.all([ loadCabecalho(), loadLancManuais(), loadLancOS(), loadPremissa() ]);
-  await syncReceitaSZB();
   renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm();
 }
 
