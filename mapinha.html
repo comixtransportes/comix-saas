@@ -447,20 +447,21 @@ function ensureAgregadoBases(){
     }
   });
 }
-/* Fechamento de Agregados (modelo limpo):
-   = Σ SZB faturamento (veículos agregados)
-   − Σ SZC abastecimentos de agregados (exclui proprietários da frota própria)
-   + Σ SZI créditos de agregados
-   − Σ débitos C.O de agregados (10.01+11.01+12.01)  [ver nota de validação] */
+/* Fechamento de Agregados (regra COMIX):
+   = Σ SZB 'Comissao Mot'  (realizado líquido do agregado por viagem)
+   − Σ SZC abastecimentos de agregados (diesel + arla; exclui proprietários)
+   − Σ SZI DÉBITOS de agregados (peças/serviços/etc. efetivamente descontados)
+   + Σ SZI CRÉDITOS de agregados
+   Lançamentos manuais NÃO entram nesta conta. */
 function calcFechamentoAgregados(){
-  const o={ fatSZB:0, abastSZC:0, credSZI:0, debCO:0, total:0, falta:[] };
+  const o={ comissao:0, szcDiesel:0, szcArla:0, debSZI:0, credSZI:0, total:0, falta:[] };
   if(SZB.rows){
     SZB.rows.forEach(function(r){
       if(r['Dt Cancel']) return;
       if(isProprio(r['Cod Propriet'])) return;
       if(siglaDeOp(r['Operacao'])!==ST.filial) return;
       if(String(r['Dt. Emissao']).slice(0,7)!==ST.mesRef) return;
-      o.fatSZB += toNum(r['Valor Total']);
+      o.comissao += toNum(r['Comissao Mot']);
     });
   } else o.falta.push('SZB');
   if(AUX.szc.loaded){
@@ -468,21 +469,21 @@ function calcFechamentoAgregados(){
       if(isProprio(r['Proprietario'])) return;
       if(siglaDeOp(r['Operacao'])!==ST.filial) return;
       if(String(r['Data Emissao']).slice(0,7)!==ST.mesRef) return;
-      o.abastSZC += toNum(r['Valor']);
+      const v=toNum(r['Valor']); const cb=String(r['Combustivel']||'').toLowerCase();
+      if(cb.indexOf('arla')>=0) o.szcArla += v; else o.szcDiesel += v;
     });
   } else o.falta.push('SZC');
   if(AUX.szi.loaded){
     AUX.szi.rows.forEach(function(r){
-      if(!/cred/i.test(r['Deb / Cred']||'')) return;
       if(isProprio(r['Agregado'])) return;
       if(siglaDeOp(r['Operacao'])!==ST.filial) return;
       if(String(r['Data']).slice(0,7)!==ST.mesRef) return;
-      o.credSZI += toNum(r['Valor']);
+      const v=toNum(r['Valor']);
+      if(/cred/i.test(r['Deb / Cred']||'')) o.credSZI += v; else o.debSZI += v;
     });
   } else o.falta.push('SZI');
-  o.debCO = lancVisiveis().filter(function(l){ return CO_AGREGADO.has(l.centroCusto); })
-                          .reduce(function(s,l){ return s+(+l.valor||0); },0);
-  o.total = o.fatSZB - o.abastSZC + o.credSZI - o.debCO;
+  o.abastSZC = o.szcDiesel + o.szcArla;
+  o.total = o.comissao - o.abastSZC - o.debSZI + o.credSZI;
   return o;
 }
 /* Diesel (modelo limpo): frota+agregado, 22.01 abate como crédito, 21.01 ignorado */
@@ -902,7 +903,9 @@ function renderDre(){
   if(note){
     const falta=(ag.falta&&ag.falta.length);
     note.innerHTML = `<div class="lock-note" style="${falta?'':'color:var(--mu);background:#fafbfc;border-color:var(--bd2)'}">`
-      + `<b>Composição Agregados</b> = Faturamento SZB <b>${moeda(ag.fatSZB||0)}</b> − Abastec. SZC agreg. <b>${moeda(ag.abastSZC||0)}</b> + Créditos SZI <b>${moeda(ag.credSZI||0)}</b> − Peç./Serv. agreg. (10/11/12.01) <b>${moeda(ag.debCO||0)}</b> = <b>${moeda(ag.total||0)}</b>`
+      + `<b>Composição Agregados</b> = Comissão SZB <b>${moeda(ag.comissao||0)}</b> − Abastec. SZC <b>${moeda(ag.abastSZC||0)}</b> `
+      + `<span style="opacity:.8">(diesel ${moeda(ag.szcDiesel||0)} + arla ${moeda(ag.szcArla||0)})</span> `
+      + `− Débitos SZI <b>${moeda(ag.debSZI||0)}</b> + Créditos SZI <b>${moeda(ag.credSZI||0)}</b> = <b>${moeda(ag.total||0)}</b>`
       + (falta?`<br>⏳ Aguardando carregar: ${ag.falta.join(', ')} — valor parcial até todas as bases chegarem.`:'')
       + `</div>`;
   }
