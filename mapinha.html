@@ -235,6 +235,7 @@ canvas{max-width:100%}
         </tr></thead>
         <tbody id="dreTbody"></tbody>
       </table>
+      <div id="agregNote" style="margin-top:10px"></div>
     </div>
   </div>
 </section>
@@ -322,9 +323,14 @@ function atlasHasParentBridge(){ return !!(window.parent && window.parent !== wi
 window.addEventListener('message', ev => {
   const m = ev.data || {};
   if (m.type === 'ATLAS_USER'){ ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...m }; applyPerm(); refreshAll(); }
-  if ((m.type === 'ATLAS_DATA_RESPONSE' || m.type === 'ATLAS_DATA_READY') && String(m.table).toLowerCase()==='szb'){
+  if ((m.type === 'ATLAS_DATA_RESPONSE' || m.type === 'ATLAS_DATA_READY')){
+    const t = String(m.table||'').toLowerCase();
     const rows = (m.payload && m.payload.rows) || (m.rows) || null;
-    if (rows && rows.length){ setSZBRows(rows); }
+    if (rows && rows.length){
+      if (t==='szb') setSZBRows(rows);
+      else if (t==='szc') setBaseRows('szc', rows);
+      else if (t==='szi') setBaseRows('szi', rows);
+    }
   }
   if (m.type === 'ATLAS_FIRESTORE_RESPONSE' && m.requestId){
     const p = _fsPending[m.requestId]; if(!p) return;
@@ -402,7 +408,92 @@ function normalizeAtlasSZBRows(rows){
   }).filter(function(r){ return Object.values(r).some(function(v){ return v!==''&&v!==null&&v!==undefined; }); });
 }
 /* setter único: normaliza uma vez e dispara o preenchimento */
-function setSZBRows(raw){ if(!raw||!raw.length) return false; SZB.rows=normalizeAtlasSZBRows(raw); SZB.loaded=true; onSZBLoaded(); return true; }
+function setSZBRows(raw){ if(!raw||!raw.length) return false; SZB.rows=normalizeAtlasSZBRows(raw); SZB.loaded=true; onSZBLoaded(); renderDre(); renderLancCards(); return true; }
+
+/* ── Bases auxiliares p/ Agregados: SZC (abastecimentos) e SZI (créditos/débitos) ── */
+const BASE_DATECOLS = { szc:['Data Emissao'], szi:['Data'] };
+const AUX = { szc:{rows:null,loaded:false,requested:false}, szi:{rows:null,loaded:false,requested:false} };
+function normalizeRows(raw, dateCols){
+  const dc=new Set(dateCols||[]);
+  return (raw||[]).map(function(row){
+    const out={};
+    Object.keys(row||{}).forEach(function(k){
+      const key=String(k).replace(/\s+/g,' ').trim(); if(!key) return;
+      const v=row[k];
+      if(dc.has(key)) out[key]=atlasExcelDateToISO(v);
+      else if(v===null||v===undefined) out[key]='';
+      else out[key]=String(v);
+    });
+    return out;
+  });
+}
+function setBaseRows(id, raw){
+  if(!raw||!raw.length||!AUX[id]) return false;
+  AUX[id].rows=normalizeRows(raw, BASE_DATECOLS[id]); AUX[id].loaded=true;
+  renderDre(); renderLancCards(); return true;
+}
+function ensureAgregadoBases(){
+  ['szc','szi'].forEach(function(id){
+    if(AUX[id].loaded) return;
+    try{ const pd=window.parent.ATLAS_DATA && window.parent.ATLAS_DATA[id];
+         if(pd && pd.rows && pd.rows.length){ setBaseRows(id, pd.rows); return; } }catch(_){}
+    if(!AUX[id].requested){ AUX[id].requested=true;
+      try{ window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:id},'*'); }catch(_){}
+      let tries=0; const iv=setInterval(function(){
+        if(AUX[id].loaded || tries++>20){ clearInterval(iv); return; }
+        try{ const pd=window.parent.ATLAS_DATA && window.parent.ATLAS_DATA[id];
+             if(pd && pd.rows && pd.rows.length){ clearInterval(iv); setBaseRows(id, pd.rows); } }catch(_){}
+      },500);
+    }
+  });
+}
+/* Fechamento de Agregados (modelo limpo):
+   = Σ SZB faturamento (veículos agregados)
+   − Σ SZC abastecimentos de agregados (exclui proprietários da frota própria)
+   + Σ SZI créditos de agregados
+   − Σ débitos C.O de agregados (10.01+11.01+12.01)  [ver nota de validação] */
+function calcFechamentoAgregados(){
+  const o={ fatSZB:0, abastSZC:0, credSZI:0, debCO:0, total:0, falta:[] };
+  if(SZB.rows){
+    SZB.rows.forEach(function(r){
+      if(r['Dt Cancel']) return;
+      if(isProprio(r['Cod Propriet'])) return;
+      if(siglaDeOp(r['Operacao'])!==ST.filial) return;
+      if(String(r['Dt. Emissao']).slice(0,7)!==ST.mesRef) return;
+      o.fatSZB += toNum(r['Valor Total']);
+    });
+  } else o.falta.push('SZB');
+  if(AUX.szc.loaded){
+    AUX.szc.rows.forEach(function(r){
+      if(isProprio(r['Proprietario'])) return;
+      if(siglaDeOp(r['Operacao'])!==ST.filial) return;
+      if(String(r['Data Emissao']).slice(0,7)!==ST.mesRef) return;
+      o.abastSZC += toNum(r['Valor']);
+    });
+  } else o.falta.push('SZC');
+  if(AUX.szi.loaded){
+    AUX.szi.rows.forEach(function(r){
+      if(!/cred/i.test(r['Deb / Cred']||'')) return;
+      if(isProprio(r['Agregado'])) return;
+      if(siglaDeOp(r['Operacao'])!==ST.filial) return;
+      if(String(r['Data']).slice(0,7)!==ST.mesRef) return;
+      o.credSZI += toNum(r['Valor']);
+    });
+  } else o.falta.push('SZI');
+  o.debCO = lancVisiveis().filter(function(l){ return CO_AGREGADO.has(l.centroCusto); })
+                          .reduce(function(s,l){ return s+(+l.valor||0); },0);
+  o.total = o.fatSZB - o.abastSZC + o.credSZI - o.debCO;
+  return o;
+}
+/* Diesel (modelo limpo): frota+agregado, 22.01 abate como crédito, 21.01 ignorado */
+function calcDiesel(){
+  let d=0;
+  lancVisiveis().forEach(function(l){
+    if(DIESEL_DEBITO.has(l.centroCusto)) d += (+l.valor||0);
+    else if(DIESEL_CREDITO.has(l.centroCusto)) d -= Math.abs(+l.valor||0);
+  });
+  return d;
+}
 /* parser de número BR — idêntico ao toN() do PD */
 function toNum(v){
   try{
@@ -517,12 +608,23 @@ function fillSZBInfo(estado, d){
 
 /* Mapa código centro de custo → grupo DRE (fallback se cadastro não trouxer grupoDre) */
 const GRUPO_FALLBACK = {
-  '01.01':'DIESEL','02.01':'DIESEL','02.02':'DIESEL','04.01':'DIESEL','04.02':'DIESEL','21.01':'DIESEL','22.01':'DIESEL',
+  // Diesel = frota (01.01,02.01,04.01) + agregado (02.02,04.02). 22.01 = crédito (reembolso, abate).
+  // 21.01 (Outros Diesel) NÃO entra no fluxo — vira CONTROLE.
+  '01.01':'DIESEL','02.01':'DIESEL','02.02':'DIESEL','04.01':'DIESEL','04.02':'DIESEL','22.01':'DIESEL','21.01':'CONTROLE',
   '03.01':'CO','05.01':'CO','06.01':'CO','07.01':'CO','08.01':'CO','09.01':'CO','10.01':'CO','11.01':'CO','12.01':'CO','23.01':'CO',
   '13.01':'CP','14.01':'CP','15.01':'CP',
   '16.01':'PEDAGIO','17.01':'AGREGADOS',
   '18.01':'CAPEX','19.01':'CONTROLE','20.01':'CONTROLE','24.01':'CONTROLE'
 };
+/* Diesel: soma frota+agregado; 22.01 (reembolso) abate; 21.01 ignorado. */
+const DIESEL_DEBITO = new Set(['01.01','02.01','02.02','04.01','04.02']);
+const DIESEL_CREDITO = new Set(['22.01']);
+/* C.O do agregado (peças/serviços/lub/pneus do agregado) — débito que abate o fechamento de agregados */
+const CO_AGREGADO = new Set(['10.01','11.01','12.01']);
+/* Códigos de PROPRIETÁRIO da frota própria (resto = agregado) — base das tabelas SZB/SZC/SZI */
+const PROPRIOS = new Set(['000764','008188','008417','003858','004498']);
+function codeKey(c){ return String(c==null?'':c).trim().replace(/\D/g,'').padStart(6,'0').slice(-6); }
+function isProprio(cod){ return PROPRIOS.has(codeKey(cod)); }
 /* Centros de custo alimentados automaticamente pela Manutenção */
 const CC_MANUTENCAO = new Set(['03.01','05.01','06.01','07.01','10.01','11.01','12.01','23.01']);
 
@@ -595,7 +697,7 @@ async function refreshAll(){
   if(!ST.filial||!ST.mesRef) return;
   await Promise.all([ loadCabecalho(), loadLancManuais(), loadLancOS(), loadPremissa() ]);
   renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm();
-  ensureSZB(); pullReceitaSZB(false);
+  ensureSZB(); ensureAgregadoBases(); pullReceitaSZB(false);
 }
 
 /* ── Cabeçalho (mapinha_mensal) ── */
@@ -759,7 +861,8 @@ function calcDRE(){
   const fat=+r.fatBruto||0, prod=+r.producaoT||0;
   const imp=(+im.icms||0)+(+im.pisCofins||0)+(+im.irCs||0)+(+im.iss||0);
   const fl=fat-imp;
-  const diesel=somaGrupo('DIESEL'), agreg=somaGrupo('AGREGADOS'), pedagio=somaGrupo('PEDAGIO');
+  const diesel=calcDiesel(); const agregInfo=calcFechamentoAgregados(); const agreg=agregInfo.total; const pedagio=somaGrupo('PEDAGIO');
+  ST._agregInfo=agregInfo;
   const coLanc=somaGrupo('CO'); const co=coLanc;
   const cpLanc=somaGrupo('CP'); const cp=custoPessoalFolha()+cpLanc;
   const ce=custoEquipFrota();
@@ -793,6 +896,16 @@ function renderDre(){
     linha('(–) Custo de Pessoal', d.cp, m.cp) +
     linha('(–) Custo de Equip.', d.ce, m.ce) +
     `<tr class="res"><td>= Resultado Financeiro</td><td class="num">${moeda(d.rf)}</td><td class="num">${pct(d.margem)}</td><td class="num">${m.resultadoFinanceiro?moeda(m.resultadoFinanceiro):'—'}</td><td class="num">${m.resultadoFinanceiro?pct(m.resultadoFinanceiro?d.rf/m.resultadoFinanceiro:0):'—'}</td></tr>`;
+  // composição do Fechamento de Agregados
+  const ag=ST._agregInfo||{};
+  const note=document.getElementById('agregNote');
+  if(note){
+    const falta=(ag.falta&&ag.falta.length);
+    note.innerHTML = `<div class="lock-note" style="${falta?'':'color:var(--mu);background:#fafbfc;border-color:var(--bd2)'}">`
+      + `<b>Composição Agregados</b> = Faturamento SZB <b>${moeda(ag.fatSZB||0)}</b> − Abastec. SZC agreg. <b>${moeda(ag.abastSZC||0)}</b> + Créditos SZI <b>${moeda(ag.credSZI||0)}</b> − Peç./Serv. agreg. (10/11/12.01) <b>${moeda(ag.debCO||0)}</b> = <b>${moeda(ag.total||0)}</b>`
+      + (falta?`<br>⏳ Aguardando carregar: ${ag.falta.join(', ')} — valor parcial até todas as bases chegarem.`:'')
+      + `</div>`;
+  }
 }
 function liveDre(){
   // recalcula DRE em tempo real a partir dos inputs sem salvar
