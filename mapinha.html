@@ -340,8 +340,8 @@ canvas{max-width:100%}
         </label>
       </div>
       <div class="lock-note" style="margin-top:12px;color:var(--mu);background:#fafbfc;border-color:var(--bd2)">
-        <b>Regra:</b> Custo Comix por placa = <b>valor de pedágio (col. T)</b> − <b>vales pagos pelo cliente</b> (arquivo Resumo).
-        A placa é associada à filial pelo <b>cadastro de veículos</b> do sistema. Custos <b>sem placa</b> (ou placa não cadastrada) vão para a <b>filial 17 — SC</b>.
+        <b>Regra:</b> Custo Comix por placa = <b>Valor Cobrado</b> (pago fora do vale) + <b>Vale Comix</b> (vales creditados pela Comix, no arquivo Resumo). Fatura inteira.
+        O vale do <b>cliente</b> não entra. Placa → filial pelo <b>cadastro de veículos</b>; <b>sem placa</b> (ou não cadastrada) → <b>filial 17 — SC</b>.
       </div>
     </div>
   </div>
@@ -352,8 +352,8 @@ canvas{max-width:100%}
     <div class="panel-h"><h3>Resumo por filial (vai para o DRE)</h3></div>
     <div class="panel-b" style="overflow:auto">
       <table>
-        <thead><tr><th>Filial</th><th class="num">Pedágio bruto</th><th class="num">Vale cliente</th>
-          <th class="num">Custo Comix (DRE)</th></tr></thead>
+        <thead><tr><th>Filial</th><th class="num">Pedágio bruto</th><th class="num">Valor Cobrado</th>
+          <th class="num">Vale Comix</th><th class="num">Custo Comix (DRE)</th></tr></thead>
         <tbody id="pedFilTbody"></tbody>
       </table>
     </div>
@@ -368,7 +368,7 @@ canvas{max-width:100%}
     <div class="panel-b" style="overflow:auto;max-height:480px">
       <table>
         <thead><tr><th>Placa</th><th>Filial</th><th class="num">Pedágio bruto</th>
-          <th class="num">Vale cliente</th><th class="num">Custo Comix</th></tr></thead>
+          <th class="num">Valor Cobrado</th><th class="num">Vale Comix</th><th class="num">Custo Comix</th></tr></thead>
         <tbody id="pedPlacaTbody"></tbody>
       </table>
     </div>
@@ -981,10 +981,10 @@ function renderDre(){
     const man = somaGrupo('PEDAGIO');
     if(ped){
       note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
-        + `<b>Composição Pedágio (${ST.filial})</b> = Bruto fatura <b>${moeda(pf?pf.bruto:0)}</b> − Vale cliente <b>${moeda(pf?pf.vale:0)}</b>`
+        + `<b>Composição Pedágio (${ST.filial})</b> = Valor Cobrado <b>${moeda(pf?pf.cobrado:0)}</b> + Vale Comix <b>${moeda(pf?pf.valeComix:0)}</b>`
         + (man?` + Lançamentos manuais <b>${moeda(man)}</b>`:'')
         + ` = <b>${moeda((pf?pf.comix:0)+man)}</b>`
-        + `<br><span style="opacity:.8">Importado da fatura de pedágio do mês · placas associadas à filial pelo cadastro de veículos · sem placa → SC.</span></div>`;
+        + `<br><span style="opacity:.8">Valor Cobrado (pago fora do vale) + vales creditados pela Comix · fatura inteira · placa→filial pelo cadastro de veículos · sem placa → SC.</span></div>`;
     }
   }
 }
@@ -1182,7 +1182,7 @@ function parsePedagioFatura(text){
   }
   if(hi<0) throw new Error('Cabeçalho da fatura não encontrado (coluna "Valor da Transação").');
   const idx=n=>cols.findIndex(c=>c.toLowerCase().replace(/\s+/g,' ').indexOf(n)>=0);
-  const iPlaca=idx('placa'), iVal=idx('valor da transa'), iVale=idx('valor utilizado de vale'), iData=idx('data da transa');
+  const iPlaca=idx('placa'), iVal=idx('valor da transa'), iVale=idx('valor utilizado de vale'), iCob=idx('valor cobrado'), iData=idx('data da transa');
   if(iVal<0) throw new Error('Coluna "Valor da Transação" não localizada.');
   const out=[];
   for(let i=hi+1;i<lines.length;i++){
@@ -1190,7 +1190,7 @@ function parsePedagioFatura(text){
     const r=pedSplitCsvLine(lines[i]);
     if(r.length<=iVal) continue;
     out.push({ placa:normPlaca(r[iPlaca]||''), valor:toNum(r[iVal]),
-               vale:iVale>=0?toNum(r[iVale]):0, data: iData>=0?String(r[iData]||''):'' });
+               vale:iVale>=0?toNum(r[iVale]):0, cobrado:iCob>=0?toNum(r[iCob]):0, data: iData>=0?String(r[iData]||''):'' });
   }
   return out;
 }
@@ -1224,34 +1224,47 @@ function parsePedagioResumo(text){
   return out;
 }
 
-/* ── Núcleo: combina fatura + resumo + cadastro → totais por placa/filial ── */
+/* ── Núcleo (regra confirmada): custo Comix = Valor Cobrado + Vale Comix (Resumo) ──
+   Por placa (fatura inteira — todos os tipos de transação):
+     bruto      = −Σ T   (Valor da Transação — pedágio bruto, só exibição)
+     usado      =  Σ U   (vale-pedágio utilizado — só exibição)
+     cobrado    = −Σ V   (Valor Cobrado — pago FORA do vale)
+     valeComix  =  Σ Resumo (vales que a Comix creditou — é custo dela)
+     comix(DRE) =  cobrado + valeComix   (cash + vale próprio; vale do cliente NÃO entra)
+     valeCliente (exibição) = max(0, usado − valeComix)  (resto do vale usado = do cliente) */
 async function computePedagio(fatRows, resRows){
   const map = await ensurePlacaFilial();
-  const FB = {};       // placa -> bruto (custo positivo = -Σ T)
-  let semPlacaBruto=0;
-  fatRows.forEach(r=>{ if(r.placa){ FB[r.placa]=(FB[r.placa]||0) - r.valor; } else { semPlacaBruto += -r.valor; } });
-  const VC = {};       // placa -> vale cliente
-  resRows.forEach(r=>{ VC[r.placa]=(VC[r.placa]||0) + r.vale; });
+  const FB={}, FU={}, FC={};      // placa -> bruto(−T), usado(U), cobrado(−V)
+  let spBruto=0, spUsado=0, spCobrado=0;
+  fatRows.forEach(r=>{
+    if(r.placa){ FB[r.placa]=(FB[r.placa]||0)-r.valor; FU[r.placa]=(FU[r.placa]||0)+(r.vale||0); FC[r.placa]=(FC[r.placa]||0)-(r.cobrado||0); }
+    else { spBruto+=-r.valor; spUsado+=(r.vale||0); spCobrado+=-(r.cobrado||0); }
+  });
+  const VC={};                    // placa -> vale Comix (Resumo)
+  resRows.forEach(r=>{ VC[r.placa]=(VC[r.placa]||0)+r.vale; });
 
   const placas = Array.from(new Set([...Object.keys(FB), ...Object.keys(VC)])).sort();
-  const lista=[]; const porFilial={}; let totalBruto=0,totalVale=0,totalComix=0,totalExcesso=0;
+  const lista=[]; const porFilial={};
+  let totalBruto=0,totalUsado=0,totalCobrado=0,totalValeComix=0,totalComix=0,totalCliente=0;
+  const bucket=fil=> porFilial[fil] || (porFilial[fil]={bruto:0,usado:0,cobrado:0,valeComix:0,comix:0});
   placas.forEach(p=>{
-    const bruto=FB[p]||0, vale=VC[p]||0, comix=bruto-vale;
+    const bruto=FB[p]||0, usado=FU[p]||0, cobrado=FC[p]||0, valeComix=VC[p]||0;
+    const comix=cobrado+valeComix;
+    const valeCliente=Math.max(0, usado-valeComix);
     const semCad=!map[p]; const fil=map[p]||'SC';
-    if(vale>bruto) totalExcesso += (vale-bruto);
-    porFilial[fil]=porFilial[fil]||{bruto:0,vale:0,comix:0};
-    porFilial[fil].bruto+=bruto; porFilial[fil].vale+=vale; porFilial[fil].comix+=comix;
-    totalBruto+=bruto; totalVale+=vale; totalComix+=comix;
-    lista.push({ placa:p, filial:fil, bruto, vale, comix, semCadastro:semCad });
+    const b=bucket(fil);
+    b.bruto+=bruto; b.usado+=usado; b.cobrado+=cobrado; b.valeComix+=valeComix; b.comix+=comix;
+    totalBruto+=bruto; totalUsado+=usado; totalCobrado+=cobrado; totalValeComix+=valeComix; totalComix+=comix; totalCliente+=valeCliente;
+    lista.push({ placa:p, filial:fil, bruto, usado, cobrado, valeComix, valeCliente, comix, semCadastro:semCad });
   });
   // custos sem placa → SC
-  if(semPlacaBruto){
-    porFilial['SC']=porFilial['SC']||{bruto:0,vale:0,comix:0};
-    porFilial['SC'].bruto+=semPlacaBruto; porFilial['SC'].comix+=semPlacaBruto;
-    totalBruto+=semPlacaBruto; totalComix+=semPlacaBruto;
+  if(spBruto || spCobrado){
+    const b=bucket('SC');
+    b.bruto+=spBruto; b.usado+=spUsado; b.cobrado+=spCobrado; b.comix+=spCobrado;
+    totalBruto+=spBruto; totalUsado+=spUsado; totalCobrado+=spCobrado; totalComix+=spCobrado;
   }
-  return { mesRef:ST.mesRef, totalBruto, totalVale, totalComix, totalExcesso,
-           semPlacaBruto, porFilial, placas:lista };
+  return { mesRef:ST.mesRef, totalBruto, totalUsado, totalCobrado, totalValeComix, totalComix, totalCliente,
+           semPlacaCobrado:spCobrado, porFilial, placas:lista };
 }
 
 function pedFile(ev,kind){
@@ -1331,33 +1344,35 @@ function renderPedagios(){
   const plTb=document.getElementById('pedPlacaTbody');
   if(!d || ST.pedagioMes!==ST.mesRef){
     if(cards) cards.innerHTML='';
-    if(filTb) filTb.innerHTML='<tr><td colspan="4" class="empty">Nenhum pedágio importado para '+ST.mesRef+'.</td></tr>';
-    if(plTb) plTb.innerHTML='<tr><td colspan="5" class="empty">Importe os arquivos para ver o detalhe por placa.</td></tr>';
+    if(filTb) filTb.innerHTML='<tr><td colspan="5" class="empty">Nenhum pedágio importado para '+ST.mesRef+'.</td></tr>';
+    if(plTb) plTb.innerHTML='<tr><td colspan="6" class="empty">Importe os arquivos para ver o detalhe por placa.</td></tr>';
     return;
   }
   if(cards) cards.innerHTML =
     card('Pedágio bruto', moeda(d.totalBruto),'acc') +
-    card('Vale cliente (−)', moeda(d.totalVale)) +
-    card('Custo Comix (DRE)', moeda(d.totalComix),'', (d.placas||[]).length+' placas') +
-    card('Vale cliente excedente', moeda(d.totalExcesso||0), (d.totalExcesso>0?'bad':''), 'vale > pedágio na placa');
+    card('Valor Cobrado', moeda(d.totalCobrado),'', 'pago fora do vale') +
+    card('Vale Comix (Resumo)', moeda(d.totalValeComix||0),'', 'creditado antes') +
+    card('Vale do cliente', moeda(d.totalCliente||0),'', 'não entra no custo') +
+    card('Custo Comix (DRE)', moeda(d.totalComix), d.totalComix>=0?'':'bad', (d.placas||[]).length+' placas · Cobrado + Vale Comix');
   // por filial
   const pf=d.porFilial||{};
   const sigs=Object.keys(pf).sort();
-  if(filTb) filTb.innerHTML = sigs.length? sigs.map(s=>`<tr><td>${s}${s==='SC'&&d.semPlacaBruto?' <span class="muted">(inclui sem placa)</span>':''}</td>
-    <td class="num">${moeda(pf[s].bruto)}</td><td class="num">${moeda(pf[s].vale)}</td>
+  if(filTb) filTb.innerHTML = sigs.length? sigs.map(s=>`<tr><td>${s}${s==='SC'&&d.semPlacaCobrado?' <span class="muted">(inclui sem placa)</span>':''}</td>
+    <td class="num">${moeda(pf[s].bruto)}</td><td class="num">${moeda(pf[s].cobrado)}</td>
+    <td class="num">${moeda(pf[s].valeComix)}</td>
     <td class="num"><b>${moeda(pf[s].comix)}</b></td></tr>`).join('')
-    + `<tr class="res"><td>Total</td><td class="num">${moeda(d.totalBruto)}</td><td class="num">${moeda(d.totalVale)}</td><td class="num">${moeda(d.totalComix)}</td></tr>`
-    : '<tr><td colspan="4" class="empty">Sem dados.</td></tr>';
+    + `<tr class="res"><td>Total</td><td class="num">${moeda(d.totalBruto)}</td><td class="num">${moeda(d.totalCobrado)}</td><td class="num">${moeda(d.totalValeComix||0)}</td><td class="num">${moeda(d.totalComix)}</td></tr>`
+    : '<tr><td colspan="5" class="empty">Sem dados.</td></tr>';
   // por placa
   const ff=sel?sel.value:'';
-  const rows=(d.placas||[]).filter(p=>!ff||p.filial===ff)
-    .sort((a,b)=> b.comix-a.comix);
+  const rows=(d.placas||[]).filter(p=>!ff||p.filial===ff).sort((a,b)=> b.comix-a.comix);
   if(plTb) plTb.innerHTML = rows.length? rows.map(p=>{
-    const tags=(p.semCadastro?'<span class="tag scd">s/ cadastro</span> ':'')+(p.vale>p.bruto?'<span class="tag exc">vale&gt;ped</span>':'');
+    const tags=(p.semCadastro?'<span class="tag scd">s/ cadastro</span>':'');
     return `<tr><td>${p.placa} ${tags}</td><td>${p.filial}</td>
-      <td class="num">${moeda(p.bruto)}</td><td class="num">${moeda(p.vale)}</td>
-      <td class="num ${p.comix<0?'neg':''}">${moeda(p.comix)}</td></tr>`;
-  }).join('') : '<tr><td colspan="5" class="empty">Sem placas para o filtro.</td></tr>';
+      <td class="num">${moeda(p.bruto)}</td><td class="num">${moeda(p.cobrado)}</td>
+      <td class="num">${moeda(p.valeComix)}</td>
+      <td class="num ${p.comix<0?'neg':''}"><b>${moeda(p.comix)}</b></td></tr>`;
+  }).join('') : '<tr><td colspan="6" class="empty">Sem placas para o filtro.</td></tr>';
 }
 
 /* ══ START ══ */
