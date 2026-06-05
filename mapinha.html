@@ -125,6 +125,14 @@ tr.grp:hover td,tr.res:hover td{background:inherit}
 .empty{text-align:center;color:var(--mu);padding:26px;font-size:12.5px}
 .lock-note{font-size:11px;color:var(--am);background:var(--am-bg);border:1px solid var(--am-bd);border-radius:var(--rs);padding:6px 10px;margin-bottom:10px}
 canvas{max-width:100%}
+/* Pedágios — dropzones (mesmo padrão visual) */
+.ped-drop{display:flex;align-items:center;gap:12px;background:var(--wh);border:1.5px dashed var(--bd);border-radius:var(--r);padding:14px 16px;cursor:pointer;transition:.15s;font-size:12.5px}
+.ped-drop:hover{border-color:var(--ac);background:var(--ac-bg)}
+.ped-drop.ok{border-style:solid;border-color:var(--gn-bd);background:var(--gn-bg)}
+.ped-drop-ic{font-size:22px;flex-shrink:0}
+.ped-drop b{font-weight:600}
+.tag.scd{background:var(--am-bg);color:var(--am)}
+.tag.exc{background:var(--rd-bg);color:var(--rd)}
 </style>
 </head>
 <body>
@@ -133,6 +141,7 @@ canvas{max-width:100%}
   <button class="tab on" data-v="lanc" onclick="tab('lanc')">Lançamentos</button>
   <button class="tab" data-v="dre" onclick="tab('dre')">DRE</button>
   <button class="tab" data-v="prem" onclick="tab('prem')">Premissas</button>
+  <button class="tab" data-v="ped" onclick="tab('ped')">Pedágios</button>
   <button class="tab" data-v="cons" onclick="tab('cons')">Consolidado</button>
   <div class="tabs-r">
     <select id="selFilial" class="sel" onchange="onScopeChange()"></select>
@@ -301,6 +310,66 @@ canvas{max-width:100%}
         <thead><tr><th>Filial</th><th>Mês</th><th class="num">Fat. Bruto</th><th class="num">Fat. Líq.</th>
           <th class="num">Result. Fin.</th><th class="num">Margem</th><th>Status</th></tr></thead>
         <tbody id="consTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ══ PEDÁGIOS ══ -->
+<section class="view" id="v-ped">
+  <div class="panel">
+    <div class="panel-h">
+      <h3>Importar pedágio do mês <span class="muted" id="pedMesInfo" style="font-weight:400;font-size:12px"></span></h3>
+      <div class="ctrls">
+        <button class="btn pri" id="pedBtnProc" onclick="processarPedagios()" disabled>Processar</button>
+        <button class="btn ok" id="pedBtnSave" onclick="salvarPedagios()" disabled>Salvar na nuvem</button>
+      </div>
+    </div>
+    <div class="panel-b">
+      <div id="pedLock"></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+        <label class="ped-drop" id="pedDropFat">
+          <input type="file" accept=".csv,.txt" onchange="pedFile(event,'fat')" style="display:none">
+          <div class="ped-drop-ic">📄</div>
+          <div><b>Detalhamento da Fatura</b> (.csv)<div class="muted" id="pedFatName">Clique para selecionar — coluna T (valor) e U (vale-pedágio).</div></div>
+        </label>
+        <label class="ped-drop" id="pedDropRes">
+          <input type="file" accept=".xls,.html,.htm" onchange="pedFile(event,'res')" style="display:none">
+          <div class="ped-drop-ic">🎫</div>
+          <div><b>Resumo de Vales Carregados</b> (.xls)<div class="muted" id="pedResName">Clique para selecionar — vales pagos pelo cliente.</div></div>
+        </label>
+      </div>
+      <div class="lock-note" style="margin-top:12px;color:var(--mu);background:#fafbfc;border-color:var(--bd2)">
+        <b>Regra:</b> Custo Comix por placa = <b>valor de pedágio (col. T)</b> − <b>vales pagos pelo cliente</b> (arquivo Resumo).
+        A placa é associada à filial pelo <b>cadastro de veículos</b> do sistema. Custos <b>sem placa</b> (ou placa não cadastrada) vão para a <b>filial 17 — SC</b>.
+      </div>
+    </div>
+  </div>
+
+  <div class="cards" id="pedCards"></div>
+
+  <div class="panel">
+    <div class="panel-h"><h3>Resumo por filial (vai para o DRE)</h3></div>
+    <div class="panel-b" style="overflow:auto">
+      <table>
+        <thead><tr><th>Filial</th><th class="num">Pedágio bruto</th><th class="num">Vale cliente</th>
+          <th class="num">Custo Comix (DRE)</th></tr></thead>
+        <tbody id="pedFilTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-h"><h3>Detalhe por placa</h3>
+      <div class="ctrls">
+        <select id="pedFiltroFil" class="sel" onchange="renderPedagios()"><option value="">Todas as filiais</option></select>
+      </div>
+    </div>
+    <div class="panel-b" style="overflow:auto;max-height:480px">
+      <table>
+        <thead><tr><th>Placa</th><th>Filial</th><th class="num">Pedágio bruto</th>
+          <th class="num">Vale cliente</th><th class="num">Custo Comix</th></tr></thead>
+        <tbody id="pedPlacaTbody"></tbody>
       </table>
     </div>
   </div>
@@ -649,6 +718,7 @@ function tab(v){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.v===v));
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
   if(v==='cons') loadConsolidado();
+  if(v==='ped') loadPedagios();
 }
 
 async function boot(){
@@ -692,8 +762,8 @@ async function onScopeChange(){
 
 async function refreshAll(){
   if(!ST.filial||!ST.mesRef) return;
-  await Promise.all([ loadCabecalho(), loadLancManuais(), loadLancOS(), loadPremissa() ]);
-  renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm();
+  await Promise.all([ loadCabecalho(), loadLancManuais(), loadLancOS(), loadPremissa(), loadPedagios() ]);
+  renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm(); renderPedagios();
   ensureSZB(); ensureAgregadoBases(); pullReceitaSZB(false);
 }
 
@@ -858,7 +928,8 @@ function calcDRE(){
   const fat=+r.fatBruto||0, prod=+r.producaoT||0;
   const imp=(+im.icms||0)+(+im.pisCofins||0)+(+im.irCs||0)+(+im.iss||0);
   const fl=fat-imp;
-  const diesel=calcDiesel(); const agregInfo=calcFechamentoAgregados(); const agreg=agregInfo.total; const pedagio=somaGrupo('PEDAGIO');
+  const diesel=calcDiesel(); const agregInfo=calcFechamentoAgregados(); const agreg=agregInfo.total;
+  const pedagio=pedFilialTotal(ST.filial)+somaGrupo('PEDAGIO');
   ST._agregInfo=agregInfo;
   const coLanc=somaGrupo('CO'); const co=coLanc;
   const cpLanc=somaGrupo('CP'); const cp=custoPessoalFolha()+cpLanc;
@@ -904,6 +975,17 @@ function renderDre(){
       + `− Débitos SZI <b>${moeda(ag.debSZI||0)}</b> + Créditos SZI <b>${moeda(ag.credSZI||0)}</b> = <b>${moeda(ag.total||0)}</b>`
       + (falta?`<br>⏳ Aguardando carregar: ${ag.falta.join(', ')} — valor parcial até todas as bases chegarem.`:'')
       + `</div>`;
+    // composição do Pedágio (origem: importação da fatura)
+    const ped=(ST.pedagio && ST.pedagioMes===ST.mesRef) ? ST.pedagio : null;
+    const pf = ped ? (ped.porFilial||{})[ST.filial] : null;
+    const man = somaGrupo('PEDAGIO');
+    if(ped){
+      note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
+        + `<b>Composição Pedágio (${ST.filial})</b> = Bruto fatura <b>${moeda(pf?pf.bruto:0)}</b> − Vale cliente <b>${moeda(pf?pf.vale:0)}</b>`
+        + (man?` + Lançamentos manuais <b>${moeda(man)}</b>`:'')
+        + ` = <b>${moeda((pf?pf.comix:0)+man)}</b>`
+        + `<br><span style="opacity:.8">Importado da fatura de pedágio do mês · placas associadas à filial pelo cadastro de veículos · sem placa → SC.</span></div>`;
+    }
   }
 }
 function liveDre(){
@@ -1049,6 +1131,233 @@ function renderConsolidado(){
     borderColor:'#1a56db', backgroundColor:'rgba(26,86,219,.08)', fill:true, tension:.25, pointRadius:3 }] },
     options:{ responsive:true, plugins:{legend:{display:false}},
       scales:{ y:{ ticks:{ callback:v=>'R$ '+(v/1000).toFixed(0)+'k' } } } } });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   PEDÁGIOS — importação fatura (col. T) − vales do cliente (Resumo),
+   associação placa→filial pelo cadastro 'veiculos', persistência na nuvem
+   (coleção mapinha_pedagios, 1 doc por mês: PED_<mesRef>).
+   ══════════════════════════════════════════════════════════════════ */
+const PED = { fat:null, res:null, fatName:'', resName:'' };  // arquivos em memória (pré-processo)
+ST.pedagio = null;            // import processado/carregado do mês corrente
+ST.pedagioMes = null;         // mesRef do import em memória
+ST._placaFilialCache = null;  // mapa normPlaca -> sigla (cadastro veiculos)
+
+function normPlaca(p){ return String(p||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+
+/* cadastro de veículos → mapa placa→sigla (mesma base/ponte do sistema) */
+async function ensurePlacaFilial(){
+  if(ST._placaFilialCache) return ST._placaFilialCache;
+  const map={}; const sigSet=new Set((ST.filiais||[]).map(f=>f.sigla));
+  try{
+    const vs = await fsGetCollection('veiculos');
+    vs.forEach(d=>{
+      const v=d.data||{};
+      const placa = normPlaca(v.placa || v.Placa || d.id);
+      if(!placa) return;
+      const raw = v.filial || v.unidade || v.operacao || '';
+      const sig = siglaDeOp(raw);                       // SC | PR | SP | (texto cru)
+      // só mapeia se resolver para uma filial conhecida; senão fica sem cadastro (→ SC, sinalizada)
+      if(sig && (OPCODE_SIGLA[normOpKey(raw)] || sigSet.has(sig))) map[placa]=sig;
+    });
+  }catch(e){ console.warn('[Pedágio] cadastro veiculos:', e.message); }
+  ST._placaFilialCache = map; return map;
+}
+
+/* ── Parser da fatura (CSV ; com aspas; cabeçalho dinâmico) ── */
+function pedSplitCsvLine(line){
+  const out=[]; let cur=''; let q=false;
+  for(let i=0;i<line.length;i++){ const c=line[i];
+    if(c==='"'){ if(q && line[i+1]==='"'){ cur+='"'; i++; } else q=!q; }
+    else if(c===';' && !q){ out.push(cur); cur=''; }
+    else cur+=c;
+  }
+  out.push(cur); return out;
+}
+function parsePedagioFatura(text){
+  const lines=String(text).replace(/^\uFEFF/,'').split(/\r?\n/);
+  let hi=-1, cols=null;
+  for(let i=0;i<lines.length;i++){
+    if(/Valor da Transa/i.test(lines[i]) && /vale-ped/i.test(lines[i])){ hi=i; cols=pedSplitCsvLine(lines[i]).map(c=>c.trim()); break; }
+  }
+  if(hi<0) throw new Error('Cabeçalho da fatura não encontrado (coluna "Valor da Transação").');
+  const idx=n=>cols.findIndex(c=>c.toLowerCase().replace(/\s+/g,' ').indexOf(n)>=0);
+  const iPlaca=idx('placa'), iVal=idx('valor da transa'), iVale=idx('valor utilizado de vale'), iData=idx('data da transa');
+  if(iVal<0) throw new Error('Coluna "Valor da Transação" não localizada.');
+  const out=[];
+  for(let i=hi+1;i<lines.length;i++){
+    if(!lines[i] || !lines[i].replace(/;/g,'').trim()) continue;
+    const r=pedSplitCsvLine(lines[i]);
+    if(r.length<=iVal) continue;
+    out.push({ placa:normPlaca(r[iPlaca]||''), valor:toNum(r[iVal]),
+               vale:iVale>=0?toNum(r[iVale]):0, data: iData>=0?String(r[iData]||''):'' });
+  }
+  return out;
+}
+/* ── Parser do Resumo (.xls = HTML; tabela com colunas Cavalo/Valor/Status) ── */
+function parsePedagioResumo(text){
+  const doc=new DOMParser().parseFromString(String(text),'text/html');
+  const tables=Array.from(doc.querySelectorAll('table'));
+  let alvo=null, head=null;
+  for(const t of tables){
+    const trs=Array.from(t.querySelectorAll('tr'));
+    for(const tr of trs){
+      const cells=Array.from(tr.children).map(c=>c.textContent.trim().toLowerCase());
+      if(cells.includes('cavalo') && cells.some(c=>c==='valor')){ alvo=t; head=cells; break; }
+    }
+    if(alvo) break;
+  }
+  if(!alvo) throw new Error('Tabela do Resumo (colunas Cavalo/Valor) não encontrada.');
+  const iCav=head.indexOf('cavalo'), iVal=head.indexOf('valor'),
+        iSt=head.findIndex(c=>c==='status'), iFil=head.findIndex(c=>c==='filial');
+  const out=[]; const trs=Array.from(alvo.querySelectorAll('tr'));
+  let started=false;
+  for(const tr of trs){
+    const cells=Array.from(tr.children).map(c=>c.textContent.trim());
+    const low=cells.map(c=>c.toLowerCase());
+    if(!started){ if(low.includes('cavalo')&&low.some(c=>c==='valor')) started=true; continue; }
+    if(cells.length<=iVal) continue;
+    if(iSt>=0 && cells[iSt] && cells[iSt].toLowerCase().indexOf('carreg')<0) continue;
+    const cav=normPlaca(cells[iCav]||''); if(!cav) continue;
+    out.push({ placa:cav, vale:toNum(cells[iVal]), filArq: iFil>=0?(cells[iFil]||''):'' });
+  }
+  return out;
+}
+
+/* ── Núcleo: combina fatura + resumo + cadastro → totais por placa/filial ── */
+async function computePedagio(fatRows, resRows){
+  const map = await ensurePlacaFilial();
+  const FB = {};       // placa -> bruto (custo positivo = -Σ T)
+  let semPlacaBruto=0;
+  fatRows.forEach(r=>{ if(r.placa){ FB[r.placa]=(FB[r.placa]||0) - r.valor; } else { semPlacaBruto += -r.valor; } });
+  const VC = {};       // placa -> vale cliente
+  resRows.forEach(r=>{ VC[r.placa]=(VC[r.placa]||0) + r.vale; });
+
+  const placas = Array.from(new Set([...Object.keys(FB), ...Object.keys(VC)])).sort();
+  const lista=[]; const porFilial={}; let totalBruto=0,totalVale=0,totalComix=0,totalExcesso=0;
+  placas.forEach(p=>{
+    const bruto=FB[p]||0, vale=VC[p]||0, comix=bruto-vale;
+    const semCad=!map[p]; const fil=map[p]||'SC';
+    if(vale>bruto) totalExcesso += (vale-bruto);
+    porFilial[fil]=porFilial[fil]||{bruto:0,vale:0,comix:0};
+    porFilial[fil].bruto+=bruto; porFilial[fil].vale+=vale; porFilial[fil].comix+=comix;
+    totalBruto+=bruto; totalVale+=vale; totalComix+=comix;
+    lista.push({ placa:p, filial:fil, bruto, vale, comix, semCadastro:semCad });
+  });
+  // custos sem placa → SC
+  if(semPlacaBruto){
+    porFilial['SC']=porFilial['SC']||{bruto:0,vale:0,comix:0};
+    porFilial['SC'].bruto+=semPlacaBruto; porFilial['SC'].comix+=semPlacaBruto;
+    totalBruto+=semPlacaBruto; totalComix+=semPlacaBruto;
+  }
+  return { mesRef:ST.mesRef, totalBruto, totalVale, totalComix, totalExcesso,
+           semPlacaBruto, porFilial, placas:lista };
+}
+
+function pedFile(ev,kind){
+  const f=ev.target.files&&ev.target.files[0]; if(!f) return;
+  const isFat = kind==='fat';
+  const reader=new FileReader();
+  reader.onload=()=>{
+    if(isFat){ PED.fat=reader.result; PED.fatName=f.name; document.getElementById('pedFatName').textContent=f.name; document.getElementById('pedDropFat').classList.add('ok'); }
+    else     { PED.res=reader.result; PED.resName=f.name; document.getElementById('pedResName').textContent=f.name; document.getElementById('pedDropRes').classList.add('ok'); }
+    document.getElementById('pedBtnProc').disabled = !(PED.fat && PED.res) || !pedPodeImportar();
+  };
+  // Fatura = UTF-8 (BOM); Resumo .xls = HTML latin-1
+  if(isFat) reader.readAsText(f,'UTF-8'); else reader.readAsText(f,'ISO-8859-1');
+}
+function pedPodeImportar(){ return isAdminOuLR(); }
+
+async function processarPedagios(){
+  if(!(PED.fat && PED.res)) return toast('Selecione os dois arquivos.','am');
+  if(!pedPodeImportar()) return toast('Apenas Admin/LR podem importar pedágio (afeta todas as filiais).','am');
+  try{
+    toast('Processando pedágios…','ac');
+    const fatRows=parsePedagioFatura(PED.fat);
+    const resRows=parsePedagioResumo(PED.res);
+    const data=await computePedagio(fatRows, resRows);
+    data.arquivos={ fatura:PED.fatName, resumo:PED.resName };
+    ST.pedagio=data; ST.pedagioMes=ST.mesRef;
+    renderPedagios(); renderDre(); renderLancCards();
+    document.getElementById('pedBtnSave').disabled = !pedPodeImportar();
+    toast(`Pedágios processados: ${data.placas.length} placas · custo Comix ${moeda(data.totalComix)}.`,'gn');
+  }catch(e){ console.error(e); toast('Erro ao processar: '+e.message,'rd'); }
+}
+
+async function salvarPedagios(){
+  if(!ST.pedagio) return toast('Processe os arquivos antes de salvar.','am');
+  if(!pedPodeImportar()) return toast('Sem permissão para salvar pedágio.','am');
+  const payload={ ...ST.pedagio, mesRef:ST.mesRef,
+    importadoPor:userMin(), importadoEm:new Date().toISOString() };
+  try{
+    await fsSetDoc('mapinha_pedagios', 'PED_'+ST.mesRef, payload);
+    ST.pedagioMes=ST.mesRef;
+    toast('Pedágio salvo na nuvem ('+ST.mesRef+').','gn');
+    renderDre();
+  }catch(e){ console.error(e); toast('Falha ao salvar: '+e.message,'rd'); }
+}
+
+async function loadPedagios(){
+  // carrega o doc do mês (se já houver import salvo) — alimenta o DRE de todas as filiais
+  if(ST.pedagioMes===ST.mesRef && ST.pedagio){ syncPedTabUI(); renderPedagios(); return; }
+  try{
+    const d=await fsGetDoc('mapinha_pedagios', 'PED_'+ST.mesRef);
+    ST.pedagio = d ? d.data : null; ST.pedagioMes = ST.mesRef;
+  }catch(e){ ST.pedagio=null; ST.pedagioMes=ST.mesRef; }
+  // se o mês mudou, descarta arquivos em memória do mês anterior
+  if(ST.pedagioMes!==ST.mesRef){ PED.fat=PED.res=null; }
+  syncPedTabUI(); renderPedagios();
+}
+function syncPedTabUI(){
+  const info=document.getElementById('pedMesInfo'); if(info) info.textContent='· '+ST.mesRef;
+  const lock=document.getElementById('pedLock');
+  if(lock) lock.innerHTML = pedPodeImportar() ? '' :
+    '<div class="lock-note">🔒 Importação de pedágio disponível apenas para Admin/LR (afeta todas as filiais). Você pode visualizar o resultado.</div>';
+  const bp=document.getElementById('pedBtnProc'); if(bp) bp.disabled = !(PED.fat&&PED.res) || !pedPodeImportar();
+  const bs=document.getElementById('pedBtnSave'); if(bs) bs.disabled = !ST.pedagio || !pedPodeImportar();
+}
+
+function pedFilialTotal(sigla){
+  if(!ST.pedagio || ST.pedagioMes!==ST.mesRef) return 0;
+  const f=(ST.pedagio.porFilial||{})[sigla]; return f? (+f.comix||0) : 0;
+}
+
+function renderPedagios(){
+  const sel=document.getElementById('pedFiltroFil');
+  if(sel && sel.options.length<=1){ ST.filiais.forEach(f=> sel.appendChild(new Option(f.sigla, f.sigla))); }
+  const d=ST.pedagio;
+  const cards=document.getElementById('pedCards');
+  const filTb=document.getElementById('pedFilTbody');
+  const plTb=document.getElementById('pedPlacaTbody');
+  if(!d || ST.pedagioMes!==ST.mesRef){
+    if(cards) cards.innerHTML='';
+    if(filTb) filTb.innerHTML='<tr><td colspan="4" class="empty">Nenhum pedágio importado para '+ST.mesRef+'.</td></tr>';
+    if(plTb) plTb.innerHTML='<tr><td colspan="5" class="empty">Importe os arquivos para ver o detalhe por placa.</td></tr>';
+    return;
+  }
+  if(cards) cards.innerHTML =
+    card('Pedágio bruto', moeda(d.totalBruto),'acc') +
+    card('Vale cliente (−)', moeda(d.totalVale)) +
+    card('Custo Comix (DRE)', moeda(d.totalComix),'', (d.placas||[]).length+' placas') +
+    card('Vale cliente excedente', moeda(d.totalExcesso||0), (d.totalExcesso>0?'bad':''), 'vale > pedágio na placa');
+  // por filial
+  const pf=d.porFilial||{};
+  const sigs=Object.keys(pf).sort();
+  if(filTb) filTb.innerHTML = sigs.length? sigs.map(s=>`<tr><td>${s}${s==='SC'&&d.semPlacaBruto?' <span class="muted">(inclui sem placa)</span>':''}</td>
+    <td class="num">${moeda(pf[s].bruto)}</td><td class="num">${moeda(pf[s].vale)}</td>
+    <td class="num"><b>${moeda(pf[s].comix)}</b></td></tr>`).join('')
+    + `<tr class="res"><td>Total</td><td class="num">${moeda(d.totalBruto)}</td><td class="num">${moeda(d.totalVale)}</td><td class="num">${moeda(d.totalComix)}</td></tr>`
+    : '<tr><td colspan="4" class="empty">Sem dados.</td></tr>';
+  // por placa
+  const ff=sel?sel.value:'';
+  const rows=(d.placas||[]).filter(p=>!ff||p.filial===ff)
+    .sort((a,b)=> b.comix-a.comix);
+  if(plTb) plTb.innerHTML = rows.length? rows.map(p=>{
+    const tags=(p.semCadastro?'<span class="tag scd">s/ cadastro</span> ':'')+(p.vale>p.bruto?'<span class="tag exc">vale&gt;ped</span>':'');
+    return `<tr><td>${p.placa} ${tags}</td><td>${p.filial}</td>
+      <td class="num">${moeda(p.bruto)}</td><td class="num">${moeda(p.vale)}</td>
+      <td class="num ${p.comix<0?'neg':''}">${moeda(p.comix)}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty">Sem placas para o filtro.</td></tr>';
 }
 
 /* ══ START ══ */
