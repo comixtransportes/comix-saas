@@ -133,6 +133,21 @@ canvas{max-width:100%}
 .ped-drop b{font-weight:600}
 .tag.scd{background:var(--am-bg);color:var(--am)}
 .tag.exc{background:var(--rd-bg);color:var(--rd)}
+
+/* ══ DASHBOARDS ══ */
+.dash-head{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.dash-head h3{font-size:15px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(205px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:var(--wh);border:1px solid var(--bd);border-radius:var(--r);padding:13px 15px;box-shadow:var(--shd);border-top:3px solid var(--bd2)}
+.kpi.acc{border-top-color:var(--ac)}.kpi.good{border-top-color:var(--gn)}.kpi.bad{border-top-color:var(--rd)}
+.kpi-k{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mu);font-weight:600}
+.kpi-v{font-size:19px;font-weight:600;font-family:var(--m);margin-top:5px;line-height:1.15;white-space:nowrap}
+.kpi.good .kpi-v{color:var(--gn)}.kpi.bad .kpi-v{color:var(--rd)}
+.kpi-s{font-size:11px;color:var(--mu);margin-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.delta{font-weight:600;font-family:var(--m);font-size:11px}
+.delta.up{color:var(--gn)}.delta.down{color:var(--rd)}.delta.flat{color:var(--mu)}
+.dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:1100px){.dash-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -143,6 +158,7 @@ canvas{max-width:100%}
   <button class="tab" data-v="prem" onclick="tab('prem')">Premissas</button>
   <button class="tab" data-v="ped" onclick="tab('ped')">Pedágios</button>
   <button class="tab" data-v="cons" onclick="tab('cons')">Consolidado</button>
+  <button class="tab" data-v="dash" onclick="tab('dash')">Dashboards</button>
   <div class="tabs-r">
     <select id="selFilial" class="sel" onchange="onScopeChange()"></select>
     <input type="month" id="selMes" class="sel" onchange="onScopeChange()">
@@ -160,7 +176,7 @@ canvas{max-width:100%}
       <h3>Receita & Impostos</h3>
       <div class="ctrls">
         <span id="szbInfo" class="muted" style="font-size:11px"></span>
-        <button class="btn sm" id="btnPullSZB" onclick="pullReceitaSZB(true)">↻ Puxar do SZB</button>
+        <span class="muted" style="font-size:11px;display:inline-flex;align-items:center;gap:4px">⚡ auto-sincroniza com o SZB do Download Base</span>
       </div>
     </div>
     <div class="panel-b">
@@ -380,6 +396,39 @@ canvas{max-width:100%}
   </div>
 </section>
 
+<!-- ══ DASHBOARDS ══ -->
+<section class="view" id="v-dash">
+  <div class="dash-head">
+    <h3 id="dashTitle">Dashboard</h3>
+    <span class="muted" id="dashSub" style="font-size:12px"></span>
+  </div>
+  <div id="dashKpis" class="kpis"></div>
+  <div class="dash-grid">
+    <div class="panel">
+      <div class="panel-h"><h3>Composição dos custos</h3><span class="muted" id="dashCostSub" style="font-size:11px"></span></div>
+      <div class="panel-b"><canvas id="dashCostChart" height="150"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-h"><h3>Atual × mês anterior</h3><span class="muted" id="dashCmpSub" style="font-size:11px"></span></div>
+      <div class="panel-b"><canvas id="dashCmpChart" height="150"></canvas></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-h"><h3>Evolução — Resultado Financeiro e Margem (meses fechados)</h3></div>
+    <div class="panel-b"><canvas id="dashEvoChart" height="92"></canvas></div>
+  </div>
+  <div class="panel">
+    <div class="panel-h"><h3>Comparativo de período (linha a linha)</h3><span class="muted" id="dashCmpTblSub" style="font-size:11px"></span></div>
+    <div class="panel-b" style="overflow:auto">
+      <table>
+        <thead><tr><th>Indicador</th><th class="num">Atual</th><th class="num">% Rec. Bruta</th>
+          <th class="num">Mês anterior</th><th class="num">Δ abs.</th><th class="num">Δ %</th></tr></thead>
+        <tbody id="dashCmpTbody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
 <div id="toast-el" class="toast"></div>
 
 <script>
@@ -397,7 +446,7 @@ window.addEventListener('message', ev => {
     const t = String(m.table||'').toLowerCase();
     const rows = (m.payload && m.payload.rows) || (m.rows) || null;
     if (rows && rows.length){
-      if (t==='szb') setSZBRows(rows);
+      if (t==='szb'){ const had=SZB.loaded; setSZBRows(rows); toast(had?'SZB atualizado — Lançamentos e DRE recalculados.':'SZB carregado.','gn'); }
       else if (t==='szc') setBaseRows('szc', rows);
       else if (t==='szi') setBaseRows('szi', rows);
     }
@@ -447,9 +496,45 @@ const OPCODE_SIGLA = { '17':'SC','18':'PR','03':'SP' };
 function siglaDeOp(op){ return OPCODE_SIGLA[normOpKey(op)] || upper(op); }
 
 /* ══════════════════════════════════════════════════════════════════
+   MÁSCARA MONETÁRIA INTELIGENTE (digita a partir dos centavos)
+   — Mantém o display em "R$ 1.234,56" porém el.value (JS) continua
+     devolvendo string numérica ("1234.56"), então toda a lógica
+     existente que faz +el.value / el.value = numero segue idêntica.
+   — Suporta negativo (digite "-") p/ lançamentos de crédito/estorno.
+   ══════════════════════════════════════════════════════════════════ */
+const MONEY_IDS = ['recFat','impICMS','impPIS','impIR','impISS','lcValor',
+  'mtFat','mtDiesel','mtAgreg','mtCO','mtCP','mtCE','mtRF',
+  'prFolhaAdic','prCPEpi','prCPLegal','prCPOutrosTotal'];
+function _moneyFmt(cents){ const v=Math.abs(cents)/100; const s=v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); return cents<0?('-'+s):s; }
+function bindMoneyInputs(){
+  const desc=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');
+  MONEY_IDS.forEach(function(id){
+    const el=document.getElementById(id); if(!el||el._moneyBound) return; el._moneyBound=true;
+    el.type='text'; el.setAttribute('inputmode','numeric'); el.autocomplete='off';
+    let cents=0;
+    Object.defineProperty(el,'value',{ configurable:true,
+      get:function(){ return cents ? (cents/100).toFixed(2) : ''; },
+      set:function(v){ if(v===''||v===null||v===undefined){ cents=0; } else { const n=Number(v); cents=isNaN(n)?0:Math.round(n*100); }
+        desc.set.call(el, cents? _moneyFmt(cents) : ''); }
+    });
+    const orig=el.getAttribute('oninput'); el.removeAttribute('oninput');
+    let origFn=null; if(orig){ try{ origFn=new Function(orig); }catch(_){ origFn=null; } }
+    el.addEventListener('input', function(){
+      const raw=desc.get.call(el);
+      const neg=raw.indexOf('-')!==-1;
+      const digits=raw.replace(/[^0-9]/g,'');
+      cents=digits ? parseInt(digits,10) : 0; if(neg) cents=-cents;
+      desc.set.call(el, cents ? _moneyFmt(cents) : (neg?'-':''));
+      try{ const L=desc.get.call(el).length; el.setSelectionRange(L,L); }catch(_){}
+      if(origFn) origFn.call(el);
+    });
+  });
+}
+
+/* ══════════════════════════════════════════════════════════════════
    SZB — receita/produção/dias derivados (MESMA metodologia do pd.html)
    ══════════════════════════════════════════════════════════════════ */
-const SZB = { rows:null, loaded:false, _requested:false };
+const SZB = { rows:null, loaded:false, _requested:false, _fp:null };
 /* converte data (serial Excel / ISO / BR) → 'YYYY-MM-DD' — idêntico ao PD */
 function atlasExcelDateToISO(v){
   if(v===null||v===undefined||v==='') return '';
@@ -478,7 +563,17 @@ function normalizeAtlasSZBRows(rows){
   }).filter(function(r){ return Object.values(r).some(function(v){ return v!==''&&v!==null&&v!==undefined; }); });
 }
 /* setter único: normaliza uma vez e dispara o preenchimento */
-function setSZBRows(raw){ if(!raw||!raw.length) return false; SZB.rows=normalizeAtlasSZBRows(raw); SZB.loaded=true; onSZBLoaded(); renderDre(); renderLancCards(); return true; }
+function szbFingerprint(rows){ try{ return ((rows&&rows.length)||0)+'|'+JSON.stringify((rows&&rows[0])||{}).length; }catch(_){ return String((rows&&rows.length)||0); } }
+function setSZBRows(raw){ if(!raw||!raw.length) return false; SZB.rows=normalizeAtlasSZBRows(raw); SZB.loaded=true; SZB._fp=szbFingerprint(raw); onSZBLoaded(); renderDre(); renderLancCards(); return true; }
+/* checa se o portal já tem um SZB diferente do carregado (ex.: reimportado no Download Base) e re-sincroniza */
+function checkSZBFresh(){
+  try{ const pd=window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
+    if(pd && pd.rows && pd.rows.length){
+      const fp=szbFingerprint(pd.rows);
+      if(fp!==SZB._fp){ const had=SZB.loaded; setSZBRows(pd.rows); if(had) toast('SZB atualizado — Lançamentos e DRE recalculados.','gn'); }
+    }
+  }catch(_){}
+}
 
 /* ── Bases auxiliares p/ Agregados: SZC (abastecimentos) e SZI (créditos/débitos) ── */
 const BASE_DATECOLS = { szc:['Data Emissao'], szi:['Data'] };
@@ -724,6 +819,8 @@ function tab(v){
   document.querySelectorAll('.view').forEach(s=>s.classList.toggle('on',s.id==='v-'+v));
   if(v==='cons') loadConsolidado();
   if(v==='ped') loadPedagios();
+  if(v==='dash') loadDashboard();
+  if(v==='lanc') checkSZBFresh();
 }
 
 async function boot(){
@@ -752,6 +849,7 @@ async function boot(){
   ST.mesRef = document.getElementById('selMes').value;
   document.getElementById('lcData').value = ST.mesRef+'-01';
   applyPerm();
+  bindMoneyInputs();
   await refreshAll();
 }
 
@@ -1255,6 +1353,124 @@ function renderConsolidado(){
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   DASHBOARDS — visão gerencial do DRE (ao vivo do mês + histórico)
+   ══════════════════════════════════════════════════════════════════ */
+let _dashCost=null,_dashCmp=null,_dashEvo=null;
+async function loadDashboard(){ await loadConsolidado(); renderDashboard(); }
+function dashPrevFechado(){
+  return (ST.consolidado||[]).filter(m=>m.filial===ST.filial && m.mesRef<ST.mesRef)
+    .sort((a,b)=>b.mesRef.localeCompare(a.mesRef))[0] || null;
+}
+function dashMetrics(d){
+  const varc=d.diesel+d.agreg+d.pedagio+d.co;   // custos variáveis (operação)
+  const fix=d.cp+d.ce;                            // custos fixos (pessoal + equipamento)
+  const mc=d.fl-varc;                             // margem de contribuição
+  return { bruta:d.fat, liquida:d.fl, imp:d.imp, varc, fix, mc, rf:d.rf, margem:d.margem,
+           margemMC:d.fat?mc/d.fat:0, prod:d.prod, pm:d.pm };
+}
+function dashKpiCard(k,v,sub,tone,delta,goodDown){
+  let cls='flat',ar='→';
+  if(delta!=null && Math.abs(delta)>1e-9){ const positive=delta>0; ar=positive?'▲':'▼';
+    cls=(goodDown? !positive : positive)?'up':'down'; }
+  const dl = delta==null?'' : `<span class="delta ${cls}">${ar} ${pct(Math.abs(delta))}</span>`;
+  return `<div class="kpi ${tone||''}"><div class="kpi-k">${k}</div><div class="kpi-v">${v}</div><div class="kpi-s">${sub||''}${dl}</div></div>`;
+}
+function renderDashboard(){
+  const d=calcDRE(), M=dashMetrics(d);
+  document.getElementById('dashTitle').textContent='Dashboard — '+ST.filial+' · '+ST.mesRef;
+  const st=(ST.cabecalho&&ST.cabecalho.status)||'rascunho';
+  document.getElementById('dashSub').textContent=(st==='rascunho'||st==='reaberto')?'valores ao vivo (mês em aberto)':'mês fechado';
+  const prev=dashPrevFechado(), pt=prev?(prev.totais||{}):null;
+  const Mp = pt ? { bruta:+pt.fatBruto||0, liquida:+pt.fatLiquido||0, imp:+pt.totalImpostos||0,
+    varc:(+pt.diesel||0)+(+pt.agregados||0)+(+pt.pedagio||0)+(+pt.custoOperacional||0),
+    fix:(+pt.custoPessoal||0)+(+pt.custoEquip||0), rf:+pt.resultadoFinanceiro||0, margem:+pt.margemPct||0,
+    mc:(+pt.fatLiquido||0)-((+pt.diesel||0)+(+pt.agregados||0)+(+pt.pedagio||0)+(+pt.custoOperacional||0)) } : null;
+  const dl=(cur,prv)=> (Mp && prv && Math.abs(prv)>1e-9) ? (cur-prv)/Math.abs(prv) : null;
+
+  document.getElementById('dashKpis').innerHTML =
+    dashKpiCard('Receita Bruta', moeda(M.bruta), prev?('vs '+prev.mesRef):'sem comparativo','acc', Mp?dl(M.bruta,Mp.bruta):null, false) +
+    dashKpiCard('Impostos', moeda(M.imp), M.bruta?pct(M.imp/M.bruta)+' da bruta':'', '', Mp?dl(M.imp,Mp.imp):null, true) +
+    dashKpiCard('Receita Líquida', moeda(M.liquida), '', '', Mp?dl(M.liquida,Mp.liquida):null, false) +
+    dashKpiCard('Custos Variáveis', moeda(M.varc), M.liquida?pct(M.varc/M.liquida)+' da líq.':'', '', Mp?dl(M.varc,Mp.varc):null, true) +
+    dashKpiCard('Margem de Contrib.', moeda(M.mc), pct(M.margemMC)+' s/ bruta', M.mc>=0?'good':'bad', Mp?dl(M.mc,Mp.mc):null, false) +
+    dashKpiCard('Custos Fixos', moeda(M.fix), '', '', Mp?dl(M.fix,Mp.fix):null, true) +
+    dashKpiCard('Resultado Operac. (RF)', moeda(M.rf), pct(M.margem)+' margem', M.rf>=0?'good':'bad', Mp?dl(M.rf,Mp.rf):null, false) +
+    dashKpiCard('Preço Médio', moeda(M.pm), num(M.prod)+' t produzidas', '', null);
+
+  // ── Doughnut: composição dos custos ──
+  const costLabels=['Diesel','Agregados','Pedágio','C. Operacional','C. Pessoal','C. Equip.'];
+  const costData=[d.diesel,d.agreg,d.pedagio,d.co,d.cp,d.ce].map(v=>Math.max(0,v));
+  const costColors=['#1a56db','#6d28d9','#0e7490','#b45309','#057a55','#c81e1e'];
+  const totalCost=costData.reduce((s,v)=>s+v,0);
+  document.getElementById('dashCostSub').textContent= totalCost?('total '+moeda(totalCost)):'sem custos lançados';
+  if(_dashCost) _dashCost.destroy();
+  _dashCost=new Chart(document.getElementById('dashCostChart'),{type:'doughnut',
+    data:{labels:costLabels,datasets:[{data:costData,backgroundColor:costColors,borderColor:'#fff',borderWidth:1}]},
+    options:{responsive:true,cutout:'58%',plugins:{legend:{position:'right',labels:{boxWidth:12,font:{size:11}}},
+      tooltip:{callbacks:{label:x=>x.label+': '+moeda(x.parsed)+' ('+(totalCost?(100*x.parsed/totalCost).toFixed(1):0)+'%)'}}}}});
+
+  // ── Barras: atual × mês anterior ──
+  const cmpLabels=['Rec. Bruta','Rec. Líquida','Margem Contrib.','Resultado'];
+  const cmpCur=[M.bruta,M.liquida,M.mc,M.rf];
+  document.getElementById('dashCmpSub').textContent=prev?('atual × '+prev.mesRef):'sem mês fechado anterior';
+  const cmpSets=[{label:ST.mesRef,data:cmpCur,backgroundColor:'#1a56db',borderRadius:3}];
+  if(Mp) cmpSets.push({label:prev.mesRef,data:[Mp.bruta,Mp.liquida,Mp.mc,Mp.rf],backgroundColor:'#94a3b8',borderRadius:3});
+  if(_dashCmp) _dashCmp.destroy();
+  _dashCmp=new Chart(document.getElementById('dashCmpChart'),{type:'bar',
+    data:{labels:cmpLabels,datasets:cmpSets},
+    options:{responsive:true,plugins:{legend:{display:!!Mp,labels:{font:{size:11}}},
+      tooltip:{callbacks:{label:x=>x.dataset.label+': '+moeda(x.parsed.y)}}},
+      scales:{y:{ticks:{callback:v=>'R$ '+(v/1000).toFixed(0)+'k'}}}}});
+
+  // ── Combo: evolução RF (barra) + Margem % (linha) ──
+  const evo=(ST.consolidado||[]).filter(m=>m.filial===ST.filial).sort((a,b)=>a.mesRef.localeCompare(b.mesRef));
+  const ev=document.getElementById('dashEvoChart');
+  if(_dashEvo){ _dashEvo.destroy(); _dashEvo=null; }
+  if(!evo.length){ ev.parentElement.innerHTML='<div class="empty">Sem meses fechados para '+ST.filial+' ainda — feche um Mapinha para ver a evolução.</div>'; }
+  else{
+    const evLabels=evo.map(m=>m.mesRef);
+    const evRF=evo.map(m=>+((m.totais||{}).resultadoFinanceiro)||0);
+    const evMg=evo.map(m=>100*(+((m.totais||{}).margemPct)||0));
+    _dashEvo=new Chart(ev,{type:'bar',
+      data:{labels:evLabels,datasets:[
+        {type:'bar',label:'Resultado Financeiro',data:evRF,backgroundColor:'rgba(26,86,219,.75)',yAxisID:'y',order:2,borderRadius:3},
+        {type:'line',label:'Margem %',data:evMg,borderColor:'#057a55',backgroundColor:'#057a55',tension:.25,pointRadius:3,yAxisID:'y1',order:1}
+      ]},
+      options:{responsive:true,plugins:{legend:{labels:{font:{size:11}}}},
+        scales:{y:{position:'left',ticks:{callback:v=>'R$ '+(v/1000).toFixed(0)+'k'}},
+          y1:{position:'right',grid:{drawOnChartArea:false},ticks:{callback:v=>v.toFixed(0)+'%'}}}}});
+  }
+
+  // ── Tabela comparativa linha a linha (Δ abs e Δ%) ──
+  const rowsT=[
+    ['Receita Bruta',M.bruta, Mp&&Mp.bruta, false],
+    ['(–) Impostos',M.imp, pt&&+pt.totalImpostos, false],
+    ['Receita Líquida',M.liquida, Mp&&Mp.liquida, true],
+    ['(–) Diesel',d.diesel, pt&&+pt.diesel, false],
+    ['(–) Agregados',d.agreg, pt&&+pt.agregados, false],
+    ['(–) Pedágio',d.pedagio, pt&&+pt.pedagio, false],
+    ['(–) Custo Operacional',d.co, pt&&+pt.custoOperacional, false],
+    ['(–) Custo Pessoal',d.cp, pt&&+pt.custoPessoal, false],
+    ['(–) Custo Equip.',d.ce, pt&&+pt.custoEquip, false],
+    ['Margem de Contribuição',M.mc, Mp&&Mp.mc, true],
+    ['= Resultado Financeiro',M.rf, Mp&&Mp.rf, true]
+  ];
+  document.getElementById('dashCmpTblSub').textContent=prev?('mês anterior: '+prev.mesRef+' ('+prev.status+')'):'sem mês fechado anterior';
+  document.getElementById('dashCmpTbody').innerHTML=rowsT.map(function(r){
+    const nome=r[0], cur=r[1], prv=r[2], strong=r[3];
+    const has=(prv!==null && prv!==undefined && prv!==false && !isNaN(prv));
+    const dabs=has?(cur-prv):null;
+    const dpct=(has && Math.abs(prv)>1e-9)?(cur-prv)/Math.abs(prv):null;
+    return `<tr class="${strong?'grp':''}"><td>${nome}</td>
+      <td class="num ${cur<0?'neg':''}">${moeda(cur)}</td>
+      <td class="num">${M.bruta?pct(cur/M.bruta):'—'}</td>
+      <td class="num">${has?moeda(prv):'—'}</td>
+      <td class="num ${dabs!=null&&dabs<0?'neg':''}">${dabs==null?'—':moeda(dabs)}</td>
+      <td class="num ${dpct!=null&&dpct<0?'neg':''}">${dpct==null?'—':((dpct>=0?'+':'')+pct(dpct))}</td></tr>`;
+  }).join('');
+}
+
+/* ══════════════════════════════════════════════════════════════════
    PEDÁGIOS — importação fatura (col. T) − vales do cliente (Resumo),
    associação placa→filial pelo cadastro 'veiculos', persistência na nuvem
    (coleção mapinha_pedagios, 1 doc por mês: PED_<mesRef>).
@@ -1498,6 +1714,8 @@ function renderPedagios(){
 
 /* ══ START ══ */
 window.addEventListener('DOMContentLoaded', ()=>{ try{ window.parent.postMessage({type:'ATLAS_REQUEST_USER'},'*'); }catch(_){} boot(); });
+window.addEventListener('focus', ()=>{ const lanc=document.getElementById('v-lanc'); if(lanc&&lanc.classList.contains('on')) checkSZBFresh(); });
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkSZBFresh(); });
 </script>
 </body>
 </html>
