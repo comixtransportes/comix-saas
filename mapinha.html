@@ -270,11 +270,16 @@ canvas{max-width:100%}
       <button class="btn sm" onclick="addFolhaRow()">+ função</button></div>
     <div class="panel-b" style="overflow:auto">
       <table>
-        <thead><tr><th>Função</th><th class="num">Qtd</th><th class="num">Salário</th><th></th></tr></thead>
+        <thead><tr><th>Função</th><th class="num">Qtd</th><th class="num">Salário</th><th class="num">Prod.</th><th class="num">% Prod.</th><th class="num">Limite</th><th class="num">Subtotal</th><th class="num">Total</th><th></th></tr></thead>
         <tbody id="folhaTbody"></tbody>
       </table>
-      <div class="frm" style="margin-top:10px;max-width:240px">
+      <div class="frm" style="margin-top:10px">
         <label class="fld">Encargos (%)<input type="number" id="prEnc" step="0.01" placeholder="ex: 70"></label>
+        <label class="fld">Folha real (% Fat.)<input type="number" id="prFolhaRealPct" step="0.01" placeholder="ex: 4.9"></label>
+        <label class="fld">Adicional folha PA (R$)<input type="number" id="prFolhaAdic" step="0.01" placeholder="ex: 7200"></label>
+        <label class="fld">EPI/Uniformes PA (R$)<input type="number" id="prCPEpi" step="0.01"></label>
+        <label class="fld">Legal PA (R$)<input type="number" id="prCPLegal" step="0.01"></label>
+        <label class="fld">CP Outros total PA (R$)<input type="number" id="prCPOutrosTotal" step="0.01"></label>
       </div>
     </div>
   </div>
@@ -284,7 +289,7 @@ canvas{max-width:100%}
       <button class="btn sm" onclick="addFrotaRow()">+ equipamento</button></div>
     <div class="panel-b" style="overflow:auto">
       <table>
-        <thead><tr><th>Tipo</th><th class="num">Qtd</th><th class="num">Valor CE unit.</th><th></th></tr></thead>
+        <thead><tr><th>Grupo</th><th>Tipo</th><th class="num">Qtd</th><th class="num">Valor CE unit.</th><th class="num">Subtotal</th><th class="num">Total</th><th></th></tr></thead>
         <tbody id="frotaTbody"></tbody>
       </table>
     </div>
@@ -914,14 +919,76 @@ function abrirOS(osId){
 
 /* ══ DRE ══ */
 function somaGrupo(g){ return lancVisiveis().filter(l=>l.grupoDre===g).reduce((s,l)=>s+(+l.valor||0),0); }
-function custoPessoalFolha(){
-  const p=ST.premissa; if(!p||!Array.isArray(p.folha)) return 0;
-  const enc=1+((+p.encargosPct||0)/100);
-  return p.folha.reduce((s,f)=> s + (+f.qtd||0)*(+f.salario||0), 0) * enc;
+function somaCentro(cc){ return lancVisiveis().filter(l=>l.centroCusto===cc).reduce((s,l)=>s+(+l.valor||0),0); }
+function somaGrupoExceto(g, codigos){
+  const set=new Set(codigos||[]);
+  return lancVisiveis().filter(l=>l.grupoDre===g && !set.has(l.centroCusto)).reduce((s,l)=>s+(+l.valor||0),0);
 }
-function custoEquipFrota(){
-  const p=ST.premissa; if(!p||!Array.isArray(p.frota)) return 0;
-  return p.frota.reduce((s,f)=> s + (+f.qtd||0)*(+f.valorCE||0), 0);
+function valPremissa(p, keys, def=0){
+  for(const k of keys){ if(p && p[k]!==undefined && p[k]!==null && p[k]!=='') return +p[k]||0; }
+  return def;
+}
+function calcFolhaLinha(f, pArg){
+  const p=pArg||ST.premissa||{}, m=p.metas||{}, rec=ST.cabecalho.receita||{};
+  const prodPA=+(m.producaoT||rec.producaoT||0);
+  const enc=1+((+p.encargosPct||0)/100);
+  const qtd=+f.qtd||0, salario=+f.salario||0;
+  const prodFator=valPremissa(f,['prodFator','producao','prod'],0);
+  const pctProd=valPremissa(f,['pctProd','percentual','perc'],100);
+  const vt=qtd>0 ? (pctProd/100)*prodPA : 0;
+  const limite=qtd>0 ? (salario+(prodFator*vt)) : 0;
+  const subtotal=qtd * (limite||salario);
+  const total=subtotal * enc;
+  return { qtd, salario, prodFator, pctProd, vt, limite:(limite||salario), subtotal, total, enc };
+}
+function calcCPDetalhado(){
+  const p=ST.premissa||{}, m=p.metas||{}, rec=ST.cabecalho.receita||{};
+  const fat=+rec.fatBruto||0;
+  const prodPA=+(m.producaoT||rec.producaoT||0);
+  const enc=1+((+p.encargosPct||0)/100);
+  const folhaRealPct=valPremissa(p,['folhaRealPct','percFolhaReal'],4.9);
+  const folhaReal=fat*(folhaRealPct/100);
+
+  let folhaMeta=0;
+  (Array.isArray(p.folha)?p.folha:[]).forEach(f=>{
+    folhaMeta += calcFolhaLinha(f,p).total;
+  });
+  folhaMeta += valPremissa(p,['folhaAdicional','adicionalFolhaPA','adicionalFolha'],0);
+
+  const epiReal=somaCentro('13.01');
+  const legalReal=somaCentro('14.01');
+  const outrosReal=somaCentro('15.01') + somaGrupoExceto('CP',['13.01','14.01','15.01']);
+  const epiMeta=valPremissa(p,['cpEpiUniformes','epiUniformes','epi'],0);
+  const legalMeta=valPremissa(p,['cpLegal','legal'],0);
+  const cpOutrosTotal=valPremissa(p,['cpOutrosTotal','outrosCPTotal'],0);
+  const outrosMeta=cpOutrosTotal ? Math.max(0, cpOutrosTotal-epiMeta) : valPremissa(p,['cpOutros','outrosCP','outros'],0);
+  const realTotal=folhaReal+epiReal+legalReal+outrosReal;
+  const metaTotal=folhaMeta+epiMeta+legalMeta+outrosMeta;
+  return { folhaReal, epiReal, legalReal, outrosReal, realTotal,
+           folhaMeta, epiMeta, legalMeta, outrosMeta, metaTotal, folhaRealPct };
+}
+function grupoCE(f){
+  const g=upper(f.grupoCE||f.grupo||'');
+  if(g) return g;
+  const t=String(f.tipo||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+  if(/CAVALO/.test(t)) return 'CAVALOS';
+  if(/CARRETA|BITREM|RODOTREM|VANDERLEIA|LS|4O|4º|EIXO/.test(t)) return 'CARRETAS';
+  if(/\bVA\b|PASSEIO|CARGA|COMPRESSOR/.test(t)) return 'VA';
+  return 'OUTROS';
+}
+function calcCEDetalhado(){
+  const out={cavalos:0, carretas:0, va:0, outros:0, realTotal:0, metaTotal:0};
+  (Array.isArray((ST.premissa||{}).frota)?ST.premissa.frota:[]).forEach(f=>{
+    const v=(+f.qtd||0)*(+f.valorCE||0);
+    const g=grupoCE(f);
+    if(g==='CAVALOS') out.cavalos+=v;
+    else if(g==='CARRETAS') out.carretas+=v;
+    else if(g==='VA') out.va+=v;
+    else out.outros+=v;
+  });
+  out.realTotal=out.cavalos+out.carretas+out.va+out.outros;
+  out.metaTotal=out.realTotal;
+  return out;
 }
 function calcDRE(){
   const r=ST.cabecalho.receita||{}, im=ST.cabecalho.impostos||{};
@@ -935,8 +1002,9 @@ function calcDRE(){
   const pedagio=pedFilialTotal(ST.filial);
   ST._agregInfo=agregInfo;
   const coLanc=somaGrupo('CO'); const co=coLanc;
-  const cpLanc=somaGrupo('CP'); const cp=custoPessoalFolha()+cpLanc;
-  const ce=custoEquipFrota();
+  const cpInfo=calcCPDetalhado(); const ceInfo=calcCEDetalhado();
+  ST._cpInfo=cpInfo; ST._ceInfo=ceInfo;
+  const cp=cpInfo.realTotal; const ce=ceInfo.realTotal;
   const rf=fl-diesel-agreg-pedagio-co-cp-ce;
   return { fat, prod, pm: prod?fat/prod:0, imp, fl, diesel, agreg, pedagio, co, cp, ce, rf,
            margem: fat? rf/fat : 0 };
@@ -944,6 +1012,7 @@ function calcDRE(){
 function renderDre(){
   document.getElementById('dreTitle').textContent = 'DRE — '+ST.filial+' · '+ST.mesRef;
   const d=calcDRE(); const m=(ST.premissa&&ST.premissa.metas)||{};
+  const cp=ST._cpInfo||calcCPDetalhado(), ce=ST._ceInfo||calcCEDetalhado();
   const fatPct=v=> d.fat? v/d.fat : 0;
   const linha=(nome,val,meta,cls='')=>{
     const realxmeta = meta? val/meta : 0;
@@ -964,8 +1033,16 @@ function renderDre(){
     linha('(–) Agregados', d.agreg, m.agreg) +
     linha('(–) Pedágio', d.pedagio) +
     linha('(–) Custo Operacional', d.co, m.co) +
-    linha('(–) Custo de Pessoal', d.cp, m.cp) +
-    linha('(–) Custo de Equip.', d.ce, m.ce) +
+    linha('(–) Custo de Pessoal', d.cp, m.cp||cp.metaTotal,'grp') +
+    linha('&nbsp;&nbsp;Folha / Enc.', cp.folhaReal, cp.folhaMeta) +
+    linha('&nbsp;&nbsp;EPI e uniformes', cp.epiReal, cp.epiMeta) +
+    linha('&nbsp;&nbsp;Legal', cp.legalReal, cp.legalMeta) +
+    linha('&nbsp;&nbsp;Outros - Alim. VT...', cp.outrosReal, cp.outrosMeta) +
+    linha('(–) Custo de Equip.', d.ce, m.ce||ce.metaTotal,'grp') +
+    linha('&nbsp;&nbsp;Cavalos', ce.cavalos, ce.cavalos) +
+    linha('&nbsp;&nbsp;Carretas', ce.carretas, ce.carretas) +
+    linha('&nbsp;&nbsp;VA', ce.va, ce.va) +
+    (ce.outros?linha('&nbsp;&nbsp;Outros CE', ce.outros, ce.outros):'') +
     `<tr class="res"><td>= Resultado Financeiro</td><td class="num">${moeda(d.rf)}</td><td class="num">${pct(d.margem)}</td><td class="num">${m.resultadoFinanceiro?moeda(m.resultadoFinanceiro):'—'}</td><td class="num">${m.resultadoFinanceiro?pct(m.resultadoFinanceiro?d.rf/m.resultadoFinanceiro:0):'—'}</td></tr>`;
   // composição do Fechamento de Agregados
   const ag=ST._agregInfo||{};
@@ -978,6 +1055,13 @@ function renderDre(){
       + `− Débitos SZI <b>${moeda(ag.debSZI||0)}</b> + Créditos SZI <b>${moeda(ag.credSZI||0)}</b> = <b>${moeda(ag.total||0)}</b>`
       + (falta?`<br>⏳ Aguardando carregar: ${ag.falta.join(', ')} — valor parcial até todas as bases chegarem.`:'')
       + `</div>`;
+    note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
+      + `<b>Composição CP</b> = Folha/Enc. <b>${moeda(cp.folhaReal)}</b> (${num(cp.folhaRealPct)}% do Fat.) + EPI <b>${moeda(cp.epiReal)}</b> + Legal <b>${moeda(cp.legalReal)}</b> + Outros <b>${moeda(cp.outrosReal)}</b>`
+      + `<br><span style="opacity:.8">PA de CP = folha por função com produção, limite, subtotal e total com encargos + EPI + Legal + Outros.</span></div>`;
+    note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
+      + `<b>Composição CE</b> = Cavalos <b>${moeda(ce.cavalos)}</b> + Carretas <b>${moeda(ce.carretas)}</b> + VA <b>${moeda(ce.va)}</b>`
+      + (ce.outros?` + Outros <b>${moeda(ce.outros)}</b>`:'')
+      + ` = <b>${moeda(ce.realTotal)}</b></div>`;
     // composição do Pedágio (origem: importação da fatura)
     const ped=(ST.pedagio && ST.pedagioMes===ST.mesRef) ? ST.pedagio : null;
     const pf = ped ? (ped.porFilial||{})[ST.filial] : null;
@@ -1028,28 +1112,56 @@ function fillPremissaForm(){
   document.getElementById('mtCO').value=m.co||''; document.getElementById('mtCP').value=m.cp||'';
   document.getElementById('mtCE').value=m.ce||''; document.getElementById('mtRF').value=m.resultadoFinanceiro||'';
   document.getElementById('prEnc').value=p.encargosPct||'';
+  const folhaRealPct = (p.folhaRealPct===undefined||p.folhaRealPct===null||p.folhaRealPct==='') ? 4.9 : p.folhaRealPct;
+  document.getElementById('prFolhaRealPct').value=folhaRealPct;
+  document.getElementById('prFolhaAdic').value=p.folhaAdicional||'';
+  document.getElementById('prCPEpi').value=p.cpEpiUniformes||p.epiUniformes||'';
+  document.getElementById('prCPLegal').value=p.cpLegal||p.legal||'';
+  document.getElementById('prCPOutrosTotal').value=p.cpOutrosTotal||'';
   renderFolha(); renderFrota();
 }
 function renderFolha(){
   const tb=document.getElementById('folhaTbody'); const arr=ST.premissa.folha||[];
-  tb.innerHTML = arr.length? arr.map((f,i)=>`<tr>
+  tb.innerHTML = arr.length? arr.map((f,i)=>{
+    const c=calcFolhaLinha(f,ST.premissa);
+    return `<tr>
     <td><input type="text" value="${f.funcao||''}" onchange="ST.premissa.folha[${i}].funcao=this.value"></td>
-    <td class="num"><input type="number" step="0.1" value="${f.qtd||0}" style="width:80px" onchange="ST.premissa.folha[${i}].qtd=+this.value"></td>
-    <td class="num"><input type="number" step="0.01" value="${f.salario||0}" style="width:110px" onchange="ST.premissa.folha[${i}].salario=+this.value"></td>
-    <td><button class="btn sm" onclick="ST.premissa.folha.splice(${i},1);renderFolha()">×</button></td></tr>`).join('')
-    : '<tr><td colspan="4" class="empty">Sem funções cadastradas.</td></tr>';
+    <td class="num"><input type="number" step="0.1" value="${f.qtd||0}" style="width:70px" onchange="ST.premissa.folha[${i}].qtd=+this.value;renderFolha();renderDre()"></td>
+    <td class="num"><input type="number" step="0.01" value="${f.salario||0}" style="width:105px" onchange="ST.premissa.folha[${i}].salario=+this.value;renderFolha();renderDre()"></td>
+    <td class="num"><input type="number" step="0.001" value="${f.prodFator||f.producao||0}" style="width:80px" onchange="ST.premissa.folha[${i}].prodFator=+this.value;renderFolha();renderDre()"></td>
+    <td class="num"><input type="number" step="0.01" value="${f.pctProd||f.percentual||100}" style="width:80px" onchange="ST.premissa.folha[${i}].pctProd=+this.value;renderFolha();renderDre()"></td>
+    <td class="num mono">${moeda(c.limite)}</td>
+    <td class="num mono">${moeda(c.subtotal)}</td>
+    <td class="num mono">${moeda(c.total)}</td>
+    <td><button class="btn sm" onclick="ST.premissa.folha.splice(${i},1);renderFolha();renderDre()">×</button></td></tr>`;
+  }).join('')
+    : '<tr><td colspan="9" class="empty">Sem funções cadastradas.</td></tr>';
 }
-function addFolhaRow(){ (ST.premissa.folha=ST.premissa.folha||[]).push({funcao:'',qtd:1,salario:0}); renderFolha(); }
+
+function addFolhaRow(){ (ST.premissa.folha=ST.premissa.folha||[]).push({funcao:'',qtd:1,salario:0,prodFator:0,pctProd:100}); renderFolha(); }
+function calcCELinha(f){
+  const subtotal=(+f.qtd||0)*(+f.valorCE||0);
+  return { subtotal, total:subtotal };
+}
 function renderFrota(){
   const tb=document.getElementById('frotaTbody'); const arr=ST.premissa.frota||[];
-  tb.innerHTML = arr.length? arr.map((f,i)=>`<tr>
+  tb.innerHTML = arr.length? arr.map((f,i)=>{
+    const c=calcCELinha(f);
+    return `<tr>
+    <td><select onchange="ST.premissa.frota[${i}].grupoCE=this.value;renderFrota();renderDre()">
+      ${['CAVALOS','CARRETAS','VA','OUTROS'].map(g=>`<option value="${g}" ${grupoCE(f)===g?'selected':''}>${g}</option>`).join('')}
+    </select></td>
     <td><input type="text" value="${f.tipo||''}" onchange="ST.premissa.frota[${i}].tipo=this.value"></td>
-    <td class="num"><input type="number" step="1" value="${f.qtd||0}" style="width:80px" onchange="ST.premissa.frota[${i}].qtd=+this.value"></td>
-    <td class="num"><input type="number" step="0.01" value="${f.valorCE||0}" style="width:110px" onchange="ST.premissa.frota[${i}].valorCE=+this.value"></td>
-    <td><button class="btn sm" onclick="ST.premissa.frota.splice(${i},1);renderFrota()">×</button></td></tr>`).join('')
-    : '<tr><td colspan="4" class="empty">Sem equipamentos cadastrados.</td></tr>';
+    <td class="num"><input type="number" step="1" value="${f.qtd||0}" style="width:70px" onchange="ST.premissa.frota[${i}].qtd=+this.value;renderFrota();renderDre()"></td>
+    <td class="num"><input type="number" step="0.01" value="${f.valorCE||0}" style="width:110px" onchange="ST.premissa.frota[${i}].valorCE=+this.value;renderFrota();renderDre()"></td>
+    <td class="num mono">${moeda(c.subtotal)}</td>
+    <td class="num mono">${moeda(c.total)}</td>
+    <td><button class="btn sm" onclick="ST.premissa.frota.splice(${i},1);renderFrota();renderDre()">×</button></td></tr>`;
+  }).join('')
+    : '<tr><td colspan="7" class="empty">Sem equipamentos cadastrados.</td></tr>';
 }
-function addFrotaRow(){ (ST.premissa.frota=ST.premissa.frota||[]).push({tipo:'',qtd:1,valorCE:0}); renderFrota(); }
+
+function addFrotaRow(){ (ST.premissa.frota=ST.premissa.frota||[]).push({grupoCE:'CAVALOS',tipo:'',qtd:1,valorCE:0}); renderFrota(); }
 async function savePremissa(){
   if(!isAdminOuLR() && !(ATLAS_CURRENT_USER.filiais||[]).map(upper).includes(ST.filial))
     return toast('Sem permissão para esta filial.','am');
@@ -1057,7 +1169,13 @@ async function savePremissa(){
     diesel:+document.getElementById('mtDiesel').value||0, agreg:+document.getElementById('mtAgreg').value||0,
     co:+document.getElementById('mtCO').value||0, cp:+document.getElementById('mtCP').value||0,
     ce:+document.getElementById('mtCE').value||0, resultadoFinanceiro:+document.getElementById('mtRF').value||0 };
-  const payload={ filial:ST.filial, vigencia:ST.mesRef, metas, encargosPct:+document.getElementById('prEnc').value||0,
+  const payload={ filial:ST.filial, vigencia:ST.mesRef, metas,
+    encargosPct:+document.getElementById('prEnc').value||0,
+    folhaRealPct:+document.getElementById('prFolhaRealPct').value||4.9,
+    folhaAdicional:+document.getElementById('prFolhaAdic').value||0,
+    cpEpiUniformes:+document.getElementById('prCPEpi').value||0,
+    cpLegal:+document.getElementById('prCPLegal').value||0,
+    cpOutrosTotal:+document.getElementById('prCPOutrosTotal').value||0,
     folha:(ST.premissa.folha||[]).filter(f=>f.funcao), frota:(ST.premissa.frota||[]).filter(f=>f.tipo),
     atualizadoPor:userMin(), atualizadoEm:new Date().toISOString() };
   await fsSetDoc('mapinha_premissas', 'PREM_'+ST.filial+'_'+ST.mesRef, payload);
