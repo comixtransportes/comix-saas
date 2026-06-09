@@ -617,13 +617,15 @@ function ensureAgregadoBases(){
    − Σ SZC abastecimentos de agregados (diesel + arla; exclui proprietários)
    − Σ SZI DÉBITOS de agregados (peças/serviços/etc. efetivamente descontados)
    + Σ SZI CRÉDITOS de agregados
+   Exclui frota própria E intercompany COMIX (isExcluidoAgreg) das TRÊS bases.
+   Débitos/créditos entram CHEIOS, sem recorte de categoria (todos por placa).
    Lançamentos manuais NÃO entram nesta conta. */
 function calcFechamentoAgregados(){
   const o={ comissao:0, szcDiesel:0, szcArla:0, debSZI:0, credSZI:0, total:0, falta:[] };
   if(SZB.rows){
     SZB.rows.forEach(function(r){
       if(r['Dt Cancel']) return;
-      if(isProprio(r['Cod Propriet'])) return;
+      if(isExcluidoAgreg(r['Cod Propriet'])) return;
       if(siglaDeOp(r['Operacao'])!==ST.filial) return;
       if(String(r['Dt. Emissao']).slice(0,7)!==ST.mesRef) return;
       o.comissao += toNum(r['Comissao Mot']);
@@ -631,7 +633,7 @@ function calcFechamentoAgregados(){
   } else o.falta.push('SZB');
   if(AUX.szc.loaded){
     AUX.szc.rows.forEach(function(r){
-      if(isProprio(r['Proprietario'])) return;
+      if(isExcluidoAgreg(r['Proprietario'])) return;
       if(siglaDeOp(r['Operacao'])!==ST.filial) return;
       if(String(r['Data Emissao']).slice(0,7)!==ST.mesRef) return;
       const v=toNum(r['Valor']); const cb=String(r['Combustivel']||'').toLowerCase();
@@ -640,7 +642,7 @@ function calcFechamentoAgregados(){
   } else o.falta.push('SZC');
   if(AUX.szi.loaded){
     AUX.szi.rows.forEach(function(r){
-      if(isProprio(r['Agregado'])) return;
+      if(isExcluidoAgreg(r['Agregado'])) return;
       if(siglaDeOp(r['Operacao'])!==ST.filial) return;
       if(String(r['Data']).slice(0,7)!==ST.mesRef) return;
       const v=toNum(r['Valor']);
@@ -789,8 +791,14 @@ const DIESEL_CREDITO = new Set(['22.01']);
 const CO_AGREGADO = new Set(['10.01','11.01','12.01']);
 /* Códigos de PROPRIETÁRIO da frota própria (resto = agregado) — base das tabelas SZB/SZC/SZI */
 const PROPRIOS = new Set(['000764','008188','008417','003858','004498']);
+/* Frota INTERCOMPANY (COMIX TRANSPORTES SP/SC/PR) lançada no Protheus como "agregado".
+   NÃO é agregado de verdade — sai do fechamento de Agregados nas TRÊS bases (SZB/SZC/SZI).
+   Obs.: códigos distintos dos PROPRIOS (não são transposição que codeKey una). */
+const INTERCOMPANY = new Set(['044980','081880','084170']);
 function codeKey(c){ return String(c==null?'':c).trim().replace(/\D/g,'').padStart(6,'0').slice(-6); }
 function isProprio(cod){ return PROPRIOS.has(codeKey(cod)); }
+/* exclui do fechamento de Agregados: frota própria + intercompany COMIX */
+function isExcluidoAgreg(cod){ const k=codeKey(cod); return PROPRIOS.has(k) || INTERCOMPANY.has(k); }
 /* Centros de custo alimentados automaticamente pela Manutenção */
 const CC_MANUTENCAO = new Set(['03.01','05.01','06.01','07.01','10.01','11.01','12.01','23.01']);
 
