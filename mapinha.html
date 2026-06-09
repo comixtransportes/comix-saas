@@ -64,6 +64,7 @@ label.fld{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--
 .pill.fechado{background:var(--gn-bg);color:var(--gn);border-color:var(--gn-bd)}
 .pill.reaberto{background:var(--cy-bg);color:var(--cy);border-color:var(--cy-bd)}
 .pill.cancelado{background:var(--rd-bg);color:var(--rd);border-color:var(--rd-bd)}
+.pill.consolidado{background:var(--ac-bg);color:var(--ac);border-color:var(--ac)}
 
 /* Tabs (barra unificada — abas à esquerda, filtros à direita, padrão PD) */
 .tabs{display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--bd);margin-bottom:14px}
@@ -160,8 +161,8 @@ canvas{max-width:100%}
   <button class="tab" data-v="cons" onclick="tab('cons')">Consolidado</button>
   <button class="tab" data-v="dash" onclick="tab('dash')">Dashboards</button>
   <div class="tabs-r">
+    <select id="selMes" class="sel" onchange="onScopeChange()"></select>
     <select id="selFilial" class="sel" onchange="onScopeChange()"></select>
-    <input type="month" id="selMes" class="sel" onchange="onScopeChange()">
     <span id="statusPill" class="pill rascunho">—</span>
   </div>
 </div>
@@ -495,6 +496,37 @@ function upper(v){ return String(v||'').trim().toLocaleUpperCase('pt-BR'); }
 const OPCODE_SIGLA = { '17':'SC','18':'PR','03':'SP' };
 function siglaDeOp(op){ return OPCODE_SIGLA[normOpKey(op)] || upper(op); }
 
+/* Rótulo de mês no MESMO padrão do PD (ex.: "Maio 2026") */
+function mesLabel(mesStr){
+  if(!mesStr) return '—';
+  const [a,m]=mesStr.split('-').map(Number);
+  const lbl=new Date(a,m-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
+  return lbl.charAt(0).toUpperCase()+lbl.slice(1);
+}
+/* Preenche o select de mês (janela rolante de 24 meses), default = mês anterior — disposição/ grafia do PD */
+function populateMeses(){
+  const sel=document.getElementById('selMes'); if(!sel) return;
+  const now=new Date(); const meses=[];
+  for(let i=24;i>=0;i--){ const d=new Date(now.getFullYear(), now.getMonth()-i, 1);
+    meses.push(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')); }
+  const prev=new Date(now.getFullYear(), now.getMonth()-1, 1);
+  const defVal=prev.getFullYear()+'-'+String(prev.getMonth()+1).padStart(2,'0');
+  const cur=sel.value;
+  sel.innerHTML='';
+  meses.forEach(m=> sel.appendChild(new Option(mesLabel(m), m)));
+  sel.value = (cur && meses.includes(cur)) ? cur : defVal;
+}
+/* Ordem fixa de exibição das filiais (igual ao PD: SC, PR, SP) */
+function _ordFilial(s){ const i=['SC','PR','SP'].indexOf(s); return i<0?99:i; }
+/* Filiais dentro do escopo permitido, na ordem do PD */
+function scopeFiliais(){
+  const perm=filiaisPermitidas();
+  return ST.filiais.filter(f=>perm.includes(f.sigla)).map(f=>f.sigla)
+                   .sort((a,b)=> _ordFilial(a)-_ordFilial(b) || a.localeCompare(b));
+}
+/* "Todas" selecionado → DRE consolidado (somatório das filiais) */
+function isConsolidado(){ return ST.filial==='all'; }
+
 /* ══════════════════════════════════════════════════════════════════
    MÁSCARA MONETÁRIA INTELIGENTE (digita a partir dos centavos)
    — Mantém o display em "R$ 1.234,56" porém el.value (JS) continua
@@ -728,12 +760,13 @@ function ensureSZB(){
     },500);
   }
 }
-function onSZBLoaded(){ const el=document.getElementById('btnPullSZB'); if(el) el.disabled = !podeEditar(); pullReceitaSZB(false); }
+function onSZBLoaded(){ const el=document.getElementById('btnPullSZB'); if(el) el.disabled = !podeEditar(); if(isConsolidado()){ refreshAll(); } else { pullReceitaSZB(false); } }
 
 /* preenche os campos de receita a partir do SZB.
    force=true: sempre sobrescreve (botão). force=false: só se ainda for fonte 'szb' (não manual). */
 function pullReceitaSZB(force){
   if(!ST.filial||!ST.mesRef) return;
+  if(isConsolidado()) return;   // consolidado: receita = soma das filiais (derivada na carga)
   const fonte=(ST.cabecalho&&ST.cabecalho.receita&&ST.cabecalho.receita.fonte)||'szb';
   if(!force && fonte==='manual') { fillSZBInfo('manual'); return; }
   ensureSZB();
@@ -810,7 +843,8 @@ const ST = {
   lancManuais:[],                                  // mapinha_lancamentos (manual)
   lancOS:[],                                       // derivados de ordens_servico (ao vivo)
   premissa:null,                                   // resolvida por carry-forward
-  consolidado:[]                                   // meses fechados (mapinha_mensal)
+  consolidado:[],                                  // meses fechados (mapinha_mensal)
+  _byFilial:null                                   // bundles por filial quando escopo = Todas
 };
 
 function isAdminOuLR(){ const p=(ATLAS_CURRENT_USER.perfil||'').toLowerCase(); return /admin|^lr$|gestor/.test(p); }
@@ -819,7 +853,7 @@ function filiaisPermitidas(){
   const fs = ATLAS_CURRENT_USER.filiais||[];
   return fs.length?fs.map(upper):ST.filiais.map(f=>f.sigla);
 }
-function podeEditar(){ const s=(ST.cabecalho&&ST.cabecalho.status)||'rascunho'; return s==='rascunho'||s==='reaberto'; }
+function podeEditar(){ if(isConsolidado()) return false; const s=(ST.cabecalho&&ST.cabecalho.status)||'rascunho'; return s==='rascunho'||s==='reaberto'; }
 
 /* ══ BOOT ══ */
 function tab(v){
@@ -844,16 +878,20 @@ async function boot(){
   // selects
   const sf=document.getElementById('selFilial'), cf=document.getElementById('consFilial');
   const perm = filiaisPermitidas();
-  sf.innerHTML=''; ST.filiais.filter(f=>perm.includes(f.sigla)).forEach(f=>{
-    sf.appendChild(new Option(f.sigla+' — '+f.nome, f.sigla)); cf.appendChild(new Option(f.sigla, f.sigla));
+  const filsOrd = ST.filiais.filter(f=>perm.includes(f.sigla))
+                            .sort((a,b)=> _ordFilial(a.sigla)-_ordFilial(b.sigla) || a.sigla.localeCompare(b.sigla));
+  sf.innerHTML='';
+  filsOrd.forEach(f=>{
+    sf.appendChild(new Option(f.sigla, f.sigla));   // SIGLA apenas (padrão PD)
+    cf.appendChild(new Option(f.sigla, f.sigla));
   });
+  if(filsOrd.length>1) sf.appendChild(new Option('Todas','all'));   // consolidado — igual ao PD
+  populateMeses();
   const cc2=document.getElementById('lcCC'); cc2.innerHTML='<option value="">Selecione…</option>';
   ST.centrosCusto.forEach(c=> cc2.appendChild(new Option(c.codigo+' '+c.nome, c.codigo)) );
 
   // escopo inicial
-  ST.filial = sf.value || (ST.filiais[0]&&ST.filiais[0].sigla) || '';
-  const now=new Date(); const ref=new Date(now.getFullYear(), now.getMonth()-1, 1); // mês anterior
-  document.getElementById('selMes').value = ref.getFullYear()+'-'+String(ref.getMonth()+1).padStart(2,'0');
+  ST.filial = sf.value || (filsOrd[0]&&filsOrd[0].sigla) || '';
   ST.mesRef = document.getElementById('selMes').value;
   document.getElementById('lcData').value = ST.mesRef+'-01';
   applyPerm();
@@ -873,9 +911,94 @@ async function onScopeChange(){
 
 async function refreshAll(){
   if(!ST.filial||!ST.mesRef) return;
+  if(isConsolidado()){
+    await loadConsolidadoScope();
+    renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm(); renderPedagios();
+    ensureSZB(); ensureAgregadoBases();
+    return;
+  }
+  ST._byFilial=null;
   await Promise.all([ loadCabecalho(), loadLancManuais(), loadLancOS(), loadPremissa(), loadPedagios() ]);
   renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm(); renderPedagios();
   ensureSZB(); ensureAgregadoBases(); pullReceitaSZB(false);
+}
+
+/* ── Carga consolidada (escopo = Todas) ──
+   Carrega cada filial uma vez (coleções buscadas em lote) e monta bundles por filial.
+   O DRE consolidado é o SOMATÓRIO dos DREs por filial (cada filial usa suas próprias
+   premissas/percentuais), garantindo que o consolidado = soma das partes. */
+async function loadConsolidadoScope(){
+  const fils = scopeFiliais();
+  const [mensalAll, lancAll, premAll, ossAll] = await Promise.all([
+    fsGetCollection('mapinha_mensal'),
+    fsGetCollection('mapinha_lancamentos'),
+    fsGetCollection('mapinha_premissas'),
+    fsGetCollection('ordens_servico')
+  ]);
+  await loadPedagios();   // doc mensal único (porFilial) — compartilhado por todas
+  ensureSZB();            // receita por filial é derivada da SZB quando não houver doc salvo
+  ST._byFilial = {};
+  fils.forEach(fil=>{
+    // cabeçalho (receita/impostos) — usa doc salvo; se vazio, deriva da SZB
+    const cabDoc = mensalAll.find(d=> d.id==='MAP_'+fil+'_'+ST.mesRef);
+    let cabecalho = cabDoc ? {...cabDoc.data} : { filial:fil, mesRef:ST.mesRef, status:'rascunho', receita:{}, impostos:{} };
+    let rec = cabecalho.receita||{};
+    if(!(+rec.fatBruto>0)){
+      const dz = derivarReceitaSZB(fil, ST.mesRef);
+      if(dz && dz.fatBruto>0){ rec = {...rec, fatBruto:dz.fatBruto, producaoT:dz.producaoT, diasUteis:dz.diasUteis, diasTrab:dz.diasTrab, fonte:'szb'}; }
+    }
+    cabecalho.receita = rec; cabecalho.impostos = cabecalho.impostos||{};
+    // lançamentos manuais
+    const lancManuais = lancAll.map(d=>({id:d.id,...d.data}))
+      .filter(l=> l.filial===fil && l.mesRef===ST.mesRef && l.origem!=='manutencao' && l.status!=='estornado');
+    // lançamentos de OS (ao vivo)
+    const lancOS = derivarLancOS(ossAll, fil);
+    // premissa por carry-forward
+    const cands = premAll.map(d=>({id:d.id,...d.data}))
+      .filter(p=> p.filial===fil && p.vigencia && p.vigencia<=ST.mesRef)
+      .sort((a,b)=> b.vigencia.localeCompare(a.vigencia));
+    const premissa = cands[0] || { filial:fil, vigencia:null, folha:[], frota:[], encargosPct:0, metas:{} };
+    ST._byFilial[fil] = { cabecalho, lancManuais, lancOS, premissa };
+  });
+  // estado "consolidado" para as telas que listam (somas + concatenações)
+  ST.cabecalho = buildConsCabecalho(fils);
+  ST.lancManuais = fils.flatMap(f=> ST._byFilial[f].lancManuais);
+  ST.lancOS      = fils.flatMap(f=> ST._byFilial[f].lancOS);
+  ST.premissa    = { filial:'all', vigencia:'consolidado', folha:[], frota:[], encargosPct:0, metas: buildConsMetas(fils) };
+}
+/* Réplica da regra de loadLancOS, parametrizada por filial (para a carga consolidada) */
+function derivarLancOS(ossArr, fil){
+  const out=[];
+  ossArr.map(d=>({id:d.id,...d.data})).forEach(o=>{
+    if(!/conclu/i.test(o.status||'')) return;
+    const f = upper(o.unidade||o.filial||'');
+    const mr = mesRefDe(o.finalizadoEm||o.atualizadoEm||o.criadoEm);
+    if(f!==fil || mr!==ST.mesRef) return;
+    const cc = o.centroCusto || '06.01';
+    const cci = ST.centrosCusto.find(c=>c.codigo===cc)||{};
+    const base = { filial:f, mesRef:mr, placa:upper(o.veiculo||o.placa||''), centroCusto:cc,
+                   centroCustoNome:cci.nome||'', grupoDre:cci.grupo||GRUPO_FALLBACK[cc]||'CO',
+                   origem:'manutencao', osId:o.id, data:(dtFrom(o.finalizadoEm)||new Date()).toISOString().slice(0,10) };
+    const notas = Array.isArray(o.notas)&&o.notas.length ? o.notas : null;
+    if(notas){ notas.forEach((n,ix)=> out.push({ id:'LCM_OS_'+o.id+'_'+(n.nf||ix), ...base,
+                 fornecedor:upper(n.fornecedor||o.prestador||''), nf:String(n.nf||''), valor:+n.valor||0 })); }
+    else { out.push({ id:'LCM_OS_'+o.id, ...base, fornecedor:upper(o.prestador||''), nf:String(o.nfNumero||''), valor:+o.valorTotal||0 }); }
+  });
+  return out;
+}
+function buildConsCabecalho(fils){
+  const rec={fatBruto:0,producaoT:0,diasUteis:0,diasTrab:0}, imp={icms:0,pisCofins:0,irCs:0,iss:0};
+  fils.forEach(f=>{ const b=ST._byFilial[f]; const r=b.cabecalho.receita||{}, i=b.cabecalho.impostos||{};
+    rec.fatBruto+=+r.fatBruto||0; rec.producaoT+=+r.producaoT||0; rec.diasUteis=Math.max(rec.diasUteis,+r.diasUteis||0); rec.diasTrab=Math.max(rec.diasTrab,+r.diasTrab||0);
+    imp.icms+=+i.icms||0; imp.pisCofins+=+i.pisCofins||0; imp.irCs+=+i.irCs||0; imp.iss+=+i.iss||0; });
+  rec.fonte='consolidado';
+  return { filial:'all', mesRef:ST.mesRef, status:'consolidado', receita:rec, impostos:imp };
+}
+function buildConsMetas(fils){
+  const m={fatBruto:0,producaoT:0,diesel:0,agreg:0,co:0,cp:0,ce:0,resultadoFinanceiro:0};
+  fils.forEach(f=>{ const mm=(ST._byFilial[f].premissa&&ST._byFilial[f].premissa.metas)||{};
+    for(const k in m) m[k]+=+mm[k]||0; });
+  return m;
 }
 
 /* ── Cabeçalho (mapinha_mensal) ── */
@@ -885,16 +1008,19 @@ async function loadCabecalho(){
   ST.cabecalho = d ? d.data : { filial:ST.filial, mesRef:ST.mesRef, status:'rascunho', receita:{}, impostos:{} };
 }
 function renderStatus(){
-  const s=(ST.cabecalho.status||'rascunho');
+  const cons=isConsolidado();
+  const s=cons?'consolidado':(ST.cabecalho.status||'rascunho');
   const p=document.getElementById('statusPill'); p.className='pill '+s; p.textContent=s.charAt(0).toUpperCase()+s.slice(1);
-  const sub=document.getElementById('sub'); if(sub) sub.textContent = ST.filial+' · '+ST.mesRef;
+  const sub=document.getElementById('sub'); if(sub) sub.textContent = (cons?'Todas':ST.filial)+' · '+mesLabel(ST.mesRef);
   const ed=podeEditar();
   ['recFat','recProd','recDU','recDT','impICMS','impPIS','impIR','impISS','lcData','lcForn','lcNF','lcPlaca','lcCC','lcValor']
     .forEach(id=>{ const el=document.getElementById(id); if(el) el.disabled=!ed; });
   document.getElementById('btnFechar').disabled = !ed;
   const bp=document.getElementById('btnPullSZB'); if(bp) bp.disabled = !ed || !SZB.loaded;
   const banner=document.getElementById('lockBanner');
-  banner.innerHTML = ed ? '' : '<div class="lock-note">🔒 Mapinha '+s+'. Edição bloqueada — use "Reabrir (controlado)" para ajustar.</div>';
+  banner.innerHTML = cons
+    ? '<div class="lock-note">📊 Visão consolidada (Todas as filiais). Somente leitura — selecione uma filial para lançar, editar premissas ou fechar.</div>'
+    : (ed ? '' : '<div class="lock-note">🔒 Mapinha '+s+'. Edição bloqueada — use "Reabrir (controlado)" para ajustar.</div>');
 }
 function fillCabecalhoForm(){
   const r=ST.cabecalho.receita||{}, i=ST.cabecalho.impostos||{};
@@ -908,6 +1034,7 @@ function fillCabecalhoForm(){
   document.getElementById('impISS').value = i.iss||'';
 }
 async function saveCabecalho(){
+  if(isConsolidado()) return toast('Selecione uma filial para salvar receita/impostos.','am');
   if(!podeEditar()) return toast('Mapinha bloqueado.','am');
   ST.cabecalho.receita = {
     fatBruto:+document.getElementById('recFat').value||0,
@@ -939,6 +1066,7 @@ async function loadLancManuais(){
     .filter(l=> l.filial===ST.filial && l.mesRef===ST.mesRef && l.origem!=='manutencao' && l.status!=='estornado');
 }
 async function addLancamento(){
+  if(isConsolidado()) return toast('Selecione uma filial para lançar.','am');
   if(!podeEditar()) return toast('Mapinha bloqueado.','am');
   const cc=document.getElementById('lcCC').value;
   const valor=+document.getElementById('lcValor').value||0;
@@ -1115,10 +1243,65 @@ function calcDRE(){
   return { fat, prod, pm: prod?fat/prod:0, imp, fl, diesel, agreg, pedagio, co, cp, ce, rf,
            margem: fat? rf/fat : 0 };
 }
+/* Sub-custos do Custo Operacional (detalhamento dentro do grupo CO).
+   Melhorias Equip. (Reformas) = CC 03.01 (ou nome ~ melhoria/reforma).
+   Agregados (empréstimos)     = lançamentos do CO cujo nome cita agregado + empréstimo. */
+function calcCOSubs(){
+  const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  let melhorias=0, agregEmp=0;
+  lancVisiveis().forEach(l=>{
+    if(l.grupoDre!=='CO') return;
+    const cod=String(l.centroCusto||''); const nome=norm(l.centroCustoNome||''); const v=+l.valor||0;
+    if(cod==='03.01' || /melhoria|reforma/.test(nome)) melhorias+=v;
+    else if(/agregad/.test(nome) && /emprest/.test(nome)) agregEmp+=v;
+  });
+  return { melhorias, agregEmp };
+}
+/* Visão unificada do DRE: filial única (lê o ST atual) ou Todas (soma das filiais). */
+function dreView(){
+  if(isConsolidado()) return calcBreakdownConsolidado();
+  const d=calcDRE();
+  return { d, cp:ST._cpInfo||calcCPDetalhado(), ce:ST._ceInfo||calcCEDetalhado(),
+           co:calcCOSubs(), agreg:ST._agregInfo||{}, metas:(ST.premissa&&ST.premissa.metas)||{} };
+}
+/* Consolida o DRE somando o resultado de cada filial (cada uma com suas premissas). */
+function calcBreakdownConsolidado(){
+  const fils = scopeFiliais();
+  const D ={fat:0,prod:0,imp:0,fl:0,diesel:0,agreg:0,pedagio:0,co:0,cp:0,ce:0,rf:0};
+  const CP={folhaReal:0,epiReal:0,legalReal:0,outrosReal:0,realTotal:0,folhaMeta:0,epiMeta:0,legalMeta:0,outrosMeta:0,metaTotal:0};
+  const CE={cavalos:0,carretas:0,va:0,outros:0,realTotal:0,metaTotal:0};
+  const CO={melhorias:0,agregEmp:0};
+  const AG={comissao:0,szcDiesel:0,szcArla:0,abastSZC:0,debSZI:0,credSZI:0,total:0,falta:[]};
+  const M ={fatBruto:0,producaoT:0,diesel:0,agreg:0,co:0,cp:0,ce:0,resultadoFinanceiro:0};
+  // snapshot do ST para restaurar depois
+  const save={filial:ST.filial,cabecalho:ST.cabecalho,lancManuais:ST.lancManuais,lancOS:ST.lancOS,premissa:ST.premissa};
+  (ST._byFilial?fils:[]).forEach(fil=>{
+    const b=ST._byFilial[fil]; if(!b) return;
+    ST.filial=fil; ST.cabecalho=b.cabecalho; ST.lancManuais=b.lancManuais; ST.lancOS=b.lancOS; ST.premissa=b.premissa;
+    const d=calcDRE(); const cp=ST._cpInfo||{}, ce=ST._ceInfo||{}, ag=ST._agregInfo||{}; const co=calcCOSubs();
+    const m=(ST.premissa&&ST.premissa.metas)||{};
+    for(const k in D) D[k]+=+d[k]||0;
+    for(const k in CP) CP[k]+=+cp[k]||0;
+    for(const k in CE) CE[k]+=+ce[k]||0;
+    CO.melhorias+=co.melhorias; CO.agregEmp+=co.agregEmp;
+    AG.comissao+=+ag.comissao||0; AG.szcDiesel+=+ag.szcDiesel||0; AG.szcArla+=+ag.szcArla||0;
+    AG.abastSZC+=+ag.abastSZC||0; AG.debSZI+=+ag.debSZI||0; AG.credSZI+=+ag.credSZI||0; AG.total+=+ag.total||0;
+    (ag.falta||[]).forEach(x=>{ if(!AG.falta.includes(x)) AG.falta.push(x); });
+    for(const k in M) M[k]+=+m[k]||0;
+  });
+  Object.assign(ST, save);   // restaura escopo consolidado
+  D.pm=D.prod?D.fat/D.prod:0; D.margem=D.fat?D.rf/D.fat:0;
+  CP.realTotal=CP.folhaReal+CP.epiReal+CP.legalReal+CP.outrosReal;
+  CP.metaTotal=CP.folhaMeta+CP.epiMeta+CP.legalMeta+CP.outrosMeta;
+  CP.folhaRealPct=D.fat?(CP.folhaReal/D.fat*100):0;
+  CE.realTotal=CE.cavalos+CE.carretas+CE.va+CE.outros; CE.metaTotal=CE.realTotal;
+  ST._agregInfo=AG; ST._cpInfo=CP; ST._ceInfo=CE;
+  return { d:D, cp:CP, ce:CE, co:CO, agreg:AG, metas:M, consolidado:true };
+}
 function renderDre(){
-  document.getElementById('dreTitle').textContent = 'DRE — '+ST.filial+' · '+ST.mesRef;
-  const d=calcDRE(); const m=(ST.premissa&&ST.premissa.metas)||{};
-  const cp=ST._cpInfo||calcCPDetalhado(), ce=ST._ceInfo||calcCEDetalhado();
+  const cons = isConsolidado();
+  document.getElementById('dreTitle').textContent = 'DRE — '+(cons?'Todas':ST.filial)+' · '+mesLabel(ST.mesRef);
+  const V = dreView(); const d=V.d, m=V.metas||{}, cp=V.cp, ce=V.ce, co=V.co;
   const fatPct=v=> d.fat? v/d.fat : 0;
   const linha=(nome,val,meta,cls='')=>{
     const realxmeta = meta? val/meta : 0;
@@ -1138,7 +1321,9 @@ function renderDre(){
     linha('(–) Diesel', d.diesel, m.diesel) +
     linha('(–) Agregados', d.agreg, m.agreg) +
     linha('(–) Pedágio', d.pedagio) +
-    linha('(–) Custo Operacional', d.co, m.co) +
+    linha('(–) Custo Operacional', d.co, m.co,'grp') +
+    linha('&nbsp;&nbsp;Melhorias Equip ( Reformas )', co.melhorias) +
+    linha('&nbsp;&nbsp;Agregados (empréstimos)', co.agregEmp) +
     linha('(–) Custo de Pessoal', d.cp, m.cp||cp.metaTotal,'grp') +
     linha('&nbsp;&nbsp;Folha / Enc.', cp.folhaReal, cp.folhaMeta) +
     linha('&nbsp;&nbsp;EPI e uniformes', cp.epiReal, cp.epiMeta) +
@@ -1151,16 +1336,20 @@ function renderDre(){
     (ce.outros?linha('&nbsp;&nbsp;Outros CE', ce.outros, ce.outros):'') +
     `<tr class="res"><td>= Resultado Financeiro</td><td class="num">${moeda(d.rf)}</td><td class="num">${pct(d.margem)}</td><td class="num">${m.resultadoFinanceiro?moeda(m.resultadoFinanceiro):'—'}</td><td class="num">${m.resultadoFinanceiro?pct(m.resultadoFinanceiro?d.rf/m.resultadoFinanceiro:0):'—'}</td></tr>`;
   // composição do Fechamento de Agregados
-  const ag=ST._agregInfo||{};
+  const ag=V.agreg||{};
   const note=document.getElementById('agregNote');
   if(note){
     const falta=(ag.falta&&ag.falta.length);
-    note.innerHTML = `<div class="lock-note" style="${falta?'':'color:var(--mu);background:#fafbfc;border-color:var(--bd2)'}">`
+    note.innerHTML = cons ? `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)"><b>Consolidado (Todas as filiais)</b> — soma dos DREs de ${scopeFiliais().join(', ')}. Cada filial usa suas próprias premissas/percentuais; edição é por filial.</div>` : '';
+    note.innerHTML += `<div class="lock-note" style="${falta?'':'color:var(--mu);background:#fafbfc;border-color:var(--bd2)'}">`
       + `<b>Composição Agregados</b> = Comissão SZB <b>${moeda(ag.comissao||0)}</b> − Abastec. SZC <b>${moeda(ag.abastSZC||0)}</b> `
       + `<span style="opacity:.8">(diesel ${moeda(ag.szcDiesel||0)} + arla ${moeda(ag.szcArla||0)})</span> `
       + `− Débitos SZI <b>${moeda(ag.debSZI||0)}</b> + Créditos SZI <b>${moeda(ag.credSZI||0)}</b> = <b>${moeda(ag.total||0)}</b>`
       + (falta?`<br>⏳ Aguardando carregar: ${ag.falta.join(', ')} — valor parcial até todas as bases chegarem.`:'')
       + `</div>`;
+    note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
+      + `<b>Composição C.O</b> = Melhorias Equip ( Reformas ) <b>${moeda(co.melhorias)}</b> + Agregados (empréstimos) <b>${moeda(co.agregEmp)}</b> + demais lançamentos do grupo C.O <b>${moeda(d.co-co.melhorias-co.agregEmp)}</b> = <b>${moeda(d.co)}</b>`
+      + `<br><span style="opacity:.8">Sub-custos detalhados dentro do Custo Operacional (CC 03.01 Reformas e empréstimos a agregados).</span></div>`;
     note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
       + `<b>Composição CP</b> = Folha/Enc. <b>${moeda(cp.folhaReal)}</b> (${num(cp.folhaRealPct)}% do Fat.) + EPI <b>${moeda(cp.epiReal)}</b> + Legal <b>${moeda(cp.legalReal)}</b> + Outros <b>${moeda(cp.outrosReal)}</b>`
       + `<br><span style="opacity:.8">PA de CP = folha por função com produção, limite, subtotal e total com encargos + EPI + Legal + Outros.</span></div>`;
@@ -1168,10 +1357,10 @@ function renderDre(){
       + `<b>Composição CE</b> = Cavalos <b>${moeda(ce.cavalos)}</b> + Carretas <b>${moeda(ce.carretas)}</b> + VA <b>${moeda(ce.va)}</b>`
       + (ce.outros?` + Outros <b>${moeda(ce.outros)}</b>`:'')
       + ` = <b>${moeda(ce.realTotal)}</b></div>`;
-    // composição do Pedágio (origem: importação da fatura)
-    const ped=(ST.pedagio && ST.pedagioMes===ST.mesRef) ? ST.pedagio : null;
+    // composição do Pedágio (origem: importação da fatura) — somente por filial
+    const ped=(!cons && ST.pedagio && ST.pedagioMes===ST.mesRef) ? ST.pedagio : null;
     const pf = ped ? (ped.porFilial||{})[ST.filial] : null;
-    const man = somaGrupo('PEDAGIO');
+    const man = cons ? 0 : somaGrupo('PEDAGIO');
     if(ped){
       note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
         + `<b>Composição Pedágio (${ST.filial})</b> = Valor Cobrado <b>${moeda(pf?pf.cobrado:0)}</b> + Vale Comix <b>${moeda(pf?pf.valeComix:0)}</b>`
@@ -1182,6 +1371,7 @@ function renderDre(){
   }
 }
 function liveDre(){
+  if(isConsolidado()){ renderLancCards(); renderDre(); return; }
   // recalcula DRE em tempo real a partir dos inputs sem salvar
   ST.cabecalho.receita={ fatBruto:+document.getElementById('recFat').value||0, producaoT:+document.getElementById('recProd').value||0,
     diasUteis:+document.getElementById('recDU').value||0, diasTrab:+document.getElementById('recDT').value||0 };
@@ -1190,7 +1380,7 @@ function liveDre(){
   renderLancCards(); renderDre();
 }
 function renderLancCards(){
-  const d=calcDRE();
+  const d=dreView().d;
   const c=document.getElementById('lancCards');
   c.innerHTML =
     card('Fat. Bruto', moeda(d.fat),'acc') +
@@ -1211,8 +1401,12 @@ async function loadPremissa(){
 function fillPremissaForm(){
   const p=ST.premissa, m=p.metas||{};
   const info=document.getElementById('premVigInfo');
-  info.textContent = p.vigencia ? `Premissa vigente desde ${p.vigencia} (herdada). Salvar abaixo cria nova vigência a partir de ${ST.mesRef}.`
-                                : `Nenhuma premissa cadastrada para ${ST.filial}. Salvar cria a vigência ${ST.mesRef}.`;
+  if(isConsolidado()){
+    info.textContent = 'Visão consolidada (Todas) — metas somadas das filiais. Premissas são editáveis por filial; selecione SC, PR ou SP.';
+  } else {
+    info.textContent = p.vigencia ? `Premissa vigente desde ${p.vigencia} (herdada). Salvar abaixo cria nova vigência a partir de ${ST.mesRef}.`
+                                  : `Nenhuma premissa cadastrada para ${ST.filial}. Salvar cria a vigência ${ST.mesRef}.`;
+  }
   document.getElementById('mtFat').value=m.fatBruto||''; document.getElementById('mtProd').value=m.producaoT||'';
   document.getElementById('mtDiesel').value=m.diesel||''; document.getElementById('mtAgreg').value=m.agreg||'';
   document.getElementById('mtCO').value=m.co||''; document.getElementById('mtCP').value=m.cp||'';
@@ -1269,6 +1463,7 @@ function renderFrota(){
 
 function addFrotaRow(){ (ST.premissa.frota=ST.premissa.frota||[]).push({grupoCE:'CAVALOS',tipo:'',qtd:1,valorCE:0}); renderFrota(); }
 async function savePremissa(){
+  if(isConsolidado()) return toast('Selecione uma filial (SC/PR/SP) para editar premissas — a visão Todas é consolidada.','am');
   if(!isAdminOuLR() && !(ATLAS_CURRENT_USER.filiais||[]).map(upper).includes(ST.filial))
     return toast('Sem permissão para esta filial.','am');
   const metas={ fatBruto:+document.getElementById('mtFat').value||0, producaoT:+document.getElementById('mtProd').value||0,
@@ -1384,10 +1579,11 @@ function dashKpiCard(k,v,sub,tone,delta,goodDown){
   return `<div class="kpi ${tone||''}"><div class="kpi-k">${k}</div><div class="kpi-v">${v}</div><div class="kpi-s">${sub||''}${dl}</div></div>`;
 }
 function renderDashboard(){
-  const d=calcDRE(), M=dashMetrics(d);
-  document.getElementById('dashTitle').textContent='Dashboard — '+ST.filial+' · '+ST.mesRef;
-  const st=(ST.cabecalho&&ST.cabecalho.status)||'rascunho';
-  document.getElementById('dashSub').textContent=(st==='rascunho'||st==='reaberto')?'valores ao vivo (mês em aberto)':'mês fechado';
+  const cons=isConsolidado();
+  const _V=dreView(); const d=_V.d, _co=_V.co; const M=dashMetrics(d);
+  document.getElementById('dashTitle').textContent='Dashboard — '+(cons?'Todas':ST.filial)+' · '+mesLabel(ST.mesRef);
+  const st=cons?'consolidado':((ST.cabecalho&&ST.cabecalho.status)||'rascunho');
+  document.getElementById('dashSub').textContent=cons?'consolidado (Todas as filiais) — valores ao vivo':((st==='rascunho'||st==='reaberto')?'valores ao vivo (mês em aberto)':'mês fechado');
   const prev=dashPrevFechado(), pt=prev?(prev.totais||{}):null;
   const Mp = pt ? { bruta:+pt.fatBruto||0, liquida:+pt.fatLiquido||0, imp:+pt.totalImpostos||0,
     varc:(+pt.diesel||0)+(+pt.agregados||0)+(+pt.pedagio||0)+(+pt.custoOperacional||0),
@@ -1431,10 +1627,19 @@ function renderDashboard(){
       scales:{y:{ticks:{callback:v=>'R$ '+(v/1000).toFixed(0)+'k'}}}}});
 
   // ── Combo: evolução RF (barra) + Margem % (linha) ──
-  const evo=(ST.consolidado||[]).filter(m=>m.filial===ST.filial).sort((a,b)=>a.mesRef.localeCompare(b.mesRef));
+  let evo;
+  if(cons){
+    const byMes={};
+    (ST.consolidado||[]).filter(m=>scopeFiliais().includes(m.filial)).forEach(m=>{ const t=m.totais||{}; const k=m.mesRef;
+      byMes[k]=byMes[k]||{mesRef:k,rf:0,fat:0}; byMes[k].rf+=+t.resultadoFinanceiro||0; byMes[k].fat+=+t.fatBruto||0; });
+    evo=Object.values(byMes).sort((a,b)=>a.mesRef.localeCompare(b.mesRef))
+          .map(x=>({mesRef:x.mesRef, totais:{resultadoFinanceiro:x.rf, margemPct:x.fat?x.rf/x.fat:0}}));
+  } else {
+    evo=(ST.consolidado||[]).filter(m=>m.filial===ST.filial).sort((a,b)=>a.mesRef.localeCompare(b.mesRef));
+  }
   const ev=document.getElementById('dashEvoChart');
   if(_dashEvo){ _dashEvo.destroy(); _dashEvo=null; }
-  if(!evo.length){ ev.parentElement.innerHTML='<div class="empty">Sem meses fechados para '+ST.filial+' ainda — feche um Mapinha para ver a evolução.</div>'; }
+  if(!evo.length){ ev.parentElement.innerHTML='<div class="empty">Sem meses fechados para '+(cons?'as filiais':ST.filial)+' ainda — feche um Mapinha para ver a evolução.</div>'; }
   else{
     const evLabels=evo.map(m=>m.mesRef);
     const evRF=evo.map(m=>+((m.totais||{}).resultadoFinanceiro)||0);
@@ -1458,6 +1663,8 @@ function renderDashboard(){
     ['(–) Agregados',d.agreg, pt&&+pt.agregados, false],
     ['(–) Pedágio',d.pedagio, pt&&+pt.pedagio, false],
     ['(–) Custo Operacional',d.co, pt&&+pt.custoOperacional, false],
+    ['&nbsp;&nbsp;Melhorias Equip ( Reformas )',_co.melhorias, null, false],
+    ['&nbsp;&nbsp;Agregados (empréstimos)',_co.agregEmp, null, false],
     ['(–) Custo Pessoal',d.cp, pt&&+pt.custoPessoal, false],
     ['(–) Custo Equip.',d.ce, pt&&+pt.custoEquip, false],
     ['Margem de Contribuição',M.mc, Mp&&Mp.mc, true],
