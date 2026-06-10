@@ -1357,6 +1357,9 @@ function applyMntButtonPerms() {
     btn.setAttribute('aria-disabled', allowed ? 'false' : 'true');
     btn.title = allowed ? 'Parâmetros' : 'Sem permissão para acessar parâmetros';
   });
+  // O botão "Editar" do Painel Geral é renderizado dentro da tabela;
+  // re-renderiza para refletir as permissões recém-recebidas.
+  try { if (typeof renderPainelGeral === 'function') renderPainelGeral(); } catch(_){}
 }
 function setMntButtonPerms(msg) {
   const src = (msg && (msg.permissoes || msg)) || {};
@@ -4879,7 +4882,13 @@ function preencherNFsExistentes(os) {
 // ══════════════════════════════════════════════════════════
 function podeEditarOS() {
   const perfil = String(ATLAS_CURRENT_USER.perfil || '').toLowerCase();
-  return ['admin','lr','aprovador','gestor'].includes(perfil);
+  if (perfil === 'admin') return true; // admin sempre pode
+  // Permissão dinâmica configurada na tela Permissões (aba Botões → btn_editar)
+  if (MNT_BUTTON_PERMS && typeof MNT_BUTTON_PERMS === 'object') {
+    return MNT_BUTTON_PERMS.btn_editar === true;
+  }
+  // Fallback: permissões ainda não carregadas do portal → perfis padrão
+  return ['lr','aprovador','gestor'].includes(perfil);
 }
 function editItemQty(item) {
   return Number(item?.quantidade ?? item?.qtd ?? item?.qty ?? 1) || 1;
@@ -4896,7 +4905,7 @@ function editItemTotal(item) {
 // ══════════════════════════════════════════════════════════
 function abrirModalEditarOS(osId) {
   if (!podeEditarOS()) {
-    toast('Sem permissão para editar O.S. Apenas Admin, LR, Aprovador e Gestor podem editar.', 'rd');
+    toast('Sem permissão para editar O.S. Solicite a liberação do botão "Editar" na tela Permissões.', 'rd');
     return;
   }
   const os = OS_DB[osId];
