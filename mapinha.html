@@ -302,6 +302,21 @@ canvas{max-width:100%}
   </div>
 
   <div class="panel">
+    <div class="panel-h"><h3>(–) Custo de Pessoal — Realizado (fechamento do mês)</h3></div>
+    <div class="panel-b">
+      <div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">
+        Valores <b>efetivamente gastos</b> no fechamento de <b id="cpRealMesLbl">—</b>. Alimentam diretamente a coluna <b>Realizado</b> do Custo de Pessoal no DRE — substituem a antiga estimativa por % do faturamento e o rateio pelos centros de custo 13/14/15.01. São específicos do mês: salve a premissa no fechamento para gravar a vigência do mês.
+      </div>
+      <div class="frm" style="margin-top:10px">
+        <label class="fld">Folha / Enc.<input type="number" id="prCPFolhaReal" step="0.01"></label>
+        <label class="fld">EPI e uniformes<input type="number" id="prCPEpiReal" step="0.01"></label>
+        <label class="fld">Legal<input type="number" id="prCPLegalReal" step="0.01"></label>
+        <label class="fld">Outros - Alim. VT<input type="number" id="prCPOutrosReal" step="0.01"></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
     <div class="panel-h"><h3>Frota (C.E) — por equipamento</h3>
       <button class="btn sm" onclick="addFrotaRow()">+ equipamento</button></div>
     <div class="panel-b" style="overflow:auto">
@@ -536,7 +551,8 @@ function isConsolidado(){ return ST.filial==='all'; }
    ══════════════════════════════════════════════════════════════════ */
 const MONEY_IDS = ['recFat','impICMS','impPIS','impIR','impISS','lcValor',
   'mtFat','mtDiesel','mtAgreg','mtCO','mtCP','mtCE','mtRF',
-  'prFolhaAdic','prCPEpi','prCPLegal','prCPOutrosTotal'];
+  'prFolhaAdic','prCPEpi','prCPLegal','prCPOutrosTotal',
+  'prCPFolhaReal','prCPEpiReal','prCPLegalReal','prCPOutrosReal'];
 function _moneyFmt(cents){ const v=Math.abs(cents)/100; const s=v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); return cents<0?('-'+s):s; }
 function bindMoneyInputs(){
   const desc=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');
@@ -1178,24 +1194,28 @@ function calcFolhaLinha(f, pArg){
 function calcCPDetalhado(){
   const p=ST.premissa||{}, m=p.metas||{}, rec=ST.cabecalho.receita||{};
   const fat=+rec.fatBruto||0;
-  const prodPA=+(m.producaoT||rec.producaoT||0);
-  const enc=1+((+p.encargosPct||0)/100);
-  const folhaRealPct=valPremissa(p,['folhaRealPct','percFolhaReal'],4.9);
-  const folhaReal=fat*(folhaRealPct/100);
 
+  // ── Realizado (fechamento do mês): preenchido manualmente na aba Premissas. ──
+  //   Fonte única da coluna "Realizado" do CP no DRE. Substitui a antiga estimativa
+  //   por % do Fat. (folhaRealPct) e o rateio por centros de custo 13/14/15.01.
+  const folhaReal  = valPremissa(p,['cpFolhaReal'],0);
+  const epiReal    = valPremissa(p,['cpEpiReal'],0);
+  const legalReal  = valPremissa(p,['cpLegalReal'],0);
+  const outrosReal = valPremissa(p,['cpOutrosReal'],0);
+  const folhaRealPct = fat ? (folhaReal/fat*100) : 0;   // apenas informativo
+
+  // ── Meta / PA (planejamento): mantém origem por função e percentuais. ──
   let folhaMeta=0;
   (Array.isArray(p.folha)?p.folha:[]).forEach(f=>{
     folhaMeta += calcFolhaLinha(f,p).total;
   });
   folhaMeta += valPremissa(p,['folhaAdicional','adicionalFolhaPA','adicionalFolha'],0);
 
-  const epiReal=somaCentro('13.01');
-  const legalReal=somaCentro('14.01');
-  const outrosReal=somaCentro('15.01') + somaGrupoExceto('CP',['13.01','14.01','15.01']);
   const epiMeta=valPremissa(p,['cpEpiUniformes','epiUniformes','epi'],0);
   const legalMeta=valPremissa(p,['cpLegal','legal'],0);
   const cpOutrosTotal=valPremissa(p,['cpOutrosTotal','outrosCPTotal'],0);
   const outrosMeta=cpOutrosTotal ? Math.max(0, cpOutrosTotal-epiMeta) : valPremissa(p,['cpOutros','outrosCP','outros'],0);
+
   const realTotal=folhaReal+epiReal+legalReal+outrosReal;
   const metaTotal=folhaMeta+epiMeta+legalMeta+outrosMeta;
   return { folhaReal, epiReal, legalReal, outrosReal, realTotal,
@@ -1352,7 +1372,7 @@ function renderDre(){
       + `<br><span style="opacity:.8">Sub-custos detalhados dentro do Custo Operacional (CC 03.01 Reformas e empréstimos a agregados).</span></div>`;
     note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
       + `<b>Composição CP</b> = Folha/Enc. <b>${moeda(cp.folhaReal)}</b> (${num(cp.folhaRealPct)}% do Fat.) + EPI <b>${moeda(cp.epiReal)}</b> + Legal <b>${moeda(cp.legalReal)}</b> + Outros <b>${moeda(cp.outrosReal)}</b>`
-      + `<br><span style="opacity:.8">PA de CP = folha por função com produção, limite, subtotal e total com encargos + EPI + Legal + Outros.</span></div>`;
+      + `<br><span style="opacity:.8">Realizado lançado manualmente no fechamento (aba Premissas → "Custo de Pessoal — Realizado"). Coluna Meta = folha por função + EPI/Legal/Outros PA.</span></div>`;
     note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
       + `<b>Composição CE</b> = Cavalos <b>${moeda(ce.cavalos)}</b> + Carretas <b>${moeda(ce.carretas)}</b> + VA <b>${moeda(ce.va)}</b>`
       + (ce.outros?` + Outros <b>${moeda(ce.outros)}</b>`:'')
@@ -1418,6 +1438,12 @@ function fillPremissaForm(){
   document.getElementById('prCPEpi').value=p.cpEpiUniformes||p.epiUniformes||'';
   document.getElementById('prCPLegal').value=p.cpLegal||p.legal||'';
   document.getElementById('prCPOutrosTotal').value=p.cpOutrosTotal||'';
+  // Realizado do CP (fechamento do mês) — fonte da coluna Realizado no DRE
+  const cpRealLbl=document.getElementById('cpRealMesLbl'); if(cpRealLbl) cpRealLbl.textContent=mesLabel(ST.mesRef);
+  document.getElementById('prCPFolhaReal').value=(p.cpFolhaReal!==undefined&&p.cpFolhaReal!==null)?p.cpFolhaReal:'';
+  document.getElementById('prCPEpiReal').value=(p.cpEpiReal!==undefined&&p.cpEpiReal!==null)?p.cpEpiReal:'';
+  document.getElementById('prCPLegalReal').value=(p.cpLegalReal!==undefined&&p.cpLegalReal!==null)?p.cpLegalReal:'';
+  document.getElementById('prCPOutrosReal').value=(p.cpOutrosReal!==undefined&&p.cpOutrosReal!==null)?p.cpOutrosReal:'';
   renderFolha(); renderFrota();
 }
 function renderFolha(){
@@ -1477,6 +1503,10 @@ async function savePremissa(){
     cpEpiUniformes:+document.getElementById('prCPEpi').value||0,
     cpLegal:+document.getElementById('prCPLegal').value||0,
     cpOutrosTotal:+document.getElementById('prCPOutrosTotal').value||0,
+    cpFolhaReal:+document.getElementById('prCPFolhaReal').value||0,
+    cpEpiReal:+document.getElementById('prCPEpiReal').value||0,
+    cpLegalReal:+document.getElementById('prCPLegalReal').value||0,
+    cpOutrosReal:+document.getElementById('prCPOutrosReal').value||0,
     folha:(ST.premissa.folha||[]).filter(f=>f.funcao), frota:(ST.premissa.frota||[]).filter(f=>f.tipo),
     atualizadoPor:userMin(), atualizadoEm:new Date().toISOString() };
   await fsSetDoc('mapinha_premissas', 'PREM_'+ST.filial+'_'+ST.mesRef, payload);
