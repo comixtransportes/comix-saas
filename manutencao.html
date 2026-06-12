@@ -793,6 +793,7 @@ body.checklist-only .view-area{height:100%;}
                 <label class="os-choice-card"><input type="radio" name="t2"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 22 20H2L12 3Z"></path><path d="M12 9v5M12 17h.01"></path></svg></span><strong>Acidente</strong></label>
                 <label class="os-choice-card"><input type="radio" name="t2"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="9" width="14" height="11" rx="1.5"></rect><path d="M8 9V5h8v4M9 13h2M13 13h2M9 17h2M13 17h2"></path></svg></span><strong>Reforma</strong></label>
                 <label class="os-choice-card"><input type="radio" name="t2"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 19 6v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3Z"></path><path d="m9 12 2 2 4-5"></path></svg></span><strong>Garantia<br>Agregado</strong></label>
+                <label class="os-choice-card"><input type="radio" name="t2"><span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="20" r="1.4"></circle><circle cx="17" cy="20" r="1.4"></circle><path d="M3 4h2l2.2 11.2a1.5 1.5 0 0 0 1.5 1.2h8.1a1.5 1.5 0 0 0 1.5-1.2L21 8H6"></path></svg></span><strong>Compra</strong></label>
               </div>
             </div>
             </div>
@@ -876,6 +877,23 @@ body.checklist-only .view-area{height:100%;}
                   </div>
                 </div>
                 <button class="add-line-btn" onclick="addPeca()">＋ Adicionar peça</button>
+              </div>
+
+              <!-- Anexar Orçamento — documento único, salvo no Firebase/Storage como os demais documentos -->
+              <div class="dynamic-area">
+                <div class="dynamic-area-title">
+                  <span>Anexar Orçamento</span>
+                  <span style="font-size:10px;color:var(--mu);font-weight:400">PDF ou imagem do orçamento (opcional)</span>
+                </div>
+                <div id="os-orcamento-preview" style="display:none;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--bd2);border-radius:var(--rs);margin-bottom:8px;font-size:11.5px"></div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--rs);font-size:11.5px;font-weight:600;color:var(--tx);cursor:pointer;transition:border-color .15s">
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
+                    Selecionar orçamento
+                    <input type="file" accept="application/pdf,image/*" style="display:none" onchange="osAnexarOrcamento(this.files)">
+                  </label>
+                  <span id="os-orcamento-nome" style="font-size:11px;color:var(--mu)">Nenhum orçamento anexado</span>
+                </div>
               </div>
 
               <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px">
@@ -1552,6 +1570,18 @@ async function salvarOS() {
     const fotosMeta = _osFotos.map(f => ({ name: f.name || 'foto', size: f.file && f.file.size ? f.file.size : 0, type: f.file && f.file.type ? f.file.type : '', local: true }));
     if (fotosMeta.length) {
       await atlasFsSetDoc('ordens_servico', osId, { fotosMeta, fotos: fotosMeta.length, atualizadoEm: new Date() }, { merge: true });
+    }
+
+    // Upload do orçamento anexado (documento salvo no Storage + referência no Firestore)
+    if (_osOrcamento && _osOrcamento.file) {
+      const orcUrl = await uploadOrcamentoNuvem(_osOrcamento.file, osId);
+      await atlasFsSetDoc('ordens_servico', osId, {
+        orcamento_url: orcUrl || '',
+        orcamento_nome: _osOrcamento.name || 'orcamento',
+        orcamento_enviadoEm: new Date(),
+        atualizadoEm: new Date()
+      }, { merge: true });
+      if (!orcUrl) toast('OS salva, mas o upload do orçamento falhou. Reanexe na edição da OS.', 'am');
     }
 
     toast(osId + (saveRes && saveRes.source === 'local' ? ' criada localmente. Firebase externo bloqueado por regras/permissões.' : ' criada e salva no Firebase.'), saveRes && saveRes.source === 'local' ? 'am' : 'gn');
@@ -2634,6 +2664,8 @@ function resetFormularioOS() {
   _osFotos = [];
   const prev = document.getElementById('os-fotos-preview'); if (prev) prev.innerHTML = '';
   const cnt = document.getElementById('os-fotos-count'); if (cnt) cnt.textContent = 'Nenhuma foto adicionada';
+  _osOrcamento = null;
+  if (typeof renderOsOrcamento === 'function') renderOsOrcamento();
   calcValorGeral();
 }
 
@@ -3894,6 +3926,92 @@ function removerOsFoto(idx) {
   renderOsFotos();
 }
 
+// ══ ANEXAR ORÇAMENTO DA OS (documento único) ══
+let _osOrcamento = null; // { file, name }
+
+function osAnexarOrcamento(files) {
+  if (!files || !files.length) return;
+  const file = files[0];
+  if (file.size > 10 * 1024 * 1024) { toast('Arquivo muito grande (máx 10MB).', 'am'); return; }
+  _osOrcamento = { file, name: file.name };
+  renderOsOrcamento();
+}
+
+function renderOsOrcamento() {
+  const nome = document.getElementById('os-orcamento-nome');
+  const prev = document.getElementById('os-orcamento-preview');
+  if (!prev) return;
+  if (_osOrcamento) {
+    const f = _osOrcamento.file;
+    const kb = f && f.size ? (f.size / 1024).toFixed(0) + ' KB' : '';
+    prev.style.display = 'flex';
+    prev.innerHTML = `<span style="font-size:16px">📄</span>`
+      + `<span style="flex:1;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(_osOrcamento.name)}</span>`
+      + (kb ? `<span style="color:var(--mu);font-size:10px">${kb}</span>` : '')
+      + `<button onclick="removerOsOrcamento()" style="background:var(--rd-bg);border:1px solid var(--rd-bd);color:var(--rd);border-radius:6px;width:22px;height:22px;cursor:pointer;font-weight:700;line-height:1" title="Remover orçamento">×</button>`;
+    if (nome) nome.textContent = 'Orçamento anexado ✓';
+  } else {
+    prev.style.display = 'none';
+    prev.innerHTML = '';
+    if (nome) nome.textContent = 'Nenhum orçamento anexado';
+  }
+}
+
+function removerOsOrcamento() {
+  _osOrcamento = null;
+  renderOsOrcamento();
+}
+
+// ══ ANEXAR ORÇAMENTO NA EDIÇÃO DA OS (após abertura) ══
+let _editOsOrcamento = null; // novo arquivo selecionado nesta edição
+
+function editOsAnexarOrcamento(files) {
+  if (!files || !files.length) return;
+  const file = files[0];
+  if (file.size > 10 * 1024 * 1024) { toast('Arquivo muito grande (máx 10MB).', 'am'); return; }
+  _editOsOrcamento = { file, name: file.name };
+  renderEditOsOrcamento({ novo: true });
+}
+
+function renderEditOsOrcamento(opts) {
+  opts = opts || {};
+  const nome = document.getElementById('edit-os-orcamento-nome');
+  const prev = document.getElementById('edit-os-orcamento-preview');
+  if (!prev) return;
+  // Prioriza o novo arquivo selecionado; senão mostra o orçamento já salvo na OS
+  const novo = _editOsOrcamento;
+  const salvoNome = opts.salvoNome || '';
+  const salvoUrl  = opts.salvoUrl || '';
+  if (novo) {
+    const f = novo.file;
+    const kb = f && f.size ? (f.size / 1024).toFixed(0) + ' KB' : '';
+    prev.style.display = 'flex';
+    prev.innerHTML = `<span style="font-size:16px">📄</span>`
+      + `<span style="flex:1;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(novo.name)}</span>`
+      + (kb ? `<span style="color:var(--mu);font-size:10px">${kb}</span>` : '')
+      + `<span style="color:var(--ac);font-size:10px;font-weight:700">novo</span>`
+      + `<button onclick="removerEditOsOrcamento()" style="background:var(--rd-bg);border:1px solid var(--rd-bd);color:var(--rd);border-radius:6px;width:22px;height:22px;cursor:pointer;font-weight:700;line-height:1" title="Cancelar novo orçamento">×</button>`;
+    if (nome) nome.textContent = 'Novo orçamento será salvo ✓';
+  } else if (salvoNome || salvoUrl) {
+    prev.style.display = 'flex';
+    const link = salvoUrl
+      ? `<a href="${escapeHtml(salvoUrl)}" target="_blank" rel="noopener" style="flex:1;font-weight:600;color:var(--ac);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(salvoNome || 'Abrir orçamento')}</a>`
+      : `<span style="flex:1;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(salvoNome)}</span>`;
+    prev.innerHTML = `<span style="font-size:16px">📄</span>${link}<span style="color:var(--mu);font-size:10px">anexado</span>`;
+    if (nome) nome.textContent = 'Orçamento anexado — selecione para substituir';
+  } else {
+    prev.style.display = 'none';
+    prev.innerHTML = '';
+    if (nome) nome.textContent = 'Nenhum orçamento anexado';
+  }
+}
+
+function removerEditOsOrcamento() {
+  _editOsOrcamento = null;
+  const os = OS_DB[document.getElementById('edit-os-id')?.value] || {};
+  renderEditOsOrcamento({ salvoNome: os.orcamento_nome, salvoUrl: os.orcamento_url });
+}
+
 // Corrige mensagem de foto no checklist wizard — só valida quando houver arquivo real
 function setStatusFotoReal(el) {
   const input = el.querySelector('input[type="file"]');
@@ -4356,6 +4474,29 @@ async function uploadOSFotoNuvem(file, osId) {
   return null;
 }
 
+/* Upload de orçamento da OS — mesmo Storage usado para os demais documentos (NF/canhotos) */
+async function uploadOrcamentoNuvem(file, osId) {
+  try {
+    const SUPABASE_URL      = 'https://onomvgnudbgywvtgetfe.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_SpcPe4Fch43LIwK7ox-jIQ_YbbBf5_g';
+    const SUPABASE_BUCKET   = 'canhotos'; // mesmo bucket dos demais documentos
+    const path = `orcamento-os/${osId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+    const res  = await fetch(`${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${path}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'Content-Type': file.type || 'application/octet-stream',
+      },
+      body: file
+    });
+    if (!res.ok) throw new Error('Upload orçamento falhou: ' + res.statusText);
+    return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${path}`;
+  } catch(err) {
+    console.error('[Manutenção] Erro upload orçamento:', err);
+    return null;
+  }
+}
+
 
 // ══════════════════════════════════════════════════════════
 // ITEM 9 — Ao salvar OS: muda placa para status "Manutenção"
@@ -4491,6 +4632,7 @@ const _MOTIVOS_LISTA = [
   'Vazamento de óleo','Vazamento de ar','Vazamento de combustível',
   'Problema no sistema de arrefecimento','Problema na suspensão','Problema na direção',
   'Problema em pneus','Problema em rodas','Problema em iluminação/sinalização',
+  'Compra Pneus',
   'Pane mecânica','Pane elétrica','Revisão programada','Sinistro/avaria',
   'Aguardando peças','Aguardando fornecedor','Aguardando aprovação',
   'Manutenção preventiva (carreta)','Manutenção corretiva (carreta)',
@@ -4946,6 +5088,10 @@ function abrirModalEditarOS(osId) {
   }
   atualizarTotalEditOS();
 
+  // Orçamento: reseta seleção nova e exibe o que já está salvo na OS (se houver)
+  _editOsOrcamento = null;
+  renderEditOsOrcamento({ salvoNome: os.orcamento_nome, salvoUrl: os.orcamento_url });
+
   document.getElementById('modal-edit-os').style.display = 'flex';
 }
 
@@ -5101,8 +5247,17 @@ async function salvarEdicaoOS() {
   const btn = document.getElementById('btn-salvar-edicao-os');
   if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
   try {
+    // Upload do orçamento, se um novo arquivo foi anexado nesta edição
+    if (_editOsOrcamento && _editOsOrcamento.file) {
+      const orcUrl = await uploadOrcamentoNuvem(_editOsOrcamento.file, osId);
+      updates.orcamento_url = orcUrl || '';
+      updates.orcamento_nome = _editOsOrcamento.name || 'orcamento';
+      updates.orcamento_enviadoEm = agora;
+      if (!orcUrl) toast('Orçamento não pôde ser enviado ao Storage. Tente novamente.', 'am');
+    }
     await atlasFsSetDoc('ordens_servico', osId, updates, { merge: true });
     Object.assign(OS_DB[osId], updates);
+    _editOsOrcamento = null;
     fecharModalEditarOS();
     toast(`${osId} atualizada. ${nivel !== 'Automática' ? 'Retornou ao fluxo de aprovação.' : 'Status: Aberta.'}`, 'gn');
     await loadOrdensServico();
@@ -5197,6 +5352,19 @@ setTimeout(iniciarAutoRefresh, 5000);
       <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg);border-radius:var(--rs);border:1px solid var(--bd2)">
         <span style="font-size:11px;font-weight:700;color:var(--mu);flex:1">Total Estimado</span>
         <input type="text" id="edit-os-custo-total" readonly style="font-family:var(--m);font-weight:700;font-size:14px;color:var(--ac);background:transparent;border:none;outline:none;text-align:right;width:120px">
+      </div>
+      <!-- Anexar Orçamento (permite anexação após a abertura) -->
+      <div style="margin-top:12px">
+        <div style="font-size:10px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">Anexar Orçamento</div>
+        <div id="edit-os-orcamento-preview" style="display:none;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--bd2);border-radius:var(--rs);margin-bottom:8px;font-size:11.5px"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--rs);font-size:11.5px;font-weight:600;color:var(--tx);cursor:pointer">
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
+            Selecionar orçamento
+            <input type="file" accept="application/pdf,image/*" style="display:none" onchange="editOsAnexarOrcamento(this.files)">
+          </label>
+          <span id="edit-os-orcamento-nome" style="font-size:11px;color:var(--mu)">Nenhum orçamento anexado</span>
+        </div>
       </div>
       <!-- Aviso de retorno ao fluxo -->
       <div style="margin-top:10px;background:var(--am-bg);border:1px solid var(--am-bd);border-radius:var(--rs);padding:8px 11px;font-size:11px;color:var(--am)">
