@@ -639,6 +639,19 @@ firebase.initializeApp({
   appId:"1:586258388438:web:3b9da22e650e88ddcf4077"
 });
 const auth = firebase.auth();
+/* Firestore com auto-detecção de long-polling.
+   PROBLEMA: o transporte padrão do Firestore (WebChannel/gRPC-over-HTTP) trava
+   no Safari/WebKit — as leituras de chunks ficavam penduradas e o download parava
+   em 20%, sem completar nem dar erro. É um problema conhecido do Firestore no
+   Safari e em iframes. SOLUÇÃO: experimentalAutoDetectLongPolling faz o SDK
+   detectar quando o WebChannel não vai funcionar e cair para HTTP long-polling,
+   que o Safari lida bem. No Chrome o WebChannel continua sendo usado (sem perda
+   de velocidade). useFetchStreams:false aumenta a compatibilidade no WebKit. */
+firebase.firestore().settings({
+  experimentalAutoDetectLongPolling: true,
+  useFetchStreams: false,
+  merge: true
+});
 const db   = firebase.firestore();
 
 let curUser = null, curPerfil = 'motorista', curNome = '', sbCol = false;
@@ -732,6 +745,11 @@ async function doLogin() {
   if (!email||!senha) { loginErr('Preencha e-mail e senha.'); return; }
   btn.disabled=true; btn.textContent='Entrando...';
   try {
+    /* Persistência LOCAL explícita: garante que a sessão sobreviva a reloads do
+       iframe/aba. No Safari, sob pressão de memória ou ITP, o padrão às vezes não
+       persistia e o usuário caía de volta no login ao recarregar. LOCAL mantém a
+       sessão no storage do navegador entre recarregamentos. */
+    try { await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch(_) {}
     await auth.signInWithEmailAndPassword(email, senha);
   } catch(e) {
     btn.disabled=false; btn.textContent='Entrar';
