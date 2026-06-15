@@ -123,6 +123,37 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
 .rep .flag-pct{background:var(--am-bg)}
 .toolbar-note{font-size:11px;color:var(--mu)}
 
+/* ── aproveitamento de largura (somente aba Fechamento) ── */
+#v-fech{max-width:1840px}
+
+/* ── dois fechamentos lado a lado ── */
+.fech-compare{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+@media(max-width:1180px){.fech-compare{grid-template-columns:1fr}}
+.fech-col{position:relative;min-width:0}
+.fech-col-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.fech-col-head .lbl{font-size:10.5px;font-weight:600;color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
+.zoom-btn{display:inline-flex;align-items:center;gap:5px;font-family:var(--f);font-size:11px;font-weight:600;color:var(--ac);background:var(--ac-bg);border:1px solid var(--bd);border-radius:var(--rs);padding:3px 9px;cursor:pointer;line-height:1}
+.zoom-btn:hover{background:var(--wh);border-color:var(--ac)}
+.fech-empty{background:var(--wh);border:1px dashed var(--bd);border-radius:var(--r);box-shadow:var(--shd);padding:26px;text-align:center;color:var(--mu);font-size:12.5px}
+
+/* ── destaque discreto da auditoria entre os dois fechamentos ── */
+.cmp-df{background:var(--rd-bg);box-shadow:inset 2px 0 0 var(--rd-bd)}
+.cmp-eq{background:var(--ac-bg);box-shadow:inset 2px 0 0 var(--cy-bd)}
+
+/* ── lupa: ampliação em sobreposição ── */
+.zoom-ov{position:fixed;inset:0;background:rgba(19,36,59,.55);z-index:9998;display:none;align-items:flex-start;justify-content:center;padding:24px 16px}
+.zoom-ov.on{display:flex}
+.zoom-ov-card{background:var(--wh);border-radius:var(--r);box-shadow:0 18px 50px rgba(19,36,59,.35);max-width:96vw;max-height:92vh;display:flex;flex-direction:column;overflow:hidden}
+.zoom-ov-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--bd2);background:#fafbfc}
+.zoom-ov-bar .ti{font-size:12px;font-weight:600;color:var(--tx);margin-right:auto}
+.zoom-ov-bar .zb{font-family:var(--f);font-size:14px;font-weight:700;color:var(--tx);background:var(--wh);border:1px solid var(--bd);border-radius:var(--rs);width:28px;height:26px;cursor:pointer;line-height:1}
+.zoom-ov-bar .zb:hover{background:var(--ht)}
+.zoom-ov-bar .lvl{font-family:var(--m);font-size:11.5px;color:var(--mu);min-width:44px;text-align:center}
+.zoom-ov-bar .cl{font-family:var(--f);font-size:12px;font-weight:700;color:#fff;background:var(--ac);border:1px solid var(--ac);border-radius:var(--rs);padding:0 12px;height:26px;cursor:pointer}
+.zoom-ov-bar .cl:hover{background:var(--ac-h)}
+.zoom-ov-body{overflow:auto;padding:16px}
+.zoom-stage{transform-origin:top left}
+
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%) translateY(80px);background:var(--hd);color:#fff;padding:10px 18px;border-radius:var(--r);font-size:12.5px;font-weight:500;opacity:0;transition:.25s;z-index:9999;pointer-events:none}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.gn{background:var(--gn)}.toast.rd{background:var(--rd)}.toast.am{background:var(--am)}
@@ -130,10 +161,15 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
 /* impressão: apenas o relatório */
 @media print{
   body{background:#fff}
-  .top,.tabs,.cards,.fech-grid>.panel:first-child,.no-print,.aud-panel,.cmp-panel{display:none !important}
+  .top,.tabs,.cards,.fech-grid>.panel:first-child,.no-print,.aud-panel,.cmp-panel,.zoom-btn,.fech-col-head,.zoom-ov{display:none !important}
   .view{display:none;padding:0;max-width:none}
   .view.on{display:block}
+  #v-fech{max-width:none}
   .fech-grid{display:block}
+  .fech-compare{display:block}
+  .fech-col{position:static}
+  .fech-col.is-prev{display:none !important}
+  .cmp-eq,.cmp-df{background:none !important;box-shadow:none !important}
   .rep{border:none;box-shadow:none;padding:0;font-size:10px}
 }
 </style>
@@ -591,16 +627,38 @@ function renderDetalhe(){
   /* relatório TrL010 */
   h+='<div class="panel no-print" style="border:none;box-shadow:none;background:none;margin-bottom:6px;display:flex;justify-content:flex-end">'
     +'<button class="btn pri sm" onclick="window.print()">🖨 Imprimir fechamento</button></div>';
-  h+=relatorioTrl(o);
+
+  /* dois fechamentos lado a lado: atual × mês anterior */
+  const mesPrev=mesAnterior(ST.mesRef);
+  h+='<div class="fech-compare">';
+  h+='<div class="fech-col is-cur">'
+    +'<div class="fech-col-head no-print"><span class="lbl">Fechamento atual · '+esc(mesLabel(ST.mesRef))+'</span>'
+    +'<button type="button" class="zoom-btn" data-rep="repArea" data-titulo="Fechamento atual · '+esc(mesLabel(ST.mesRef))+'" title="Ampliar fechamento atual">🔍 Ampliar</button></div>'
+    +relatorioTrl(o, ST.mesRef, 'repArea')+'</div>';
+  if(prev){
+    h+='<div class="fech-col is-prev">'
+      +'<div class="fech-col-head no-print"><span class="lbl">Mês anterior · '+esc(mesLabel(mesPrev))+'</span>'
+      +'<button type="button" class="zoom-btn" data-rep="repAreaPrev" data-titulo="Mês anterior · '+esc(mesLabel(mesPrev))+'" title="Ampliar fechamento do mês anterior">🔍 Ampliar</button></div>'
+      +relatorioTrl(prev, mesPrev, 'repAreaPrev')+'</div>';
+  } else {
+    h+='<div class="fech-col is-prev">'
+      +'<div class="fech-col-head no-print"><span class="lbl">Mês anterior · '+esc(mesLabel(mesPrev))+'</span></div>'
+      +'<div class="fech-empty">Sem fechamento para este agregado no mês anterior — comparação indisponível.</div></div>';
+  }
+  h+='</div>';
+
   el.innerHTML=h;
+  aplicarComparacaoFechamentos();
+  montarLupas();
 }
 
 /* relatório no layout do TrL010 */
-function relatorioTrl(o){
-  const per='01/'+ST.mesRef.slice(5,7)+'/'+ST.mesRef.slice(0,4)+' a '+ultimoDia(ST.mesRef)+'/'+ST.mesRef.slice(5,7)+'/'+ST.mesRef.slice(0,4);
+function relatorioTrl(o, mes, repId){
+  mes = mes || ST.mesRef;
+  const per='01/'+mes.slice(5,7)+'/'+mes.slice(0,4)+' a '+ultimoDia(mes)+'/'+mes.slice(5,7)+'/'+mes.slice(0,4);
   const hoje=new Date().toLocaleDateString('pt-BR');
   const codes=Array.from(o.codes).sort();
-  let h='<div class="rep" id="repArea">';
+  let h='<div class="rep" id="'+(repId||'repArea')+'">';
   h+='<div class="rep-head">'
     +'<div class="l1">COMIX</div><div class="rgt">Folha..: 1<br>DT.Ref.: '+hoje+'</div>'
     +'<div class="ctr">ATLAS /Agregados&nbsp;&nbsp;&nbsp;Comissão Agregados - '+per+' - Agregado: '+codes.join('+')+' - '+esc(o.nome)+'</div>'
@@ -666,6 +724,94 @@ function relatorioTrl(o){
   h+='</div>';
   return h;
 }
+
+/* ══ AUDITORIA VISUAL ENTRE OS DOIS FECHAMENTOS ══
+   Reaproveita o "Resumo da comissão por veículo" (já renderizado em cada
+   fechamento) e compara, por placa, célula a célula. Coincidência → azul;
+   divergência → vermelho. Placas presentes em apenas um mês não recebem
+   destaque (não há comparação relevante). Não altera valores nem conteúdo. */
+function _resumoTable(repId){
+  const rep=document.getElementById(repId); if(!rep) return null;
+  const tbs=rep.querySelectorAll('table');
+  return tbs.length ? tbs[tbs.length-1] : null;   // a última tabela é o resumo por veículo
+}
+function _resumoRows(table){
+  const map={};
+  if(!table) return map;
+  table.querySelectorAll('tr').forEach(function(tr){
+    if(tr.classList.contains('tot')) return;       // ignora linha de totais
+    const tds=tr.querySelectorAll('td');
+    if(tds.length<9) return;
+    const placa=(tds[1].textContent||'').trim();
+    if(placa) map[placa]=tds;
+  });
+  return map;
+}
+function aplicarComparacaoFechamentos(){
+  const tA=_resumoTable('repArea'), tB=_resumoTable('repAreaPrev');
+  if(!tA||!tB) return;                              // sem mês anterior → nada a comparar
+  const A=_resumoRows(tA), B=_resumoRows(tB);
+  const cols=[2,3,4,5,6,7,8];                       // Fat.Bruto..Saldo (placa = coluna 1)
+  Object.keys(A).forEach(function(p){
+    const ra=A[p], rb=B[p];
+    if(!rb) return;                                 // placa só no mês atual → sem comparação
+    cols.forEach(function(i){
+      if(i>=ra.length||i>=rb.length) return;
+      const va=(ra[i].textContent||'').trim(), vb=(rb[i].textContent||'').trim();
+      if(va===''&&vb==='') return;
+      const cls=(va===vb)?'cmp-eq':'cmp-df';
+      ra[i].classList.add(cls); rb[i].classList.add(cls);
+    });
+  });
+}
+
+/* ══ LUPA — ampliação em sobreposição, independente por fechamento ══ */
+let _zoomLvl=1.6;
+function _ensureZoomOverlay(){
+  let ov=document.getElementById('zoomOverlay');
+  if(ov) return ov;
+  ov=document.createElement('div'); ov.id='zoomOverlay'; ov.className='zoom-ov no-print';
+  ov.innerHTML='<div class="zoom-ov-card" role="dialog" aria-label="Ampliação do fechamento">'
+    +'<div class="zoom-ov-bar"><span class="ti" id="zoomTi">Fechamento</span>'
+    +'<button type="button" class="zb" id="zoomOut" title="Reduzir">−</button>'
+    +'<span class="lvl" id="zoomLvl">160%</span>'
+    +'<button type="button" class="zb" id="zoomIn" title="Ampliar">+</button>'
+    +'<button type="button" class="cl" id="zoomClose">Fechar</button></div>'
+    +'<div class="zoom-ov-body"><div class="zoom-stage" id="zoomStage"></div></div></div>';
+  document.body.appendChild(ov);
+  ov.addEventListener('click', function(e){ if(e.target===ov) fecharLupa(); });
+  ov.querySelector('#zoomClose').addEventListener('click', fecharLupa);
+  ov.querySelector('#zoomIn').addEventListener('click', function(){ _setZoom(_zoomLvl+0.2); });
+  ov.querySelector('#zoomOut').addEventListener('click', function(){ _setZoom(_zoomLvl-0.2); });
+  return ov;
+}
+function _setZoom(l){
+  _zoomLvl=Math.min(3, Math.max(1, Math.round(l*10)/10));
+  const st=document.getElementById('zoomStage'), lv=document.getElementById('zoomLvl');
+  if(st) st.style.transform='scale('+_zoomLvl+')';
+  if(lv) lv.textContent=Math.round(_zoomLvl*100)+'%';
+}
+function abrirLupa(repId, titulo){
+  const rep=document.getElementById(repId); if(!rep) return;
+  const ov=_ensureZoomOverlay();
+  const stage=ov.querySelector('#zoomStage');
+  const w=rep.scrollWidth;
+  const clone=rep.cloneNode(true);                  // clona — não altera o fechamento original
+  clone.removeAttribute('id');
+  clone.style.boxShadow='none'; clone.style.border='none';
+  clone.style.width=w+'px'; clone.style.maxWidth='none'; clone.style.overflow='visible';
+  stage.innerHTML=''; stage.appendChild(clone);
+  ov.querySelector('#zoomTi').textContent=titulo||'Fechamento';
+  _setZoom(1.6);
+  ov.classList.add('on');
+}
+function fecharLupa(){ const ov=document.getElementById('zoomOverlay'); if(ov) ov.classList.remove('on'); }
+function montarLupas(){
+  document.querySelectorAll('#agDetalhe .zoom-btn').forEach(function(b){
+    b.onclick=function(){ abrirLupa(b.getAttribute('data-rep'), b.getAttribute('data-titulo')||'Fechamento'); };
+  });
+}
+document.addEventListener('keydown', function(e){ if(e.key==='Escape') fecharLupa(); });
 
 /* ══ CONSOLIDADO ══ */
 function renderConsolidado(){
