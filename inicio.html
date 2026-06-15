@@ -584,9 +584,25 @@ html{-webkit-text-size-adjust:100%;-moz-text-size-adjust:100%;text-size-adjust:1
    SEM loop: proteção window.self === window.top
 ═══════════════════════════════════════════════════════════ */
 
-/* Anti-loop */
+/* Anti-loop — só redireciona para o index quando temos CERTEZA de que a página
+   foi aberta fora do iframe. No mobile (Safari/Chrome iOS), sob pressão de
+   memória o WebKit destrói e recria o iframe; durante a recriação há um instante
+   em que window.self===window.top é true momentaneamente, e o replace() antigo
+   disparava um loop infinito de recarga. Proteções:
+   1) Acessar window.top.location para confirmar que somos realmente o top-level
+      (dentro de um iframe same-origin isso funciona; o self===top puro não basta).
+   2) Guard por sessionStorage: no máximo 1 redirect, evitando qualquer loop. */
 (function(){
-  try{ if(window.self===window.top) window.location.replace('index.html#inicio'); }catch(_){}
+  try{
+    if(window.self !== window.top) return;            // estamos no iframe → ok
+    // Confirmação extra: se conseguimos ler parent.ATLAS_DATA, é iframe legítimo
+    try{ if(window.parent && window.parent !== window && window.parent.ATLAS_DATA !== undefined) return; }catch(_){}
+    // Guard anti-loop: redireciona no máximo uma vez por sessão
+    var k='__atlas_inicio_redir';
+    if(sessionStorage.getItem(k)){ return; }
+    sessionStorage.setItem(k,'1');
+    window.location.replace('index.html#inicio');
+  }catch(_){}
 })();
 
 /* ── Sem Firebase próprio — usa o db e funções já autenticadas do parent ──
@@ -762,10 +778,15 @@ async function loadCloudBaseDirect(id){
     const meta = metaSnap.data() || {};
     const n = meta.numChunks || 0;
     if(!n) return null;
-    const proms=[]; for(let i=0;i<n;i++) proms.push(docRef.collection('chunks').doc(String(i)).get());
-    const snaps = await Promise.all(proms);
+    /* Mobile: carregar TODOS os chunks em paralelo (Promise.all) montava o array
+       inteiro de uma só vez e estourava o teto de memória por aba do WebKit/Chrome
+       mobile (~200-400MB no iOS), matando a página. Lendo um chunk de cada vez o
+       pico de memória cai drasticamente; o custo é alguns ms a mais, irrelevante. */
     const rows=[];
-    for(const s of snaps){ if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) rows.push(...r); } }
+    for(let i=0;i<n;i++){
+      const s = await docRef.collection('chunks').doc(String(i)).get();
+      if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) rows.push(...r); }
+    }
     return rows.length ? rows : null;
   }catch(e){ console.warn('[Início] leitura direta bases_cloud/'+id+' falhou:', e.message); return null; }
 }
@@ -1731,27 +1752,18 @@ document.addEventListener('DOMContentLoaded', async ()=>{
   /* Solicita usuário ao parent */
   try{ window.parent.postMessage({type:'ATLAS_REQUEST_USER'},'*'); }catch(_){}
 
-  /* Aprovações reais do Firestore (com retry) */
-  tryLoadAprovacoes(1);
+  /* ── Carregamento das bases ──
+     ANTES: as 4 cargas pesadas (aprovações+ordens_servico 5000, veículos, SZC
+     com todos os chunks, SZB inteira) disparavam TODAS em paralelo. No desktop
+     há RAM de sobra; no mobile o pico simultâneo estourava o teto de memória da
+     aba e a página era morta ("cai e não volta" no Chrome / loop no Safari).
+     AGORA: detectamos mobile e, nesse caso, executamos as cargas em SÉRIE (uma
+     conclui antes da próxima começar), achatando o pico de memória. No desktop
+     mantemos o paralelo (mais rápido). */
+  const _isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+                    || (window.matchMedia && window.matchMedia('(max-width:820px)').matches);
 
-  /* Cadastro de veículos — base da frota/agregados, cavalos parados e ranking
-     (mesma fonte da aba Dashboard/Alocação do módulo Frota) */
-  tryLoadVeiculos(1);
-
-  /* Base de diesel (SZC) — para "Diesel (mês)" + "Peso Diesel" dos cards.
-     A SZC vive em bases_cloud/szc (NÃO em bases_szb), então é lida pela ponte
-     getCollection na subcoleção de chunks — mesmo local que o pd.html usa. */
-  (async function loadDiesel(att){
-    att=att||1;
-    const rows=await loadSZCRows();
-    if(rows && rows.length){ _szcRows=rows; tryRenderFrota(); }
-    else if(att<5) setTimeout(()=>loadDiesel(att+1), att===1?1500:3000);
-  })(1);
-
-  /* Tenta carregar o SZB com até 3 tentativas espaçadas.
-     O index pode ainda estar fazendo o preload do Firestore quando o
-     iframe é aberto — o delay cobre essa janela de tempo. */
-  async function tryLoad(attemptNum){
+  async function tryLoadSZB(attemptNum){
     try{
       const payload = await loadSZB();
       render(payload.rows, payload.ts);
@@ -1759,18 +1771,39 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     } catch(e){
       console.warn('[Início] SZB tentativa ' + attemptNum + ':', e.message);
       if(attemptNum < 3){
-        // Aguarda e tenta novamente (o parent pode estar carregando o SZB)
         const delay = attemptNum === 1 ? 2000 : 4000;
-        setTimeout(() => tryLoad(attemptNum + 1), delay);
+        setTimeout(() => tryLoadSZB(attemptNum + 1), delay);
       } else {
-        // Esgotou tentativas — mostra erro
         $('cav-list').innerHTML = '<div class="est"><p>' + e.message + '</p></div>';
         tx('h-carga','↻ SZB não disponível');
         hideSplash();
       }
     }
   }
-  tryLoad(1);
+
+  async function loadDiesel(att){
+    att=att||1;
+    const rows=await loadSZCRows();
+    if(rows && rows.length){ _szcRows=rows; tryRenderFrota(); }
+    else if(att<5) setTimeout(()=>loadDiesel(att+1), att===1?1500:3000);
+  }
+
+  if(_isMobile){
+    /* SÉRIE: a ordem prioriza o que pinta a tela principal (SZB) por último,
+       depois de liberar a memória usada pelas cargas auxiliares. */
+    (async ()=>{
+      try{ await tryLoadAprovacoes(1); }catch(_){}
+      try{ await tryLoadVeiculos(1); }catch(_){}
+      try{ await loadDiesel(1); }catch(_){}
+      try{ await tryLoadSZB(1); }catch(_){}
+    })();
+  } else {
+    /* DESKTOP: paralelo (comportamento original — mais rápido). */
+    tryLoadAprovacoes(1);
+    tryLoadVeiculos(1);
+    loadDiesel(1);
+    tryLoadSZB(1);
+  }
 });
 
 setInterval(()=>tx('h-hora',horaFmt()),60000);
