@@ -1119,7 +1119,15 @@ function atlasFilterRowsForScope(rows, table) {
   const ops = pdAllowedOps();
   if (!Array.isArray(ops)) return rows || [];
   const allowed = new Set(ops);
-  return (rows || []).filter(r => allowed.has(pdRowOp(r)));
+  if (!Array.isArray(rows)) return [];
+  /* IN-PLACE: compacta o próprio array em vez de criar um novo com .filter(),
+     evitando manter duas cópias da base em memória no mobile. */
+  let w = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (allowed.has(pdRowOp(rows[i]))) rows[w++] = rows[i];
+  }
+  rows.length = w;
+  return rows;
 }
 function pdBranchLabel(op) {
   return op === '17' ? 'SC' : op === '18' ? 'PR' : op === '03' ? 'SP' : op;
@@ -4315,39 +4323,61 @@ function atlasExcelDateToISO(v) {
 }
 
 function normalizeAtlasSZBRows(rows) {
+  if (!Array.isArray(rows)) return [];
   var dateCols = new Set(['Dt. Emissao', 'Dt Cancel']);
-  return (rows || []).map(function(row) {
+  /* IN-PLACE: antes este map() criava um array NOVO de objetos enquanto o
+     original (payload.rows) seguia vivo — duas cópias completas da SZB em
+     memória ao mesmo tempo (+ uma terceira no filtro de escopo). Com ~30 chunks
+     isso somava centenas de MB e matava a aba no mobile. Agora mutamos cada
+     objeto no lugar e compactamos o próprio array, mantendo só UMA cópia. */
+  var w = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i] || {};
     var out = {};
-    Object.keys(row || {}).forEach(function(k) {
+    var hasVal = false;
+    for (var k in row) {
+      if (!Object.prototype.hasOwnProperty.call(row, k)) continue;
       var key = String(k).replace(/\s+/g, ' ').trim();
-      if (!key) return;
+      if (!key) continue;
       var v = row[k];
-      if (dateCols.has(key)) out[key] = atlasExcelDateToISO(v);
-      else if (v === null || v === undefined) out[key] = '';
-      else out[key] = String(v);
-    });
-    return out;
-  }).filter(function(r) {
-    return Object.values(r).some(function(v) { return v !== '' && v !== null && v !== undefined; });
-  });
+      var nv;
+      if (dateCols.has(key)) nv = atlasExcelDateToISO(v);
+      else if (v === null || v === undefined) nv = '';
+      else nv = String(v);
+      out[key] = nv;
+      if (nv !== '') hasVal = true;
+    }
+    if (hasVal) { rows[w++] = out; }
+  }
+  rows.length = w; // descarta o excesso, liberando os objetos antigos
+  return rows;
 }
 
 function normalizeAtlasSZCRows(rows) {
+  if (!Array.isArray(rows)) return [];
   var dateCols = new Set(['Data Emissao']);
-  return (rows || []).map(function(row) {
+  /* IN-PLACE — mesma otimização de memória do normalizeAtlasSZBRows. */
+  var w = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i] || {};
     var out = {};
-    Object.keys(row || {}).forEach(function(k) {
+    var hasVal = false;
+    for (var k in row) {
+      if (!Object.prototype.hasOwnProperty.call(row, k)) continue;
       var key = String(k).replace(/\s+/g, ' ').trim();
-      if (!key) return;
+      if (!key) continue;
       var v = row[k];
-      if (dateCols.has(key)) out[key] = atlasExcelDateToISO(v);
-      else if (v === null || v === undefined) out[key] = '';
-      else out[key] = String(v);
-    });
-    return out;
-  }).filter(function(r) {
-    return Object.values(r).some(function(v) { return v !== '' && v !== null && v !== undefined; });
-  });
+      var nv;
+      if (dateCols.has(key)) nv = atlasExcelDateToISO(v);
+      else if (v === null || v === undefined) nv = '';
+      else nv = String(v);
+      out[key] = nv;
+      if (nv !== '') hasVal = true;
+    }
+    if (hasVal) { rows[w++] = out; }
+  }
+  rows.length = w;
+  return rows;
 }
 
 function atlasParentSZC() {
@@ -4440,6 +4470,11 @@ function applyAtlasSZB(parentData, origem) {
 
   // Mesmo contrato usado após parseXLSM(file): RAW recebe registros; DATA é recriado por fullRebuild/enrich.
   RAW = rows;
+  /* Solta a referência ao array bruto recebido do parent. Como a normalização e
+     o filtro agora são in-place, parentData.rows é o MESMO array que virou RAW;
+     zerar o ponteiro do payload evita que o objeto de mensagem segure memória
+     extra após o processamento. */
+  try { parentData.rows = null; } catch(_) {}
   DATA = [];
   AI_CACHE = null;
   __ATLAS_PD_CARREGADO = true;
