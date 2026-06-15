@@ -1173,29 +1173,17 @@ async function atlasLoadBaseFromFirestore(id){
     const n = meta.numChunks || 0;
     if(!n) return null;
     
-    // Lê chunks. No mobile, SEQUENCIAL (um de cada vez) para não montar o array
-    // inteiro de uma vez e estourar a memória da aba; no desktop, em paralelo
-    // (Promise.all) que é mais rápido e a RAM comporta.
+    // Lê chunks em LOTES paralelos. Tudo de uma vez estourava a memória no
+    // mobile; um a um travava por lentidão. Lote pequeno (mobile) equilibra.
     const rows = [];
-    if(window.ATLAS_IS_MOBILE){
-      for(let i=0;i<n;i++){
-        const s = await docRef.collection('chunks').doc(String(i)).get();
-        if(s.exists){
-          const r = s.data().rows;
-          if(Array.isArray(r)) rows.push(...r);
-        }
-      }
-    } else {
-      const promises = [];
-      for(let i=0;i<n;i++){
-        promises.push(docRef.collection('chunks').doc(String(i)).get());
-      }
-      const snaps = await Promise.all(promises);
+    const __batch = window.ATLAS_IS_MOBILE ? 5 : 25;
+    for(let start=0; start<n; start+=__batch){
+      const end = Math.min(start+__batch, n);
+      const reqs = [];
+      for(let i=start; i<end; i++) reqs.push(docRef.collection('chunks').doc(String(i)).get());
+      const snaps = await Promise.all(reqs);
       for(const s of snaps){
-        if(s.exists){
-          const r = s.data().rows;
-          if(Array.isArray(r)) rows.push(...r);
-        }
+        if(s.exists){ const r = s.data().rows; if(Array.isArray(r)) rows.push(...r); }
       }
     }
     if(!rows.length) return null;
