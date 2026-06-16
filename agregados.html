@@ -361,7 +361,7 @@ function normalizeRows(raw, dateCols){
 function setBase(id, raw){
   if(!raw||!raw.length||!BASES[id]) return false;
   BASES[id].rows=normalizeRows(raw, BASES[id].dateCols); BASES[id].loaded=true;
-  if(id==='szb') montarMeses();
+  if(id==='szb'){ montarMeses(); logSzbCols(); }
   _cache={}; refreshBaseInfo(); renderAll(); return true;
 }
 function ensureBases(){
@@ -403,6 +403,32 @@ function montarMeses(){
 }
 function scopeSet(){ return ST.filial==='all' ? new Set(['SC','PR','SP']) : new Set([ST.filial]); }
 
+/* ── leitura dos campos do SZB (rótulos confirmados pela estrutura real da tabela) ──
+   Filial cai para o código da operação (17/18/03) caso venha vazio. */
+function pick(r, names){ for(let i=0;i<names.length;i++){ const v=r[names[i]]; if(v!=null && String(v).trim()!=='') return v; } return ''; }
+const SZB_ALIAS = {
+  filial : ['Filial'],
+  ctrc   : ['Numero CTRC'],
+  serie  : ['Serie','Serie CTRC'],
+  nfData : ['Emis Nf Cli'],
+  nfSerie: ['Serie NF Cli'],
+  nfNum  : ['NF CLIENTE'],
+  destCod: ['Destinatario']
+};
+let _szbColsLogged=false;
+function logSzbCols(){
+  if(_szbColsLogged) return; const r=BASES.szb.rows && BASES.szb.rows[0]; if(!r) return;
+  _szbColsLogged=true;
+  try{
+    console.info('[Atlas/Agregados] Colunas presentes no SZB:', Object.keys(r));
+    console.info('[Atlas/Agregados] Amostra (1ª linha) dos campos-chave →', {
+      Filial:pick(r,SZB_ALIAS.filial), 'Numero CTRC':pick(r,SZB_ALIAS.ctrc), Serie:pick(r,SZB_ALIAS.serie),
+      'NF CLIENTE':pick(r,SZB_ALIAS.nfNum), 'Serie NF Cli':pick(r,SZB_ALIAS.nfSerie), 'Emis Nf Cli':pick(r,SZB_ALIAS.nfData),
+      Destinatario:pick(r,SZB_ALIAS.destCod)
+    });
+  }catch(_){}
+}
+
 /* ══ MOTOR: monta o fechamento de um mês (escopo atual) ══ */
 let _cache={};
 function buildMes(mes){
@@ -430,10 +456,11 @@ function buildMes(mes){
     const percShow = perc || esp;
     /* Base C Comis: quando o SZB não traz, deriva pela comissão ÷ percentual (Base = Comissão/Perc) */
     let base=toNum(r['Base C Comis']); if(!base && percShow) base=com/(percShow/100);
-    v.ctrcs.push({ filial:String(r['Filial']||'').trim(), ctrc:String(r['Numero CTRC']||'').trim(), serie:String(r['Serie']||'').trim()||'001',
+    let fil=String(pick(r,SZB_ALIAS.filial)||'').trim(); if(!fil) fil=normOpKey(r['Operacao'])||'';
+    v.ctrcs.push({ filial:fil, ctrc:String(pick(r,SZB_ALIAS.ctrc)||'').trim(), serie:String(pick(r,SZB_ALIAS.serie)||'').trim()||'001',
       op:opNum(r['Operacao']), data:String(r['Dt. Emissao']).slice(0,10),
-      nfData:atlasExcelDateToISO(r['Emis Nf Cli']), nfNum:String(r['NF CLIENTE']||'').trim(),
-      destCod:String(r['Destinatario']||'').trim(), dest:String(r['Nome Destina']||'').trim(), mun:String(r['Local Entreg']||'').trim(),
+      nfData:atlasExcelDateToISO(pick(r,SZB_ALIAS.nfData)), nfSerie:String(pick(r,SZB_ALIAS.nfSerie)||'').trim(), nfNum:String(pick(r,SZB_ALIAS.nfNum)||'').trim(),
+      destCod:String(pick(r,SZB_ALIAS.destCod)||'').trim(), dest:String(r['Nome Destina']||'').trim(), mun:String(r['Local Entreg']||'').trim(),
       peso:toNum(r['Peso Liquido']), total:tot, ped:ped, base:base, perc:perc, percShow:percShow, com:com, esp:esp,
       divg: perc && Math.abs(perc-esp)>0.01 });
     v.com+=com; v.fat+=tot; v.fatLiq+=base; v.percs.add(percShow);
@@ -699,7 +726,7 @@ function relatorioTrl(o, mes, repId, prevAg){
     const vPrev=prevAg ? prevAg.veiculos[p] : null;
     h+='<div class="vh">Veículo: '+p+'</div>';
     if(v.ctrcs.length){
-      h+='<table><thead><tr><th>Filial</th><th>CTRC/Serie</th><th>OP</th><th>Emissao</th><th>Nf Cli (Dt/Num)</th><th>Destinatario</th><th>Mun Descarga</th>'
+      h+='<table><thead><tr><th>Filial</th><th>CTRC/Serie</th><th>OP</th><th>Emissao</th><th>Nf Cli (Dt/Ser/Num)</th><th>Destinatario</th><th>Mun Descarga</th>'
         +'<th class="num">Peso</th><th class="num">Vol</th><th class="num">Total Servico</th><th class="num">Impostos</th><th class="num">Pedagio</th>'
         +'<th class="num">Base</th><th class="num">Perc</th><th class="num">Comissao</th></tr></thead><tbody>';
       let tw=0, timp=0, tped=0; const tpercs=new Set();
@@ -710,7 +737,7 @@ function relatorioTrl(o, mes, repId, prevAg){
         timp+=imp; tped+=c.ped; if(pc) tpercs.add(pc);
         h+='<tr data-row="ctrc" data-placa="'+esc(p)+'" data-ckey="'+esc(p+'|'+_normDesc(c.dest))+'" data-diabr="'+esc(diaBR(c.data))+'"'+(c.divg?' class="flag-pct" title="% fora da regra: cobrado '+num(c.perc)+'%, esperado '+num(c.esp)+'%"':'')+'>'
           +'<td>'+esc(c.filial)+'</td><td>'+esc(c.ctrc)+'/'+esc(c.serie)+'</td><td>'+esc(c.op)+'</td><td>'+diaBR(c.data)+'</td>'
-          +'<td>'+(c.nfData?diaBR(c.nfData)+' ':'')+esc(c.nfNum)+'</td>'
+          +'<td>'+[ c.nfData?diaBR(c.nfData):'', esc(c.nfSerie), esc(c.nfNum) ].filter(Boolean).join(' ')+'</td>'
           +'<td>'+esc(c.destCod)+' - '+esc(c.dest)+'</td><td>'+esc(c.mun)+'</td>'
           +'<td class="num">'+num0(c.peso)+'</td><td class="num">1</td>'
           +'<td class="num">'+num(c.total)+'</td><td class="num">'+num(imp)+'</td><td class="num">'+(c.ped?num(c.ped):'')+'</td>'
