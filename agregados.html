@@ -425,15 +425,18 @@ function buildMes(mes){
     const o=ag(r['Cod Propriet'], r['Nome Proprie']||r['Nome Motoris']);
     const v=veic(o, r['Placa Veicul']);
     const com=toNum(r['Comissao Mot']), tot=toNum(r['Valor Total']), perc=toNum(r['Perc Comissa']), ped=toNum(r['Vlr Pedagio']);
-    let base=toNum(r['Base C Comis']); if(!base && perc) base=com/(perc/100);
     const esp=pctEsperado(r['Nome Proprie'], sg, r['Descr Prod'], r['Nome Destina']);
+    /* percentual efetivo: usa o cobrado (SZB) e, na ausência dele, a regra → espelha o TrL010 */
+    const percShow = perc || esp;
+    /* Base C Comis: quando o SZB não traz, deriva pela comissão ÷ percentual (Base = Comissão/Perc) */
+    let base=toNum(r['Base C Comis']); if(!base && percShow) base=com/(percShow/100);
     v.ctrcs.push({ filial:String(r['Filial']||'').trim(), ctrc:String(r['Numero CTRC']||'').trim(), serie:String(r['Serie']||'').trim()||'001',
       op:opNum(r['Operacao']), data:String(r['Dt. Emissao']).slice(0,10),
       nfData:atlasExcelDateToISO(r['Emis Nf Cli']), nfNum:String(r['NF CLIENTE']||'').trim(),
       destCod:String(r['Destinatario']||'').trim(), dest:String(r['Nome Destina']||'').trim(), mun:String(r['Local Entreg']||'').trim(),
-      peso:toNum(r['Peso Liquido']), total:tot, ped:ped, base:base, perc:perc, com:com, esp:esp,
+      peso:toNum(r['Peso Liquido']), total:tot, ped:ped, base:base, perc:perc, percShow:percShow, com:com, esp:esp,
       divg: perc && Math.abs(perc-esp)>0.01 });
-    v.com+=com; v.fat+=tot; v.fatLiq+=base; v.percs.add(perc);
+    v.com+=com; v.fat+=tot; v.fatLiq+=base; v.percs.add(percShow);
     o.com+=com; o.fat+=tot; o.fatLiq+=base; o.ctrcs++;
   });
   if(BASES.szc.loaded) BASES.szc.rows.forEach(function(r){
@@ -699,20 +702,23 @@ function relatorioTrl(o, mes, repId, prevAg){
       h+='<table><thead><tr><th>Filial</th><th>CTRC/Serie</th><th>OP</th><th>Emissao</th><th>Nf Cli (Dt/Num)</th><th>Destinatario</th><th>Mun Descarga</th>'
         +'<th class="num">Peso</th><th class="num">Vol</th><th class="num">Total Servico</th><th class="num">Impostos</th><th class="num">Pedagio</th>'
         +'<th class="num">Base</th><th class="num">Perc</th><th class="num">Comissao</th></tr></thead><tbody>';
-      let tw=0;
+      let tw=0, timp=0, tped=0; const tpercs=new Set();
       v.ctrcs.forEach(function(c){
         tw+=c.peso;
+        const pc=c.percShow||c.perc;
         const imp=Math.max(0,c.total-c.base-c.ped);
+        timp+=imp; tped+=c.ped; if(pc) tpercs.add(pc);
         h+='<tr data-row="ctrc" data-placa="'+esc(p)+'" data-ckey="'+esc(p+'|'+_normDesc(c.dest))+'" data-diabr="'+esc(diaBR(c.data))+'"'+(c.divg?' class="flag-pct" title="% fora da regra: cobrado '+num(c.perc)+'%, esperado '+num(c.esp)+'%"':'')+'>'
           +'<td>'+esc(c.filial)+'</td><td>'+esc(c.ctrc)+'/'+esc(c.serie)+'</td><td>'+esc(c.op)+'</td><td>'+diaBR(c.data)+'</td>'
           +'<td>'+(c.nfData?diaBR(c.nfData)+' ':'')+esc(c.nfNum)+'</td>'
           +'<td>'+esc(c.destCod)+' - '+esc(c.dest)+'</td><td>'+esc(c.mun)+'</td>'
           +'<td class="num">'+num0(c.peso)+'</td><td class="num">1</td>'
           +'<td class="num">'+num(c.total)+'</td><td class="num">'+num(imp)+'</td><td class="num">'+(c.ped?num(c.ped):'')+'</td>'
-          +'<td class="num">'+num(c.base)+'</td><td class="num">'+num(c.perc)+(c.divg?' ⚠':'')+'</td><td class="num">'+num(c.com)+'</td></tr>';
+          +'<td class="num">'+num(c.base)+'</td><td class="num">'+num(pc)+(c.divg?' ⚠':'')+'</td><td class="num">'+num(c.com)+'</td></tr>';
       });
+      const tpc = tpercs.size===1 ? num(Array.from(tpercs)[0]) : '';
       h+='<tr class="tot"><td colspan="7">Total do veiculo:</td><td class="num">'+num0(tw)+'</td><td class="num">'+v.ctrcs.length+'</td>'
-        +'<td class="num">'+num(v.fat)+'</td><td></td><td></td><td class="num">'+num(v.fatLiq)+'</td><td></td><td class="num">'+num(v.com)+'</td></tr>'
+        +'<td class="num">'+num(v.fat)+'</td><td class="num">'+num(timp)+'</td><td class="num">'+(tped?num(tped):'')+'</td><td class="num">'+num(v.fatLiq)+'</td><td class="num">'+tpc+'</td><td class="num">'+num(v.com)+'</td></tr>'
         +'</tbody></table>';
     } else {
       h+='<div style="padding:4px 0;color:var(--mu)">Sem CTRCs no período — veículo somente com lançamentos.</div>';
