@@ -452,12 +452,24 @@ canvas{max-width:100%}
    PONTE FIRESTORE (mesmo contrato do manutencao.html / index.html)
    ══════════════════════════════════════════════════════════════════ */
 let ATLAS_CURRENT_USER = { email:'', uid:'', nome:'', perfil:'admin', filiais:[] };
+/* _userReady: resolve quando o portal entrega o usuário real (ATLAS_USER).
+   boot() aguarda esta promessa antes de montar os selects, garantindo escopo
+   correto já no primeiro paint (em vez de montar com o default 'admin'). */
+let _userReadyResolve; const _userReady = new Promise(r => { _userReadyResolve = r; });
+let _booted = false, _booting = false, _scopeBuiltReal = false;
 const _fsPending = {}; let _fsSeq = 0;
 
 function atlasHasParentBridge(){ return !!(window.parent && window.parent !== window); }
 window.addEventListener('message', ev => {
   const m = ev.data || {};
-  if (m.type === 'ATLAS_USER'){ ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...m }; applyPerm(); refreshAll(); }
+  if (m.type === 'ATLAS_USER'){
+    ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...m };
+    _userReadyResolve && _userReadyResolve();
+    applyPerm();
+    if (!_booted) { boot(); }                       // boot ainda não terminou (ou falhou) → (re)inicia
+    else if (!_scopeBuiltReal) { buildScopeSelects(true); refreshAll(); } // selects montados com default → reconstrói com escopo real
+    else { refreshAll(); }
+  }
   if ((m.type === 'ATLAS_DATA_RESPONSE' || m.type === 'ATLAS_DATA_READY')){
     const t = String(m.table||'').toLowerCase();
     const rows = (m.payload && m.payload.rows) || (m.rows) || null;
@@ -482,15 +494,27 @@ function atlasParent(action, payload={}, timeout=9000){
     window.parent.postMessage({type:'ATLAS_FIRESTORE_REQUEST',requestId,action,...payload},'*');
   });
 }
+/* Helper de retry para LEITURAS via ponte. Leituras são idempotentes, então
+   reexecutar em falha transitória (timeout/cold-start do Firestore) é seguro.
+   Isto elimina o "primeiro carregamento vem vazio, precisa recarregar". */
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
+async function _bridgeRead(action, payload, tries = 4){
+  let lastErr;
+  for (let i = 1; i <= tries; i++){
+    try { return await atlasParent(action, payload, 12000); }
+    catch(e){ lastErr = e; if (i < tries) await _sleep(350 * i); }
+  }
+  throw lastErr || new Error('Falha na ponte');
+}
 async function fsGetCollection(collection,opts={}){
-  if(atlasHasParentBridge()){ try{ const r=await atlasParent('getCollection',{collection,...opts}); return r.docs||[]; }catch(e){ console.warn('[Mapinha] getCollection '+collection+':', e.message); return []; } }
+  if(atlasHasParentBridge()){ try{ const r=await _bridgeRead('getCollection',{collection,...opts}); return r.docs||[]; }catch(e){ console.warn('[Mapinha] getCollection '+collection+':', e.message); return []; } }
   try{ const db=window._mapDB;
     if(db){ let ref=db.collection(collection); if(opts.orderBy)ref=ref.orderBy(opts.orderBy,opts.orderDir||'asc'); if(opts.limit)ref=ref.limit(+opts.limit);
       const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); } }catch(e){ console.warn('[Mapinha] getCollection direto '+collection+':', e.message); }
   return [];
 }
 async function fsGetDoc(collection,docId){
-  if(atlasHasParentBridge()){ try{ const r=await atlasParent('getDoc',{collection,docId}); return r.exists?{id:r.id,data:r.data||{}}:null; }catch(e){ console.warn('[Mapinha] getDoc '+collection+':', e.message); return null; } }
+  if(atlasHasParentBridge()){ try{ const r=await _bridgeRead('getDoc',{collection,docId}); return r.exists?{id:r.id,data:r.data||{}}:null; }catch(e){ console.warn('[Mapinha] getDoc '+collection+':', e.message); return null; } }
   try{ const db=window._mapDB; if(db){ const s=await db.collection(collection).doc(docId).get(); return s.exists?{id:s.id,data:s.data()}:null; } }catch(e){ console.warn('[Mapinha] getDoc direto '+collection+':', e.message); }
   return null;
 }
@@ -888,37 +912,71 @@ function tab(v){
 }
 
 async function boot(){
-  // cadastros
-  const [fil, cc] = await Promise.all([ fsGetCollection('filiais'), fsGetCollection('centros_custo') ]);
-  ST.filiais = fil.map(d=>({ id:d.id, sigla:upper(d.data.sigla||d.data.nome||d.id), nome:d.data.nome||d.id }))
-                  .sort((a,b)=>a.sigla.localeCompare(b.sigla));
-  ST.centrosCusto = cc.map(d=>({ codigo:d.data.codigo||d.id, nome:d.data.nome||'', grupo:(d.data.grupoDre||GRUPO_FALLBACK[d.data.codigo]||'CONTROLE') }))
-                      .filter(c=>/^\d{2}\.\d{2}$/.test(c.codigo))
-                      .sort((a,b)=>a.codigo.localeCompare(b.codigo));
-  ST.grupoMap = {}; ST.centrosCusto.forEach(c=>ST.grupoMap[c.codigo]=c.grupo);
+  if(_booting) return; _booting = true;
+  try {
+    // 1) Espera o usuário real do portal (até 1,5s) para montar o escopo certo já
+    //    no primeiro paint, em vez de usar o default 'admin'.
+    const hadUser = await Promise.race([
+      _userReady.then(()=>true),
+      _sleep(1500).then(()=>false)
+    ]);
 
-  // selects
+    // 2) Cadastros com retry. 'filiais' é obrigatório: sem ele a tela fica vazia.
+    //    Em falha transitória da nuvem, tenta de novo em vez de desistir calado.
+    let fil=[], cc=[];
+    for(let attempt=1; attempt<=4 && !fil.length; attempt++){
+      [fil, cc] = await Promise.all([ fsGetCollection('filiais'), fsGetCollection('centros_custo') ]);
+      if(!fil.length && attempt<4) await _sleep(400*attempt);
+    }
+    if(!fil.length){
+      // Nunca deixa a tela vazia: avisa e reprograma o boot.
+      toast('Sem conexão com os cadastros — tentando de novo…','am');
+      _booting = false; setTimeout(boot, 1500); return;
+    }
+
+    ST.filiais = fil.map(d=>({ id:d.id, sigla:upper(d.data.sigla||d.data.nome||d.id), nome:d.data.nome||d.id }))
+                    .sort((a,b)=>a.sigla.localeCompare(b.sigla));
+    ST.centrosCusto = cc.map(d=>({ codigo:d.data.codigo||d.id, nome:d.data.nome||'', grupo:(d.data.grupoDre||GRUPO_FALLBACK[d.data.codigo]||'CONTROLE') }))
+                        .filter(c=>/^\d{2}\.\d{2}$/.test(c.codigo))
+                        .sort((a,b)=>a.codigo.localeCompare(b.codigo));
+    ST.grupoMap = {}; ST.centrosCusto.forEach(c=>ST.grupoMap[c.codigo]=c.grupo);
+
+    populateMeses();
+    const cc2=document.getElementById('lcCC'); cc2.innerHTML='<option value="">Selecione…</option>';
+    ST.centrosCusto.forEach(c=> cc2.appendChild(new Option(c.codigo+' '+c.nome, c.codigo)) );
+
+    buildScopeSelects(hadUser);
+
+    ST.mesRef = document.getElementById('selMes').value;
+    document.getElementById('lcData').value = ST.mesRef+'-01';
+    applyPerm();
+    bindMoneyInputs();
+    _booted = true;
+    await refreshAll();
+  } finally {
+    _booting = false;
+  }
+}
+
+/* Monta os selects de filial respeitando o escopo do usuário, preservando a
+   seleção atual quando ainda válida. Idempotente: pode ser chamada de novo
+   quando o usuário real chega depois do boot (sem duplicar opções). */
+function buildScopeSelects(isReal){
   const sf=document.getElementById('selFilial'), cf=document.getElementById('consFilial');
+  const prev = sf.value;
   const perm = filiaisPermitidas();
   const filsOrd = ST.filiais.filter(f=>perm.includes(f.sigla))
                             .sort((a,b)=> _ordFilial(a.sigla)-_ordFilial(b.sigla) || a.sigla.localeCompare(b.sigla));
-  sf.innerHTML='';
+  sf.innerHTML=''; cf.innerHTML='';
   filsOrd.forEach(f=>{
     sf.appendChild(new Option(f.sigla, f.sigla));   // SIGLA apenas (padrão PD)
     cf.appendChild(new Option(f.sigla, f.sigla));
   });
   if(filsOrd.length>1) sf.appendChild(new Option('Todas','all'));   // consolidado — igual ao PD
-  populateMeses();
-  const cc2=document.getElementById('lcCC'); cc2.innerHTML='<option value="">Selecione…</option>';
-  ST.centrosCusto.forEach(c=> cc2.appendChild(new Option(c.codigo+' '+c.nome, c.codigo)) );
-
-  // escopo inicial
-  ST.filial = sf.value || (filsOrd[0]&&filsOrd[0].sigla) || '';
-  ST.mesRef = document.getElementById('selMes').value;
-  document.getElementById('lcData').value = ST.mesRef+'-01';
-  applyPerm();
-  bindMoneyInputs();
-  await refreshAll();
+  const valid = Array.from(sf.options).some(o=>o.value===prev);
+  sf.value = valid ? prev : ((filsOrd[0]&&filsOrd[0].sigla) || '');
+  ST.filial = sf.value;
+  if(isReal) _scopeBuiltReal = true;
 }
 
 function applyPerm(){
