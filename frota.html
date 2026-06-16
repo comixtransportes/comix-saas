@@ -3179,6 +3179,8 @@ function calcResumo() {
   function blank() {
     return {
       cavalos_op: 0, frota_op: 0, agregado_op: 0,
+      // EQUIPAMENTOS - TOTAL (operando + disponível + manutenção + reserva) por vínculo
+      equip_frota_total: 0, equip_agregado_total: 0,
       cavalos_disp: 0, cavalos_indisp: 0, cavalos_manut: 0,
       cavalos_em_reforma: 0, cavalos_a_reformar: 0, cavalos_indisponivel: 0,
       // Manutenção de cavalos (por vínculo) — apenas status=manutencao
@@ -3229,6 +3231,12 @@ function calcResumo() {
 
     // ── CAVALOS ──────────────────────────────────────────────────────────────
     if (v.categoria === "cavalo") {
+      // EQUIPAMENTOS - TOTAL: soma operando + disponível + manutenção + reserva por
+      // vínculo (frota/agregado). Exclui apenas indisponível / em reforma / a reformar.
+      if (unit && u[unit] && !["indisponivel","em_reforma","a_reformar"].includes(d)) {
+        if (v.vinculo === "AGREGADO") u[unit].equip_agregado_total++;
+        else u[unit].equip_frota_total++;
+      }
       if (d === "indisponivel") {
         if (unit && u[unit]) { u[unit].cavalos_indisp++; u[unit].cavalos_indisponivel++; }
       } else if (d === "em_reforma") {
@@ -3385,6 +3393,26 @@ function renderDashboard() {
   const totalGeralEquipSP = r.byUnit.SP.frota_op + r.byUnit.SP.agregado_op;
   const totalGeralEquip   = totalGeralEquipSC + totalGeralEquipPR + totalGeralEquipSP;
 
+  // EQUIPAMENTOS - TOTAL, E POR TIPO — soma de cavalos (operando+disponível+manutenção+reserva) por vínculo
+  const equipTotalRows = [
+    ["FROTA",    r.byUnit.SC.equip_frota_total,    r.byUnit.PR.equip_frota_total,    r.byUnit.SP.equip_frota_total,    r.total.equip_frota_total],
+    ["AGREGADO", r.byUnit.SC.equip_agregado_total, r.byUnit.PR.equip_agregado_total, r.byUnit.SP.equip_agregado_total, r.total.equip_agregado_total],
+  ];
+  const totEqTotSC = (r.byUnit.SC.equip_frota_total||0) + (r.byUnit.SC.equip_agregado_total||0);
+  const totEqTotPR = (r.byUnit.PR.equip_frota_total||0) + (r.byUnit.PR.equip_agregado_total||0);
+  const totEqTotSP = (r.byUnit.SP.equip_frota_total||0) + (r.byUnit.SP.equip_agregado_total||0);
+  const totEqTot   = totEqTotSC + totEqTotPR + totEqTotSP;
+
+  // Manutenção Cavalos Mecânicos — apenas status=manutencao, por vínculo
+  const manutCavRows = [
+    ["FROTA",    r.byUnit.SC.cavalos_manut_frota,    r.byUnit.PR.cavalos_manut_frota,    r.byUnit.SP.cavalos_manut_frota,    r.total.cavalos_manut_frota],
+    ["AGREGADO", r.byUnit.SC.cavalos_manut_agregado, r.byUnit.PR.cavalos_manut_agregado, r.byUnit.SP.cavalos_manut_agregado, r.total.cavalos_manut_agregado],
+  ];
+  const totManutCavSC = (r.byUnit.SC.cavalos_manut_frota||0) + (r.byUnit.SC.cavalos_manut_agregado||0);
+  const totManutCavPR = (r.byUnit.PR.cavalos_manut_frota||0) + (r.byUnit.PR.cavalos_manut_agregado||0);
+  const totManutCavSP = (r.byUnit.SP.cavalos_manut_frota||0) + (r.byUnit.SP.cavalos_manut_agregado||0);
+  const totManutCav   = totManutCavSC + totManutCavPR + totManutCavSP;
+
   const compRows = [
     ["OPERANDO",   r.byUnit.SC.compressores_op,      r.byUnit.PR.compressores_op,      r.byUnit.SP.compressores_op,      r.total.compressores_op],
     ["EM ESTOQUE", r.byUnit.SC.compressores_estoque, r.byUnit.PR.compressores_estoque, r.byUnit.SP.compressores_estoque, r.total.compressores_estoque],
@@ -3426,9 +3454,8 @@ function renderDashboard() {
   el.innerHTML = `
     <!-- PAINEL PRINCIPAL (estilo resumo_frota) -->
     <div class="dash-xl-grid">
-      ${xlTbl("EQUIPAMENTOS", "Cavalos mecânicos em operação por tipo e unidade", [
-        equipRows[0], equipRows[1]
-      ], ["Total Geral", totalGeralEquipSC, totalGeralEquipPR, totalGeralEquipSP, totalGeralEquip])}
+      ${xlTbl("EQUIPAMENTOS - TOTAL, E POR TIPO", "Total de cavalos mecânicos (operando, disponível, manutenção e reserva) por vínculo e unidade", equipTotalRows,
+        ["Total Geral", totEqTotSC, totEqTotPR, totEqTotSP, totEqTot])}
 
       ${xlTbl("COMPRESSORES", "Situação atual dos compressores: ativos, estoque e manutenção", compRows,
         ["Total Geral", totalCompSC, totalCompPR, totalCompSP, totalCompGeral])}
@@ -3438,48 +3465,13 @@ function renderDashboard() {
 
       ${xlTbl("CARRETAS DISPONÍVEIS", "Carretas sem alocação de cavalo, disponíveis para operação", dispRows,
         ["Total Geral", totalDispSC, totalDispPR, totalDispSP, totalDispGeral])}
-    </div>
 
-    <!-- Tabela Manutenção Cavalos Mecânicos — somente cavalos (categoria==="cavalo"), carretas excluídas -->
-    <div class="dash-section" style="margin-top:14px">
-      <div class="dash-section-header">🔧 Manutenção Cavalos Mecânicos</div>
-      <table class="xl-tbl" style="margin:0;border:none">
-        <colgroup>
-          <col style="width:40%">
-          <col style="width:15%;min-width:90px">
-          <col style="width:15%;min-width:90px">
-          <col style="width:15%;min-width:90px">
-          <col style="width:15%;min-width:90px">
-        </colgroup>
-        <thead>
-          <tr><th class="xl-th-titulo">CAVALO MECÂNICO</th><th>SANTA CATARINA</th><th>PARANÁ</th><th>SÃO PAULO</th><th>Total Geral</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>FROTA</td>
-            <td>${r.byUnit.SC.cavalos_manut_frota||''}</td>
-            <td>${r.byUnit.PR.cavalos_manut_frota||''}</td>
-            <td>${r.byUnit.SP.cavalos_manut_frota||''}</td>
-            <td>${(r.byUnit.SC.cavalos_manut_frota||0)+(r.byUnit.PR.cavalos_manut_frota||0)+(r.byUnit.SP.cavalos_manut_frota||0)||''}</td>
-          </tr>
-          <tr>
-            <td>AGREGADO</td>
-            <td>${r.byUnit.SC.cavalos_manut_agregado||''}</td>
-            <td>${r.byUnit.PR.cavalos_manut_agregado||''}</td>
-            <td>${r.byUnit.SP.cavalos_manut_agregado||''}</td>
-            <td>${(r.byUnit.SC.cavalos_manut_agregado||0)+(r.byUnit.PR.cavalos_manut_agregado||0)+(r.byUnit.SP.cavalos_manut_agregado||0)||''}</td>
-          </tr>
-        </tbody>
-        <tfoot>
-          <tr class="xl-total">
-            <td>Total Geral</td>
-            <td>${(r.byUnit.SC.cavalos_manut_frota||0)+(r.byUnit.SC.cavalos_manut_agregado||0)||''}</td>
-            <td>${(r.byUnit.PR.cavalos_manut_frota||0)+(r.byUnit.PR.cavalos_manut_agregado||0)||''}</td>
-            <td>${(r.byUnit.SP.cavalos_manut_frota||0)+(r.byUnit.SP.cavalos_manut_agregado||0)||''}</td>
-            <td>${(r.byUnit.SC.cavalos_manut_frota||0)+(r.byUnit.SC.cavalos_manut_agregado||0)+(r.byUnit.PR.cavalos_manut_frota||0)+(r.byUnit.PR.cavalos_manut_agregado||0)+(r.byUnit.SP.cavalos_manut_frota||0)+(r.byUnit.SP.cavalos_manut_agregado||0)||''}</td>
-          </tr>
-        </tfoot>
-      </table>
+      ${xlTbl("🔧 MANUTENÇÃO CAVALOS MECÂNICOS", "Cavalos mecânicos em manutenção por vínculo e unidade", manutCavRows,
+        ["Total Geral", totManutCavSC, totManutCavPR, totManutCavSP, totManutCav])}
+
+      ${xlTbl("EQUIPAMENTOS", "Cavalos mecânicos em operação por tipo e unidade", [
+        equipRows[0], equipRows[1]
+      ], ["Total Geral", totalGeralEquipSC, totalGeralEquipPR, totalGeralEquipSP, totalGeralEquip])}
     </div>
 
     <!-- KPIs (cards rápidos) -->
