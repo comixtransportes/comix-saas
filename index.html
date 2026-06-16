@@ -655,6 +655,10 @@ firebase.firestore().settings({
 const db   = firebase.firestore();
 
 let curUser = null, curPerfil = 'motorista', curNome = '', sbCol = false;
+/* authReady: resolve assim que o estado de auth é CONHECIDO (com ou sem usuário).
+   A ponte Firestore aguarda esta promessa antes de rejeitar pedidos dos iframes,
+   eliminando a corrida "iframe pede dados antes do login terminar de resolver". */
+let _authReadyResolve; const authReady = new Promise(r => { _authReadyResolve = r; });
 const frFlags = {};  // 'loading' | 'done'
 const pollers = {};
 
@@ -691,9 +695,12 @@ auth.onAuthStateChanged(async user => {
       curPerfil = doc ? (doc.perfil || doc.tipo || 'motorista') : 'motorista';
       curNome   = doc ? (doc.nome || doc.nome_completo || doc.nomeCompleto || doc.displayName || '') : '';
     } catch(e) { curPerfil = 'motorista'; }
+    _authReadyResolve && _authReadyResolve();
     showApp();
   } else {
-    curUser = null; curPerfil = 'usuario'; showLogin();
+    curUser = null; curPerfil = 'usuario';
+    _authReadyResolve && _authReadyResolve();
+    showLogin();
   }
 });
 
@@ -2058,6 +2065,11 @@ window.addEventListener('message', async function(ev) {
   };
   const allowed = new Set(['ordens_servico','checklists_diarios','parametros_sistema','alocacao_frota_status','alocacao_frota','cpk_parametros','cpk_km_rotas','cpk_lancamentos','cpk_metas','cpk_diagnostico','cpk_categorias_regras','veiculos','filiais','centros_custo','mapinha_lancamentos','mapinha_mensal','mapinha_premissas','mapinha_consolidado','mapinha_pedagios']);
   try {
+    if (!curUser) {
+      // Em vez de falhar na hora (corrida com o onAuthStateChanged), espera o
+      // auth resolver. Só rejeita se realmente não houver sessão.
+      await Promise.race([ authReady, new Promise(r => setTimeout(r, 5000)) ]);
+    }
     if (!curUser) throw new Error('Usuário não autenticado no portal.');
     if (!allowed.has(msg.collection)) throw new Error('Coleção não permitida pela ponte.');
     if (msg.action === 'getCollection') {
@@ -2097,6 +2109,22 @@ window.addEventListener('message', async function(ev) {
 /* ── MENSAGENS ENTRE MÓDULOS ── */
 window.addEventListener('message', function(ev) {
   if (!ev.data || typeof ev.data !== 'object') return;
+  // Iframe pede o usuário logado (ex.: mapinha no DOMContentLoaded).
+  // Responder na hora evita que o módulo monte a tela com escopo/permissão
+  // padrão e dependa do envio tardio (300ms) do frLoaded.
+  if (ev.data.type === 'ATLAS_REQUEST_USER') {
+    const src = ev.source;
+    const send = () => { try { src && src.postMessage({
+      type:'ATLAS_USER',
+      email: curUser?.email || '', uid: curUser?.uid || '',
+      perfil: curPerfil || 'motorista',
+      nome: curNome || curUser?.displayName || '',
+      scope: atlasPermissionContext(), permissoes: atlasPermissionContext()
+    }, '*'); } catch(_) {} };
+    if (curUser) send();
+    else authReady.then(() => { if (curUser) send(); });
+    return;
+  }
   // Quando permissões são atualizadas, recarregar
   if (ev.data.type === 'PERM_UPDATED') {
     if (ev.data.tipo === curPerfil || ev.data.tipo === 'ALL') {
