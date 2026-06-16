@@ -149,6 +149,17 @@ canvas{max-width:100%}
 .delta.up{color:var(--gn)}.delta.down{color:var(--rd)}.delta.flat{color:var(--mu)}
 .dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:1100px){.dash-grid{grid-template-columns:1fr}}
+/* ── Skeleton (carregamento) + indicador de revalidação (stale-while-revalidate) ── */
+.skel{display:inline-block;border-radius:6px;background:linear-gradient(90deg,rgba(0,0,0,.06),rgba(0,0,0,.13),rgba(0,0,0,.06));background-size:200% 100%;animation:skelMove 1.1s ease-in-out infinite}
+@keyframes skelMove{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.skel-line{height:12px;width:100%}
+.skel-line.w40{width:40%}.skel-line.w60{width:60%}.skel-line.w80{width:80%}.skel-line.tall{height:22px;margin-top:8px}
+td>.skel-line{vertical-align:middle}
+.skel-card{display:flex;flex-direction:column;gap:7px;justify-content:center}
+.fresh-pill{margin-left:8px;font-size:11px;font-weight:600;color:#8a6d00;background:#fff6da;border:1px solid #f0e0a8;border-radius:999px;padding:2px 9px;display:none;align-items:center;gap:6px;vertical-align:middle}
+.fresh-pill.on{display:inline-flex}
+.fresh-pill .dot{width:6px;height:6px;border-radius:50%;background:#e0a800;animation:freshPulse 1s infinite}
+@keyframes freshPulse{0%,100%{opacity:1}50%{opacity:.25}}
 </style>
 </head>
 <body>
@@ -164,6 +175,7 @@ canvas{max-width:100%}
     <select id="selMes" class="sel" onchange="onScopeChange()"></select>
     <select id="selFilial" class="sel" onchange="onScopeChange()"></select>
     <span id="statusPill" class="pill rascunho">—</span>
+    <span id="freshPill" class="fresh-pill"><span class="dot"></span><span id="freshTxt">atualizando…</span></span>
   </div>
 </div>
 
@@ -821,7 +833,7 @@ function pullReceitaSZB(force){
     document.getElementById('recDT').value   = d.diasTrab||'';
     ST.cabecalho.receita = { ...(ST.cabecalho.receita||{}),
       fatBruto:d.fatBruto, producaoT:d.producaoT, diasUteis:d.diasUteis, diasTrab:d.diasTrab, fonte:'szb' };
-    renderLancCards(); renderDre();
+    renderLancCards(); renderDre(); cacheCurrentScope();
   }
   fillSZBInfo(vazio?'vazio':'szb', d);
   if(force) toast(vazio?'SZB sem registros para esta filial/mês.':'Receita puxada do SZB.', vazio?'am':'gn');
@@ -893,6 +905,87 @@ const ST = {
   _byFilial:null                                   // bundles por filial quando escopo = Todas
 };
 
+/* ══════════════════════════════════════════════════════════════════
+   CACHE LOCAL + STALE-WHILE-REVALIDATE
+   O Firestore continua sendo a fonte da verdade. O cache local é só um
+   espelho rápido por navegador: pinta a última visão na hora e revalida
+   em segundo plano. Nunca grava de volta na nuvem a partir do cache.
+   ══════════════════════════════════════════════════════════════════ */
+const _clone = o => { try{ return structuredClone(o); }catch(_){ try{ return JSON.parse(JSON.stringify(o)); }catch(__){ return o; } } };
+const MapCache = (function(){
+  const NS = 'atlas.mapinha.v1';
+  const uid = ()=> (ATLAS_CURRENT_USER && ATLAS_CURRENT_USER.uid) || 'anon';
+  const k = (key, shared)=> NS+':'+(shared?'shared':uid())+':'+key;
+  return {
+    get(key, shared){ try{ const r=localStorage.getItem(k(key,shared)); return r?JSON.parse(r):null; }catch(_){ return null; } },
+    set(key, val, shared){
+      const full=k(key,shared);
+      try{ localStorage.setItem(full, JSON.stringify(val)); }
+      catch(_){
+        // Quota cheia: purga escopos antigos deste módulo (menos o atual) e tenta 1x.
+        try{
+          for(let i=localStorage.length-1;i>=0;i--){ const kk=localStorage.key(i);
+            if(kk && kk.startsWith(NS+':') && kk.indexOf(':scope:')>-1 && kk!==full) localStorage.removeItem(kk); }
+          localStorage.setItem(full, JSON.stringify(val));
+        }catch(__){ /* desiste: cache é descartável */ }
+      }
+    },
+    del(key, shared){ try{ localStorage.removeItem(k(key,shared)); }catch(_){} }
+  };
+})();
+
+function scopeKey(){ return (isConsolidado()?'ALL':ST.filial)+'|'+ST.mesRef; }
+
+/* Snapshot dos campos de ST que compõem a visão de um escopo (sem valores
+   derivados — esses são recalculados no render a partir da SZB em memória). */
+function snapshotScope(){
+  return {
+    v:1,
+    cabecalho:_clone(ST.cabecalho),
+    lancManuais:_clone(ST.lancManuais||[]),
+    lancOS:_clone(ST.lancOS||[]),
+    premissa:_clone(ST.premissa),
+    pedagio:_clone(ST.pedagio), pedagioMes:ST.pedagioMes,
+    byFilial: isConsolidado()? _clone(ST._byFilial) : null,
+    ts:Date.now()
+  };
+}
+function restoreScope(b){
+  if(!b) return;
+  ST.cabecalho   = _clone(b.cabecalho);
+  ST.lancManuais = _clone(b.lancManuais||[]);
+  ST.lancOS      = _clone(b.lancOS||[]);
+  ST.premissa    = _clone(b.premissa);
+  if(b.pedagioMes===ST.mesRef){ ST.pedagio=_clone(b.pedagio); ST.pedagioMes=b.pedagioMes; }
+  ST._byFilial   = b.byFilial? _clone(b.byFilial) : null;
+}
+/* Sequência única de render — usada tanto na pintura do cache quanto na revalidação. */
+function renderScope(){
+  renderStatus(); renderLancCards(); fillCabecalhoForm();
+  renderLancamentos(); renderDre(); fillPremissaForm(); renderPedagios();
+}
+function cacheCurrentScope(){
+  if(!ST.filial||!ST.mesRef||!ST.cabecalho) return;
+  try{ MapCache.set('scope:'+scopeKey(), snapshotScope()); }catch(_){}
+}
+
+/* ── Skeleton: placeholders enquanto não há nem cache nem dado ── */
+function _skelRows(n,cols){ let r=''; for(let i=0;i<n;i++){ r+='<tr>'; for(let c=0;c<cols;c++) r+='<td><span class="skel skel-line '+(c===0?'w60':'w80')+'"></span></td>'; r+='</tr>'; } return r; }
+function showScopeSkeleton(){
+  const cards=document.getElementById('lancCards');
+  if(cards) cards.innerHTML = Array(4).fill('<div class="card skel-card"><span class="skel skel-line w40"></span><span class="skel skel-line w80 tall"></span></div>').join('');
+  const dre=document.getElementById('dreTbody'); if(dre) dre.innerHTML=_skelRows(9,5);
+  const lanc=document.getElementById('lancTbody'); if(lanc) lanc.innerHTML=_skelRows(4,8);
+}
+/* ── Indicador "atualizando…" (stale → live) ── */
+function setFreshness(state){
+  const pill=document.getElementById('freshPill'); const txt=document.getElementById('freshTxt');
+  if(!pill) return;
+  if(state==='stale'){ if(txt) txt.textContent='atualizando…'; pill.classList.add('on'); }
+  else if(state==='loading'){ pill.classList.remove('on'); }   // skeleton já comunica
+  else { pill.classList.remove('on'); }                        // 'live' / 'error'
+}
+
 function isAdminOuLR(){ const p=(ATLAS_CURRENT_USER.perfil||'').toLowerCase(); return /admin|^lr$|gestor/.test(p); }
 function filiaisPermitidas(){
   if(isAdminOuLR()) return ST.filiais.map(f=>f.sigla);
@@ -921,29 +1014,26 @@ async function boot(){
       _sleep(1500).then(()=>false)
     ]);
 
-    // 2) Cadastros com retry. 'filiais' é obrigatório: sem ele a tela fica vazia.
-    //    Em falha transitória da nuvem, tenta de novo em vez de desistir calado.
-    let fil=[], cc=[];
-    for(let attempt=1; attempt<=4 && !fil.length; attempt++){
-      [fil, cc] = await Promise.all([ fsGetCollection('filiais'), fsGetCollection('centros_custo') ]);
-      if(!fil.length && attempt<4) await _sleep(400*attempt);
+    // 2) Cadastros — stale-while-revalidate: usa o cache local na hora (selects
+    //    instantâneos) e revalida na nuvem em segundo plano. Só faz a busca
+    //    bloqueante (com retry) quando NÃO há cache. 'filiais' é obrigatório.
+    let fil=[], cc=[], usouCacheCad=false;
+    const cad = MapCache.get('cad', true);
+    if(cad && Array.isArray(cad.fil) && cad.fil.length){
+      fil = cad.fil; cc = cad.cc||[]; usouCacheCad = true;
+    } else {
+      for(let attempt=1; attempt<=4 && !fil.length; attempt++){
+        [fil, cc] = await Promise.all([ fsGetCollection('filiais'), fsGetCollection('centros_custo') ]);
+        if(!fil.length && attempt<4) await _sleep(400*attempt);
+      }
+      if(!fil.length){
+        // Nunca deixa a tela vazia: avisa e reprograma o boot.
+        toast('Sem conexão com os cadastros — tentando de novo…','am');
+        _booting = false; setTimeout(boot, 1500); return;
+      }
+      MapCache.set('cad', { fil, cc, ts:Date.now() }, true);
     }
-    if(!fil.length){
-      // Nunca deixa a tela vazia: avisa e reprograma o boot.
-      toast('Sem conexão com os cadastros — tentando de novo…','am');
-      _booting = false; setTimeout(boot, 1500); return;
-    }
-
-    ST.filiais = fil.map(d=>({ id:d.id, sigla:upper(d.data.sigla||d.data.nome||d.id), nome:d.data.nome||d.id }))
-                    .sort((a,b)=>a.sigla.localeCompare(b.sigla));
-    ST.centrosCusto = cc.map(d=>({ codigo:d.data.codigo||d.id, nome:d.data.nome||'', grupo:(d.data.grupoDre||GRUPO_FALLBACK[d.data.codigo]||'CONTROLE') }))
-                        .filter(c=>/^\d{2}\.\d{2}$/.test(c.codigo))
-                        .sort((a,b)=>a.codigo.localeCompare(b.codigo));
-    ST.grupoMap = {}; ST.centrosCusto.forEach(c=>ST.grupoMap[c.codigo]=c.grupo);
-
-    populateMeses();
-    const cc2=document.getElementById('lcCC'); cc2.innerHTML='<option value="">Selecione…</option>';
-    ST.centrosCusto.forEach(c=> cc2.appendChild(new Option(c.codigo+' '+c.nome, c.codigo)) );
+    applyCadastros(fil, cc);
 
     buildScopeSelects(hadUser);
 
@@ -953,9 +1043,48 @@ async function boot(){
     bindMoneyInputs();
     _booted = true;
     await refreshAll();
+
+    // Se os selects vieram do cache, confere os cadastros frescos sem travar a tela.
+    if(usouCacheCad) revalidarCadastros();
   } finally {
     _booting = false;
   }
+}
+
+/* Aplica os cadastros (filiais/centros) ao estado e aos selects dependentes.
+   Recebe os docs crus (mesmo formato do fsGetCollection), então serve igual
+   para cache e para dado fresco. */
+let _cadSig = '';
+function _sigCad(fil, cc){
+  return JSON.stringify([
+    fil.map(d=>[d.id, d.data&&(d.data.sigla||d.data.nome)||d.id]).sort(),
+    cc.map(d=>[(d.data&&d.data.codigo)||d.id, (d.data&&d.data.nome)||'', (d.data&&d.data.grupoDre)||'']).sort()
+  ]);
+}
+function applyCadastros(fil, cc){
+  ST.filiais = fil.map(d=>({ id:d.id, sigla:upper(d.data.sigla||d.data.nome||d.id), nome:d.data.nome||d.id }))
+                  .sort((a,b)=>a.sigla.localeCompare(b.sigla));
+  ST.centrosCusto = cc.map(d=>({ codigo:d.data.codigo||d.id, nome:d.data.nome||'', grupo:(d.data.grupoDre||GRUPO_FALLBACK[d.data.codigo]||'CONTROLE') }))
+                      .filter(c=>/^\d{2}\.\d{2}$/.test(c.codigo))
+                      .sort((a,b)=>a.codigo.localeCompare(b.codigo));
+  ST.grupoMap = {}; ST.centrosCusto.forEach(c=>ST.grupoMap[c.codigo]=c.grupo);
+  populateMeses();
+  const cc2=document.getElementById('lcCC'); cc2.innerHTML='<option value="">Selecione…</option>';
+  ST.centrosCusto.forEach(c=> cc2.appendChild(new Option(c.codigo+' '+c.nome, c.codigo)) );
+  _cadSig = _sigCad(fil, cc);
+}
+
+/* Revalidação de cadastros em segundo plano: só refaz selects/refresh se mudou. */
+async function revalidarCadastros(){
+  try{
+    const [fil, cc] = await Promise.all([ fsGetCollection('filiais'), fsGetCollection('centros_custo') ]);
+    if(!fil.length) return;
+    MapCache.set('cad', { fil, cc, ts:Date.now() }, true);
+    if(_sigCad(fil, cc) === _cadSig) return;   // nada mudou
+    applyCadastros(fil, cc);
+    buildScopeSelects(_scopeBuiltReal);
+    await refreshAll();
+  }catch(_){}
 }
 
 /* Monta os selects de filial respeitando o escopo do usuário, preservando a
@@ -991,16 +1120,46 @@ async function onScopeChange(){
 
 async function refreshAll(){
   if(!ST.filial||!ST.mesRef) return;
-  if(isConsolidado()){
-    await loadConsolidadoScope();
-    renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm(); renderPedagios();
+  const key = scopeKey();
+  const token = (refreshAll._t = (refreshAll._t||0)+1);
+
+  // 1) Pintura instantânea pelo cache local (stale-while-revalidate).
+  //    ensureSZB lê a base da memória do portal (síncrono quando já pré-carregada),
+  //    então o DRE já sai completo na maioria dos casos.
+  const cached = MapCache.get('scope:'+key);
+  if(cached){
+    restoreScope(cached);
     ensureSZB(); ensureAgregadoBases();
+    renderScope();
+    setFreshness('stale');
+  } else {
+    showScopeSkeleton();
+    setFreshness('loading');
+  }
+
+  // 2) Revalidação real em segundo plano.
+  try{
+    if(isConsolidado()){
+      await loadConsolidadoScope();
+    } else {
+      ST._byFilial=null;
+      await Promise.all([ loadCabecalho(), loadLancManuais(), loadLancOS(), loadPremissa(), loadPedagios() ]);
+    }
+  }catch(e){
+    if(token!==refreshAll._t) return;          // já há um escopo mais novo
+    setFreshness('live');                        // encerra o "atualizando…"
+    if(!cached){ showScopeSkeleton(); toast('Falha ao carregar — verifique a conexão.','am'); }
+    console.warn('[Mapinha] refreshAll:', e&&e.message);
     return;
   }
-  ST._byFilial=null;
-  await Promise.all([ loadCabecalho(), loadLancManuais(), loadLancOS(), loadPremissa(), loadPedagios() ]);
-  renderStatus(); renderLancCards(); fillCabecalhoForm(); renderLancamentos(); renderDre(); fillPremissaForm(); renderPedagios();
-  ensureSZB(); ensureAgregadoBases(); pullReceitaSZB(false);
+
+  if(token!==refreshAll._t) return;            // o usuário trocou de escopo no meio — descarta resultado antigo
+
+  renderScope();
+  cacheCurrentScope();                         // grava a visão fresca para a próxima abertura
+  setFreshness('live');
+  ensureSZB(); ensureAgregadoBases();
+  if(!isConsolidado()) pullReceitaSZB(false);
 }
 
 /* ── Carga consolidada (escopo = Todas) ──
@@ -1135,7 +1294,7 @@ async function saveCabecalho(){
   ST.cabecalho.atualizadoEm=new Date().toISOString();
   ST.cabecalho.atualizadoPor=userMin();
   await fsSetDoc('mapinha_mensal', mapId(), ST.cabecalho, {merge:true});
-  toast('Receita/impostos salvos.','gn'); renderLancCards(); renderDre();
+  toast('Receita/impostos salvos.','gn'); renderLancCards(); renderDre(); cacheCurrentScope();
 }
 function userMin(){ return { uid:ATLAS_CURRENT_USER.uid||'', email:ATLAS_CURRENT_USER.email||'', nome:ATLAS_CURRENT_USER.nome||'' }; }
 
@@ -1168,13 +1327,13 @@ async function addLancamento(){
   await fsSetDoc('mapinha_lancamentos', docId, payload);
   toast('Lançamento adicionado.','gn');
   ['lcForn','lcNF','lcPlaca','lcValor'].forEach(id=>document.getElementById(id).value='');
-  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre();
+  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre(); cacheCurrentScope();
 }
 async function estornarLanc(id){
   if(!podeEditar()) return toast('Mapinha bloqueado.','am');
   if(!confirm('Estornar este lançamento? (mantém histórico, não exclui)')) return;
   await fsSetDoc('mapinha_lancamentos', id, { status:'estornado', estornadoEm:new Date().toISOString(), estornadoPor:userMin() }, {merge:true});
-  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre(); toast('Lançamento estornado.','am');
+  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre(); cacheCurrentScope(); toast('Lançamento estornado.','am');
 }
 
 /* ── Derivar custos de OS concluídas (ao vivo) ──
