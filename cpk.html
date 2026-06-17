@@ -343,7 +343,7 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 
     <!-- ══════════ VISÃO GERAL ══════════ -->
     <div class="cpk-pane on" id="pane-vg">
-      <div class="cpk-info">⛽ <span>CPK da <strong>frota própria</strong>. Custo total vem do <strong>DRE (Mapinha)</strong>, somente componentes de frota (diesel, manutenção, pedágio, pessoal e equipamento) — agregados excluídos. KM por placa vem da aba <strong>Dados</strong> (importação real); sem importação, deriva de SZB×SZY. Receita = CTRC de frota própria no <strong>SZB</strong>. <b>CPK = Custo Total ÷ KM Total.</b></span></div>
+      <div class="cpk-info">⛽ <span>CPK da <strong>frota própria</strong>. Custo total vem dos <strong>lançamentos do Mapinha</strong> nos centros de custo autorizados para a frota; 09.01 e 20.01 entram por 82%. KM por placa vem da aba <strong>Dados</strong> (importação real); sem importação, deriva de SZB×SZY. Receita = CTRC de frota própria no <strong>SZB</strong>. <b>CPK = Custo Total ÷ KM Total.</b></span></div>
 
       <div class="cpk-cards" id="vg-cards"></div>
 
@@ -370,7 +370,7 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 
     <!-- ══════════ FROTA ══════════ -->
     <div class="cpk-pane" id="pane-frota">
-      <div class="cpk-info">🚛 <span>Análise agrupada por <strong>tipo / classificação</strong> dos veículos da frota própria. Custo rateado por KM sobre o custo total da frota (DRE).</span></div>
+      <div class="cpk-info">🚛 <span>Análise agrupada por <strong>tipo / classificação</strong> dos veículos da frota própria. Custos com placa permanecem na placa; valores sem placa são divididos igualmente entre as placas do escopo.</span></div>
       <div class="cpk-cards" id="frota-cards"></div>
       <div class="cpk-charts">
         <div class="chart-box"><div class="ct"><span>KM por tipo de veículo</span></div><canvas id="ch-frota-km"></canvas></div>
@@ -425,7 +425,7 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 
     <!-- ══════════ PLACAS ══════════ -->
     <div class="cpk-pane" id="pane-placas">
-      <div class="cpk-info">🔢 <span>CPK individual por placa (frota própria). KM por placa via aba <strong>Dados</strong> (importação) ou derivado de SZB×SZY. Receita via SZB. Custo rateado por KM sobre o custo total da frota.</span></div>
+      <div class="cpk-info">🔢 <span>CPK individual por placa (frota própria). KM por placa via aba <strong>Dados</strong> (importação) ou derivado de SZB×SZY. Receita via SZB. Custos com placa permanecem na placa; valores sem placa são divididos igualmente.</span></div>
       <div class="cpk-cards" id="placas-cards"></div>
       <div class="cpk-tw">
         <div class="cpk-th3">
@@ -541,10 +541,10 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 /* ════════════════════════════════════════════════════════════════════
    COMIX ATLAS — CPK · Custo por KM (FROTA)
    Versão 1 — escopo: somente veículos classificados como FROTA própria.
-   Custo total = DRE da tela Mapinha (espelho de cálculo).
+   Custo total = lançamentos do Mapinha nos centros autorizados (100% ou 82%).
    KM por placa  = importação na aba Dados (complementada por SZB×SZY).
    Receita       = SZB (Controle de Frete).
-   CPK = Custo Total ÷ KM Total. Custo rateado por KM nas quebras.
+   CPK = Custo Total ÷ KM Total. Custos sem placa são divididos igualmente.
    ════════════════════════════════════════════════════════════════════ */
 
 // ── ESTADO GLOBAL ──────────────────────────────────────────────────
@@ -561,8 +561,8 @@ const CPK = {
 
   // custo (espelho Mapinha) — cache por mês
   custoMes:null, custoFilial:{}, custoLoaded:false, custoRaw:null,
-  apontaCO:{}, apontaPed:{},         // {filial:{placa:valor}} apontados do DRE (manutenção/pedágio)
-  cobertura:null,                    // {diesel,co,pedagio:{apontado,dre,pct}} por escopo
+  apontaCustos:{diesel:{},co:{},cp:{},ce:{}}, // {balde:{filial:{placa:valor}}} dos lançamentos elegíveis
+  cobertura:null,                    // cobertura dos custos apontados diretamente por placa
 
   // KM importado (aba Dados) — por mês
   kmImportMes:null, kmImport:{}, kmImportMeta:null, kmImportLoaded:false,
@@ -597,11 +597,32 @@ const CPK_KM_DOC = mes => 'KM_'+mes;
 // ── CONSTANTES DO DRE (espelho exato do mapinha.html) ──────────────
 const FILIAIS_PADRAO = ['SC','PR','SP'];
 const OPCODE_SIGLA = { '17':'SC','18':'PR','03':'SP' };
-// Diesel da FROTA própria (exclui agregado 02.02/04.02). 22.01 = reembolso (abate).
-const DIESEL_FROTA_DEB = new Set(['01.01','02.01','04.01']);
-const DIESEL_CREDITO   = new Set(['22.01']);
-// Custo Operacional do AGREGADO (peças/serviços/lub do agregado) — fora do custo de frota.
-const CO_AGREGADO = new Set(['10.01','11.01','12.01']);
+// Centros de custo que compõem o custo da FROTA no CPK.
+// Regra: códigos abaixo entram por 100%; 09.01 e 20.01 entram por 82%.
+const CPK_CC_FROTA_100 = new Set([
+  '01.01','02.01','03.01','04.01','05.01','06.01','07.01','08.01',
+  '13.01','14.01','15.01','18.01','19.01','23.01','24.01'
+]);
+const CPK_CC_FROTA_82 = new Set(['09.01','20.01']);
+function cpkFatorCentroCusto(codigo){
+  const cod=String(codigo||'').trim();
+  if(CPK_CC_FROTA_100.has(cod))return 1;
+  if(CPK_CC_FROTA_82.has(cod))return 0.82;
+  return 0;
+}
+function cpkBaldeCentroCusto(codigo){
+  const cod=String(codigo||'').trim();
+  if(['01.01','02.01','04.01'].includes(cod))return'diesel';
+  if(['13.01','14.01','15.01'].includes(cod))return'cp';
+  if(cod==='18.01')return'ce';
+  return'co';
+}
+function cpkPlacaLancamento(reg){
+  if(!reg)return'';
+  const cand = reg.placa ?? reg.Placa ?? reg.veiculo ?? reg.Veiculo ?? reg.placaVeiculo ?? reg.placa_veiculo ?? reg['Placa Veículo'] ?? reg['Placa Veiculo'] ?? '';
+  if(cand && typeof cand==='object') return cpkNormPlaca(cand.placa||cand.codigo||cand.valor||'');
+  return cpkNormPlaca(cand);
+}
 // Mapa código centro de custo → grupo DRE (fallback se cadastro não trouxer grupoDre)
 const GRUPO_FALLBACK = {
   '01.01':'DIESEL','02.01':'DIESEL','02.02':'DIESEL','04.01':'DIESEL','04.02':'DIESEL','22.01':'DIESEL','21.01':'CONTROLE',
@@ -871,29 +892,28 @@ function cpkUnidadePlaca(placa, opSZB, frotaSZB){
 async function cpkLoadCusto(mes){
   if(CPK.custoLoaded && CPK.custoMes===mes) return;
   CPK.custoMes=mes; CPK.custoFilial={}; CPK.custoLoaded=false;
+  CPK.apontaCustos={diesel:{},co:{},cp:{},ce:{}};
   cpkLoaderMsg('Carregando custos do DRE (Mapinha)…');
 
-  // leituras únicas (paralelas)
-  const [mensal, lanc, prem, oss, ped, cc] = await Promise.all([
+  // Leituras únicas (paralelas). O custo do CPK vem somente dos lançamentos/OS
+  // nos centros autorizados pela regra de frota.
+  const [mensal, lanc, oss, cc] = await Promise.all([
     cpkFsGet('mapinha_mensal'),
     cpkFsGet('mapinha_lancamentos'),
-    cpkFsGet('mapinha_premissas'),
     cpkFsGet('ordens_servico'),
-    cpkFsGetDoc('mapinha_pedagios','PED_'+mes),
     (CPK.centrosCusto.length?Promise.resolve(null):cpkFsGet('centros_custo'))
   ]);
 
-  // mapa centro de custo → grupo DRE
+  // mapa centro de custo → grupo DRE (mantido para compatibilidade com o cadastro)
   if(cc){ CPK.centrosCusto=cc.map(d=>({codigo:d.data.codigo||d.id,nome:d.data.nome||'',grupo:(d.data.grupoDre||GRUPO_FALLBACK[d.data.codigo]||'CONTROLE')})); CPK.grupoMap={}; CPK.centrosCusto.forEach(c=>CPK.grupoMap[c.codigo]=c.grupo); }
-  const grupoDe = codigo => CPK.grupoMap[codigo] || GRUPO_FALLBACK[codigo] || 'CONTROLE';
 
   // pré-indexa por filial
   const mensalByFil={}; (mensal||[]).forEach(d=>{ const v=d.data||{}; if(v.mesRef===mes && v.filial) mensalByFil[v.filial]=v; });
   const lancByFil={};   (lanc||[]).forEach(d=>{ const l=d.data||{}; if(l.mesRef===mes && l.status!=='estornado'){ (lancByFil[l.filial]=lancByFil[l.filial]||[]).push(l); } });
 
-  // OS concluídas do mês → custo de manutenção (mesma regra do mapinha)
-  // + apontamento por placa (manutenção é de um veículo específico)
-  const osByFil={}; const apontaCO={};
+  // OS concluídas do mês continuam sendo consideradas como lançamentos de custo,
+  // sempre obedecendo ao centro de custo e ao apontamento da placa.
+  const osByFil={};
   (oss||[]).forEach(d=>{
     const o=d.data||{}; if(!/conclu/i.test(o.status||''))return;
     const fil=String(o.unidade||o.filial||'').toUpperCase();
@@ -901,70 +921,45 @@ async function cpkLoadCusto(mes){
     if(mr!==mes)return;
     const sig = OPCODE_SIGLA[String(o.operacao||'').trim()] || (FILIAIS_PADRAO.includes(fil)?fil:'');
     const filR = FILIAIS_PADRAO.includes(fil)?fil:sig; if(!filR)return;
-    const cod=o.centroCusto||'06.01';
-    const grp=grupoDe(cod);
+    const cod=String(o.centroCusto||'06.01').trim();
     const notas=Array.isArray(o.notas)&&o.notas.length?o.notas:null;
-    const valor = notas? notas.reduce((s,n)=>s+(+n.valor||0),0) : (+o.valorTotal||0);
-    (osByFil[filR]=osByFil[filR]||[]).push({centroCusto:cod,grupoDre:grp,valor});
-    // apontamento por placa só p/ OS que caem no grupo CO (manutenção operacional)
-    if(grp==='CO'){
-      const pl=cpkNormPlaca(o.placa||o.veiculo||'');
-      if(pl){ (apontaCO[filR]=apontaCO[filR]||{}); apontaCO[filR][pl]=(apontaCO[filR][pl]||0)+valor; }
-    }
+    const valor = notas? notas.reduce((sum,n)=>sum+(+n.valor||0),0) : (+o.valorTotal||0);
+    (osByFil[filR]=osByFil[filR]||[]).push({centroCusto:cod,valor,placa:cpkPlacaLancamento(o)});
   });
-  CPK.apontaCO=apontaCO;
-
-  // premissas: última vigência ≤ mês por filial
-  const premByFil={};
-  (prem||[]).forEach(d=>{ const p=d.data||{}; if(!p.filial||!p.vigencia||p.vigencia>mes)return; const cur=premByFil[p.filial]; if(!cur||p.vigencia>cur.vigencia)premByFil[p.filial]=p; });
-
-  // PEDÁGIO — SOMENTE frota própria (o porFilial do Mapinha soma a fatura inteira,
-  // incluindo agregado; aqui filtramos placa a placa pelo cadastro para não vazar agregado).
-  const apontaPed={}, pedFrotaFil={};
-  ((ped&&ped.data&&ped.data.placas)||[]).forEach(r=>{
-    const pl=cpkNormPlaca(r.placa||''); if(!pl)return;            // "sem placa" (rateado p/ SC) → fora
-    const vv=cpkVeic(pl); if(!vv||vv.vinculo!=='proprio')return;  // exclui agregado/indefinido/não cadastrada
-    const filRaw=String(r.filial||'').toUpperCase();
-    const filR=FILIAIS_PADRAO.includes(filRaw)?filRaw:(OPCODE_SIGLA[filRaw]||vv.unidade||'');
-    if(!FILIAIS_PADRAO.includes(filR))return;
-    const v=+(r.comix!=null?r.comix:((+r.cobrado||0)+(+r.valeComix||0)))||0;
-    if(!v)return;
-    (apontaPed[filR]=apontaPed[filR]||{}); apontaPed[filR][pl]=(apontaPed[filR][pl]||0)+v;
-    pedFrotaFil[filR]=(pedFrotaFil[filR]||0)+v;
-  });
-  CPK.apontaPed=apontaPed;
 
   for(const fil of FILIAIS_PADRAO){
-    const ls=lancByFil[fil]||[], os=osByFil[fil]||[];
-    let dieselDeb=0, dieselCred=0, co=0, coAgreg=0;
-    const acc=(cod,grp,v)=>{
-      if(DIESEL_FROTA_DEB.has(cod)) dieselDeb+=v;
-      else if(DIESEL_CREDITO.has(cod)) dieselCred+=Math.abs(v);
-      if(grp==='CO'){ co+=v; if(CO_AGREGADO.has(cod)) coAgreg+=v; }
+    const totais={diesel:0,co:0,cp:0,ce:0,pedagio:0};
+    const apontados={diesel:{},co:{},cp:{},ce:{}};
+
+    const acumular=(reg,codRaw,valorRaw)=>{
+      const cod=String(codRaw||'').trim();
+      const fator=cpkFatorCentroCusto(cod);
+      if(!fator)return; // qualquer centro fora da lista não entra no CPK
+      const valor=(+valorRaw||0)*fator;
+      if(!valor)return;
+      const balde=cpkBaldeCentroCusto(cod);
+      totais[balde]+=valor;
+      const placa=cpkPlacaLancamento(reg);
+      if(placa) apontados[balde][placa]=(apontados[balde][placa]||0)+valor;
     };
-    ls.forEach(l=> acc(String(l.centroCusto||''), l.grupoDre||grupoDe(l.centroCusto), +l.valor||0));
-    os.forEach(o=> acc(String(o.centroCusto||''), o.grupoDre, +o.valor||0));
 
-    const diesel = dieselDeb - dieselCred;
-    const coFrota = co - coAgreg;
+    (lancByFil[fil]||[]).forEach(l=>acumular(l,l.centroCusto,l.valor));
+    (osByFil[fil]||[]).forEach(o=>acumular(o,o.centroCusto,o.valor));
 
-    // Custo de Pessoal (realizado do fechamento) e Custo de Equipamento (CE)
-    const p=premByFil[fil]||{};
-    const cp = (+p.cpFolhaReal||0)+(+p.cpEpiReal||0)+(+p.cpLegalReal||0)+(+p.cpOutrosReal||0);
-    let ce=0; (Array.isArray(p.frota)?p.frota:[]).forEach(f=> ce += (+f.qtd||0)*(+f.valorCE||0) );
+    for(const balde of ['diesel','co','cp','ce']){
+      CPK.apontaCustos[balde][fil]=apontados[balde];
+    }
 
-    const pedagio = +(pedFrotaFil[fil]||0);                 // frota própria apenas
-
-    const receita = +(((mensalByFil[fil]||{}).receita||{}).fatBruto||0); // total do Mapinha (ref.)
-    const total = diesel + coFrota + cp + ce + pedagio;
-
-    CPK.custoFilial[fil]={ diesel, co:coFrota, cp, ce, pedagio, total, receita,
-      flags:{ cpZero:cp===0, premissa:!!premByFil[fil], pedagio:pedagio>0, receita:receita>0 } };
+    const receita = +(((mensalByFil[fil]||{}).receita||{}).fatBruto||0); // referência do Mapinha
+    const total = totais.diesel + totais.co + totais.cp + totais.ce;
+    CPK.custoFilial[fil]={...totais,total,receita,
+      flags:{ receita:receita>0, possuiCusto:total!==0 } };
   }
-  CPK.custoRaw={mensalByFil,premByFil,pedFrotaFil};
+  CPK.custoRaw={mensalByFil,lancByFil,osByFil};
   CPK.custoLoaded=true;
-  cpkLog('Custo DRE carregado p/', mes, CPK.custoFilial);
+  cpkLog('Custo CPK carregado p/', mes, CPK.custoFilial);
 }
+
 function cpkPoolScope(){
   const fils=cpkScopeFiliais(); const acc={diesel:0,co:0,cp:0,ce:0,pedagio:0,total:0,receita:0};
   fils.forEach(f=>{ const c=CPK.custoFilial[f]; if(c){ for(const k in acc) acc[k]+=(+c[k]||0); } });
@@ -1132,71 +1127,88 @@ function cpkCalculate(){
 
   CPK.totalKm=totalKm;
   CPK.cpkRate = totalKm>0 ? CPK.pool/totalKm : null;   // taxa média da frota (headline VG)
-  const rate=CPK.cpkRate;
+  let rate=CPK.cpkRate;
 
   // ───────────────────────────────────────────────────────────────────
-  // 4b) CASCATA DE APONTAMENTO POR PLACA  (DRE = verdade do total)
-  //     Custo da placa = apontado (diesel/SZC, manut/OS, pedágio/PED)
-  //                    + resíduo rateado por KM + CP igualitário + CE por KM
-  //     Σ por balde sempre reconcilia ao total do DRE no escopo.
+  // 4b) APONTAMENTO POR PLACA
+  //     - lançamento com placa: permanece integralmente na placa;
+  //     - lançamento sem placa: saldo dividido igualmente entre as placas do escopo;
+  //     - centros 09.01 e 20.01 já chegam aqui limitados a 82%.
   // ───────────────────────────────────────────────────────────────────
-  const inScope = pl => !!aggP[pl];
-  // diesel+ARLA apontado por placa (SZC, mês+escopo) — mesmo bucket "combustível" do DRE
-  const dieselApont={}; let arlaApont=0, dieselPuroApont=0;
-  (CPK.szc||[]).forEach(s=>{
-    if(s.mes!==mes)return;
-    const uni = OPCODE_SIGLA[s.op] || (FILIAIS_PADRAO.includes(s.op)?s.op:'');
-    if(scope.size){ if(!uni||!scope.has(uni))return; }
-    if(s.placa && inScope(s.placa)){
-      dieselApont[s.placa]=(dieselApont[s.placa]||0)+s.valor;
-      if(s.tipo==='arla') arlaApont+=s.valor; else dieselPuroApont+=s.valor;
+  const apontScope={diesel:{},co:{},cp:{},ce:{}};
+  cpkScopeFiliais().forEach(fil=>{
+    for(const balde of ['diesel','co','cp','ce']){
+      const src=(((CPK.apontaCustos||{})[balde]||{})[fil])||{};
+      for(const pl in src) apontScope[balde][pl]=(apontScope[balde][pl]||0)+(+src[pl]||0);
     }
   });
-  // manutenção (CO) apontada por placa (OS) e pedágio apontado por placa (PED) — somando filiais do escopo
-  const coApont={}, pedApont={};
-  cpkScopeFiliais().forEach(fil=>{
-    const co=CPK.apontaCO[fil]||{}; for(const pl in co){ if(inScope(pl)) coApont[pl]=(coApont[pl]||0)+co[pl]; }
-    const pd=CPK.apontaPed[fil]||{}; for(const pl in pd){ if(inScope(pl)) pedApont[pl]=(pedApont[pl]||0)+pd[pl]; }
-  });
 
-  // reconcilia um balde ao total do DRE: normaliza se transacional exceder; senão resíduo→rateio KM
+  // Uma placa com custo direto precisa permanecer individualizada mesmo sem CTRC/KM.
+  for(const balde of ['diesel','co','cp','ce']){
+    for(const placa in apontScope[balde]){
+      if(aggP[placa])continue;
+      const v=cpkVeic(placa);
+      if(!v||v.vinculo!=='proprio')continue;
+      if(scope.size&&v.unidade&&!scope.has(v.unidade))continue;
+      const imp=CPK.kmImport[placa];
+      const km=imp&&imp.km>0?imp.km:0;
+      aggP[placa]={ placa, frota:v.frota, motorista:v.motorista, unidade:v.unidade, tipo:v.tipo,
+        viagens:0, faturamento:0, km_szb:0, km_total:km, fonte_km:km>0?'importado':'pendente',
+        clientes:{}, rotas:{}, semReceita:true, somenteCusto:true };
+      if(km>0) totalKm+=km;
+    }
+  }
+
+  // Como placas de custo podem ter sido adicionadas, atualiza os totais de referência.
+  CPK.totalKm=totalKm;
+  CPK.cpkRate = totalKm>0 ? CPK.pool/totalKm : null;
+  rate=CPK.cpkRate;
+
+  const inScope = pl => !!aggP[pl];
+  function somentePlacasEscopo(mapa){
+    const out={};
+    for(const pl in mapa){ if(inScope(pl))out[pl]=(out[pl]||0)+(+mapa[pl]||0); }
+    return out;
+  }
+
+  // Reconcilia cada balde ao total calculado pelos centros autorizados.
+  // Se o apontamento superar o total, normaliza proporcionalmente para preservar o DRE.
   function cpkReconcilia(apontMap, dreTotal){
-    let A=0; for(const k in apontMap)A+=apontMap[k];
+    let A=0; for(const k in apontMap)A+=(+apontMap[k]||0);
     if(!(dreTotal>0)) return {placed:{}, residuo:Math.max(0,dreTotal), A:0, pct:0, excedeu:false};
     if(A<=0)          return {placed:{}, residuo:dreTotal, A:0, pct:0, excedeu:false};
     if(A<=dreTotal)   return {placed:apontMap, residuo:dreTotal-A, A, pct:A/dreTotal, excedeu:false};
     const f=dreTotal/A, placed={}; for(const k in apontMap)placed[k]=apontMap[k]*f;
     return {placed, residuo:0, A:dreTotal, pct:1, excedeu:true};
   }
-  const recDiesel=cpkReconcilia(dieselApont, pool.diesel);
-  const recCO    =cpkReconcilia(coApont,     pool.co);
-  const recPed   =cpkReconcilia(pedApont,    pool.pedagio);
+  const recDiesel=cpkReconcilia(somentePlacasEscopo(apontScope.diesel), pool.diesel);
+  const recCO    =cpkReconcilia(somentePlacasEscopo(apontScope.co),     pool.co);
+  const recCP    =cpkReconcilia(somentePlacasEscopo(apontScope.cp),     pool.cp);
+  const recCE    =cpkReconcilia(somentePlacasEscopo(apontScope.ce),     pool.ce);
 
-  // CP (pessoal) → igualitário entre placas ATIVAS (com KM ou viagem); cavalo parado não carrega folha
-  const ativas=Object.values(aggP).filter(p=>p.km_total>0||p.viagens>0);
-  const cpEach = ativas.length? pool.cp/ativas.length : 0;
-  const ativaSet=new Set(ativas.map(p=>p.placa));
+  const placasRateio=Object.values(aggP);
+  const qtdRateio=placasRateio.length;
+  const igual = qtdRateio?1/qtdRateio:0;
 
-  // cobertura do escopo (para transparência na tela)
-  const apontTotal=recDiesel.A+recCO.A+recPed.A;
+  const apontTotal=recDiesel.A+recCO.A+recCP.A+recCE.A;
   CPK.cobertura={
-    diesel:{apontado:recDiesel.A, dre:pool.diesel, pct:recDiesel.pct, excedeu:recDiesel.excedeu,
-            arla:arlaApont, dieselPuro:dieselPuroApont},
-    co:{apontado:recCO.A, dre:pool.co, pct:recCO.pct, excedeu:recCO.excedeu},
-    pedagio:{apontado:recPed.A, dre:pool.pedagio, pct:recPed.pct, excedeu:recPed.excedeu},
+    diesel:{apontado:recDiesel.A,dre:pool.diesel,pct:recDiesel.pct,excedeu:recDiesel.excedeu,arla:0,dieselPuro:0},
+    co:{apontado:recCO.A,dre:pool.co,pct:recCO.pct,excedeu:recCO.excedeu},
+    cp:{apontado:recCP.A,dre:pool.cp,pct:recCP.pct,excedeu:recCP.excedeu},
+    ce:{apontado:recCE.A,dre:pool.ce,pct:recCE.pct,excedeu:recCE.excedeu},
+    pedagio:{apontado:0,dre:0,pct:0,excedeu:false},
     medidoPct: pool.total>0? apontTotal/pool.total : 0,
-    apontadoTotal:apontTotal, dreTotal:pool.total
+    apontadoTotal:apontTotal, dreTotal:pool.total,
+    qtdRateio
   };
 
-  const kmShare = km => totalKm>0? km/totalKm : 0;
   function cpkCustoPlaca(pa){
-    const sh=kmShare(pa.km_total);
-    const diesel = (recDiesel.placed[pa.placa]||0) + recDiesel.residuo*sh;
-    const co     = (recCO.placed[pa.placa]||0)     + recCO.residuo*sh;
-    const ped    = (recPed.placed[pa.placa]||0)    + recPed.residuo*sh;
-    const cp     = ativaSet.has(pa.placa)? cpEach : 0;
-    const ce     = pool.ce*sh;
-    return { diesel, co, ped, cp, ce, total:diesel+co+ped+cp+ce };
+    const diesel = (recDiesel.placed[pa.placa]||0) + recDiesel.residuo*igual;
+    const co     = (recCO.placed[pa.placa]||0)     + recCO.residuo*igual;
+    const cp     = (recCP.placed[pa.placa]||0)     + recCP.residuo*igual;
+    const ce     = (recCE.placed[pa.placa]||0)     + recCE.residuo*igual;
+    const ped=0;
+    return { diesel, co, ped, cp, ce, total:diesel+co+cp+ce };
   }
 
   // 5) métricas por placa (custo medido + resíduo rateado)
@@ -1431,15 +1443,11 @@ function cpkRenderAlertas(){
   const d=CPK.diag||{}, cov=CPK.cobertura, out=[];
   if(d.semCusto) out.push(['err','Custo total da frota = 0 no DRE deste mês. Verifique se o Mapinha está fechado/preenchido para o período e filial selecionados.']);
   const pool=CPK.poolBreak||{};
-  // cobertura medida por balde (transparência da cascata)
+  // cobertura medida por placa e regra de rateio dos lançamentos sem placa
   if(cov && !d.semCusto){
     const pc=v=>cpkFmtPct(v*100,0);
-    out.push(['ok',`Cascata de apontamento: <b>${pc(cov.medidoPct)}</b> do custo é medido por placa — combustível (diesel + ARLA) <b>${pc(cov.diesel.pct)}</b> (SZC), manutenção <b>${pc(cov.co.pct)}</b> (OS), pedágio <b>${pc(cov.pedagio.pct)}</b> (PED). O restante (pessoal, equipamento e resíduos) é rateado por KM e <b>reconciliado ao total do DRE</b>.`]);
-    if(cov.diesel.arla>0) out.push(['ok',`Do combustível apontado, ${cpkFmt(cov.diesel.arla)} é ARLA (${cpkFmtPct(cov.diesel.dre>0?cov.diesel.arla/cov.diesel.dre*100:0,0)} do bucket) — agora atribuído à placa que abasteceu, não mais rateado.`]);
-    if(cov.diesel.pct<0.6 && pool.diesel>0) out.push(['nd',`Cobertura de combustível por placa em ${pc(cov.diesel.pct)} — provável abastecimento sem placa (depósito centralizado, típico de SC). Esse valor cai no resíduo rateado; o total continua fiel ao DRE, mas a distribuição por placa fica menos precisa nessa fatia.`]);
-    if(cov.diesel.excedeu) out.push(['nd','Combustível apontado na SZC excedeu o lançado no DRE — apontamento normalizado ao DRE (timing de competência / estoque, ou ARLA em centro de custo distinto). Total preservado; vale conferir onde o ARLA é lançado no Protheus.']);
+    out.push(['ok',`Dos custos elegíveis, <b>${pc(cov.medidoPct)}</b> estão apontados diretamente por placa. O saldo sem placa foi dividido <b>igualmente entre ${cov.qtdRateio||0} placa(s)</b>. Os centros 09.01 e 20.01 entram no cálculo por <b>82%</b>; os demais centros autorizados, por 100%.`]);
   }
-  if(!d.semCusto && pool.cp===0) out.push(['nd','Custo de Pessoal (CP) zerado no DRE. O CPK pode estar subestimado — confirme o fechamento de pessoal no Mapinha.']);
   if(d.semKm&&d.semKm.length) out.push(['nd',`${d.semKm.length} placa(s) com receita mas sem KM (nem importado, nem via SZY). Importe os KM na aba Dados para um CPK fiel. Ex.: ${d.semKm.slice(0,6).join(', ')}${d.semKm.length>6?'…':''}`]);
   if(d.semCadastro&&d.semCadastro.length) out.push(['nd',`${d.semCadastro.length} placa(s) rodando sem cadastro em Cadastros: ${d.semCadastro.slice(0,6).join(', ')}${d.semCadastro.length>6?'…':''}. Tratadas pela classificação do SZB.`]);
   if(d.indefinidas&&d.indefinidas.length) out.push(['nd',`${d.indefinidas.length} placa(s) com vínculo indefinido foram ignoradas (não classificadas como Frota nem Agregado).`]);
