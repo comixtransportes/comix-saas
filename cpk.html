@@ -343,7 +343,7 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 
     <!-- ══════════ VISÃO GERAL ══════════ -->
     <div class="cpk-pane on" id="pane-vg">
-      <div class="cpk-info">⛽ <span>CPK da <strong>frota própria</strong>. Custo total vem do <strong>DRE (Mapinha)</strong>; KM por placa vem da aba <strong>Dados</strong> (importação) complementada pelas rotas <strong>SZY</strong>; receita vem do <strong>SZB</strong>. <b>CPK = Custo Total ÷ KM Total.</b></span></div>
+      <div class="cpk-info">⛽ <span>CPK da <strong>frota própria</strong>. Custo total vem do <strong>DRE (Mapinha)</strong>, somente componentes de frota (diesel, manutenção, pedágio, pessoal e equipamento) — agregados excluídos. KM por placa vem da aba <strong>Dados</strong> (importação real); sem importação, deriva de SZB×SZY. Receita = CTRC de frota própria no <strong>SZB</strong>. <b>CPK = Custo Total ÷ KM Total.</b></span></div>
 
       <div class="cpk-cards" id="vg-cards"></div>
 
@@ -918,17 +918,19 @@ async function cpkLoadCusto(mes){
   const premByFil={};
   (prem||[]).forEach(d=>{ const p=d.data||{}; if(!p.filial||!p.vigencia||p.vigencia>mes)return; const cur=premByFil[p.filial]; if(!cur||p.vigencia>cur.vigencia)premByFil[p.filial]=p; });
 
-  // pedágio por filial (porFilial[sigla].comix) — predominantemente frota
-  const pedFil = (ped&&ped.data&&ped.data.porFilial)||{};
-  // pedágio APONTADO por placa (PED.placas[] → {placa,filial,comix})
-  const apontaPed={};
+  // PEDÁGIO — SOMENTE frota própria (o porFilial do Mapinha soma a fatura inteira,
+  // incluindo agregado; aqui filtramos placa a placa pelo cadastro para não vazar agregado).
+  const apontaPed={}, pedFrotaFil={};
   ((ped&&ped.data&&ped.data.placas)||[]).forEach(r=>{
-    const pl=cpkNormPlaca(r.placa||''); if(!pl)return;
-    const fil=String(r.filial||'').toUpperCase();
-    const filR=FILIAIS_PADRAO.includes(fil)?fil:(OPCODE_SIGLA[fil]||fil); if(!FILIAIS_PADRAO.includes(filR))return;
+    const pl=cpkNormPlaca(r.placa||''); if(!pl)return;            // "sem placa" (rateado p/ SC) → fora
+    const vv=cpkVeic(pl); if(!vv||vv.vinculo!=='proprio')return;  // exclui agregado/indefinido/não cadastrada
+    const filRaw=String(r.filial||'').toUpperCase();
+    const filR=FILIAIS_PADRAO.includes(filRaw)?filRaw:(OPCODE_SIGLA[filRaw]||vv.unidade||'');
+    if(!FILIAIS_PADRAO.includes(filR))return;
     const v=+(r.comix!=null?r.comix:((+r.cobrado||0)+(+r.valeComix||0)))||0;
     if(!v)return;
     (apontaPed[filR]=apontaPed[filR]||{}); apontaPed[filR][pl]=(apontaPed[filR][pl]||0)+v;
+    pedFrotaFil[filR]=(pedFrotaFil[filR]||0)+v;
   });
   CPK.apontaPed=apontaPed;
 
@@ -951,15 +953,15 @@ async function cpkLoadCusto(mes){
     const cp = (+p.cpFolhaReal||0)+(+p.cpEpiReal||0)+(+p.cpLegalReal||0)+(+p.cpOutrosReal||0);
     let ce=0; (Array.isArray(p.frota)?p.frota:[]).forEach(f=> ce += (+f.qtd||0)*(+f.valorCE||0) );
 
-    const pedagio = +((pedFil[fil]||{}).comix||0);
+    const pedagio = +(pedFrotaFil[fil]||0);                 // frota própria apenas
 
-    const receita = +(((mensalByFil[fil]||{}).receita||{}).fatBruto||0);
+    const receita = +(((mensalByFil[fil]||{}).receita||{}).fatBruto||0); // total do Mapinha (ref.)
     const total = diesel + coFrota + cp + ce + pedagio;
 
     CPK.custoFilial[fil]={ diesel, co:coFrota, cp, ce, pedagio, total, receita,
-      flags:{ cpZero:cp===0, premissa:!!premByFil[fil], pedagio:!!pedFil[fil], receita:receita>0 } };
+      flags:{ cpZero:cp===0, premissa:!!premByFil[fil], pedagio:pedagio>0, receita:receita>0 } };
   }
-  CPK.custoRaw={mensalByFil,premByFil,pedFil};
+  CPK.custoRaw={mensalByFil,premByFil,pedFrotaFil};
   CPK.custoLoaded=true;
   cpkLog('Custo DRE carregado p/', mes, CPK.custoFilial);
 }
@@ -1047,7 +1049,7 @@ function cpkCalculate(){
 
   // 1) pool de custo da frota (DRE) no escopo
   const pool=cpkPoolScope();
-  CPK.pool=pool.total; CPK.poolBreak=pool; CPK.receitaTotal=pool.receita;
+  CPK.pool=pool.total; CPK.poolBreak=pool; CPK.receitaMapinha=pool.receita; CPK.receitaTotal=pool.receita;
   CPK.diag.semCusto = !(pool.total>0);
 
   if(!CPK.szb){ CPK.cpkRate=null; return; }
@@ -1106,12 +1108,14 @@ function cpkCalculate(){
     if(rota)pa.rotas[rota]=(pa.rotas[rota]||0)+1;
   }
 
-  // 4) KM por placa: importado (preferencial) → SZB×SZY (fallback)
+  // 4) KM por placa: se há importação no mês, ela é a fonte AUTORITATIVA (= aba Dados).
+  //    Sem importação, cai no derivado SZB×SZY. Placa com receita e sem KM importado fica flagada.
+  const temImport = Object.keys(CPK.kmImport).length>0;
   let totalKm=0;
   Object.values(aggP).forEach(pa=>{
     const imp=CPK.kmImport[pa.placa];
     if(imp&&imp.km>0){ pa.km_total=imp.km; pa.fonte_km='importado'; }
-    else if(pa.km_szb>0){ pa.km_total=pa.km_szb; pa.fonte_km='szy'; }
+    else if(!temImport && pa.km_szb>0){ pa.km_total=pa.km_szb; pa.fonte_km='szy'; }
     else { pa.km_total=0; pa.fonte_km='pendente'; CPK.diag.semKm.push(pa.placa); }
     totalKm+=pa.km_total;
   });
@@ -1220,6 +1224,9 @@ function cpkCalculate(){
   placas.forEach(p=>{ p.var_media = (p.margem_km!=null&&mgMedia!=null&&mgMedia!==0)? (p.margem_km-mgMedia)/Math.abs(mgMedia)*100 : null; });
   CPK.margemMediaKm=mgMedia;
   CPK.aggPlaca=placas;
+  // RECEITA da FROTA = soma dos CTRC de frota própria no SZB (exclui agregado).
+  // O fatBruto do Mapinha é o total da filial (frota+agregado) e fica só como referência.
+  CPK.receitaTotal = placas.reduce((s,p)=>s+(+p.faturamento||0),0);
 
   // 6) ROTAS — custo = Σ viagens (km × taxa efetiva da placa da viagem)
   const aggR={};
@@ -1377,7 +1384,7 @@ function cpkRenderVG(){
     cpkCard('CPK da Frota', rate!=null?cpkFmt(rate)+'<span style="font-size:10px;color:var(--mu)"> /km</span>':'—',
             km>0?cpkFmtKm(km)+' rodados':'Sem KM no mês','pu','⛽') +
     cpkCard('Custo Total (DRE)', cpkFmt(CPK.pool||0), cpkMesLabel(CPK.filtros.mes), CPK.pool>0?'':'rd','💰') +
-    cpkCard('KM Total', cpkFmtKm(km), CPK.aggPlaca.length+' placas','cy','📏') +
+    cpkCard('KM Total', cpkFmtKm(km), (CPK.aggPlaca.filter(p=>p.km_total>0).length)+'/'+CPK.aggPlaca.length+' placas c/ KM','cy','📏') +
     cpkCard('Receita', cpkFmt(rec), recKm!=null?cpkFmt(recKm)+'/km':'—','','📈') +
     cpkCard('Margem', cpkFmt(margem), margKm!=null?cpkFmt(margKm)+'/km':'—', margem>=0?'gn':'rd', margem>=0?'✓':'⚠') +
     cpkCard('Margem %', margemPct!=null?cpkFmtPct(margemPct):'—', 'Receita − Custo', margemPct!=null&&margemPct<0?'rd':margemPct>=0?'gn':'', '%') +
