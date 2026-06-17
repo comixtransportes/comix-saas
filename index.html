@@ -23,7 +23,7 @@
   --pu:#6d28d9;--pu-bg:#ede9fe;--pu-bd:#c4b5fd;
   --cy:#0e7490;--cy-bg:#ecfeff;--cy-bd:#a5f3fc;
   --hd:#1e2d45;--ht:#e8edf5;
-  --sb-w:220px;--sb-wc:52px;--top-h:40px;
+  --sb-w:240px;--sb-wc:64px;--top-h:40px;
   --f:'IBM Plex Sans',sans-serif;--m:'IBM Plex Mono',monospace;
   --shd:0 1px 3px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.06);
   --shd-l:0 8px 40px rgba(0,0,0,.14);
@@ -55,52 +55,73 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 .lc-ok.on{display:block}
 
 /* ══ SHELL ══ */
-#scr-app{display:flex;height:100vh;width:100vw;overflow:hidden}
+#scr-app{display:flex;height:100vh;width:100vw;overflow:hidden;position:relative}
 #scr-app.off{display:none}
 
-/* ── SIDEBAR ── */
-.sb{width:var(--sb-w);background:#1E324F;border-right:1px solid #17293f;display:flex;flex-direction:column;flex-shrink:0;transition:width .22s ease;overflow:hidden;position:relative;z-index:100}
-.sb.col{width:var(--sb-wc)}
+/* ── SIDEBAR ──
+   Arquitetura: um SPACER ocupa a largura no layout (rail 64px ou fixa 240px).
+   A sidebar real é absolute e FLUTUA por cima do conteúdo ao expandir no hover
+   (peek), evitando reflow do iframe a cada passada do mouse. */
+.sb-spacer{flex-shrink:0;width:var(--sb-wc);transition:width .2s ease}
+#scr-app.sb-pinned .sb-spacer{width:var(--sb-w)}
+
+.sb{position:absolute;left:0;top:0;bottom:0;width:var(--sb-wc);background:#1E324F;border-right:1px solid #17293f;display:flex;flex-direction:column;overflow:hidden;z-index:100;transition:width .2s ease,box-shadow .2s ease}
+#scr-app.sb-pinned .sb{width:var(--sb-w)}            /* fixada: encosta no spacer, sem sombra */
+.sb.peek{width:var(--sb-w);box-shadow:var(--shd-l);z-index:150}  /* hover: overlay flutuante */
+
+/* Brand / header */
 .sb-brand{height:var(--top-h);display:flex;align-items:center;gap:9px;padding:0 12px;border-bottom:1px solid #2C4363;flex-shrink:0}
-.sb-mark{width:24px;height:24px;border-radius:5px;background:#152236;color:#63A8FF;font-family:var(--m);font-size:9px;font-weight:600;display:flex;align-items:center;justify-content:center;flex-shrink:0;letter-spacing:.3px;border:1px solid #2C4363}
-.sb-btext{overflow:hidden;white-space:nowrap;transition:opacity .18s,width .22s}
-.sb.col .sb-btext{opacity:0;width:0}
-.sb-btext strong{display:block;font-size:12px;font-weight:700;color:#DDEBFF;line-height:1.2;letter-spacing:.2px}
-.sb-tog{position:absolute;bottom:52px;right:8px;width:24px;height:24px;border-radius:var(--rs);border:1px solid #2C4363;background:#152236;color:#89A4C7;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:12px;transition:background .15s}
-.sb-tog:hover{background:#2C4363;color:#DDEBFF}
-.sb-nav{flex:1;overflow-y:auto;overflow-x:hidden;padding:6px 6px}
+.sb:not(.expanded) .sb-brand{padding:0;justify-content:center}
+.sb-mark{width:30px;height:30px;border-radius:7px;background:#152236;color:#63A8FF;font-family:var(--m);font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;flex-shrink:0;letter-spacing:.3px;border:1px solid #2C4363}
+.sb-btext{flex:1;overflow:hidden;white-space:nowrap;transition:opacity .15s,width .2s}
+.sb:not(.expanded) .sb-btext{opacity:0;width:0}
+.sb-btext strong{display:block;font-size:13px;font-weight:700;color:#DDEBFF;line-height:1.2;letter-spacing:.2px}
+
+/* Botão FIXAR (estilo Gobrax: circular) */
+.sb-pin{width:26px;height:26px;border-radius:50%;border:1px solid #2C4363;background:#152236;color:#89A4C7;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;padding:0;transition:background .15s,color .15s,border-color .15s,opacity .15s}
+.sb-pin svg{width:15px;height:15px}
+.sb-pin:hover{background:#2C4363;color:#DDEBFF}
+#scr-app.sb-pinned .sb-pin{background:#2B5DA8;border-color:#63A8FF;color:#fff}
+.sb:not(.expanded) .sb-pin{opacity:0;width:0;pointer-events:none;border:none}
+
+.sb-nav{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px}
 .sb-nav::-webkit-scrollbar{width:2px}
 .sb-nav::-webkit-scrollbar-thumb{background:#2C4363;border-radius:2px}
 /* Section labels */
-.nav-lbl{font-size:10px;font-weight:700;color:#7090BD;letter-spacing:1.2px;text-transform:uppercase;padding:12px 8px 4px;white-space:nowrap;overflow:hidden;transition:opacity .18s}
-.sb.col .nav-lbl{opacity:0;padding-top:6px}
+.nav-lbl{font-size:10px;font-weight:700;color:#7090BD;letter-spacing:1.2px;text-transform:uppercase;padding:12px 8px 4px;white-space:nowrap;overflow:hidden;transition:opacity .15s,height .15s,padding .15s}
+.sb:not(.expanded) .nav-lbl{opacity:0;height:8px;padding:4px 0 0}
 /* Items */
-.nav-item{height:46px;display:flex;align-items:center;gap:12px;padding:8px 10px;border-radius:8px;cursor:pointer;color:#DDEBFF;border:none;background:none;width:100%;text-align:left;transition:background .2s ease,color .2s ease,border-left .2s ease;margin-bottom:2px;white-space:nowrap;border-left:3px solid transparent}
+.nav-item{height:48px;display:flex;align-items:center;gap:14px;padding:8px 12px;border-radius:8px;cursor:pointer;color:#DDEBFF;border:none;background:none;width:100%;text-align:left;transition:background .2s ease,color .2s ease;margin-bottom:2px;white-space:nowrap;border-left:3px solid transparent}
+.sb:not(.expanded) .nav-item{justify-content:center;gap:0;padding:8px}
 .nav-item:hover{background:#233d5c;color:#FFFFFF}
 .nav-item.on{background:#2B5DA8;color:#FFFFFF;border-left:3px solid #63A8FF}
+.sb:not(.expanded) .nav-item.on{border-left-color:transparent}
 .nav-item.on .ni-ico{color:#FFFFFF}
 .nav-item.on .ni-text small{color:#C3D6F0}
-.ni-ico{width:19px;height:19px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#7EA6D9;transition:color .2s}
+.ni-ico{width:24px;height:24px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#7EA6D9;transition:color .2s}
+.ni-ico svg{width:23px;height:23px}
 .nav-item:hover .ni-ico{color:#FFFFFF}
-.ni-text{flex:1;overflow:hidden;transition:opacity .18s,width .22s}
-.sb.col .ni-text{opacity:0;width:0}
-.ni-text strong{display:block;font-size:13.5px;font-weight:500;color:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1}
-.ni-text small{display:block;font-size:10.5px;font-weight:400;color:#89A4C7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1}
-.ni-bdg{font-size:8px;font-weight:700;padding:2px 5px;border-radius:8px;letter-spacing:.3px;flex-shrink:0;transition:opacity .18s}
-.sb.col .ni-bdg{opacity:0}
+.ni-text{flex:1;overflow:hidden;transition:opacity .15s,width .2s}
+.sb:not(.expanded) .ni-text{opacity:0;width:0}
+.ni-text strong{display:block;font-size:13.5px;font-weight:500;color:inherit;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.15}
+.ni-text small{display:block;font-size:10.5px;font-weight:400;color:#89A4C7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.15}
+.ni-bdg{font-size:8px;font-weight:700;padding:2px 5px;border-radius:8px;letter-spacing:.3px;flex-shrink:0;transition:opacity .15s}
+.sb:not(.expanded) .ni-bdg{opacity:0;width:0;padding:0}
 .ni-bdg.am{background:rgba(180,83,9,.2);color:#f59e0b}
 .ni-bdg.gn{background:rgba(5,122,85,.2);color:#34d399}
 .ni-bdg.pu{background:rgba(109,40,217,.2);color:#a78bfa}
-.sb-div{height:1px;background:#2C4363;margin:6px 10px}
-.sb-user{padding:8px 10px;border-top:1px solid #2C4363;flex-shrink:0;display:flex;align-items:center;gap:7px;overflow:hidden}
-.sb-av{width:26px;height:26px;border-radius:50%;background:#152236;color:#63A8FF;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid #2C4363}
-.sb-uinfo{flex:1;overflow:hidden;transition:opacity .18s,width .22s}
-.sb.col .sb-uinfo{opacity:0;width:0}
-.sb-uemail{font-size:10px;color:#DDEBFF;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.sb-urole{font-size:9px;color:#4a6280;font-family:var(--m);white-space:nowrap}
-.sb-out{width:22px;height:22px;border-radius:var(--rs);border:1px solid #2C4363;background:none;color:#5a7a9a;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:background .15s,color .15s}
+.sb-div{height:1px;background:#2C4363;margin:6px 10px;transition:margin .15s}
+.sb:not(.expanded) .sb-div{margin:6px 12px}
+.sb-user{padding:8px 12px;border-top:1px solid #2C4363;flex-shrink:0;display:flex;align-items:center;gap:9px;overflow:hidden}
+.sb:not(.expanded) .sb-user{justify-content:center;padding:8px}
+.sb-av{width:30px;height:30px;border-radius:50%;background:#152236;color:#63A8FF;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid #2C4363}
+.sb-uinfo{flex:1;overflow:hidden;transition:opacity .15s,width .2s}
+.sb:not(.expanded) .sb-uinfo{opacity:0;width:0}
+.sb-uemail{font-size:11px;color:#DDEBFF;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-urole{font-size:9px;color:#7090BD;font-family:var(--m);white-space:nowrap}
+.sb-out{width:24px;height:24px;border-radius:var(--rs);border:1px solid #2C4363;background:none;color:#5a7a9a;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:background .15s,color .15s}
 .sb-out:hover{background:var(--rd-bg);color:var(--rd);border-color:var(--rd-bd)}
-.sb.col .sb-out{display:none}
+.sb:not(.expanded) .sb-out{display:none}
 
 /* ── TOPBAR (estilo COMIX) ── */
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
@@ -234,11 +255,20 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 /* ── MOBILE ── */
 .sb-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:90}
 @media(max-width:900px){
+  .sb-spacer{width:0!important}
   .sb{position:fixed;left:0;top:0;bottom:0;width:var(--sb-w)!important;transform:translateX(-100%);z-index:200;box-shadow:var(--shd-l);transition:transform .22s ease}
   .sb.mb-open{transform:translateX(0)}
   .sb-ov.on{display:block}
   .tb-mb{display:flex}
-  .sb-tog{display:none}
+  .sb-pin{display:none}
+  /* No mobile o drawer abre sempre completo (texto visível), ignora peek/fixar */
+  .sb .sb-btext,.sb .ni-text,.sb .sb-uinfo{opacity:1!important;width:auto!important}
+  .sb .nav-lbl{opacity:1!important;height:auto!important;padding:12px 8px 4px!important}
+  .sb .ni-bdg{opacity:1!important;width:auto!important;padding:2px 5px!important}
+  .sb .nav-item{justify-content:flex-start!important;gap:14px!important;padding:8px 12px!important}
+  .sb .sb-brand{justify-content:flex-start!important;padding:0 12px!important}
+  .sb .sb-user{justify-content:flex-start!important;padding:8px 12px!important}
+  .sb .sb-out{display:flex!important}
 }
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -342,10 +372,14 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
 <div id="scr-app" class="off">
 
   <!-- SIDEBAR -->
+  <div class="sb-spacer" id="sb-spacer"></div>
   <aside class="sb" id="sb">
     <div class="sb-brand">
       <div class="sb-mark">CX</div>
       <div class="sb-btext"><strong>COMIX Atlas</strong></div>
+      <button class="sb-pin" id="sb-pin" onclick="togglePin()" title="Fixar barra lateral" aria-label="Fixar barra lateral">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path stroke-linecap="round" stroke-linejoin="round" d="M12 17v5"/><path stroke-linecap="round" stroke-linejoin="round" d="M9 10.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V16a1 1 0 001 1h12a1 1 0 001-1v-.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V7a1 1 0 011-1 2 2 0 000-4H8a2 2 0 000 4 1 1 0 011 1z"/></svg>
+      </button>
     </div>
 
     <nav class="sb-nav">
@@ -432,7 +466,6 @@ html,body{height:100%;overflow:hidden;font-family:var(--f);color:var(--tx);font-
         <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
       </button>
     </div>
-    <button class="sb-tog" id="sb-tog" onclick="toggleSb()">‹</button>
   </aside>
 
   <div class="sb-ov" id="sb-ov" onclick="closeMb()"></div>
@@ -654,7 +687,7 @@ firebase.firestore().settings({
 });
 const db   = firebase.firestore();
 
-let curUser = null, curPerfil = 'motorista', curNome = '', sbCol = false;
+let curUser = null, curPerfil = 'motorista', curNome = '', sbPinned = false, _sbPeekT = null, _sbInit = false;
 /* authReady: resolve assim que o estado de auth é CONHECIDO (com ou sem usuário).
    A ponte Firestore aguarda esta promessa antes de rejeitar pedidos dos iframes,
    eliminando a corrida "iframe pede dados antes do login terminar de resolver". */
@@ -711,6 +744,8 @@ async function showApp() {
   document.getElementById('sb-av').textContent    = e.charAt(0).toUpperCase();
   document.getElementById('sb-email').textContent = e;
   document.getElementById('sb-role').textContent  = curPerfil;
+
+  initSidebar();
 
   // Carrega as permissões antes de renderizar/navegar para evitar menu visível sem clique funcional.
   await loadPermissions();
@@ -889,17 +924,61 @@ function dispatchNav(viewId, navType) {
   } catch(e) {}
 }
 
-/* ══ SIDEBAR ══ */
-function toggleSb() {
-  sbCol=!sbCol;
-  document.getElementById('sb').classList.toggle('col',sbCol);
-  document.getElementById('sb-tog').textContent=sbCol?'›':'‹';
+/* ══ SIDEBAR ══
+   Padrão: barra recolhida (rail só com ícones). Ao passar o mouse, ela expande
+   como overlay (peek) mostrando os textos; ao tirar o mouse, recolhe sozinha.
+   O botão de fixar mantém a barra sempre aberta (empurra o conteúdo). */
+const SB_KEY = 'atlas_sb_pinned';
+
+function applySbState() {
+  const app = document.getElementById('scr-app');
+  const sb  = document.getElementById('sb');
+  const pin = document.getElementById('sb-pin');
+  if (!app || !sb) return;
+  app.classList.toggle('sb-pinned', sbPinned);
+  if (sbPinned) {
+    sb.classList.add('expanded');
+    sb.classList.remove('peek');
+  } else {
+    sb.classList.remove('expanded', 'peek');
+  }
+  if (pin) pin.title = sbPinned ? 'Desafixar — recolher automaticamente' : 'Fixar barra lateral';
+}
+
+function togglePin() {
+  sbPinned = !sbPinned;
+  try { localStorage.setItem(SB_KEY, sbPinned ? '1' : '0'); } catch(e) {}
+  applySbState();
+}
+
+function sbPeekIn() {
+  if (sbPinned) return;
+  if (window.matchMedia('(max-width:900px)').matches) return;
+  clearTimeout(_sbPeekT);
+  document.getElementById('sb').classList.add('peek', 'expanded');
+}
+function sbPeekOut() {
+  if (sbPinned) return;
+  clearTimeout(_sbPeekT);
+  _sbPeekT = setTimeout(() => {
+    document.getElementById('sb').classList.remove('peek', 'expanded');
+  }, 200);
+}
+
+function initSidebar() {
+  if (_sbInit) return;
+  _sbInit = true;
+  try { sbPinned = localStorage.getItem(SB_KEY) === '1'; } catch(e) {}
+  applySbState();
+  const sb = document.getElementById('sb');
+  sb.addEventListener('mouseenter', sbPeekIn);
+  sb.addEventListener('mouseleave', sbPeekOut);
 }
 function openMb()  { document.getElementById('sb').classList.add('mb-open'); document.getElementById('sb-ov').classList.add('on'); }
 function closeMb() { document.getElementById('sb').classList.remove('mb-open'); document.getElementById('sb-ov').classList.remove('on'); }
 document.addEventListener('keydown',e=>{
   if(e.key==='Escape') closeMb();
-  if(e.ctrlKey&&e.key==='b'){e.preventDefault();toggleSb();}
+  if(e.ctrlKey&&e.key==='b'){e.preventDefault();togglePin();}
 });
 
 /* ══ DOWNLOAD BASE ══ */
