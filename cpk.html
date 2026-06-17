@@ -829,7 +829,9 @@ function cpkApplySZC(rows){
 // ── CARGA DA FROTA (cadastro veiculos) ─────────────────────────────
 async function cpkLoadFrota(){
   try{
-    const result=await cpkFsGet('veiculos');
+    let result=await cpkFsGet('veiculos');
+    // corrida de auth no portal pode devolver vazio na 1ª tentativa → 1 retry curto
+    if((!result||!result.length)){ await new Promise(r=>setTimeout(r,900)); result=await cpkFsGet('veiculos'); }
     CPK.frota=(result||[]).map(d=>{
       const v=d.data||{};
       const tv=String(v.tipo_vinculo||v.vinculo||'').toUpperCase().trim();
@@ -841,11 +843,14 @@ async function cpkLoadFrota(){
                tipo:(v.categoria||v.tipo||v.especie||'').toString(), disponibilidade:(v.disponibilidade||v.status||'').toString() };
     });
     CPK.frotaLoaded=true;
+    // índice por placa normalizada (lookup O(1) e consistente com a importação)
+    CPK.frotaIdx=new Map();
+    CPK.frota.forEach(v=>{ if(v.placa)CPK.frotaIdx.set(v.placa,v); });
     const pr=CPK.frota.filter(v=>v.vinculo==='proprio').length;
     cpkLog('Frota:',CPK.frota.length,'veículos ('+pr+' próprios)');
-  }catch(e){ cpkLog('Frota erro:',e.message); CPK.frota=[]; CPK.frotaLoaded=true; }
+  }catch(e){ cpkLog('Frota erro:',e.message); CPK.frota=[]; CPK.frotaIdx=new Map(); CPK.frotaLoaded=true; }
 }
-function cpkVeic(placa){ return CPK.frota.find(v=>v.placa===placa); }
+function cpkVeic(placa){ const p=cpkNormPlaca(placa); return (CPK.frotaIdx&&CPK.frotaIdx.get(p))||CPK.frota.find(v=>v.placa===p); }
 function cpkVinculoPlaca(placa, frotaSZB){
   const v=cpkVeic(placa);
   if(v&&v.vinculo) return v.vinculo;
@@ -1638,6 +1643,8 @@ async function cpkDadosFile(ev){
   const file=ev.target.files&&ev.target.files[0]; if(!file)return;
   const info=document.getElementById('dados-parse-info');
   info.innerHTML='<div class="cpk-info">⏳ <span>Lendo planilha…</span></div>';
+  // garante cadastro de frota carregado (corrida de auth pode ter deixado vazio)
+  if(!CPK.frota || !CPK.frota.length){ info.innerHTML='<div class="cpk-info">⏳ <span>Carregando cadastro de veículos…</span></div>'; try{ await cpkLoadFrota(); }catch(_){} }
   try{
     const buf=await file.arrayBuffer();
     const wb=XLSX.read(buf,{type:'array'});
@@ -1667,14 +1674,22 @@ function cpkProcessaPreview(dataRows, det, fileName){
     if(!placa) return; // linha vazia
     const km=cpkNumKm(kmRaw);
     const v=cpkVeic(placa);
-    // classificação
-    if(!v){ inconsist.push({placa,km,problema:'Não cadastrada em Cadastros'}); return; }
-    if(v.vinculo!=='proprio'){ inconsist.push({placa,km,problema:'Classificada como '+(v.vinculo==='agregado'?'Agregado':'indefinido')+' (fora do escopo Frota)'}); return; }
+    // classificação: cadastro primeiro; se ausente, usa o que o motor já classificou
+    // como frota própria via SZB (presença em CPK.aggPlaca) — mesmo critério do motor
+    let vinc = v ? v.vinculo : '';
+    const noMotor = !!(CPK.aggPlaca && CPK.aggPlaca.some(p=>p.placa===placa));
+    if(!vinc && noMotor) vinc='proprio';
+    if(vinc==='agregado'){ inconsist.push({placa,km,problema:'Classificada como Agregado (fora do escopo Frota)'}); return; }
+    if(vinc!=='proprio'){
+      inconsist.push({placa,km,problema: v?'Vínculo indefinido no cadastro':'Não cadastrada em Cadastros nem identificada como Frota no SZB'});
+      return;
+    }
     if(!(km>0)){ inconsist.push({placa,km,problema:'KM vazio, zero ou inválido'}); return; }
     // duplicidade no mesmo arquivo → mantém o último, não soma
     if(vistos[placa]){ dupCount++; inconsist.push({placa,km,problema:'Duplicada no arquivo — mantido o último valor'}); }
     vistos[placa]=true;
-    validos[placa]={ km, unidade:v.unidade||'', frota:v.frota||'', bruto:{placa_orig:String(placaRaw), km_orig:String(kmRaw)} };
+    validos[placa]={ km, unidade:(v&&v.unidade)||cpkUnidadePlaca(placa)||'', frota:(v&&v.frota)||'',
+      semCadastro:!v, bruto:{placa_orig:String(placaRaw), km_orig:String(kmRaw)} };
   });
 
   CPK.dadosPreview={ mes, fileName, validos, inconsist, dupCount, count:Object.keys(validos).length,
