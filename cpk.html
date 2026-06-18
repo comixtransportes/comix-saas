@@ -637,6 +637,19 @@ const GRUPO_FALLBACK = {
   '18.01':'CAPEX','19.01':'CONTROLE','20.01':'CONTROLE','24.01':'CONTROLE'
 };
 
+// ── PLACAS DE CONTROLE (tratamento especial, espelha o PD Diário) ────
+//  AAA9999 → placa-controle DIRETIVO. O faturamento NÃO é receita real
+//            (é um controle à parte). Descartada de TUDO: receita, KM,
+//            custo, placa, rota e cliente — exatamente como no PD Diário.
+//  FSC0000 → placa usada para emitir CARTAS FRETE COMPLEMENTAR (extras
+//            pendentes emitidos depois). A RECEITA é real e entra no total,
+//            porém NÃO é um veículo válido para análise: não gera placa,
+//            KM, CPK, margem por placa, rota nem cliente. Só soma receita.
+const CPK_PLACAS_IGNORADAS     = new Set(['AAA9999']); // fora de qualquer cálculo
+const CPK_PLACAS_RECEITA_COMPL = new Set(['FSC0000']); // receita real, sem análise por placa
+function cpkPlacaIgnorada(p){ return CPK_PLACAS_IGNORADAS.has(cpkNormPlaca(p)); }
+function cpkPlacaReceitaCompl(p){ return CPK_PLACAS_RECEITA_COMPL.has(cpkNormPlaca(p)); }
+
 // ── FIREBASE (iframe usa o parent; standalone cria instância própria) ─
 let _fb=null, _db=null, _auth=null;
 function cpkGetFb(){
@@ -1046,6 +1059,7 @@ function cpkCalculate(){
   const f=CPK.filtros, mes=f.mes, scope=new Set(cpkScopeFiliais());
   CPK.aggPlaca=[]; CPK.aggRota=[]; CPK.aggCliente=[]; CPK.aggTipo=[];
   CPK.diag={semCadastro:[], indefinidas:[], semKm:[], semCusto:false};
+  CPK.receitaComplementar=0; // Cartas Frete Complementar (FSC0000): receita real, fora da análise por placa
 
   // 1) pool de custo da frota (DRE) no escopo
   const pool=cpkPoolScope();
@@ -1080,6 +1094,20 @@ function cpkCalculate(){
     const cancel=SF.cancel(r); if(cancel&&cancel!==''&&cancel!=='0'&&cancel!=='undefined')continue;
     const dt=SF.dt(r); if(mes&&(!dt||!dt.startsWith(mes)))continue;
     const placa=SF.placa(r); if(!placa)continue;
+
+    // ── PLACAS DE CONTROLE (cancelamento e mês já filtrados acima) ─────
+    // AAA9999: faturamento não é receita real → descarta a linha inteira.
+    if(cpkPlacaIgnorada(placa)) continue;
+    // FSC0000 (Carta Frete Complementar): receita REAL, mas não é veículo
+    // de análise. Soma a receita ao total e segue — sem placa/KM/rota/cliente.
+    if(cpkPlacaReceitaCompl(placa)){
+      if(f.placa) continue; // em drill-down por placa específica não injeta receita avulsa
+      const uniC=cpkUnidadePlaca(placa,SF.op(r),SF.frota(r));
+      if(scope.size&&uniC&&!scope.has(uniC)) continue; // respeita o escopo de filial
+      CPK.receitaComplementar += SF.fat(r);
+      continue;
+    }
+
     if(f.placa&&placa!==cpkNormPlaca(f.placa))continue;
     const frotaSZB=SF.frota(r);
     const vinc=cpkVinculoPlaca(placa,frotaSZB);
@@ -1243,7 +1271,10 @@ function cpkCalculate(){
   CPK.aggPlaca=placas;
   // RECEITA da FROTA = soma dos CTRC de frota própria no SZB (exclui agregado).
   // O fatBruto do Mapinha é o total da filial (frota+agregado) e fica só como referência.
-  CPK.receitaTotal = placas.reduce((s,p)=>s+(+p.faturamento||0),0);
+  // receitaPlacas = receita analisável (soma da tabela por placa).
+  // receitaTotal  = receita real do topo = placas + Cartas Frete Complementar (FSC0000).
+  CPK.receitaPlacas = placas.reduce((s,p)=>s+(+p.faturamento||0),0);
+  CPK.receitaTotal  = CPK.receitaPlacas + (CPK.receitaComplementar||0);
 
   // 6) ROTAS — custo = Σ viagens (km × taxa efetiva da placa da viagem)
   const aggR={};
@@ -1454,6 +1485,7 @@ function cpkRenderAlertas(){
     out.push(['ok',`Dos custos elegíveis, <b>${pc(cov.medidoPct)}</b> estão apontados diretamente por placa. O saldo sem placa foi dividido <b>igualmente entre ${cov.qtdRateio||0} placa(s)</b>. Os centros 09.01 e 20.01 entram no cálculo por <b>82%</b>; os demais centros autorizados, por 100%.`]);
   }
   if(d.semKm&&d.semKm.length) out.push(['nd',`${d.semKm.length} placa(s) com receita mas sem KM (nem importado, nem via SZY). Importe os KM na aba Dados para um CPK fiel. Ex.: ${d.semKm.slice(0,6).join(', ')}${d.semKm.length>6?'…':''}`]);
+  if((CPK.receitaComplementar||0)>0) out.push(['ok',`A Receita do topo inclui <b>${cpkFmt(CPK.receitaComplementar)}</b> de Cartas Frete Complementar (placa ${[...CPK_PLACAS_RECEITA_COMPL].join(', ')}): valor <b>real</b> somado ao total, mas <b>fora</b> da análise por placa/rota/cliente. Por isso a soma das placas (${cpkFmt(CPK.receitaPlacas||0)}) fica abaixo da Receita total. A placa de controle AAA9999 é descartada integralmente.`]);
   if(d.semCadastro&&d.semCadastro.length) out.push(['nd',`${d.semCadastro.length} placa(s) rodando sem cadastro em Cadastros: ${d.semCadastro.slice(0,6).join(', ')}${d.semCadastro.length>6?'…':''}. Tratadas pela classificação do SZB.`]);
   if(d.indefinidas&&d.indefinidas.length) out.push(['nd',`${d.indefinidas.length} placa(s) com vínculo indefinido foram ignoradas (não classificadas como Frota nem Agregado).`]);
   host.innerHTML = out.map(([cls,msg])=>`<div class="cpk-${cls==='err'?'err':cls==='ok'?'ok':'nd'}" style="margin-top:7px">${cls==='err'?'⛔':cls==='ok'?'ℹ':'⚠'} <span>${msg}</span></div>`).join('');
@@ -1464,13 +1496,14 @@ function cpkRenderAlertas(){
 // ════════════════════════════════════════════════════════════════════
 function cpkRenderFrota(){
   const tipos=cpkSortData(CPK.aggTipo,'frota');
-  const totVe=CPK.aggPlaca.length, totKm=CPK.totalKm, totCusto=CPK.pool||0, totRec=CPK.receitaTotal||0;
+  const totVe=CPK.aggPlaca.length, totKm=CPK.totalKm, totCusto=CPK.pool||0, totRec=CPK.receitaPlacas||0;
+  const complF=CPK.receitaComplementar||0;
   const cpkMed=totKm>0?totCusto/totKm:null;
   document.getElementById('frota-cards').innerHTML =
     cpkCard('Veículos (Frota)', totVe, CPK.aggTipo.length+' classificações','pu','🚛') +
     cpkCard('KM Total', cpkFmtKm(totKm), '', 'cy','📏') +
     cpkCard('Custo Total', cpkFmt(totCusto), '', 'rd','💰') +
-    cpkCard('Receita', cpkFmt(totRec), '', '','📈') +
+    cpkCard('Receita (placas)', cpkFmt(totRec), complF>0?('+ '+cpkFmt(complF)+' compl. (fora)'):'', '','📈') +
     cpkCard('CPK Médio', cpkMed!=null?cpkFmt(cpkMed)+' /km':'—', '', 'pu','⛽');
 
   // chart KM por tipo
@@ -1547,12 +1580,13 @@ function cpkRenderRotas(){
 // ════════════════════════════════════════════════════════════════════
 function cpkRenderPlacas(){
   const placas=cpkSortData(CPK.filtrados.placa||CPK.aggPlaca,'placa');
-  const totKm=CPK.totalKm, totRec=CPK.receitaTotal||0, totCusto=CPK.pool||0;
+  const totKm=CPK.totalKm, totRec=CPK.receitaPlacas||0, totCusto=CPK.pool||0;
+  const compl=CPK.receitaComplementar||0;
   document.getElementById('placas-cards').innerHTML =
     cpkCard('Placas (Frota)', CPK.aggPlaca.length, '', 'pu','🔢') +
     cpkCard('KM Total', cpkFmtKm(totKm), '', 'cy','📏') +
     cpkCard('CPK Frota', CPK.cpkRate!=null?cpkFmt(CPK.cpkRate)+' /km':'—', '', 'pu','⛽') +
-    cpkCard('Receita', cpkFmt(totRec), '', '','📈') +
+    cpkCard('Receita (placas)', cpkFmt(totRec), compl>0?('+ '+cpkFmt(compl)+' compl. (fora)'):'', '','📈') +
     cpkCard('Margem/km médio', CPK.margemMediaKm!=null?cpkFmt(CPK.margemMediaKm):'—', '', (CPK.margemMediaKm||0)>=0?'gn':'rd','📊');
 
   const head=document.querySelector('#tbl-placas thead');
@@ -1692,6 +1726,9 @@ function cpkProcessaPreview(dataRows, det, fileName){
     const placaRaw=r[det.cPlaca], kmRaw=r[det.cKm];
     const placa=cpkNormPlaca(placaRaw);
     if(!placa) return; // linha vazia
+    // placas de controle nunca entram na base de KM (não são veículos reais)
+    if(cpkPlacaIgnorada(placa)){ inconsist.push({placa,km:cpkNumKm(kmRaw),problema:'Placa-controle diretivo — ignorada em todos os cálculos'}); return; }
+    if(cpkPlacaReceitaCompl(placa)){ inconsist.push({placa,km:cpkNumKm(kmRaw),problema:'Carta Frete Complementar — receita real, mas não é veículo de análise (sem KM/CPK)'}); return; }
     const km=cpkNumKm(kmRaw);
     const v=cpkVeic(placa);
     // classificação: cadastro primeiro; se ausente, usa o que o motor já classificou
