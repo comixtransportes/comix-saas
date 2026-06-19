@@ -737,15 +737,32 @@ function calcFechamentoAgregados(){
   o.total = o.comissao - o.abastSZC - o.debSZI + o.credSZI;
   return o;
 }
-/* Diesel (modelo limpo): frota+agregado, 22.01 abate como crédito, 21.01 ignorado */
-function calcDiesel(){
-  let d=0;
+/* Diesel (modelo limpo): frota+agregado, 22.01 abate como crédito, 21.01 ignorado.
+   Subdividido por fonte (Interno/Externo/Arla) × dono (frota própria/agregado).
+   Códigos Protheus: 01=Interno, 02=Externo, 04=Arla; sufixo .01=frota, .02=agregado. */
+function calcDieselDetalhado(){
+  const sub={ internoFrota:0, internoAgreg:0, externoFrota:0, externoAgreg:0,
+              arlaFrota:0, arlaAgreg:0, reembolso:0 };
+  const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   lancVisiveis().forEach(function(l){
-    if(DIESEL_DEBITO.has(l.centroCusto)) d += (+l.valor||0);
-    else if(DIESEL_CREDITO.has(l.centroCusto)) d -= Math.abs(+l.valor||0);
+    const cod=String(l.centroCusto||'').trim(); const v=+l.valor||0;
+    if(DIESEL_CREDITO.has(cod)){ sub.reembolso += Math.abs(v); return; }   // 22.01 abate o total
+    let cls=DIESEL_MAP[cod];
+    if(!cls){
+      if(!DIESEL_DEBITO.has(cod)) return;                                  // não é diesel → ignora
+      const nome=norm(l.centroCustoNome);                                  // fallback por nome do CC
+      const fonte=/arla/.test(nome)?'arla':/externo/.test(nome)?'externo':'interno';
+      const dono =/agregad/.test(nome)?'agregado':'frota';
+      cls=[fonte,dono];
+    }
+    const key=cls[0]+(cls[1]==='frota'?'Frota':'Agreg');
+    sub[key]+=v;
   });
-  return d;
+  sub.total = sub.internoFrota+sub.internoAgreg+sub.externoFrota+sub.externoAgreg
+            + sub.arlaFrota+sub.arlaAgreg - sub.reembolso;
+  return sub;
 }
+function calcDiesel(){ return calcDieselDetalhado().total; }
 /* parser de número BR — idêntico ao toN() do PD */
 function toNum(v){
   try{
@@ -870,8 +887,14 @@ const GRUPO_FALLBACK = {
   '18.01':'CAPEX','19.01':'CONTROLE','20.01':'CONTROLE','24.01':'CONTROLE'
 };
 /* Diesel: soma frota+agregado; 22.01 (reembolso) abate; 21.01 ignorado. */
-const DIESEL_DEBITO = new Set(['01.01','02.01','02.02','04.01','04.02']);
+const DIESEL_DEBITO = new Set(['01.01','01.02','02.01','02.02','04.01','04.02']);
 const DIESEL_CREDITO = new Set(['22.01']);
+/* Subdivisão do Diesel: código → [fonte, dono]. 01=Interno, 02=Externo, 04=Arla; .01=frota, .02=agregado. */
+const DIESEL_MAP = {
+  '01.01':['interno','frota'],  '01.02':['interno','agregado'],
+  '02.01':['externo','frota'],  '02.02':['externo','agregado'],
+  '04.01':['arla','frota'],     '04.02':['arla','agregado']
+};
 /* C.O do agregado (peças/serviços/lub/pneus do agregado) — débito que abate o fechamento de agregados */
 const CO_AGREGADO = new Set(['10.01','11.01','12.01']);
 /* Códigos de PROPRIETÁRIO da frota própria (resto = agregado) — base das tabelas SZB/SZC/SZI */
@@ -1472,7 +1495,7 @@ function calcDRE(){
   const fat=+r.fatBruto||0, prod=+r.producaoT||0;
   const imp=(+im.icms||0)+(+im.pisCofins||0)+(+im.irCs||0)+(+im.iss||0);
   const fl=fat-imp;
-  const diesel=calcDiesel(); const agregInfo=calcFechamentoAgregados(); const agreg=agregInfo.total;
+  const dieselDet=calcDieselDetalhado(); const diesel=dieselDet.total; const agregInfo=calcFechamentoAgregados(); const agreg=agregInfo.total;
   // Pedágio no DRE vem exclusivamente da aba Pedágios.
   // Lançamentos manuais classificados como PEDAGIO permanecem registrados/listados,
   // mas não compõem mais a linha de Pedágio nem o Resultado Financeiro.
@@ -1483,7 +1506,7 @@ function calcDRE(){
   ST._cpInfo=cpInfo; ST._ceInfo=ceInfo;
   const cp=cpInfo.realTotal; const ce=ceInfo.realTotal;
   const rf=fl-diesel-agreg-pedagio-co-cp-ce;
-  return { fat, prod, pm: prod?fat/prod:0, imp, fl, diesel, agreg, pedagio, co, cp, ce, rf,
+  return { fat, prod, pm: prod?fat/prod:0, imp, fl, diesel, dieselDet, agreg, pedagio, co, cp, ce, rf,
            margem: fat? rf/fat : 0 };
 }
 /* Sub-custos do Custo Operacional (detalhamento dentro do grupo CO).
@@ -1494,9 +1517,11 @@ function calcCOSubs(){
   let melhorias=0, agregEmp=0;
   lancVisiveis().forEach(l=>{
     if(l.grupoDre!=='CO') return;
-    const cod=String(l.centroCusto||''); const nome=norm(l.centroCustoNome||''); const v=+l.valor||0;
+    const cod=String(l.centroCusto||'').trim(); const nome=norm(l.centroCustoNome||''); const v=+l.valor||0;
     if(cod==='03.01' || /melhoria|reforma/.test(nome)) melhorias+=v;
-    else if(/agregad/.test(nome) && /emprest/.test(nome)) agregEmp+=v;
+    // Agregados (empréstimos): Lub. (10.01) + Peç./Serv. (11.01) + Pneus (12.01) dos agregados.
+    // Já compõem o CO Total — esta linha apenas destaca o sub-custo (custo adiantado ao agregado).
+    else if(CO_AGREGADO.has(cod)) agregEmp+=v;
   });
   return { melhorias, agregEmp };
 }
@@ -1514,6 +1539,7 @@ function calcBreakdownConsolidado(){
   const CP={folhaReal:0,epiReal:0,legalReal:0,outrosReal:0,realTotal:0,folhaMeta:0,epiMeta:0,legalMeta:0,outrosMeta:0,metaTotal:0};
   const CE={cavalos:0,carretas:0,va:0,outros:0,realTotal:0,metaTotal:0};
   const CO={melhorias:0,agregEmp:0};
+  const DD={internoFrota:0,internoAgreg:0,externoFrota:0,externoAgreg:0,arlaFrota:0,arlaAgreg:0,reembolso:0,total:0};
   const AG={comissao:0,szcDiesel:0,szcArla:0,abastSZC:0,debSZI:0,credSZI:0,total:0,falta:[]};
   const M ={fatBruto:0,producaoT:0,diesel:0,agreg:0,co:0,cp:0,ce:0,resultadoFinanceiro:0};
   // snapshot do ST para restaurar depois
@@ -1527,12 +1553,14 @@ function calcBreakdownConsolidado(){
     for(const k in CP) CP[k]+=+cp[k]||0;
     for(const k in CE) CE[k]+=+ce[k]||0;
     CO.melhorias+=co.melhorias; CO.agregEmp+=co.agregEmp;
+    const dd=d.dieselDet||{}; for(const k in DD) DD[k]+=+dd[k]||0;
     AG.comissao+=+ag.comissao||0; AG.szcDiesel+=+ag.szcDiesel||0; AG.szcArla+=+ag.szcArla||0;
     AG.abastSZC+=+ag.abastSZC||0; AG.debSZI+=+ag.debSZI||0; AG.credSZI+=+ag.credSZI||0; AG.total+=+ag.total||0;
     (ag.falta||[]).forEach(x=>{ if(!AG.falta.includes(x)) AG.falta.push(x); });
     for(const k in M) M[k]+=+m[k]||0;
   });
   Object.assign(ST, save);   // restaura escopo consolidado
+  D.dieselDet=DD;
   D.pm=D.prod?D.fat/D.prod:0; D.margem=D.fat?D.rf/D.fat:0;
   CP.realTotal=CP.folhaReal+CP.epiReal+CP.legalReal+CP.outrosReal;
   CP.metaTotal=CP.folhaMeta+CP.epiMeta+CP.legalMeta+CP.outrosMeta;
@@ -1544,7 +1572,7 @@ function calcBreakdownConsolidado(){
 function renderDre(){
   const cons = isConsolidado();
   document.getElementById('dreTitle').textContent = 'DRE — '+(cons?'Todas':ST.filial)+' · '+mesLabel(ST.mesRef);
-  const V = dreView(); const d=V.d, m=V.metas||{}, cp=V.cp, ce=V.ce, co=V.co;
+  const V = dreView(); const d=V.d, m=V.metas||{}, cp=V.cp, ce=V.ce, co=V.co; const dd=d.dieselDet||{};
   const fatPct=v=> d.fat? v/d.fat : 0;
   const linha=(nome,val,meta,cls='')=>{
     const realxmeta = meta? val/meta : 0;
@@ -1561,7 +1589,14 @@ function renderDre(){
     `<tr><td>Preço Médio</td><td class="num">${moeda(d.pm)}</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>` +
     linha('(–) Impostos', d.imp) +
     linha('= Fat. Líquido', d.fl,'','grp') +
-    linha('(–) Diesel', d.diesel, m.diesel) +
+    linha('(–) Diesel', d.diesel, m.diesel,'grp') +
+    linha('&nbsp;&nbsp;Interno - frotas', dd.internoFrota) +
+    linha('&nbsp;&nbsp;Interno - agregados', dd.internoAgreg) +
+    linha('&nbsp;&nbsp;Externo - frotas', dd.externoFrota) +
+    linha('&nbsp;&nbsp;Externo - agregado', dd.externoAgreg) +
+    linha('&nbsp;&nbsp;Arla - frotas', dd.arlaFrota) +
+    linha('&nbsp;&nbsp;Arla - agregados', dd.arlaAgreg) +
+    (dd.reembolso?linha('&nbsp;&nbsp;Reembolso (crédito)', -dd.reembolso):'') +
     linha('(–) Agregados', d.agreg, m.agreg) +
     linha('(–) Pedágio', d.pedagio) +
     linha('(–) Custo Operacional', d.co, m.co,'grp') +
@@ -1590,6 +1625,11 @@ function renderDre(){
       + `− Débitos SZI <b>${moeda(ag.debSZI||0)}</b> + Créditos SZI <b>${moeda(ag.credSZI||0)}</b> = <b>${moeda(ag.total||0)}</b>`
       + (falta?`<br>⏳ Aguardando carregar: ${ag.falta.join(', ')} — valor parcial até todas as bases chegarem.`:'')
       + `</div>`;
+    note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
+      + `<b>Composição Diesel</b> = Interno (frota <b>${moeda(dd.internoFrota||0)}</b> + agreg <b>${moeda(dd.internoAgreg||0)}</b>) + Externo (frota <b>${moeda(dd.externoFrota||0)}</b> + agreg <b>${moeda(dd.externoAgreg||0)}</b>) + Arla (frota <b>${moeda(dd.arlaFrota||0)}</b> + agreg <b>${moeda(dd.arlaAgreg||0)}</b>)`
+      + (dd.reembolso?` − Reembolso <b>${moeda(dd.reembolso)}</b>`:'')
+      + ` = <b>${moeda(d.diesel)}</b>`
+      + `<br><span style="opacity:.8">Interno=CC 01, Externo=CC 02, Arla=CC 04 (sufixo .01 frota própria, .02 agregado). 22.01 reembolso abate; 21.01 fora do fluxo.</span></div>`;
     note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
       + `<b>Composição C.O</b> = Melhorias Equip ( Reformas ) <b>${moeda(co.melhorias)}</b> + Agregados (empréstimos) <b>${moeda(co.agregEmp)}</b> + demais lançamentos do grupo C.O <b>${moeda(d.co-co.melhorias-co.agregEmp)}</b> = <b>${moeda(d.co)}</b>`
       + `<br><span style="opacity:.8">Sub-custos detalhados dentro do Custo Operacional (CC 03.01 Reformas e empréstimos a agregados).</span></div>`;
