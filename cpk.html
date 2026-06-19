@@ -340,9 +340,8 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 .fil-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px;flex-shrink:0}
 .fil-card{background:var(--wh);border:1px solid var(--bd2);border-radius:10px;overflow:hidden;box-shadow:var(--shd);display:flex;flex-direction:column}
 .fil-hd{display:flex;align-items:center;gap:9px;padding:9px 12px;border-bottom:1px solid var(--bd2);background:linear-gradient(135deg,#fff,#f8fafc)}
-.fil-sig{width:42px;height:42px;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;background:#fff;border:1.6px solid var(--hd);padding:3px 0 2px;box-shadow:0 1px 2px rgba(16,24,40,.06)}
-.fil-sig svg{width:26px;height:19px;display:block}
-.fil-sig .fil-sig-tx{font-family:var(--m);font-size:7px;font-weight:700;letter-spacing:.6px;line-height:1;margin-top:1px}
+.fil-sig{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:#fff;border:1.6px solid var(--hd);padding:2px;box-shadow:0 1px 2px rgba(16,24,40,.06)}
+.fil-sig svg{width:34px;height:28px;display:block}
 .fil-sig.sc{border-color:#0e7a7a;color:#0e7a7a}.fil-sig.pr{border-color:#1a56db;color:#1a56db}.fil-sig.sp{border-color:#6d28d9;color:#6d28d9}
 .fil-hd-tt{flex:1;min-width:0}
 .fil-hd-tt b{font-size:12px;font-weight:700;color:var(--tx);display:block}
@@ -1449,7 +1448,11 @@ function cpkCalculate(){
   Object.keys(CPK.kmImport).forEach(placa=>{
     if(aggP[placa])return;
     const v=cpkVeic(placa); if(!v||v.vinculo!=='proprio')return;          // só frota própria
-    if(scope.size&&v.unidade&&!scope.has(v.unidade))return;
+    // Escopo pela MESMA filial estável dos cards (unidade→cadastro→apontamento→
+    // escopo único). Sem isso, placa de unidade vazia entrava no KM do headline de
+    // QUALQUER filial filtrada, mas o card a roteava p/ a filial real — divergindo.
+    const filEst=cpkFilialDe({placa,unidade:v.unidade},scopeArr);
+    if(scope.size&&filEst&&!scope.has(filEst))return;
     const km=CPK.kmImport[placa].km; if(!(km>0))return;
     aggP[placa]={ placa, frota:v.frota, motorista:v.motorista, unidade:v.unidade, tipo:v.tipo,
       viagens:0, faturamento:0, km_szb:0, km_total:km, fonte_km:'importado', clientes:{}, rotas:{}, semReceita:true };
@@ -1479,7 +1482,9 @@ function cpkCalculate(){
       if(aggP[placa])continue;
       const v=cpkVeic(placa);
       if(!v||v.vinculo!=='proprio')continue;
-      if(scope.size&&v.unidade&&!scope.has(v.unidade))continue;
+      // Mesma filial estável dos cards — mantém KM do headline e do card idênticos.
+      const filEst=cpkFilialDe({placa,unidade:v.unidade},scopeArr);
+      if(scope.size&&filEst&&!scope.has(filEst))continue;
       const imp=CPK.kmImport[placa];
       const km=imp&&imp.km>0?imp.km:0;
       aggP[placa]={ placa, frota:v.frota, motorista:v.motorista, unidade:v.unidade, tipo:v.tipo,
@@ -1796,7 +1801,9 @@ function cpkAggFilial(scopeOnly){
   const mk=()=>({km:0,rec:0,custo:0,placas:0,saud:0,aten:0,crit:0,semkm:0});
   const map={SC:mk(),PR:mk(),SP:mk()};
   CPK.aggPlaca.forEach(p=>{
-    const u=cpkFilialDe(p,scopeFils); if(!map[u])return;
+    // Placa órfã real (sem unidade/cadastro/apontamento) cai na 1ª filial do escopo,
+    // garantindo que a soma do KM dos cards = KM Total do headline (sem placa perdida).
+    let u=cpkFilialDe(p,scopeFils); if(!u)u=scopeFils[0]; if(!map[u])return;
     const m=map[u]; m.placas++; m.km+=p.km_total||0; m.rec+=p.faturamento||0;
     if(p.status==='saudavel')m.saud++; else if(p.status==='atencao')m.aten++; else if(p.status==='critico')m.crit++; else m.semkm++;
   });
@@ -1904,7 +1911,7 @@ function cpkRenderFiliais(){
       .map(([c,n])=>n>0?'<i class="'+c+'" style="width:'+(n/tot*100)+'%"></i>':'').join('');
     const margTone=f.margem>=0?'gn':'rd';
     return '<div class="fil-card"><div class="fil-hd">'+
-      '<div class="fil-sig '+f.sigla.toLowerCase()+'" title="'+nomes[f.sigla]+'">'+cpkFilIcon(f.sigla)+'<span class="fil-sig-tx">'+f.sigla+'</span></div>'+
+      '<div class="fil-sig '+f.sigla.toLowerCase()+'" title="'+nomes[f.sigla]+'">'+cpkFilIcon(f.sigla)+'</div>'+
       '<div class="fil-hd-tt"><b>'+nomes[f.sigla]+'</b><span>op '+code[f.sigla]+' · '+f.placas+' placas</span></div>'+
       '<div class="fil-cpk"><b>'+(f.cpk!=null?cpkFmt(f.cpk):'—')+'</b><span>CPK /km</span></div>'+
       '</div>'+
