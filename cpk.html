@@ -529,7 +529,7 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 
     <!-- ══════════ PLACAS ══════════ -->
     <div class="cpk-pane" id="pane-placas">
-      <div class="cpk-info"><span>CPK individual por placa (frota própria). Custo da placa = parcela do <strong>DRE do Mapinha sem agregados</strong>: lançamentos de diesel e C.O com placa permanecem na placa; o saldo sem placa (incl. Pessoal, Equipamentos e Pedágio) é rateado igualmente entre as placas da filial. KM por placa via aba <strong>Dados</strong> ou derivado de SZB×SZY. Receita via SZB.</span></div>
+      <div class="cpk-info"><span>CPK individual por placa (frota própria). Custo da placa = parcela do <strong>DRE do Mapinha sem agregados</strong>: diesel e C.O com placa, e o <strong>pedágio por placa</strong> (Valor Cobrado + Vale Comix da aba Pedágios) permanecem na placa; o saldo sem placa (Pessoal e Equipamentos) é rateado igualmente entre as placas da filial. KM por placa via aba <strong>Dados</strong> ou derivado de SZB×SZY. Receita via SZB.</span></div>
       <div class="kpi-row" id="placas-cards"></div>
       <div class="insight-row" id="placas-insights"></div>
 
@@ -774,16 +774,22 @@ function cpkPremissaVigente(premissas, fil, mes){
     .sort((a,b)=> String(b.vigencia).localeCompare(String(a.vigencia)));
   return cands[0]||null;
 }
-// Pedágio da FROTA PRÓPRIA por filial (só placas próprias; exclui agregados/sem cadastro).
+// Pedágio da FROTA PRÓPRIA, derivado da aba Pedágios do Mapinha (doc PED_<mes>).
+// O doc traz, por placa: comix = Valor Cobrado + Vale Comix (= custo do DRE) e a
+// filial pelo cadastro. Aqui usamos o valor REAL de cada placa própria (sem rateio):
+//   porFil[fil]  → total do balde (linha do DRE)        — exclui agregados/sem cadastro
+//   apont[fil]   → { placa: comix } por placa própria    — vira custo direto da placa
 function cpkPedPropriaPorFil(pedDoc){
-  const out={SC:0,PR:0,SP:0};
+  const porFil={SC:0,PR:0,SP:0}, apont={SC:{},PR:{},SP:{}};
   const placas=(pedDoc&&pedDoc.data&&pedDoc.data.placas)||(pedDoc&&pedDoc.placas)||[];
   placas.forEach(pl=>{
-    const v=cpkVeic(pl.placa); if(!v||v.vinculo!=='proprio')return;
-    const fil=v.unidade||pl.filial; if(out[fil]==null)return;
-    out[fil]+=(+pl.comix||0);
+    const v=cpkVeic(pl.placa); if(!v||v.vinculo!=='proprio')return;       // só frota própria
+    const fil=v.unidade||pl.filial; if(porFil[fil]==null)return;
+    const val=+pl.comix||0; if(!val)return;
+    const pn=cpkNormPlaca(pl.placa);
+    porFil[fil]+=val; apont[fil][pn]=(apont[fil][pn]||0)+val;
   });
-  return out;
+  return { porFil, apont };
 }
 // Núcleo: custo da frota própria de UMA filial (espelho DRE − agregados).
 // lancList/osList: lançamentos {centroCusto,centroCustoNome,valor,placa}.
@@ -1115,21 +1121,22 @@ async function cpkLoadCusto(mes){
     (osByFil[filR]=osByFil[filR]||[]).push({centroCusto:cod,centroCustoNome:o.centroCustoNome||'',valor,placa:cpkPlacaLancamento(o)});
   });
 
-  // pedágio da frota própria por filial (só placas próprias)
-  const pedFil = cpkPedPropriaPorFil(ped);
+  // pedágio da frota própria, por placa (real, sem rateio) e total por filial
+  const pedInfo = cpkPedPropriaPorFil(ped);
 
   for(const fil of FILIAIS_PADRAO){
     const premissa = cpkPremissaVigente(prem, fil, mes);
-    const { tot, apont } = cpkCustoFrotaFilial(lancByFil[fil]||[], osByFil[fil]||[], premissa, pedFil[fil]||0);
+    const { tot, apont } = cpkCustoFrotaFilial(lancByFil[fil]||[], osByFil[fil]||[], premissa, pedInfo.porFil[fil]||0);
 
-    // diesel/CO têm apontamento por placa; CP/CE/pedágio são sempre resíduo (sem placa).
+    // diesel/CO/pedágio têm apontamento por placa; CP/CE são sempre resíduo (sem placa).
     CPK.apontaCustos.diesel[fil]=apont.diesel;
     CPK.apontaCustos.co[fil]=apont.co;
-    CPK.apontaCustos.cp[fil]={}; CPK.apontaCustos.ce[fil]={}; CPK.apontaCustos.ped[fil]={};
+    CPK.apontaCustos.ped[fil]=pedInfo.apont[fil]||{};
+    CPK.apontaCustos.cp[fil]={}; CPK.apontaCustos.ce[fil]={};
 
     const receita = +(((mensalByFil[fil]||{}).receita||{}).fatBruto||0); // referência do Mapinha
     CPK.custoFilial[fil]={ diesel:tot.diesel, co:tot.co, cp:tot.cp, ce:tot.ce, ped:tot.ped, total:tot.total, receita,
-      flags:{ receita:receita>0, possuiCusto:tot.total!==0, premissa:!!premissa, pedagio:(pedFil[fil]||0)>0 } };
+      flags:{ receita:receita>0, possuiCusto:tot.total!==0, premissa:!!premissa, pedagio:(pedInfo.porFil[fil]||0)>0 } };
   }
   CPK.custoRaw={mensalByFil,lancByFil,osByFil};
   CPK.custoLoaded=true;
@@ -1322,20 +1329,19 @@ function cpkCalculate(){
 
   // ───────────────────────────────────────────────────────────────────
   // 4b) APONTAMENTO POR PLACA
-  //     - lançamento com placa: permanece integralmente na placa;
-  //     - lançamento sem placa: saldo dividido igualmente entre as placas do escopo;
-  //     - centros 09.01 e 20.01 já chegam aqui limitados a 82%.
+  //     - diesel/C.O com placa e pedágio por placa: permanecem na placa;
+  //     - saldo sem placa (incl. Pessoal/Equip.): rateado igualmente na filial.
   // ───────────────────────────────────────────────────────────────────
-  const apontScope={diesel:{},co:{},cp:{},ce:{}};
+  const apontScope={diesel:{},co:{},cp:{},ce:{},ped:{}};
   cpkScopeFiliais().forEach(fil=>{
-    for(const balde of ['diesel','co','cp','ce']){
+    for(const balde of ['diesel','co','ped']){
       const src=(((CPK.apontaCustos||{})[balde]||{})[fil])||{};
       for(const pl in src) apontScope[balde][pl]=(apontScope[balde][pl]||0)+(+src[pl]||0);
     }
   });
 
-  // Uma placa com custo direto precisa permanecer individualizada mesmo sem CTRC/KM.
-  for(const balde of ['diesel','co']){
+  // Uma placa com custo direto (diesel/C.O/pedágio) permanece individualizada mesmo sem CTRC/KM.
+  for(const balde of ['diesel','co','ped']){
     for(const placa in apontScope[balde]){
       if(aggP[placa])continue;
       const v=cpkVeic(placa);
@@ -1886,7 +1892,7 @@ function cpkCustoFilialMes(mes,b,pedDoc){
     const valor=notas?notas.reduce((s,n)=>s+(+n.valor||0),0):(+o.valorTotal||0);
     (osByFil[filR]=osByFil[filR]||[]).push({centroCusto:cod,centroCustoNome:o.centroCustoNome||'',valor,placa:cpkPlacaLancamento(o)});
   });
-  const pedFil=cpkPedPropriaPorFil(pedDoc);
+  const pedFil=cpkPedPropriaPorFil(pedDoc).porFil;
   const res={};
   for(const fil of FILIAIS_PADRAO){
     const prem=cpkPremissaVigente(b.prem, fil, mes);
@@ -1959,7 +1965,7 @@ function cpkRenderAlertas(){
   // cobertura medida por placa e regra de rateio dos lançamentos sem placa
   if(cov && !d.semCusto){
     const pc=v=>cpkFmtPct(v*100,0);
-    out.push(['ok',`O custo da frota própria espelha o <b>DRE do Mapinha sem agregados</b>: Diesel + C.O (dos lançamentos) + Pessoal + Equipamentos (premissa do fechamento) + Pedágio (aba Pedágios). Ficam de fora o Fechamento de Agregados, o diesel de agregado (02.02/04.02), o C.O de agregado (10/11/12.01 + empréstimos/garantias) e os pedágios de placas agregadas. Dos custos com origem por placa (diesel e C.O), <b>${pc(cov.medidoPct)}</b> estão apontados diretamente na placa; o saldo de <b>cada filial</b> (incl. Pessoal, Equip. e Pedágio) é rateado igualmente entre as placas da própria filial — assim o consolidado é a soma exata das filiais.`]);
+    out.push(['ok',`O custo da frota própria espelha o <b>DRE do Mapinha sem agregados</b>: Diesel + C.O (dos lançamentos) + Pessoal + Equipamentos (premissa do fechamento) + Pedágio (aba Pedágios, <b>por placa</b>: Valor Cobrado + Vale Comix). Ficam de fora o Fechamento de Agregados, o diesel de agregado (02.02/04.02), o C.O de agregado (10/11/12.01 + empréstimos/garantias) e os pedágios de placas agregadas. Os custos com origem por placa (diesel, C.O e pedágio) entram direto na placa — <b>${pc(cov.medidoPct)}</b> do custo total; só Pessoal e Equipamentos são rateados igualmente entre as placas de <b>cada filial</b>, então o consolidado é a soma exata das filiais.`]);
   }
   if(d.semKm&&d.semKm.length) out.push(['nd',`${d.semKm.length} placa(s) com receita mas sem KM (nem importado, nem via SZY). Importe os KM na aba Dados para um CPK fiel. Ex.: ${d.semKm.slice(0,6).join(', ')}${d.semKm.length>6?'…':''}`]);
   if((CPK.receitaComplementar||0)>0) out.push(['ok',`A Receita do topo inclui <b>${cpkFmt(CPK.receitaComplementar)}</b> de Cartas Frete Complementar (placa ${[...CPK_PLACAS_RECEITA_COMPL].join(', ')}): valor <b>real</b> somado ao total, mas <b>fora</b> da análise por placa/rota/cliente. Por isso a soma das placas (${cpkFmt(CPK.receitaPlacas||0)}) fica abaixo da Receita total. A placa de controle AAA9999 é descartada integralmente.`]);
