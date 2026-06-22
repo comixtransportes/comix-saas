@@ -520,6 +520,11 @@ function deleteSelectedHistory(){if(!state.histSelected){toast('Selecione uma li
 function exportCSV(){const rows=state.history||[];const cols=['status','numeroCiot','numeroCte','chaveCte','motoristaNome','contratadoNome','origemMunicipio','origemUF','destinoMunicipio','destinoUF','distanciaKm','updatedAt'];const csv=[cols.join(';')].concat(rows.map(r=>cols.map(c=>'"'+String(r[c]??'').replace(/"/g,'""')+'"').join(';'))).join('\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='historico-ciot.csv';a.click();}
 /* ── v14: CIOT EMITIDO — captura do número, gravação no histórico e PDF embutido no Atlas ── */
 const CIOT_PDF_COLLECTION='ciot_pdfs';
+/* Trava PERSISTENTE (sobrevive ao Ctrl+R) dos CIOTs já exibidos. A extensão reenvia o último
+   resultado a cada carregamento; sem isto o Atlas reabria o PDF e regravava a cada reload. */
+function ciotShownSet(){try{return new Set(JSON.parse(localStorage.getItem('comix_ciot_shown')||'[]'));}catch(_){return new Set();}}
+function ciotAlreadyShown(slug){try{return ciotShownSet().has(String(slug));}catch(_){return false;}}
+function markCiotShown(slug){try{const s=ciotShownSet();s.add(String(slug));localStorage.setItem('comix_ciot_shown',JSON.stringify([...s].slice(-300)));}catch(_){}}
 function normCiotNumero(v){const s=String(v||'').replace(/\s/g,'');const m=s.match(/(\d[\d.]{9,}\/\d{3,6})/);return m?m[1].replace(/\./g,''):'';}
 function ciotPretty(slug){const m=String(slug||'').match(/^(\d+)\/(\d+)$/);if(!m)return String(slug||'');return m[1].replace(/\B(?=(\d{3})+(?!\d))/g,'.')+'/'+m[2];}
 function buildCiotPdfUrl(slug){return 'https://sistema.efrete.com.br/CIOT/Consultar?codigoIdentificacaoOperacao='+encodeURIComponent(slug);}
@@ -531,20 +536,23 @@ function findItemByResult(res){const chave=onlyDigits(res.chaveCte||'');const ct
 async function persistCiotPdf(slug,base64){if(!base64)return;const id=String(slug).replace(/\//g,'_');if(base64.length>900000){log('PDF do CIOT '+ciotPretty(slug)+' grande demais p/ Firestore; mantido só nesta sessão + URL.','warn');return;}try{await fsSet(CIOT_PDF_COLLECTION,id,{numeroCiot:slug,pdfBase64:base64,savedAt:new Date().toISOString(),savedBy:state.user.email||''});}catch(e){log('Não consegui persistir o PDF do CIOT: '+e.message,'warn');}}
 async function loadCiotPdfBase64(slug){if(state.pdfCache[slug])return state.pdfCache[slug];const id=String(slug).replace(/\//g,'_');try{const docs=await fsGetCollection(CIOT_PDF_COLLECTION);const d=docs.find(x=>x.id===id||(x.data&&x.data.numeroCiot===slug));if(d&&d.data&&d.data.pdfBase64){state.pdfCache[slug]=d.data.pdfBase64;return d.data.pdfBase64;}}catch(_){}return '';}
 async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(res.numeroCiot||res.numeroCiotPretty||'');if(!slug){log('Resultado de emissão sem número de CIOT reconhecível.','warn');return;}
-  if(state.__lastCiotApplied===slug&&!res.pdfBase64)return;   // idempotente; RESULT com PDF ainda passa
+  const replay=ciotAlreadyShown(slug);   // já exibido antes (reenvio da extensão no load/Ctrl+R)
+  if(replay&&!res.pdfBase64){state.__lastCiotApplied=slug;return;}   // reload puro: não reabre PDF, não regrava, não notifica
+  if(state.__lastCiotApplied===slug&&!res.pdfBase64)return;   // idempotente na sessão; RESULT com PDF ainda passa
   state.__lastCiotApplied=slug;
   const pdfUrl=res.pdfUrl||buildCiotPdfUrl(slug);
   if(res.pdfBase64){state.pdfCache[slug]=res.pdfBase64;persistCiotPdf(slug,res.pdfBase64);}
   const item=findItemByResult(res);
   if(item){item.numeroCiot=slug;item.ciotPdfUrl=pdfUrl;item.ciotHasPdf=!!res.pdfBase64||!!item.ciotHasPdf;item.status='emitido';item.emitidoAt=res.at||new Date().toISOString();item.updatedAt=new Date().toISOString();
     await fsSet(CIOT_COLLECTION,item.chaveCte||item.id,item);await loadHistory();renderAll();
-    toast('CIOT '+ciotPretty(slug)+' salvo no histórico'+(res.pdfBase64?' com PDF':''),'ok');
-    log('CIOT '+ciotPretty(slug)+' emitido — CT-e '+(item.numeroCte||'')+' marcado como Emitido'+(res.pdfBase64?' (PDF anexado).':'.'),'ok');
+    if(!replay){toast('CIOT '+ciotPretty(slug)+' salvo no histórico'+(res.pdfBase64?' com PDF':''),'ok');
+    log('CIOT '+ciotPretty(slug)+' emitido — CT-e '+(item.numeroCte||'')+' marcado como Emitido'+(res.pdfBase64?' (PDF anexado).':'.'),'ok');}
   }else{const mini={id:'ciot_'+slug.replace(/\//g,'_'),chaveCte:onlyDigits(res.chaveCte||''),numeroCte:res.numeroCte||'',numeroCiot:slug,ciotPdfUrl:pdfUrl,ciotHasPdf:!!res.pdfBase64,status:'emitido',emitidoAt:res.at||new Date().toISOString(),updatedAt:new Date().toISOString(),createdAt:new Date().toISOString(),createdBy:state.user.email||'',avulso:true};
     await fsSet(CIOT_COLLECTION,mini.chaveCte||mini.id,mini);await loadHistory();renderAll();
-    toast('CIOT '+ciotPretty(slug)+' salvo (CT-e não localizado)','warn');
-    log('CIOT '+ciotPretty(slug)+' emitido, mas não achei o CT-e correspondente — salvei como registro avulso.','warn');}
-  if(opts.autoOpen!==false)openCiotPdfBySlug(slug,pdfUrl);
+    if(!replay){toast('CIOT '+ciotPretty(slug)+' salvo (CT-e não localizado)','warn');
+    log('CIOT '+ciotPretty(slug)+' emitido, mas não achei o CT-e correspondente — salvei como registro avulso.','warn');}}
+  markCiotShown(slug);
+  if(opts.autoOpen!==false&&!replay)openCiotPdfBySlug(slug,pdfUrl);
 }catch(e){log('Erro ao aplicar emissão do CIOT: '+e.message,'err');}}
 function sniffCiotFromLog(message){const slug=normCiotNumero(message||'');if(!slug)return;if(state.__lastCiotApplied===slug)return;if(/(emitid|registrad)/i.test(String(message))){applyEmissionResult({numeroCiot:slug},{autoOpen:false});}}
 function openCiotPdf(id){const h=(state.history||[]).find(x=>(x.id||x.chaveCte)===id)||(state.items||[]).find(x=>(x.id||x.chaveCte)===id);if(!h||!h.numeroCiot){toast('Este registro ainda não tem número de CIOT.','warn');return;}openCiotPdfBySlug(h.numeroCiot,h.ciotPdfUrl||buildCiotPdfUrl(h.numeroCiot));}
