@@ -9,7 +9,7 @@
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 <script>
 /* ══ FIREBASE — Atlas Mapinha ══ */
 (function(){
@@ -531,6 +531,8 @@ async function fsGetDoc(collection,docId){
   return null;
 }
 async function fsSetDoc(collection,docId,data,opts={}){
+  // Invalida o cache SWR do Consolidado quando um mês é gravado/fechado/reaberto.
+  if(collection==='mapinha_mensal'){ try{ MapCache.del('mensal', true); }catch(_){ } }
   if(atlasHasParentBridge()){ const r=await atlasParent('setDoc',{collection,docId,data,merge:!!opts.merge}); return {id:(r&&r.id)||docId}; }
   const db=window._mapDB; if(db){ await db.collection(collection).doc(docId).set(data,{merge:!!opts.merge}); return {id:docId}; }
   throw new Error('Firestore indisponível');
@@ -1819,12 +1821,41 @@ async function reabrir(){
 
 /* ══ CONSOLIDADO ══ */
 let _consChart=null;
-async function loadConsolidado(){
-  const all = await fsGetCollection('mapinha_mensal');
+/* Deriva ST.consolidado a partir da lista bruta de docs mensais — MESMA regra
+   do original (status fechado/reaberto + filiais permitidas + ordenação). */
+function _deriveConsolidado(rawList){
   const perm = filiaisPermitidas();
-  ST.consolidado = all.map(d=>d.data)
+  return (rawList||[])
     .filter(m=> (m.status==='fechado'||m.status==='reaberto') && perm.includes(m.filial))
     .sort((a,b)=> (a.mesRef+a.filial).localeCompare(b.mesRef+b.filial));
+}
+async function _fetchConsolidadoRaw(){
+  const all = await fsGetCollection('mapinha_mensal');
+  const raw = all.map(d=>d.data);
+  try{ MapCache.set('mensal', { raw, ts:Date.now() }, true); }catch(_){}
+  return raw;
+}
+let _consRevalidando=false;
+async function loadConsolidado(){
+  const TTL=60000; // 60s — meses fechados mudam raramente; write local invalida na hora
+  const cached = MapCache.get('mensal', true);
+  if(cached && Array.isArray(cached.raw)){
+    ST.consolidado = _deriveConsolidado(cached.raw);
+    renderConsolidado();
+    if((Date.now()-(cached.ts||0))>TTL && !_consRevalidando){
+      _consRevalidando=true;
+      _fetchConsolidadoRaw().then(raw=>{
+        ST.consolidado=_deriveConsolidado(raw);
+        const active=(document.querySelector('.tab.on')||{}).dataset?.v;
+        if(active==='cons') renderConsolidado();
+        else if(active==='dash') renderDashboard();
+      }).catch(()=>{}).finally(()=>{ _consRevalidando=false; });
+    }
+    return;
+  }
+  // Sem cache: busca bloqueante (primeira vez no dispositivo).
+  const raw = await _fetchConsolidadoRaw();
+  ST.consolidado = _deriveConsolidado(raw);
   renderConsolidado();
 }
 function renderConsolidado(){
