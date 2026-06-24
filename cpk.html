@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=1280, minimum-scale=0.1, maximum-scale=10, user-scalable=yes, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <title>COMIX Atlas — CPK · Custo por KM (Frota)</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
@@ -1126,7 +1126,7 @@ function cpkApplyAtlasBase(table,payload){
   cpkMaybeRecalc();
 }
 function cpkApplySZB(rows,payload){
-  CPK.szb=rows; CPK.szbLoaded=true;
+  CPK.szb=rows; CPK.szbLoaded=true; CPK._dataVer=(CPK._dataVer||0)+1;
   const ts=payload&&payload.ts?new Date(payload.ts):null;
   cpkSyncBadge('✓ SZB '+rows.length.toLocaleString('pt-BR')+' reg.'+(ts?' · '+ts.toLocaleDateString('pt-BR'):''),'ok');
 }
@@ -1141,7 +1141,7 @@ function cpkApplySZY(rows){
     const ex=byRota[cod];
     if(!ex||(revisto&&!ex.revisto)||(revisto===ex.revisto&&kmIda>ex.km_ida)) byRota[cod]={km_ida:kmIda,km_volta:kmVolta,km_total:kmIda+kmVolta,revisto,uf_orig:ufO,uf_dest:ufD};
   }
-  CPK.szy=byRota; CPK.szyLoaded=true;
+  CPK.szy=byRota; CPK.szyLoaded=true; CPK._dataVer=(CPK._dataVer||0)+1;
 }
 // SZC = abastecimento. Combustível da FROTA = diesel + ARLA (mesmo bucket do DRE).
 // Ambos são apontados por placa; o tipo fica marcado p/ transparência da cobertura.
@@ -1183,7 +1183,7 @@ async function cpkLoadFrota(){
                unidade:cpkUnidadeVeic(v), vinculo, modelo:v.modelo||'',
                tipo:(v.categoria||v.tipo||v.especie||'').toString(), disponibilidade:(v.disponibilidade||v.status||'').toString() };
     });
-    CPK.frotaLoaded=true;
+    CPK.frotaLoaded=true; CPK._dataVer=(CPK._dataVer||0)+1;
     // índice por placa normalizada (lookup O(1) e consistente com a importação)
     CPK.frotaIdx=new Map();
     CPK.frota.forEach(v=>{ if(v.placa)CPK.frotaIdx.set(v.placa,v); });
@@ -1345,6 +1345,72 @@ function cpkKmViagem(r){
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  ÍNDICE DE DERIVAÇÃO POR MÊS (independente de escopo/drill)
+//  Pré-calcula, UMA vez por (mês + versão de dados), o trabalho pesado por
+//  linha do SZB — cancelamento, filtro de mês, placa, ignoradas, classificação
+//  de vínculo/unidade/filial-estável, rota, cliente e KM da viagem. Todos os
+//  filtros de ESCOPO (unidade) e DRILL (placa/cliente/rota) permanecem no
+//  cpkCalculate, aplicados sobre este índice — resultado idêntico, mas trocar
+//  unidade/filtro deixa de re-varrer e re-normalizar o SZB inteiro.
+//  Equivalência da filial-estável: para a decisão de skip por escopo,
+//  cpkFilialDe(p, scopeArr) é idêntico a cpkFilialDe(p, null) — o fallback
+//  por escopo único só afeta placas órfãs, que entram em qualquer escopo.
+// ════════════════════════════════════════════════════════════════════
+function cpkBuildDerivIndex(){
+  const mes = CPK.filtros.mes || '';
+  const sig = mes + '|' + (CPK._dataVer||0);
+  CPK._derivCache = CPK._derivCache || {};
+  if(CPK._derivCache[sig]) return CPK._derivCache[sig];
+
+  const rows=[];
+  if(CPK.szb){
+    const SF={
+      placa:r=>cpkNormPlaca(r['Placa Veicul']||r['placa_veicul']||r['Veiculo']||''),
+      frota:r=>cpkStr(r['Frota']||r['frota']||'').toUpperCase(),
+      motorista:r=>cpkStr(r['Nome Motoris']||r['nome_motoris']||r['Motorista']||''),
+      dt:r=>cpkNormDate(r['Dt. Emissao']||r['dt_emissao']||r['Data']||''),
+      fat:r=>cpkNum(r['Valor Total']||r['valor_total']||r['Tarifa']||0),
+      op:r=>cpkStr(r['Operacao']||r['operacao']||''),
+      rota:r=>cpkStr(r['Rota']||r['rota']||''),
+      tipoFrete:r=>cpkStr(r['Tipo Frete']||r['tipo_frete']||''),
+      localColeta:r=>cpkStr(r['Local Coleta']||r['local_coleta']||''),
+      ufO:r=>cpkStr(r['Uf Origem']||r['uf_origem']||''),
+      localEntreg:r=>cpkStr(r['Local Entreg']||r['local_entreg']||''),
+      ufD:r=>cpkStr(r['Uf Destino']||r['uf_destino']||''),
+      nomeDest:r=>cpkStr(r['Nome Destina']||r['nome_destina']||''),
+      nomeRemet:r=>cpkStr(r['Nome Remeten']||r['nome_remeten']||''),
+      nomeCliDev:r=>cpkStr(r['Nome Cli Dev']||r['nome_cli_dev']||''),
+      cancel:r=>cpkStr(r['Dt Cancel']||r['dt_cancel']||'')
+    };
+    for(const r of CPK.szb){
+      const cancel=SF.cancel(r); if(cancel&&cancel!==''&&cancel!=='0'&&cancel!=='undefined')continue;
+      const dt=SF.dt(r); if(mes&&(!dt||!dt.startsWith(mes)))continue;
+      const placa=SF.placa(r); if(!placa)continue;
+      if(cpkPlacaIgnorada(placa)) continue;
+      if(cpkPlacaReceitaCompl(placa)){
+        rows.push({ k:0, placa, uniC:cpkUnidadePlaca(placa,SF.op(r),SF.frota(r)), fat:SF.fat(r) });
+        continue;
+      }
+      const frotaSZB=SF.frota(r);
+      const vinc=cpkVinculoPlaca(placa,frotaSZB);
+      const unidade=cpkUnidadePlaca(placa,SF.op(r),frotaSZB);
+      const uPre=cpkFilialDe({placa,unidade},null); // filial-estável SEM escopo (equivalente p/ skip)
+      const kmv=cpkKmViagem(r);
+      rows.push({ k:1, placa, frotaSZB, motorista:SF.motorista(r), unidade, uPre, vinc,
+        fat:SF.fat(r), rota:cpkPadRota(SF.rota(r)),
+        cliente:SF.nomeDest(r)||SF.nomeCliDev(r)||SF.nomeRemet(r)||'S/N',
+        localColeta:SF.localColeta(r), ufO:SF.ufO(r), localEntreg:SF.localEntreg(r), ufD:SF.ufD(r),
+        tipoFrete:SF.tipoFrete(r), km:kmv.km, fonte_km:kmv.fonte });
+    }
+  }
+  // mantém só os últimos meses para não crescer indefinidamente
+  const keys=Object.keys(CPK._derivCache);
+  if(keys.length>=6){ delete CPK._derivCache[keys[0]]; }
+  CPK._derivCache[sig]=rows;
+  return rows;
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  MOTOR DE CÁLCULO — somente FROTA própria
 // ════════════════════════════════════════════════════════════════════
 function cpkCalculate(){
@@ -1360,75 +1426,37 @@ function cpkCalculate(){
 
   if(!CPK.szb){ CPK.cpkRate=null; return; }
 
-  // 2) campos SZB
-  const SF={
-    placa:r=>cpkNormPlaca(r['Placa Veicul']||r['placa_veicul']||r['Veiculo']||''),
-    frota:r=>cpkStr(r['Frota']||r['frota']||'').toUpperCase(),
-    motorista:r=>cpkStr(r['Nome Motoris']||r['nome_motoris']||r['Motorista']||''),
-    dt:r=>cpkNormDate(r['Dt. Emissao']||r['dt_emissao']||r['Data']||''),
-    fat:r=>cpkNum(r['Valor Total']||r['valor_total']||r['Tarifa']||0),
-    op:r=>cpkStr(r['Operacao']||r['operacao']||''),
-    rota:r=>cpkStr(r['Rota']||r['rota']||''),
-    tipoFrete:r=>cpkStr(r['Tipo Frete']||r['tipo_frete']||''),
-    localColeta:r=>cpkStr(r['Local Coleta']||r['local_coleta']||''),
-    ufO:r=>cpkStr(r['Uf Origem']||r['uf_origem']||''),
-    localEntreg:r=>cpkStr(r['Local Entreg']||r['local_entreg']||''),
-    ufD:r=>cpkStr(r['Uf Destino']||r['uf_destino']||''),
-    nomeDest:r=>cpkStr(r['Nome Destina']||r['nome_destina']||''),
-    nomeRemet:r=>cpkStr(r['Nome Remeten']||r['nome_remeten']||''),
-    nomeCliDev:r=>cpkStr(r['Nome Cli Dev']||r['nome_cli_dev']||''),
-    cancel:r=>cpkStr(r['Dt Cancel']||r['dt_cancel']||'')
-  };
-
-  // 3) varre SZB → agrega por placa (somente frota própria, escopo, mês)
+  // 2-3) Derivação por linha vem do índice por mês (cpkBuildDerivIndex), que
+  //      já fez cancelamento, filtro de mês, vínculo, unidade, filial-estável,
+  //      rota, cliente e KM. Aqui aplicamos SOMENTE escopo (unidade) e drill
+  //      (placa/cliente/rota) e agregamos — exatamente como antes.
+  const derivRows = cpkBuildDerivIndex();
   const aggP={}, viagens=[];
-  for(const r of CPK.szb){
-    const cancel=SF.cancel(r); if(cancel&&cancel!==''&&cancel!=='0'&&cancel!=='undefined')continue;
-    const dt=SF.dt(r); if(mes&&(!dt||!dt.startsWith(mes)))continue;
-    const placa=SF.placa(r); if(!placa)continue;
-
-    // ── PLACAS DE CONTROLE (cancelamento e mês já filtrados acima) ─────
-    // AAA9999: faturamento não é receita real → descarta a linha inteira.
-    if(cpkPlacaIgnorada(placa)) continue;
-    // FSC0000 (Carta Frete Complementar): receita REAL, mas não é veículo
-    // de análise. Soma a receita ao total e segue — sem placa/KM/rota/cliente.
-    if(cpkPlacaReceitaCompl(placa)){
-      if(f.placa) continue; // em drill-down por placa específica não injeta receita avulsa
-      const uniC=cpkUnidadePlaca(placa,SF.op(r),SF.frota(r));
-      if(scope.size&&uniC&&!scope.has(uniC)) continue; // respeita o escopo de filial
-      CPK.receitaComplementar += SF.fat(r);
+  for(const d of derivRows){
+    if(d.k===0){ // FSC0000 — Carta Frete Complementar
+      if(f.placa) continue;
+      if(scope.size&&d.uniC&&!scope.has(d.uniC)) continue;
+      CPK.receitaComplementar += d.fat;
       continue;
     }
-
+    const placa=d.placa;
     if(f.placa&&placa!==cpkNormPlaca(f.placa))continue;
-    const frotaSZB=SF.frota(r);
-    const vinc=cpkVinculoPlaca(placa,frotaSZB);
-    const unidade=cpkUnidadePlaca(placa,SF.op(r),frotaSZB);
-    // Inclusão no escopo pela filial ESTÁVEL (mesma regra dos cards: unidade →
-    // cadastro → maior apontamento → escopo único). Sem isso, placas órfãs (sem
-    // unidade no SZB) entram no headline de QUALQUER filial filtrada e inflam o
-    // KM/Receita, divergindo do card — que as atribui via cpkFilialDe.
-    const filEstavel=cpkFilialDe({placa,unidade},scopeArr);
-    if(scope.size&&filEstavel&&!scope.has(filEstavel))continue;
-    // SOMENTE FROTA PRÓPRIA
-    if(vinc!=='proprio'){ if(vinc==='indefinido'&&!CPK.diag.indefinidas.includes(placa))CPK.diag.indefinidas.push(placa); continue; }
+    if(scope.size&&d.uPre&&!scope.has(d.uPre))continue;
+    if(d.vinc!=='proprio'){ if(d.vinc==='indefinido'&&!CPK.diag.indefinidas.includes(placa))CPK.diag.indefinidas.push(placa); continue; }
 
-    const fat=SF.fat(r);
-    const rota=cpkPadRota(SF.rota(r));
-    const cliente=SF.nomeDest(r)||SF.nomeCliDev(r)||SF.nomeRemet(r)||'S/N';
+    const fat=d.fat, rota=d.rota, cliente=d.cliente;
     if(f.cliente&&!cpkNormStr(cliente).includes(cpkNormStr(f.cliente)))continue;
-    if(f.rota&&!(rota.includes(cpkPadRota(f.rota))||cpkNormStr(SF.localEntreg(r)).includes(cpkNormStr(f.rota))))continue;
-    const kmv=cpkKmViagem(r);
+    if(f.rota&&!(rota.includes(cpkPadRota(f.rota))||cpkNormStr(d.localEntreg).includes(cpkNormStr(f.rota))))continue;
 
-    viagens.push({ placa, frotaSZB, motorista:SF.motorista(r), unidade, fat, rota,
-      localColeta:SF.localColeta(r), ufO:SF.ufO(r), localEntreg:SF.localEntreg(r), ufD:SF.ufD(r),
-      cliente, tipoFrete:SF.tipoFrete(r), km:kmv.km, fonte_km:kmv.fonte });
+    viagens.push({ placa, frotaSZB:d.frotaSZB, motorista:d.motorista, unidade:d.unidade, fat, rota,
+      localColeta:d.localColeta, ufO:d.ufO, localEntreg:d.localEntreg, ufD:d.ufD,
+      cliente, tipoFrete:d.tipoFrete, km:d.km, fonte_km:d.fonte_km });
 
-    if(!aggP[placa]) aggP[placa]={ placa, frota:cpkVeic(placa)?.frota||frotaSZB, motorista:SF.motorista(r), unidade,
+    if(!aggP[placa]) aggP[placa]={ placa, frota:cpkVeic(placa)?.frota||d.frotaSZB, motorista:d.motorista, unidade:d.unidade,
       tipo:cpkVeic(placa)?.tipo||'', viagens:0, faturamento:0, km_szb:0, clientes:{}, rotas:{} };
     const pa=aggP[placa];
-    pa.viagens++; pa.faturamento+=fat; pa.km_szb+=kmv.km;
-    if(!pa.unidade&&unidade)pa.unidade=unidade; if(!pa.motorista&&SF.motorista(r))pa.motorista=SF.motorista(r);
+    pa.viagens++; pa.faturamento+=fat; pa.km_szb+=d.km;
+    if(!pa.unidade&&d.unidade)pa.unidade=d.unidade; if(!pa.motorista&&d.motorista)pa.motorista=d.motorista;
     pa.clientes[cliente]=(pa.clientes[cliente]||0)+fat;
     if(rota)pa.rotas[rota]=(pa.rotas[rota]||0)+1;
   }
