@@ -14,7 +14,10 @@
 <title>COMIX — PD Diário</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- [PERF][PD] JSZip só é usado no parseXLSM (upload local de arquivo). Dentro do
+     Atlas os dados chegam pelo bridge do parent, então o JSZip nunca é necessário
+     no boot. defer remove ~95KB do caminho crítico sem alterar funcionalidade. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <!-- Firebase para leitura do SZB no Firestore (mesma config do Atlas).
      No iframe, reusa a instância do parent. Standalone, inicializa aqui. -->
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
@@ -1028,6 +1031,63 @@ let RAW=[], DATA=[];
 let RAW_SZC=[], SZC_DATA=[];
 let RAW_SZY=[], SZY_DATA=[], SZY_MAP={};
 const CHS={};
+
+/* ════════════════════════════════════════════════════════════════════════
+   [PERF][PD] Controle de carregamento/render — não altera nenhum cálculo.
+   Objetivo: (1) idempotência por versão (a mesma base não dispara fullRebuild
+   duas vezes); (2) render por aba sob demanda (só a aba visível é montada;
+   as ocultas são montadas ao abrir); (3) IA fora do caminho crítico.
+   ════════════════════════════════════════════════════════════════════════ */
+var __PD_SZB_SIG = null, __PD_SZC_SIG = null, __PD_SZY_SIG = null;
+var __PD_GEN = 0;                // geração monotônica: incrementa a cada recalc
+var __PD_CTX = '';               // assinatura do contexto atual (geração + uid|mes)
+var __PD_TAB_BUILT = {};         // aba -> __PD_CTX com que foi montada
+var __PD_LAST = null;            // {uid, mes, meses} do último recalc
+var __PD_AI_T = null;
+
+// Chave de escopo: muda quando o perfil/filiais/operações mudam (re-filtra resultados).
+function __pdScopeKey(){
+  try{ return JSON.stringify({
+    p: ATLAS_PD_SCOPE && ATLAS_PD_SCOPE.perfil,
+    a: ATLAS_PD_SCOPE && ATLAS_PD_SCOPE.isAdmin,
+    f: ATLAS_PD_SCOPE && ATLAS_PD_SCOPE.filiaisAtivas,
+    o: ATLAS_PD_SCOPE && ATLAS_PD_SCOPE.pdOps
+  }); }catch(_){ return ''; }
+}
+
+// Qual aba está visível agora (pane com classe .on). Default: vg.
+function __pdVisibleTab(){
+  var p = document.querySelector('.pane.on');
+  return p ? p.id.replace('p-','') : 'vg';
+}
+
+// Monta UMA aba com o contexto atual. Usa exatamente as mesmas funções de build
+// (mesmos argumentos) — nenhum resultado muda, apenas o MOMENTO da montagem.
+function __pdBuildTab(id){
+  if(!__PD_LAST) return;
+  var u = __PD_LAST.uid, m = __PD_LAST.mes, ms = __PD_LAST.meses;
+  var t0 = performance.now();
+  switch(id){
+    case 'vg': buildVG(u, m); break;
+    case 'cl': buildCl(u, m); break;
+    case 'ta': buildTa(u, m); break;
+    case 'cc': buildCc(u, m); break;
+    case 'fr': buildFr(u, m); break;
+    case 'hi': buildHi(ms, u); break;
+    default: return;
+  }
+  __PD_TAB_BUILT[id] = __PD_CTX;
+  console.log('[PERF][PD] build '+id+' '+(performance.now()-t0).toFixed(1)+'ms');
+}
+
+// IA fora do caminho crítico: coalescida e adiada para o idle após a 1ª pintura.
+function scheduleTriggerAI(){
+  if(__PD_AI_T){ clearTimeout(__PD_AI_T); }
+  var ric = window.requestIdleCallback || function(f){ return setTimeout(f, 1); };
+  __PD_AI_T = setTimeout(function(){
+    ric(function(){ try{ triggerAI(); }catch(e){} });
+  }, 350);
+}
 
 /* ── Escopo de filial recebido do Atlas ─────────────────────
    O PD Diário deve montar todos os cards, gráficos, tabelas e IA apenas
@@ -2110,6 +2170,7 @@ async function buildDash(){
 // FULL REBUILD
 // ═══════════════════════════════════════════════════════
 function fullRebuild(){
+  var __t0 = performance.now();
   configureUnitSelectForScope();
   DATA=enrich(atlasFilterRowsForScope(RAW, 'szb'));
   _clearFopCache();
@@ -2124,6 +2185,7 @@ function fullRebuild(){
   });
   if(meses.includes(curVal)) smEl.value=curVal;
   else smEl.value=meses[meses.length-1]||'';
+  console.log('[PERF][PD] fullRebuild enrich+meses '+(performance.now()-__t0).toFixed(1)+'ms ('+DATA.length+' reg)');
   recalc();
 }
 
@@ -2154,14 +2216,20 @@ function recalc(){
   document.getElementById('h-uni').textContent='Unidade: '+ulbl;
   document.getElementById('h-per').textContent=mesLabel(mes);
   document.getElementById('h-reg').textContent=DATA.length+' registros';
-  // Executa builds em microtasks separadas para liberar o thread de renderização entre cada aba
-  buildVG(uid,mes);
-  setTimeout(function(){ buildCl(uid,mes); },0);
-  setTimeout(function(){ buildTa(uid,mes); },0);
-  setTimeout(function(){ buildCc(uid,mes); },0);
-  setTimeout(function(){ buildFr(uid,mes); },0);
-  setTimeout(function(){ buildHi(meses,uid); },0);
-  setTimeout(triggerAI, 400);
+  // [PERF][PD] Render por aba sob demanda. Antes, todo recalc montava as 6 abas
+  // (mesmo as ocultas) — e como SZB/SZC/SZY chamam recalc ao chegar, isso montava
+  // tudo 3–5x num boot frio. Agora monta SÓ a aba visível (no boot, a VG, que é a
+  // pane .on por padrão = "primeira visão útil"); as demais são montadas no showTab
+  // ao serem abertas, já visíveis (gráficos dimensionam corretamente). As funções
+  // de build e seus argumentos são IDÊNTICOS — nenhum resultado muda.
+  var __t0 = performance.now();
+  __PD_LAST = { uid: uid, mes: mes, meses: meses };
+  __PD_CTX  = (++__PD_GEN) + '|' + uid + '|' + mes;   // geração única por recalc
+  __PD_TAB_BUILT = {};                 // tudo passa a "pendente" para o novo contexto
+  var __vis = __pdVisibleTab();        // monta apenas a aba aberta agora
+  __pdBuildTab(__vis);
+  console.log('[PERF][PD] recalc ('+__vis+') '+(performance.now()-__t0).toFixed(1)+'ms');
+  scheduleTriggerAI();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -3436,6 +3504,11 @@ function showTab(id){
   const mp={vg:'Visão Geral',cl:'Rotas',ta:'Tarifa',cc:'Clientes',fr:'Frota',hi:'Histórico'};
   document.querySelectorAll('.tab').forEach(b=>{b.classList.toggle('on',b.textContent.trim()===mp[id]);});
   document.querySelectorAll('.pane').forEach(p=>{p.classList.toggle('on',p.id==='p-'+id);});
+  // [PERF][PD] Monta a aba na 1ª abertura (ou se o contexto mudou desde a última
+  // montagem). A pane já está visível aqui, então os gráficos dimensionam certo.
+  if(__PD_LAST && __PD_TAB_BUILT[id] !== __PD_CTX){
+    __pdBuildTab(id);
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -4407,6 +4480,14 @@ function applyAtlasSZC(parentData, origem) {
   var rows = normalizeAtlasSZCRows(parentData.rows);
   rows = atlasFilterRowsForScope(rows, 'szc');
   if (!rows.length) return false;
+  // [PERF][PD] Idempotência: a SZC pode chegar do parent E do Firestore (corrida).
+  // Se for a mesma versão+escopo já aplicada, evita o recalc duplicado.
+  var __sig = (parentData.ts || '') + '|' + rows.length + '|' + __pdScopeKey();
+  if (__sig === __PD_SZC_SIG && SZC_DATA && SZC_DATA.length) {
+    console.log('[PERF][PD] SZC ignorado (versão já aplicada)');
+    return true;
+  }
+  __PD_SZC_SIG = __sig;
   RAW_SZC = rows;
   SZC_DATA = enrichSZC(RAW_SZC);
   if (DATA.length || RAW.length) {
@@ -4433,6 +4514,13 @@ function applyAtlasSZY(parentData, origem) {
   if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
   var rows = normalizeAtlasSZYRows(parentData.rows);
   if (!rows.length) return false;
+  // [PERF][PD] Idempotência: a SZY pode chegar do parent E do Firestore (corrida).
+  var __sig = (parentData.ts || '') + '|' + rows.length;
+  if (__sig === __PD_SZY_SIG && RAW_SZY && RAW_SZY.length) {
+    console.log('[PERF][PD] SZY ignorado (versão já aplicada)');
+    return true;
+  }
+  __PD_SZY_SIG = __sig;
   RAW_SZY = rows;
   rebuildSZYMap();
   if (DATA.length || RAW.length) {
@@ -4482,6 +4570,19 @@ function applyAtlasSZB(parentData, origem) {
   var rows = normalizeAtlasSZBRows(parentData.rows);
   rows = atlasFilterRowsForScope(rows, 'szb');
   if (!rows.length) return false;
+
+  // [PERF][PD] Idempotência por versão+escopo. Os múltiplos caminhos de boot
+  // (timers do DOMContentLoaded, IIFE, handlers de ATLAS_DATA_READY/RESPONSE,
+  // fallback Firestore) podem chamar applyAtlasSZB várias vezes com a MESMA carga.
+  // Se a versão (ts), o nº de registros e o escopo são idênticos ao já carregado,
+  // os dados/resultados seriam byte-a-byte iguais: pulamos o fullRebuild redundante.
+  var __sig = (parentData.ts || '') + '|' + rows.length + '|' + __pdScopeKey();
+  if (__sig === __PD_SZB_SIG && DATA.length) {
+    console.log('[PERF][PD] SZB ignorado (versão já carregada) ' + (origem||''));
+    return true;
+  }
+  __PD_SZB_SIG = __sig;
+  console.log('[PERF][PD] SZB aplicado: ' + rows.length + ' reg — ' + (origem||''));
 
   // Mesmo contrato usado após parseXLSM(file): RAW recebe registros; DATA é recriado por fullRebuild/enrich.
   RAW = rows;
