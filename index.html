@@ -7,8 +7,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <title>COMIX Atlas</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- [PERF][INDEX] SheetJS e JSZip só são usados no fluxo Download Base (parse de XLSM/ZIP).
+     defer remove ~700KB do caminho crítico de boot sem alterar nenhuma funcionalidade. -->
+<script defer src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
@@ -1485,48 +1487,87 @@ function atlasWatchSZBMeta(){ atlasWatchBase('szb'); }
 
 /* Carrega TODAS as bases da nuvem ao logar — assim o Financeiro/PD encontra
    os dados prontos quando abrir os iframes, mesmo sem novo upload nesta sessão.
-   Comparação de versão usa updatedAt do servidor (confiável) quando disponível,
-   caindo back para ts do cliente apenas se updatedAt não existir. */
+
+   [PERF][INDEX] Otimizado em duas frentes, SEM alterar dados/fonte da verdade:
+   (1) Cache local versionado: se o IndexedDB já tem a MESMA versão que está na
+       nuvem (igualdade exata de meta.ts = clientTs do upload), hidrata a base do
+       cache local em vez de rebaixar todos os chunks do Firestore. Como a decisão
+       é por ts idêntico, é garantidamente a mesma carga da nuvem — zero risco de
+       versão antiga (a preocupação original do bridge era usar IDB sem checar
+       versão; aqui a versão é checada e tem que bater).
+   (2) Concorrência: as bases eram carregadas em SÉRIE (uma esperava a outra
+       terminar). Agora rodam em um pool paralelo limitado, com SZB primeiro
+       (PD Diário é prioridade). No mobile mantém 1 por vez (memória). */
+async function __atlasPreloadOne(id){
+  const t0 = performance.now();
+  const docRef = atlasCloudDocRef(id);
+  const metaSnap = await docRef.get();      // meta é leve (sem chunks)
+  if(!metaSnap.exists) return;
+  const meta = metaSnap.data();
+
+  // (1a) Memória já está na versão da nuvem? nada a fazer.
+  const mem = window.ATLAS_DATA[id];
+  if(mem && Array.isArray(mem.rows) && mem.rows.length && meta.ts && mem.ts === meta.ts){
+    __atlasWatchLastTs[id] = mem.ts;
+    if(id === 'szb') window.__atlasSZBLastTs = mem.ts;
+    console.log(`[PERF][INDEX] ${id.toUpperCase()} cache-mem ${(performance.now()-t0).toFixed(0)}ms`);
+    return;
+  }
+
+  // (1b) Cache local (IndexedDB) com a MESMA versão da nuvem? hidrata sem baixar chunks.
+  try{
+    const cached = await atlasLoadBase(id);
+    if(cached && Array.isArray(cached.rows) && cached.rows.length && meta.ts && cached.ts === meta.ts){
+      window.ATLAS_DATA[id] = cached;
+      atlasMarkLoadedCard(id, cached, 'do cache local');
+      __atlasWatchLastTs[id] = cached.ts;
+      if(id === 'szb') window.__atlasSZBLastTs = cached.ts;
+      atlasBroadcast(id, cached);
+      console.log(`[PERF][INDEX] ${id.toUpperCase()} cache-idb ${(performance.now()-t0).toFixed(0)}ms (${cached.count||cached.rows.length} reg)`);
+      return;
+    }
+  }catch(_){}
+
+  // (2) Versão nova ou cache ausente: baixa os chunks da nuvem (fonte da verdade).
+  const p = await atlasLoadBaseFromFirestore(id);
+  if(p && Array.isArray(p.rows) && p.rows.length){
+    window.ATLAS_DATA[id] = p;
+    atlasSaveBase(id, p).catch(()=>{});
+    atlasMarkLoadedCard(id, p, 'da nuvem');
+    // Inicializa o ts para o watcher não considerar isso como "nova versão"
+    __atlasWatchLastTs[id] = p.ts;
+    if(id === 'szb') window.__atlasSZBLastTs = p.ts;
+    // Notifica iframes abertos antes do preload terminar (ex: PD Diário em branco)
+    atlasBroadcast(id, p);
+    console.log(`[PERF][INDEX] ${id.toUpperCase()} download ${(performance.now()-t0).toFixed(0)}ms (${p.count||p.rows.length} reg)`);
+  }
+}
+
 async function atlasPreloadAllBases(){
   if(!db || !curUser) return;
-  for(const id of ATLAS_CLOUD_BASES){
-    /* MOBILE: pré-carrega só as bases essenciais para a 1ª pintura (SZB). As
-       demais (financeiro, agregados, szy, szc…) NÃO entram na memória agora —
-       são carregadas sob demanda quando o usuário abre o menu correspondente
-       (o handler de ATLAS_REQUEST_DATA já faz esse load da nuvem). Isso evita
-       manter as 10 bases vivas ao mesmo tempo, que saturava a aba mobile e
-       derrubava QUALQUER menu. No desktop nada muda: carrega tudo. */
-    if(window.ATLAS_IS_MOBILE && !window.ATLAS_MOBILE_PRELOAD.has(id)) continue;
-    try{
-      const docRef = atlasCloudDocRef(id);
-      const metaSnap = await docRef.get();
-      if(!metaSnap.exists) continue;
-      const meta = metaSnap.data();
+  const t0 = performance.now();
+  /* MOBILE: pré-carrega só as bases essenciais para a 1ª pintura (SZB). As demais
+     (financeiro, agregados, szy, szc…) NÃO entram na memória agora — são carregadas
+     sob demanda quando o usuário abre o menu correspondente (o handler de
+     ATLAS_REQUEST_DATA já faz esse load da nuvem). No desktop, carrega tudo. */
+  let ids = [...ATLAS_CLOUD_BASES].filter(id =>
+    !(window.ATLAS_IS_MOBILE && !window.ATLAS_MOBILE_PRELOAD.has(id)));
+  // SZB primeiro: é a base da PD Diário (prioridade máxima do sistema).
+  ids.sort((a,b)=> (a==='szb'? -1 : 0) - (b==='szb'? -1 : 0));
 
-      // Fonte da verdade: updatedAt (serverTimestamp). Fallback: ts (cliente).
-      const cloudUpdatedAt = meta.updatedAt ? meta.updatedAt.toMillis() : 0;
-      const cloudTs        = meta.ts ? new Date(meta.ts).getTime() : 0;
-      const cloudVersion   = cloudUpdatedAt || cloudTs; // preferência ao server time
-
-      const mem    = window.ATLAS_DATA[id];
-      const memTs  = mem && mem.ts ? new Date(mem.ts).getTime() : 0;
-
-      // Só busca chunks se a nuvem tiver algo mais recente (ou memória vazia)
-      if(mem && cloudVersion && memTs && cloudVersion < memTs) continue;
-
-      const p = await atlasLoadBaseFromFirestore(id);
-      if(p && Array.isArray(p.rows) && p.rows.length){
-        window.ATLAS_DATA[id] = p;
-        atlasSaveBase(id, p).catch(()=>{});
-        atlasMarkLoadedCard(id, p, 'da nuvem');
-        // Inicializa o ts para o watcher não considerar isso como "nova versão"
-        __atlasWatchLastTs[id] = p.ts;
-        if(id === 'szb') window.__atlasSZBLastTs = p.ts;
-        // Notifica iframes abertos antes do preload terminar (ex: PD Diário em branco)
-        atlasBroadcast(id, p);
-      }
-    }catch(e){ console.warn(`[Atlas] preload ${id}:`, e.message); }
+  // Pool de concorrência limitada — substitui o laço serial (uma base esperava a
+  // outra). Desktop: 4 simultâneas; mobile: 1 (teto de memória da aba).
+  const LIMIT = window.ATLAS_IS_MOBILE ? 1 : 4;
+  let i = 0;
+  async function worker(){
+    while(i < ids.length){
+      const id = ids[i++];
+      try{ await __atlasPreloadOne(id); }
+      catch(e){ console.warn(`[Atlas] preload ${id}:`, e.message); }
+    }
   }
+  await Promise.all(Array.from({length: Math.min(LIMIT, ids.length)}, worker));
+  console.log(`[PERF][INDEX] preload total ${(performance.now()-t0).toFixed(0)}ms (${ids.length} bases)`);
 }
 function atlasMarkLoadedCard(id,payload,sourceTxt){
   try{
@@ -1591,6 +1632,12 @@ window.addEventListener('message',async ev=>{
   if(d.type!=='ATLAS_REQUEST_DATA'||!d.table) return;
   const id=String(d.table).toLowerCase();
   let payload=null;
+  // [PERF][INDEX] Conta quantas vezes cada base é resolvida pelo bridge.
+  // Se a mesma base aparecer com nº crescente em poucos ms, há pedido duplicado.
+  window.__ATLAS_REQ_COUNT = window.__ATLAS_REQ_COUNT || {};
+  window.__ATLAS_REQ_COUNT[id] = (window.__ATLAS_REQ_COUNT[id]||0) + 1;
+  const __reqHadMem = !!(window.ATLAS_DATA && window.ATLAS_DATA[id]);
+  console.log(`[PERF][INDEX] bridge pedido #${window.__ATLAS_REQ_COUNT[id]} ${id.toUpperCase()} (em memória: ${__reqHadMem})`);
 
   if(ATLAS_CLOUD_BASES.has(id)){
     // Bases sincronizadas (SZB, SE1, SE2, SE5):
