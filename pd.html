@@ -76,6 +76,22 @@ body{background:var(--bg);color:var(--tx);font-family:var(--f);font-size:12px;di
 .lnk{color:var(--mu);font-size:11px;cursor:pointer;text-decoration:underline;}
 .lnk:hover{color:var(--ac);}
 
+/* ── PRÉ-CARREGAMENTO PD (substitui a antiga tela de upload manual da SZB) ── */
+#pd-preload{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;text-align:center;width:100%;}
+#pd-preload .pl-spin{width:46px;height:46px;border-radius:50%;border:3px solid var(--bd2);border-top-color:var(--ac);animation:plspin .8s linear infinite;}
+@keyframes plspin{to{transform:rotate(360deg);}}
+#pd-preload .pl-tit{font-size:20px;font-weight:600;color:var(--tx);}
+#pd-preload .pl-sub{color:var(--mu);font-size:13px;max-width:440px;line-height:1.6;min-height:20px;}
+#pd-preload .pl-skel{display:flex;flex-direction:column;gap:10px;width:100%;max-width:460px;margin-top:2px;}
+#pd-preload .pl-bar{height:12px;border-radius:6px;background:linear-gradient(90deg,var(--bd2) 25%,#eef1f7 37%,var(--bd2) 63%);background-size:400% 100%;animation:plshim 1.4s ease infinite;}
+#pd-preload .pl-bar.b2{width:84%;}
+#pd-preload .pl-bar.b3{width:66%;}
+@keyframes plshim{0%{background-position:100% 0;}100%{background-position:0 0;}}
+#pd-preload .pl-brand{margin-top:4px;color:var(--mu);font-size:11px;letter-spacing:.7px;font-weight:600;text-transform:uppercase;}
+#pd-preload .pl-fallback{display:none;margin-top:4px;}
+#pd-preload.empty .pl-spin,#pd-preload.empty .pl-skel{display:none;}
+#pd-preload.empty .pl-fallback{display:inline-block;}
+
 /* MAIN */
 #scr-main{display:none;flex-direction:column;flex:1;overflow:hidden;}
 .bar{background:#fff;border-bottom:1px solid var(--bd);padding:0 14px;display:flex;align-items:center;height:36px;flex-shrink:0;}
@@ -562,18 +578,33 @@ html{ -webkit-text-size-adjust:100%; }
   </div>
 </div>
 
-<!-- DROP -->
+<!-- PRÉ-CARREGAMENTO (dados chegam automaticamente da nuvem/Atlas) -->
 <div id="scr-drop">
-  <div class="dtit">PD Diário</div>
-  <div class="dsub">Upload do arquivo XML exportado do ERP Protheus (Base SZB). Os parâmetros são carregados automaticamente da nuvem.</div>
-  <label class="dz" id="dz" for="fi" style="cursor:pointer;">
-    <div class="di">📂</div>
-    <div class="dlb">Clique ou arraste o arquivo XML da SZB</div>
-    <div class="dhi" id="dz-h">SZB_-_CONHECIMENTO_FRETE.xml / .xlsm</div>
-  </label>
-  <input type="file" id="fi" accept=".xml,.xlsm,.xlsx" style="display:none">
-  <button class="btn" id="btn-go" onclick="buildDash()" disabled>Carregar Dashboard</button>
-  <span class="lnk" onclick="demo()">Usar dados de demonstração</span>
+  <div id="pd-preload">
+    <div class="pl-spin"></div>
+    <div class="pl-tit">PD Diário</div>
+    <div class="pl-sub" id="pd-preload-sub">Sincronizando dados da nuvem…</div>
+    <div class="pl-skel" aria-hidden="true">
+      <div class="pl-bar"></div>
+      <div class="pl-bar b2"></div>
+      <div class="pl-bar b3"></div>
+    </div>
+    <div class="pl-brand">COMIX Atlas</div>
+    <span class="lnk pl-fallback" onclick="pdShowUpload()">Carregar arquivo manualmente</span>
+  </div>
+
+  <!-- Upload legado da SZB — mantido oculto para compatibilidade; acionado só no fallback sem dados na nuvem -->
+  <div id="pd-upload-legacy" style="display:none;flex-direction:column;align-items:center;gap:20px;width:100%;">
+    <div class="dsub">Upload do arquivo XML exportado do ERP Protheus (Base SZB). Os parâmetros são carregados automaticamente da nuvem.</div>
+    <label class="dz" id="dz" for="fi" style="cursor:pointer;">
+      <div class="di">📂</div>
+      <div class="dlb">Clique ou arraste o arquivo XML da SZB</div>
+      <div class="dhi" id="dz-h">SZB_-_CONHECIMENTO_FRETE.xml / .xlsm</div>
+    </label>
+    <input type="file" id="fi" accept=".xml,.xlsm,.xlsx" style="display:none">
+    <button class="btn" id="btn-go" onclick="buildDash()" disabled>Carregar Dashboard</button>
+    <span class="lnk" onclick="demo()">Usar dados de demonstração</span>
+  </div>
 </div>
 
 <!-- MAIN -->
@@ -1244,6 +1275,19 @@ function ldSet(pct, msg){
   document.getElementById('ld-fill').style.width=pct+'%';
   document.getElementById('ld-pct').textContent=Math.round(pct)+'%';
   if(msg) document.getElementById('ld-step').textContent=msg;
+}
+
+/* Pré-carregamento PD: revela o upload manual legado (fallback quando a nuvem não tem dados). */
+function pdShowUpload(){
+  var pl=document.getElementById('pd-preload'); if(pl) pl.style.display='none';
+  var up=document.getElementById('pd-upload-legacy'); if(up) up.style.display='flex';
+}
+/* Estado "sem dados" do pré-carregamento: para o spinner/skeleton e oferece o fallback manual. */
+function pdPreloadEmpty(msg){
+  var pl=document.getElementById('pd-preload'); if(!pl) return;
+  pl.classList.add('empty');
+  var sub=document.getElementById('pd-preload-sub');
+  if(sub) sub.textContent = msg || 'Nenhum dado disponível na nuvem.';
 }
 
 // ═══════════════════════════════════════════════════════
@@ -3666,8 +3710,9 @@ window.addEventListener('DOMContentLoaded', ()=>{
           setTimeout(triggerAI, 1000);
         } else {
           ldHide();
+          pdPreloadEmpty('Nenhum dado encontrado na nuvem para este perfil.');
         }
-      } catch(e) { ldHide(); }
+      } catch(e) { ldHide(); pdPreloadEmpty('Não foi possível sincronizar os dados da nuvem.'); }
     }, __pdMobFb ? 4000 : 1800);
     return;
   }
@@ -3688,9 +3733,11 @@ window.addEventListener('DOMContentLoaded', ()=>{
         setTimeout(triggerAI, 1000);
       } else {
         ldHide();
+        pdPreloadEmpty('Nenhum dado salvo na nuvem.');
       }
     } catch(e) {
       ldHide();
+      pdPreloadEmpty('Não foi possível carregar os dados salvos.');
       const el = document.getElementById('h-sync');
       if (el) { el.textContent = 'Sem dados salvos'; el.className = 'hm-sync'; }
     }
