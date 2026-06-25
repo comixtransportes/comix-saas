@@ -66,6 +66,8 @@ table{width:100%;border-collapse:collapse}th{position:sticky;top:0;background:#f
 .ciot-emit .ce-txt span{display:block;font-size:10.5px;color:var(--mu);margin-top:1px}
 .btn.pdf{background:var(--rd);border-color:var(--rd);color:#fff}.btn.pdf:hover{background:#a91717;color:#fff}
 .copy-ciot{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;flex:0 0 auto;padding:0;border:1px solid var(--bd2);background:#fff;color:var(--mu);border-radius:5px;cursor:pointer;transition:.12s}.copy-ciot svg{width:13px;height:13px;display:block}.copy-ciot:hover{border-color:var(--ac);color:var(--ac);background:var(--ac-bg)}.copy-ciot:active{transform:scale(.92)}
+.copy-ciot.copied{background:var(--ac-bg);border-color:#bfdbfe;color:var(--ac)}
+.copy-ciot.copied:hover{background:#dbe8ff;border-color:var(--ac);color:var(--ac)}
 .pdf-modal{position:fixed;inset:0;z-index:60;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;padding:18px}
 .pdf-modal.on{display:flex}
 .pdf-box{width:min(980px,96vw);height:min(92vh,1000px);background:var(--wh);border-radius:var(--r);box-shadow:0 20px 60px rgba(0,0,0,.35);display:flex;flex-direction:column;overflow:hidden}
@@ -82,6 +84,10 @@ table{width:100%;border-collapse:collapse}th{position:sticky;top:0;background:#f
 #screen-historico .work{grid-template-columns:1fr;width:100%}
 #screen-historico .card.grow{width:100%}
 .hist-table{min-width:100%}
+.hist-table th.th-sort{cursor:pointer;user-select:none;white-space:nowrap;transition:.12s}
+.hist-table th.th-sort:hover{color:var(--ac);background:#eef3fb}
+.hist-table th.th-active{color:var(--ac)}
+.hist-table th .sort-ar{font-size:10px;font-weight:700}
 .hist-table .hist-acoes{white-space:nowrap}
 .hist-table .hist-when{white-space:nowrap;color:var(--mu)}
 .hist-table .hist-chave{font-size:9.5px}
@@ -152,13 +158,13 @@ tr.row-dup:hover{background:#fde8e8!important}
             <div class="stat err"><b id="stDup">0</b><span>Duplicados</span></div>
           </div>
           <div class="card grow">
-            <div class="card-h"><h2>Fila de CT-es para CIOT</h2><div class="toolbar"><button class="btn blue" id="btnBatch" onclick="startBatch()" disabled title="Emite em sequência todos os CT-es marcados (prontos)">⚡ Auto EFrete (lote)</button><button class="btn danger" id="btnBatchStop" onclick="stopBatch()" style="display:none">Parar lote</button><label class="batch-emit" title="LIGADO: o robô clica Emitir sozinho e encadeia as emissões sem parar na conferência. DESLIGADO (recomendado): o robô preenche e PARA; você confere e emite cada um, e o lote avança a cada emissão."><input type="checkbox" id="batchAutoEmit"> emitir automático</label><span class="batch-count muted" id="batchCount"></span><input class="input" id="q" placeholder="Buscar CT-e, placa, origem..." oninput="renderTable()"><select class="input" id="statusFilter" onchange="renderTable()"><option value="">Todos</option><option value="pronto">Pronto</option><option value="pendente">Pendente</option><option value="emitido">Emitido</option><option value="erro">Erro</option></select></div></div>
+            <div class="card-h"><h2>Fila de CT-es para CIOT</h2><div class="toolbar"><input class="input" id="q" placeholder="Buscar CT-e, placa, origem..." oninput="renderTable()"><select class="input" id="statusFilter" onchange="renderTable()"><option value="">Todos</option><option value="pronto">Pronto</option><option value="pendente">Pendente</option><option value="emitido">Emitido</option><option value="erro">Erro</option></select></div></div>
             <div class="scroll grow"><table><thead><tr><th style="width:30px"><input type="checkbox" id="checkAll" onclick="toggleCheckAll(this)" title="Marcar/desmarcar todos os prontos"></th><th>Status</th><th>CT-e</th><th>Origem/Destino</th><th>Peso</th><th>Placas</th><th>Pendências</th><th>Ações</th></tr></thead><tbody id="rows"></tbody></table></div>
           </div>
         </div>
         <div class="right">
           <div class="card grow">
-            <div class="card-h"><h2>Conferência do CIOT</h2><div class="toolbar"><button class="btn" onclick="saveSelected()" id="btnSave" disabled>Salvar</button><button class="btn blue" onclick="sendAutoEfrete()" id="btnAuto" disabled>Auto EFrete</button></div></div>
+            <div class="card-h"><h2>Conferência do CIOT</h2><div class="toolbar"><button class="btn" onclick="saveSelected()" id="btnSave" disabled>Salvar</button><label class="batch-emit" title="LIGADO: o robô clica Emitir sozinho e encadeia as emissões sem parar na conferência. DESLIGADO (recomendado): o robô preenche e PARA; você confere e emite cada um, e o lote avança a cada emissão."><input type="checkbox" id="batchAutoEmit"> emitir automático</label><button class="btn blue" id="btnBatch" onclick="startBatch()" disabled title="Emite em sequência todos os CT-es marcados (prontos). Com 1 marcado, envia só ele.">⚡ Auto EFrete (lote)</button><button class="btn danger" id="btnBatchStop" onclick="stopBatch()" style="display:none">Parar lote</button><span class="batch-count muted" id="batchCount"></span></div></div>
             <div class="card-b scroll grow" id="detail"><div class="detail-empty">Selecione um CT-e importado para conferir, complementar e enviar para o Auto EFrete.</div></div>
           </div>
           <div class="card">
@@ -169,7 +175,7 @@ tr.row-dup:hover{background:#fde8e8!important}
       </div>
     </section>
 
-    <section class="screen" id="screen-historico"><div class="work" style="grid-template-columns:1fr"><div class="card grow"><div class="card-h"><h2>Histórico de CIOTs</h2><div class="toolbar"><button class="btn" onclick="loadHistory()">Recarregar</button><input class="input" id="histQ" placeholder="Filtrar: CIOT, CT-e, chave, motorista, contratado…" oninput="renderHistory()" style="min-width:260px;flex:1"><button class="btn" onclick="exportCSV()">Exportar CSV</button></div></div><div class="scroll grow"><table class="hist-table"><thead><tr><th>Status</th><th>CIOT</th><th>CT-e</th><th>Placas</th><th>Motorista</th><th>Contratado</th><th>Tomador</th><th>Usuário</th><th>Atualização</th><th>Ações</th></tr></thead><tbody id="histRows"></tbody></table></div></div></div></section>
+    <section class="screen" id="screen-historico"><div class="work" style="grid-template-columns:1fr"><div class="card grow"><div class="card-h"><h2>Histórico de CIOTs</h2><div class="toolbar"><button class="btn" onclick="loadHistory()">Recarregar</button><input class="input" id="histQ" placeholder="Filtrar: CIOT, CT-e, chave, motorista, contratado…" oninput="renderHistory()" style="min-width:260px;flex:1"><button class="btn" onclick="exportCSV()">Exportar CSV</button></div></div><div class="scroll grow"><table class="hist-table"><thead><tr><th class="th-sort" data-key="status" onclick="sortHistory('status')">Status<span class="sort-ar"></span></th><th class="th-sort" data-key="ciot" onclick="sortHistory('ciot')">CIOT<span class="sort-ar"></span></th><th class="th-sort" data-key="cte" onclick="sortHistory('cte')">CT-e<span class="sort-ar"></span></th><th class="th-sort" data-key="placas" onclick="sortHistory('placas')">Placas<span class="sort-ar"></span></th><th class="th-sort" data-key="motorista" onclick="sortHistory('motorista')">Motorista<span class="sort-ar"></span></th><th class="th-sort" data-key="contratado" onclick="sortHistory('contratado')">Contratado<span class="sort-ar"></span></th><th class="th-sort" data-key="tomador" onclick="sortHistory('tomador')">Tomador<span class="sort-ar"></span></th><th class="th-sort" data-key="usuario" onclick="sortHistory('usuario')">Usuário<span class="sort-ar"></span></th><th class="th-sort" data-key="atualizacao" onclick="sortHistory('atualizacao')">Atualização<span class="sort-ar"></span></th><th>Ações</th></tr></thead><tbody id="histRows"></tbody></table></div></div></div></section>
 
     <section class="screen" id="screen-apoio"><div class="work" style="grid-template-columns:1fr 1fr"><div class="card grow"><div class="card-h"><h2>Placas e motoristas</h2><div class="toolbar"><button class="btn" onclick="loadCadastros()">Ler cadastros</button><button class="btn" onclick="requestSZB()">Ler SZB</button><button class="btn" onclick="requestSA2()">Ler SA2</button></div></div><div class="card-b"><p class="muted">A SZB é a fonte principal de motorista, CPF, proprietário e placa por CT-e. O cadastro Firestore (veículos/motoristas) entra como complemento. Se algo não vier completo, complemente no painel de conferência do CT-e.</p><div class="section-title">Cadastro Firestore</div><div id="cadResumo" class="muted">Ainda não carregado.</div><div class="section-title">SZB (motorista/proprietário por CT-e)</div><div id="szbResumo" class="muted">Ainda não carregado.</div><div class="section-title">SA2 (dados bancários do contratado)</div><div id="sa2Resumo" class="muted">Ainda não carregado.</div></div></div><div class="card grow"><div class="card-h"><h2>Rotas e distâncias</h2><button class="btn" onclick="requestSZY()">Ler SZY</button></div><div class="card-b"><p class="muted">A distância é buscada na base SZY do Atlas usando origem e destino do XML. Quando não encontrar, o CT-e fica pendente para preenchimento manual.</p><div class="section-title">Resumo carregado</div><div id="szyResumo" class="muted">Ainda não carregado.</div></div></div></div></section>
 
@@ -185,7 +191,7 @@ tr.row-dup:hover{background:#fde8e8!important}
       <div class="param"><label>Documento no EFrete</label><select class="input" id="pDocEfrete"><option value="chave">Chave do CT-e</option><option value="numero">Número do CT-e</option></select></div>
     </div><div class="section-title">Valores fixos zerados</div><p class="muted">Combustível, vale-pedágio, seguro/GR, IRRF, INSS, SEST/SENAT, ISSQN e outros impostos são enviados como R$ 0,00.</p></div></div></div></section>
 
-    <section class="screen" id="screen-auto"><div class="work" style="grid-template-columns:1fr"><div class="card"><div class="card-h"><h2>Auto EFrete — extensão Chrome</h2><button class="btn" onclick="checkRobot()">Verificar extensão</button></div><div class="card-b"><p>O botão <b>Auto EFrete</b> envia a tarefa diretamente para a extensão <b>COMIX Auto EFrete Autônomo</b> instalada no Chrome. Não usa Prompt de Comando, Node, Playwright, porta 9222 nem download manual de JSON.</p><div class="section-title">Status</div><div id="robotStatus" class="muted">Verificando extensão...</div><div class="section-title">Uso esperado</div><p class="muted">Mantenha o EFrete logado em outra aba do mesmo Chrome e clique em Auto EFrete no CT-e pronto.</p></div></div></div></section>
+    <section class="screen" id="screen-auto"><div class="work" style="grid-template-columns:1fr"><div class="card"><div class="card-h"><h2>Auto EFrete — extensão Chrome</h2><span class="chip" id="robotChipAuto" style="margin-left:auto">Auto EFrete — verificando extensão</span><button class="btn" onclick="checkRobot()">Verificar extensão</button></div><div class="card-b"><p>O botão <b>⚡ Auto EFrete (lote)</b>, na conferência do CIOT, envia a tarefa diretamente para a extensão <b>COMIX Auto EFrete Autônomo</b> instalada no Chrome — funciona para 1 ou vários CT-es marcados como prontos. Não usa Prompt de Comando, Node, Playwright, porta 9222 nem download manual de JSON.</p><div class="section-title">Status da conexão</div><div id="robotStatus" class="muted">Verificando extensão...</div><div class="section-title">Uso esperado</div><p class="muted">Mantenha o EFrete logado em outra aba do mesmo Chrome, marque os CT-es prontos na fila e clique em <b>⚡ Auto EFrete (lote)</b>. Com <b>emitir automático</b> desligado (recomendado) o robô preenche e para na conferência; ligado, ele encadeia as emissões sozinho.</p></div></div></div></section>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -210,7 +216,7 @@ tr.row-dup:hover{background:#fde8e8!important}
 const CIOT_COLLECTION='ciot_operacoes';
 const CIOT_PARAMS_COLLECTION='ciot_parametros';
 const ROBOT_URL='http://127.0.0.1:3636';
-const state={user:{},items:[],selected:null,checked:new Set(),batch:{active:false,queue:[],idx:-1,autoEmitir:false,emitidos:0,total:0},histSelected:null,history:[],pdfCache:{},pdfCurrent:null,veiculos:[],motoristas:[],szy:[],szb:[],szbByCte:{},szbByPlaca:{},szbByMot:{},szbByDoc:{},szbDocByPropNome:{},sa2:[],sa2ByDoc:{},sa2ByName:{},routeByCities:{},szyByRota:{},cadComplete:false,duplicados:0,params:{operacao:'LOTACAO',tipoCargaCodigo:'12',tipoCargaDescricao:'Carga Granel Pressurizada',tipoCargaLabel:'12 - Carga Granel Pressurizada',embalagem:'Granel',retornoVazio:'NÃO',altoDesempenho:'NÃO',outrasDespesas:'N',docEfrete:'chave'}};
+const state={user:{},items:[],selected:null,checked:new Set(),batch:{active:false,queue:[],idx:-1,autoEmitir:false,emitidos:0,total:0},histSelected:null,histSort:{key:'atualizacao',dir:'desc'},copiedCiots:new Set(),history:[],pdfCache:{},pdfCurrent:null,veiculos:[],motoristas:[],szy:[],szb:[],szbByCte:{},szbByPlaca:{},szbByMot:{},szbByDoc:{},szbDocByPropNome:{},sa2:[],sa2ByDoc:{},sa2ByName:{},routeByCities:{},szyByRota:{},cadComplete:false,duplicados:0,params:{operacao:'LOTACAO',tipoCargaCodigo:'12',tipoCargaDescricao:'Carga Granel Pressurizada',tipoCargaLabel:'12 - Carga Granel Pressurizada',embalagem:'Granel',retornoVazio:'NÃO',altoDesempenho:'NÃO',outrasDespesas:'N',docEfrete:'chave'}};
 const $=id=>document.getElementById(id);
 function norm(v){return String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim();}
 function onlyDigits(v){return String(v||'').replace(/\D/g,'');}
@@ -296,7 +302,7 @@ async function flushPending(){
   if(done){log(done+' registro(s) pendente(s) sincronizado(s) com o Firestore — agora visíveis a todos os usuários.','ok');loadHistory();}
 }
 function requestData(table){return new Promise(resolve=>{const handler=ev=>{const m=ev.data||{};if(m.type==='ATLAS_DATA_RESPONSE'&&m.table===table){window.removeEventListener('message',handler);resolve(m.payload)}};window.addEventListener('message',handler);try{parent.postMessage({type:'ATLAS_REQUEST_DATA',table},'*')}catch(_){resolve(null)}setTimeout(()=>{window.removeEventListener('message',handler);resolve(null)},12000)})}
-window.addEventListener('message',ev=>{const m=ev.data||{};if(m.type==='ATLAS_USER'){state.user=m;$('userChip').textContent=(m.nome||m.email||'Usuário')+' — '+(m.perfil||'');try{ciotApplyButtonPerms();}catch(_){}flushPending();window.__cadTries=(window.__cadTries||0);if(!state.cadComplete&&window.__cadTries<3){window.__cadTries++;log('Bridge do Atlas conectado. Recarregando cadastros e histórico (tentativa '+window.__cadTries+')…','info');loadCadastros();loadHistory();}else{loadHistory();}}if(m.type==='ATLAS_DATA_READY'){if(m.table==='szy')requestSZY();if(m.table==='szb')requestSZB();if(m.table==='sa2')requestSA2();}if(m.type==='COMIX_AUTO_EFRETE_LOG'&&m.message){const key=String(m.at||'')+'|'+m.message;if(key!==window.__lastRobotLogKey){window.__lastRobotLogKey=key;const low=m.message.toLowerCase();const tp=/(não emito|nao emito|pausad|pausei|recus|rejei|erro|falh|não consegui|nao consegui|faltam|falta\b)/.test(low)?'warn':'info';log('Robô: '+m.message,tp);}sniffCiotFromLog(m.message);}if(m.type==='COMIX_AUTO_EFRETE_RESULT'&&m.result){applyEmissionResult(m.result,{autoOpen:true});}});
+window.addEventListener('message',ev=>{const m=ev.data||{};if(m.type==='ATLAS_USER'){state.user=m;$('userChip').textContent=(m.nome||m.email||'Usuário')+' — '+(m.perfil||'');try{ciotApplyButtonPerms();}catch(_){}try{refreshCopiedMarks();}catch(_){}flushPending();window.__cadTries=(window.__cadTries||0);if(!state.cadComplete&&window.__cadTries<3){window.__cadTries++;log('Bridge do Atlas conectado. Recarregando cadastros e histórico (tentativa '+window.__cadTries+')…','info');loadCadastros();loadHistory();}else{loadHistory();}}if(m.type==='ATLAS_DATA_READY'){if(m.table==='szy')requestSZY();if(m.table==='szb')requestSZB();if(m.table==='sa2')requestSA2();}if(m.type==='COMIX_AUTO_EFRETE_LOG'&&m.message){const key=String(m.at||'')+'|'+m.message;if(key!==window.__lastRobotLogKey){window.__lastRobotLogKey=key;const low=m.message.toLowerCase();const tp=/(não emito|nao emito|pausad|pausei|recus|rejei|erro|falh|não consegui|nao consegui|faltam|falta\b)/.test(low)?'warn':'info';log('Robô: '+m.message,tp);}sniffCiotFromLog(m.message);}if(m.type==='COMIX_AUTO_EFRETE_RESULT'&&m.result){applyEmissionResult(m.result,{autoOpen:true});}});
 /* ══ PERMISSÕES DE BOTÕES (Auto EFrete lote / Emitir automático) ══
    Tratadas na tela de Permissões como botões:
    · btn_ciot_lote          → botão "⚡ Auto EFrete (lote)"
@@ -339,7 +345,7 @@ window.addEventListener('message',ev=>{
 try{ parent.postMessage({type:'ATLAS_REQUEST_TAB_PERMS'},'*'); }catch(_){}
 
 async function init(){
-  requestUser(); bindDrop(); updateDataChip();
+  requestUser(); bindDrop(); updateDataChip(); loadCopiedMarksLocal();
   lpMsg('Carregando bases do Atlas… (pode soltar o XML; os campos são preenchidos assim que as bases chegam)');
   log('Central CIOT iniciada. Carregando bases SZB / SZY / SA2 / cadastros…','info');
   await loadParams();
@@ -850,10 +856,11 @@ async function advanceBatch(emittedItem,slug){
 }
 function downloadJSON(obj,name){const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 let __robotWatch=null;
-async function checkRobot(opts){const r=await pingChromeExtension();if(r.ok){$('robotChip').textContent='Auto EFrete — extensão conectada';$('robotChip').className='chip ok';$('robotStatus').innerHTML=`Extensão conectada. Versão: <b>${r.version||'—'}</b>.`;if(__robotWatch){clearInterval(__robotWatch);__robotWatch=null;}return true}$('robotChip').textContent='Auto EFrete — extensão não detectada';$('robotChip').className='chip warn';$('robotStatus').innerHTML='A extensão COMIX Auto EFrete Autônomo não respondeu nesta aba. Recarregue a extensão em chrome://extensions (botão recarregar) — o status reconecta sozinho em alguns segundos. Se persistir, atualize o Atlas com Ctrl + Shift + R.';
+function setRobotChip(text,cls){['robotChip','robotChipAuto'].forEach(id=>{const el=$(id);if(el){el.textContent=text;el.className='chip '+cls;}});}
+async function checkRobot(opts){const r=await pingChromeExtension();if(r.ok){setRobotChip('Auto EFrete — extensão conectada','ok');$('robotStatus').innerHTML=`Extensão conectada. Versão: <b>${r.version||'—'}</b>.`;if(__robotWatch){clearInterval(__robotWatch);__robotWatch=null;}return true}setRobotChip('Auto EFrete — extensão não detectada','warn');$('robotStatus').innerHTML='A extensão COMIX Auto EFrete Autônomo não respondeu nesta aba. Recarregue a extensão em chrome://extensions (botão recarregar) — o status reconecta sozinho em alguns segundos. Se persistir, atualize o Atlas com Ctrl + Shift + R.';
 // Auto-recuperação: continua tentando em segundo plano. Assim, quando você recarrega a extensão
 // ou o bridge fica pronto, o chip vira "conectada" sozinho, sem precisar atualizar a página.
-if(!(opts&&opts.noWatch)&&!__robotWatch){let tries=0;__robotWatch=setInterval(async()=>{tries++;const rr=await pingChromeExtension();if(rr.ok){$('robotChip').textContent='Auto EFrete — extensão conectada';$('robotChip').className='chip ok';$('robotStatus').innerHTML=`Extensão conectada. Versão: <b>${rr.version||'—'}</b>.`;clearInterval(__robotWatch);__robotWatch=null;}else if(tries>=30){clearInterval(__robotWatch);__robotWatch=null;}},2000);}
+if(!(opts&&opts.noWatch)&&!__robotWatch){let tries=0;__robotWatch=setInterval(async()=>{tries++;const rr=await pingChromeExtension();if(rr.ok){setRobotChip('Auto EFrete — extensão conectada','ok');$('robotStatus').innerHTML=`Extensão conectada. Versão: <b>${rr.version||'—'}</b>.`;clearInterval(__robotWatch);__robotWatch=null;}else if(tries>=30){clearInterval(__robotWatch);__robotWatch=null;}},2000);}
 return false}
 function prettyEmail(e){e=String(e||'').trim();if(!e)return '';const local=e.split('@')[0];return local.replace(/[._-]+/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
 function histUserLabel(i){return i.ciotByName||i.emitidoByName||i.updatedByName||i.createdByName||prettyEmail(i.ciotBy||i.emitidoBy||i.updatedBy||i.createdBy)||'—';}
@@ -862,8 +869,64 @@ function histPlacas(i){const p=(i.placas||[]).filter(Boolean);return p.length?`<
 const COPY_ICON_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
 /* Mapa nº de CIOT -> CT-es distintos que o usam. Se um mesmo CIOT aparece em >1 CT-e, é captura duplicada. */
 function ciotOwnersMap(){const m={};for(const h of (state.history||[])){const c=String(h.numeroCiot||'').replace(/[^\d]/g,'');if(!c)continue;const k=onlyDigits(h.chaveCte||h.id||'')||(h.numeroCte?'cte:'+h.numeroCte:'');if(!k)continue;(m[c]||(m[c]=new Set())).add(k);}return m;}
-function renderHistory(){const q=norm($('histQ')?.value||'');const owners=ciotOwnersMap();let rows=(state.history||[]).slice().sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')));if(q)rows=rows.filter(i=>norm([i.numeroCiot,ciotPretty(i.numeroCiot||''),String(i.numeroCiot||'').replace(/[^\d]/g,''),i.numeroCte,i.chaveCte,i.id,(i.placas||[]).join(' '),i.motoristaNome,i.motoristaCpf,i.contratadoNome,i.contratadoDoc,i.tomadorNome,i.remetenteNome,histUserLabel(i),i.createdBy,i.emitidoBy,i.status,i.origemMunicipio,i.destinoMunicipio].join(' ')).includes(q));$('histRows').innerHTML=rows.map(i=>{const id=i.id||i.chaveCte;const sel=state.histSelected===id;const ciotClean=String(i.numeroCiot||'').replace(/[^\d]/g,'');const chave=String(i.chaveCte||i.id||'');const isDup=ciotClean&&owners[ciotClean]&&owners[ciotClean].size>1;const pend=i.__pendingSync?' <span class="badge warn" title="Salvo localmente; sincroniza com o Firestore assim que a ponte voltar">sync</span>':'';const ciotCell=i.numeroCiot?`<span class="ciot-wrap"><button class="copy-ciot" title="Copiar CIOT (só números)" onclick="event.stopPropagation();copyCiot('${esc(ciotClean)}')">${COPY_ICON_SVG}</button><span class="mono ciot-num">${ciotPretty(i.numeroCiot)}</span></span>${isDup?`<div class="dup-flag"><span class="badge err" title="Este nº de CIOT também consta em outro CT-e — captura duplicada. Confira no EFrete e exclua o registro incorreto.">⚠ duplicado</span></div>`:''}`:'—';const pdfBtn=i.numeroCiot?`<button class="btn" onclick="event.stopPropagation();openCiotPdf(this.closest('tr').dataset.hid)">PDF</button>`:`<button class="btn pdf-off" disabled title="PDF disponível somente após a emissão do CIOT">PDF</button>`;return `<tr class="${sel?'sel':''}${isDup?' row-dup':''}" data-hid="${esc(id)}" onclick="selectHistRow(this.dataset.hid)"><td>${badge(i.status)}${pend}</td><td class="cell-ciot">${ciotCell}</td><td class="cell-cte"><b class="cte-num">${esc(i.numeroCte||'—')}</b>${chave?`<br><span class="mono muted hist-chave" title="${esc(chave)}">${esc(chave.slice(0,24))}…</span>`:''}</td><td>${histPlacas(i)}</td><td>${esc(i.motoristaNome||'—')}</td><td>${esc(i.contratadoNome||'—')}</td><td>${esc(histTomador(i))}</td><td>${esc(histUserLabel(i))}</td><td class="hist-when">${i.updatedAt?new Date(i.updatedAt).toLocaleString('pt-BR'):''}</td><td class="hist-acoes">${pdfBtn}<button class="btn" onclick="event.stopPropagation();openHistory(this.closest('tr').dataset.hid)">Abrir</button><button class="btn danger" onclick="event.stopPropagation();deleteHistory(this.closest('tr').dataset.hid)">Excluir</button></td></tr>`}).join('')||`<tr><td colspan="10" class="muted">${q?'Nenhum registro corresponde ao filtro.':'Histórico vazio.'}</td></tr>`}
-function copyCiot(v){const clean=String(v||'').replace(/[^\d]/g,'');if(!clean){toast('CIOT sem número para copiar.','warn');return;}const done=()=>toast('CIOT '+clean+' copiado','ok');if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(clean).then(done).catch(()=>fallbackCopy(clean,done));}else{fallbackCopy(clean,done);}}
+/* ── Ordenação do Histórico de CIOTs (clique no cabeçalho, igual ao Atlas) ── */
+const HIST_SORT_KEYS={
+  status:i=>String(i.status||''),
+  ciot:i=>Number(String(i.numeroCiot||'').replace(/[^\d]/g,''))||0,
+  cte:i=>Number(String(i.numeroCte||'').replace(/[^\d]/g,''))||0,
+  placas:i=>(i.placas||[]).join(',').toUpperCase(),
+  motorista:i=>String(i.motoristaNome||'').toUpperCase(),
+  contratado:i=>String(i.contratadoNome||'').toUpperCase(),
+  tomador:i=>String(histTomador(i)||'').toUpperCase(),
+  usuario:i=>String(histUserLabel(i)||'').toUpperCase(),
+  atualizacao:i=>String(i.updatedAt||i.createdAt||'')
+};
+function sortHistRows(rows){
+  const s=state.histSort||(state.histSort={key:'atualizacao',dir:'desc'});
+  const getv=HIST_SORT_KEYS[s.key]||HIST_SORT_KEYS.atualizacao;
+  const dir=s.dir==='asc'?1:-1;
+  rows.sort((a,b)=>{
+    const va=getv(a),vb=getv(b);let c;
+    if(typeof va==='number'&&typeof vb==='number')c=va-vb;
+    else c=String(va).localeCompare(String(vb),'pt-BR',{numeric:true,sensitivity:'base'});
+    if(c===0)c=String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||''));
+    return c*dir;
+  });
+  return rows;
+}
+function sortHistory(key){
+  if(!key||!HIST_SORT_KEYS[key])return;
+  const s=state.histSort||(state.histSort={key:'atualizacao',dir:'desc'});
+  if(s.key===key){s.dir=s.dir==='asc'?'desc':'asc';}
+  else{s.key=key;s.dir=(key==='atualizacao'||key==='ciot'||key==='cte')?'desc':'asc';}
+  renderHistory();
+}
+function updateHistSortArrows(){
+  const s=state.histSort||{key:'atualizacao',dir:'desc'};
+  document.querySelectorAll('#screen-historico th.th-sort').forEach(th=>{
+    const ar=th.querySelector('.sort-ar');const active=th.dataset.key===s.key;
+    th.classList.toggle('th-active',active);
+    if(ar)ar.textContent=active?(s.dir==='asc'?' ↑':' ↓'):'';
+  });
+}
+
+/* ── Marca "copiado" do botão Copiar CIOT: por usuário e persistente ──
+   Cada usuário enxerga em azul claro só os CIOTs que ELE copiou. Guardado em
+   localStorage (instantâneo, por navegador) e espelhado no Firestore
+   (coleção ciot_copy_marks, 1 doc por usuário) para seguir entre máquinas. */
+const CIOT_COPY_COLLECTION='ciot_copy_marks';
+function copyMarkUser(){return String((state.user&&state.user.email)||'').trim().toLowerCase();}
+function copyMarkLocalKey(){return 'ciot_copied::'+(copyMarkUser()||'anon');}
+function copyMarkDocId(){return (copyMarkUser()||'anon').replace(/[^a-z0-9._-]/gi,'_');}
+function loadCopiedMarksLocal(){try{const raw=localStorage.getItem(copyMarkLocalKey());const arr=raw?JSON.parse(raw):[];state.copiedCiots=new Set(Array.isArray(arr)?arr.map(String):[]);}catch(_){state.copiedCiots=state.copiedCiots||new Set();}}
+function saveCopiedMarksLocal(){try{localStorage.setItem(copyMarkLocalKey(),JSON.stringify([...state.copiedCiots]));}catch(_){}}
+async function loadCopiedMarksRemote(){const email=copyMarkUser();if(!email)return;try{const docs=await fsGetCollection(CIOT_COPY_COLLECTION);const id=copyMarkDocId();const d=docs.find(x=>x.id===id||(x.data&&String(x.data.email||'').toLowerCase()===email));if(d&&d.data&&d.data.marks){let changed=false;Object.keys(d.data.marks).forEach(k=>{if(d.data.marks[k]&&!state.copiedCiots.has(String(k))){state.copiedCiots.add(String(k));changed=true;}});if(changed){saveCopiedMarksLocal();renderHistory();}}}catch(_){}}
+async function persistCopiedMarkRemote(){const email=copyMarkUser();if(!email)return;const marks={};state.copiedCiots.forEach(c=>{marks[c]=true;});try{await fsSet(CIOT_COPY_COLLECTION,copyMarkDocId(),{email,marks,updatedAt:new Date().toISOString()});}catch(_){}}
+function markCiotCopied(clean,btn){if(!clean)return;state.copiedCiots=state.copiedCiots||new Set();state.copiedCiots.add(String(clean));if(btn&&btn.classList)btn.classList.add('copied');saveCopiedMarksLocal();persistCopiedMarkRemote();}
+function refreshCopiedMarks(){loadCopiedMarksLocal();try{renderHistory();}catch(_){}loadCopiedMarksRemote();}
+
+function renderHistory(){const q=norm($('histQ')?.value||'');const owners=ciotOwnersMap();let rows=(state.history||[]).slice();sortHistRows(rows);if(q)rows=rows.filter(i=>norm([i.numeroCiot,ciotPretty(i.numeroCiot||''),String(i.numeroCiot||'').replace(/[^\d]/g,''),i.numeroCte,i.chaveCte,i.id,(i.placas||[]).join(' '),i.motoristaNome,i.motoristaCpf,i.contratadoNome,i.contratadoDoc,i.tomadorNome,i.remetenteNome,histUserLabel(i),i.createdBy,i.emitidoBy,i.status,i.origemMunicipio,i.destinoMunicipio].join(' ')).includes(q));$('histRows').innerHTML=rows.map(i=>{const id=i.id||i.chaveCte;const sel=state.histSelected===id;const ciotClean=String(i.numeroCiot||'').replace(/[^\d]/g,'');const chave=String(i.chaveCte||i.id||'');const isDup=ciotClean&&owners[ciotClean]&&owners[ciotClean].size>1;const pend=i.__pendingSync?' <span class="badge warn" title="Salvo localmente; sincroniza com o Firestore assim que a ponte voltar">sync</span>':'';const ciotCell=i.numeroCiot?`<span class="ciot-wrap"><button class="copy-ciot${state.copiedCiots&&state.copiedCiots.has(ciotClean)?' copied':''}" title="Copiar CIOT (só números)" onclick="event.stopPropagation();copyCiot('${esc(ciotClean)}',this)">${COPY_ICON_SVG}</button><span class="mono ciot-num">${ciotPretty(i.numeroCiot)}</span></span>${isDup?`<div class="dup-flag"><span class="badge err" title="Este nº de CIOT também consta em outro CT-e — captura duplicada. Confira no EFrete e exclua o registro incorreto.">⚠ duplicado</span></div>`:''}`:'—';const pdfBtn=i.numeroCiot?`<button class="btn" onclick="event.stopPropagation();openCiotPdf(this.closest('tr').dataset.hid)">PDF</button>`:`<button class="btn pdf-off" disabled title="PDF disponível somente após a emissão do CIOT">PDF</button>`;return `<tr class="${sel?'sel':''}${isDup?' row-dup':''}" data-hid="${esc(id)}" onclick="selectHistRow(this.dataset.hid)"><td>${badge(i.status)}${pend}</td><td class="cell-ciot">${ciotCell}</td><td class="cell-cte"><b class="cte-num">${esc(i.numeroCte||'—')}</b>${chave?`<br><span class="mono muted hist-chave" title="${esc(chave)}">${esc(chave.slice(0,24))}…</span>`:''}</td><td>${histPlacas(i)}</td><td>${esc(i.motoristaNome||'—')}</td><td>${esc(i.contratadoNome||'—')}</td><td>${esc(histTomador(i))}</td><td>${esc(histUserLabel(i))}</td><td class="hist-when">${i.updatedAt?new Date(i.updatedAt).toLocaleString('pt-BR'):''}</td><td class="hist-acoes">${pdfBtn}<button class="btn" onclick="event.stopPropagation();openHistory(this.closest('tr').dataset.hid)">Abrir</button><button class="btn danger" onclick="event.stopPropagation();deleteHistory(this.closest('tr').dataset.hid)">Excluir</button></td></tr>`}).join('')||`<tr><td colspan="10" class="muted">${q?'Nenhum registro corresponde ao filtro.':'Histórico vazio.'}</td></tr>`;updateHistSortArrows();}
+function copyCiot(v,btn){const clean=String(v||'').replace(/[^\d]/g,'');if(!clean){toast('CIOT sem número para copiar.','warn');return;}const done=()=>{toast('CIOT '+clean+' copiado','ok');markCiotCopied(clean,btn);};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(clean).then(done).catch(()=>fallbackCopy(clean,done));}else{fallbackCopy(clean,done);}}
 function fallbackCopy(txt,done){try{const ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();done&&done();}catch(_){toast('Não consegui copiar automaticamente.','warn');}}
 function selectHistRow(id){state.histSelected=(state.histSelected===id?null:id);renderHistory();}
 function openHistory(id){const h=state.history.find(x=>(x.id||x.chaveCte)===id);if(!h)return;state.items=[enrichItem({...h})].concat(state.items.filter(x=>x.chaveCte!==h.chaveCte));state.selected=h.chaveCte||h.id;showTab('emitir');renderAll();}
