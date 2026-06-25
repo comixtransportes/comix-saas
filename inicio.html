@@ -1793,22 +1793,26 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     else if(att<5) setTimeout(()=>loadDiesel(att+1), att===1?1500:3000);
   }
 
-  if(_isMobile){
-    /* SÉRIE: a ordem prioriza o que pinta a tela principal (SZB) por último,
-       depois de liberar a memória usada pelas cargas auxiliares. */
-    (async ()=>{
-      try{ await tryLoadAprovacoes(1); }catch(_){}
+  /* PRIORIDADE ABSOLUTA AO SZB: é o que pinta a tela principal e esconde o splash.
+     ANTES: no mobile o SZB carregava por ÚLTIMO (o splash esperava as 4 cargas em
+     série) e no desktop as 4 disputavam banda em paralelo, atrasando o SZB. AGORA:
+     carregamos o SZB primeiro e sozinho — primeira pintura muito mais rápida. As
+     auxiliares (veículos, diesel, aprovações) entram DEPOIS, em segundo plano, cada
+     uma com seu próprio render: SÉRIE no mobile (achata o pico de memória) e PARALELO
+     no desktop (mais rápido). render(SZB) é autossuficiente (deriva tudo do próprio
+     SZB), então a tela aparece completa sem depender das auxiliares. */
+  (async ()=>{
+    try{ await tryLoadSZB(1); }catch(_){}
+    if(_isMobile){
       try{ await tryLoadVeiculos(1); }catch(_){}
       try{ await loadDiesel(1); }catch(_){}
-      try{ await tryLoadSZB(1); }catch(_){}
-    })();
-  } else {
-    /* DESKTOP: paralelo (comportamento original — mais rápido). */
-    tryLoadAprovacoes(1);
-    tryLoadVeiculos(1);
-    loadDiesel(1);
-    tryLoadSZB(1);
-  }
+      try{ await tryLoadAprovacoes(1); }catch(_){}
+    } else {
+      tryLoadVeiculos(1);
+      loadDiesel(1);
+      tryLoadAprovacoes(1);
+    }
+  })();
 });
 
 setInterval(()=>tx('h-hora',horaFmt()),60000);
