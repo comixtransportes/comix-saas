@@ -65,7 +65,7 @@ table{width:100%;border-collapse:collapse}th{position:sticky;top:0;background:#f
 .ciot-emit .ce-txt{flex:1;line-height:1.35}.ciot-emit .ce-txt b{font:600 13px var(--m);color:var(--tx)}
 .ciot-emit .ce-txt span{display:block;font-size:10.5px;color:var(--mu);margin-top:1px}
 .btn.pdf{background:var(--rd);border-color:var(--rd);color:#fff}.btn.pdf:hover{background:#a91717;color:#fff}
-.btn.copy-ciot{padding:2px 6px;font-size:12px;line-height:1;border-radius:4px;vertical-align:middle}.btn.copy-ciot:hover{background:var(--ac-bg)}
+.copy-ciot{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;flex:0 0 auto;padding:0;border:1px solid var(--bd2);background:#fff;color:var(--mu);border-radius:5px;cursor:pointer;transition:.12s}.copy-ciot svg{width:13px;height:13px;display:block}.copy-ciot:hover{border-color:var(--ac);color:var(--ac);background:var(--ac-bg)}.copy-ciot:active{transform:scale(.92)}
 .pdf-modal{position:fixed;inset:0;z-index:60;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center;padding:18px}
 .pdf-modal.on{display:flex}
 .pdf-box{width:min(980px,96vw);height:min(92vh,1000px);background:var(--wh);border-radius:var(--r);box-shadow:0 20px 60px rgba(0,0,0,.35);display:flex;flex-direction:column;overflow:hidden}
@@ -87,6 +87,23 @@ table{width:100%;border-collapse:collapse}th{position:sticky;top:0;background:#f
 .hist-table .hist-chave{font-size:9.5px}
 .hist-table td .plates{gap:3px}
 .hist-table .badge.warn{margin-left:4px}
+/* Ações: botões menores e mais discretos */
+.hist-table .hist-acoes{text-align:right}
+.hist-table .hist-acoes .btn{padding:4px 8px;font-size:10px;font-weight:600;border-radius:5px}
+.hist-table .hist-acoes .btn+.btn{margin-left:4px}
+.btn.pdf-off,.btn.pdf-off:hover{background:#eef1f5;border-color:#e3e8ee;color:#a3acb8;cursor:not-allowed;opacity:1}
+/* Coluna CIOT: botão copiar FIXO na frente do número */
+.hist-table .cell-ciot{min-width:150px}
+.ciot-wrap{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.ciot-wrap .ciot-num{font-size:11.5px}
+/* Coluna CT-e: largura suficiente para não cortar o número */
+.hist-table .cell-cte{min-width:118px}
+.hist-table .cell-cte .cte-num{font-size:12px;white-space:nowrap}
+.hist-table .hist-chave{display:inline-block;max-width:170px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:bottom}
+/* Conflito: mesmo CIOT em CT-es diferentes */
+.dup-flag{margin-top:3px}
+tr.row-dup{background:var(--rd-bg)!important;box-shadow:inset 3px 0 0 var(--rd)}
+tr.row-dup:hover{background:#fde8e8!important}
 </style>
 </head>
 <body>
@@ -842,7 +859,10 @@ function prettyEmail(e){e=String(e||'').trim();if(!e)return '';const local=e.spl
 function histUserLabel(i){return i.ciotByName||i.emitidoByName||i.updatedByName||i.createdByName||prettyEmail(i.ciotBy||i.emitidoBy||i.updatedBy||i.createdBy)||'—';}
 function histTomador(i){return i.tomadorNome||i.remetenteNome||'—';}
 function histPlacas(i){const p=(i.placas||[]).filter(Boolean);return p.length?`<div class="plates">${p.map(x=>`<span class="plate">${esc(x)}</span>`).join('')}</div>`:'—';}
-function renderHistory(){const q=norm($('histQ')?.value||'');let rows=(state.history||[]).slice().sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')));if(q)rows=rows.filter(i=>norm([i.numeroCiot,ciotPretty(i.numeroCiot||''),String(i.numeroCiot||'').replace(/[^\d]/g,''),i.numeroCte,i.chaveCte,i.id,(i.placas||[]).join(' '),i.motoristaNome,i.motoristaCpf,i.contratadoNome,i.contratadoDoc,i.tomadorNome,i.remetenteNome,histUserLabel(i),i.createdBy,i.emitidoBy,i.status,i.origemMunicipio,i.destinoMunicipio].join(' ')).includes(q));$('histRows').innerHTML=rows.map(i=>{const id=i.id||i.chaveCte;const sel=state.histSelected===id;const ciotClean=String(i.numeroCiot||'').replace(/[^\d]/g,'');const chave=String(i.chaveCte||i.id||'');const pend=i.__pendingSync?' <span class="badge warn" title="Salvo localmente; sincroniza com o Firestore assim que a ponte voltar">sync</span>':'';return `<tr class="${sel?'sel':''}" data-hid="${esc(id)}" onclick="selectHistRow(this.dataset.hid)"><td>${badge(i.status)}${pend}</td><td>${i.numeroCiot?`<span class="mono">${ciotPretty(i.numeroCiot)}</span> <button class="btn copy-ciot" title="Copiar CIOT sem ponto e barra" onclick="event.stopPropagation();copyCiot('${esc(ciotClean)}')">⧉</button>`:'—'}</td><td><b>${esc(i.numeroCte||'—')}</b>${chave?`<br><span class="mono muted hist-chave" title="${esc(chave)}">${esc(chave.slice(0,20))}…</span>`:''}</td><td>${histPlacas(i)}</td><td>${esc(i.motoristaNome||'—')}</td><td>${esc(i.contratadoNome||'—')}</td><td>${esc(histTomador(i))}</td><td>${esc(histUserLabel(i))}</td><td class="hist-when">${i.updatedAt?new Date(i.updatedAt).toLocaleString('pt-BR'):''}</td><td class="hist-acoes">${i.numeroCiot?`<button class="btn" onclick="event.stopPropagation();openCiotPdf(this.closest('tr').dataset.hid)">PDF</button> `:''}<button class="btn" onclick="event.stopPropagation();openHistory(this.closest('tr').dataset.hid)">Abrir</button> <button class="btn danger" onclick="event.stopPropagation();deleteHistory(this.closest('tr').dataset.hid)">Excluir</button></td></tr>`}).join('')||`<tr><td colspan="10" class="muted">${q?'Nenhum registro corresponde ao filtro.':'Histórico vazio.'}</td></tr>`}
+const COPY_ICON_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+/* Mapa nº de CIOT -> CT-es distintos que o usam. Se um mesmo CIOT aparece em >1 CT-e, é captura duplicada. */
+function ciotOwnersMap(){const m={};for(const h of (state.history||[])){const c=String(h.numeroCiot||'').replace(/[^\d]/g,'');if(!c)continue;const k=onlyDigits(h.chaveCte||h.id||'')||(h.numeroCte?'cte:'+h.numeroCte:'');if(!k)continue;(m[c]||(m[c]=new Set())).add(k);}return m;}
+function renderHistory(){const q=norm($('histQ')?.value||'');const owners=ciotOwnersMap();let rows=(state.history||[]).slice().sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')));if(q)rows=rows.filter(i=>norm([i.numeroCiot,ciotPretty(i.numeroCiot||''),String(i.numeroCiot||'').replace(/[^\d]/g,''),i.numeroCte,i.chaveCte,i.id,(i.placas||[]).join(' '),i.motoristaNome,i.motoristaCpf,i.contratadoNome,i.contratadoDoc,i.tomadorNome,i.remetenteNome,histUserLabel(i),i.createdBy,i.emitidoBy,i.status,i.origemMunicipio,i.destinoMunicipio].join(' ')).includes(q));$('histRows').innerHTML=rows.map(i=>{const id=i.id||i.chaveCte;const sel=state.histSelected===id;const ciotClean=String(i.numeroCiot||'').replace(/[^\d]/g,'');const chave=String(i.chaveCte||i.id||'');const isDup=ciotClean&&owners[ciotClean]&&owners[ciotClean].size>1;const pend=i.__pendingSync?' <span class="badge warn" title="Salvo localmente; sincroniza com o Firestore assim que a ponte voltar">sync</span>':'';const ciotCell=i.numeroCiot?`<span class="ciot-wrap"><button class="copy-ciot" title="Copiar CIOT (só números)" onclick="event.stopPropagation();copyCiot('${esc(ciotClean)}')">${COPY_ICON_SVG}</button><span class="mono ciot-num">${ciotPretty(i.numeroCiot)}</span></span>${isDup?`<div class="dup-flag"><span class="badge err" title="Este nº de CIOT também consta em outro CT-e — captura duplicada. Confira no EFrete e exclua o registro incorreto.">⚠ duplicado</span></div>`:''}`:'—';const pdfBtn=i.numeroCiot?`<button class="btn" onclick="event.stopPropagation();openCiotPdf(this.closest('tr').dataset.hid)">PDF</button>`:`<button class="btn pdf-off" disabled title="PDF disponível somente após a emissão do CIOT">PDF</button>`;return `<tr class="${sel?'sel':''}${isDup?' row-dup':''}" data-hid="${esc(id)}" onclick="selectHistRow(this.dataset.hid)"><td>${badge(i.status)}${pend}</td><td class="cell-ciot">${ciotCell}</td><td class="cell-cte"><b class="cte-num">${esc(i.numeroCte||'—')}</b>${chave?`<br><span class="mono muted hist-chave" title="${esc(chave)}">${esc(chave.slice(0,24))}…</span>`:''}</td><td>${histPlacas(i)}</td><td>${esc(i.motoristaNome||'—')}</td><td>${esc(i.contratadoNome||'—')}</td><td>${esc(histTomador(i))}</td><td>${esc(histUserLabel(i))}</td><td class="hist-when">${i.updatedAt?new Date(i.updatedAt).toLocaleString('pt-BR'):''}</td><td class="hist-acoes">${pdfBtn}<button class="btn" onclick="event.stopPropagation();openHistory(this.closest('tr').dataset.hid)">Abrir</button><button class="btn danger" onclick="event.stopPropagation();deleteHistory(this.closest('tr').dataset.hid)">Excluir</button></td></tr>`}).join('')||`<tr><td colspan="10" class="muted">${q?'Nenhum registro corresponde ao filtro.':'Histórico vazio.'}</td></tr>`}
 function copyCiot(v){const clean=String(v||'').replace(/[^\d]/g,'');if(!clean){toast('CIOT sem número para copiar.','warn');return;}const done=()=>toast('CIOT '+clean+' copiado','ok');if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(clean).then(done).catch(()=>fallbackCopy(clean,done));}else{fallbackCopy(clean,done);}}
 function fallbackCopy(txt,done){try{const ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();done&&done();}catch(_){toast('Não consegui copiar automaticamente.','warn');}}
 function selectHistRow(id){state.histSelected=(state.histSelected===id?null:id);renderHistory();}
@@ -876,6 +896,21 @@ async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(re
   const pdfUrl=res.pdfUrl||buildCiotPdfUrl(slug);
   if(res.pdfBase64){state.pdfCache[slug]=res.pdfBase64;persistCiotPdf(slug,res.pdfBase64);}
   const item=findItemByResult(res);
+  /* ===== CONFERÊNCIA ANTI-DUPLICIDADE (antes de gravar) =====
+     Um mesmo nº de CIOT NÃO pode cair em dois CT-es diferentes. Causa raiz: em emissões em sequência,
+     a extensão pode reler a tela de sucesso do CIOT ANTERIOR e devolver o número antigo já casado com o
+     CT-e novo (a ciotTask trocou antes de o portal do EFrete renderizar o novo CIOT). Aqui o Atlas confere
+     e se recusa a sobrescrever — exige verificação manual em vez de gravar um CIOT repetido. */
+  {const slugDigits=slug.replace(/[^\d]/g,'');
+   const candChave=onlyDigits((item&&(item.chaveCte||item.id))||res.chaveCte||'');
+   const candCte=String((item&&item.numeroCte)||res.numeroCte||'');
+   const dono=(state.history||[]).find(x=>{if(String(x.numeroCiot||'').replace(/[^\d]/g,'')!==slugDigits)return false;const xch=onlyDigits(x.chaveCte||x.id||'');if(candChave&&xch)return xch!==candChave;if(candCte&&x.numeroCte)return String(x.numeroCte)!==candCte;return false;});
+   if(dono){log('⛔ CONFLITO DE CIOT: o robô devolveu o CIOT '+ciotPretty(slug)+' para o CT-e '+(candCte||'?')+', mas esse número já pertence ao CT-e '+(dono.numeroCte||'?')+' ('+(dono.motoristaNome||'sem motorista')+'). Provável releitura da emissão anterior — NÃO gravei. Confira no EFrete e reemita o CT-e '+(candCte||'?')+' se o CIOT correto for outro.','err');
+     toast('⚠️ CIOT '+ciotPretty(slug)+' já consta no CT-e '+(dono.numeroCte||'?')+'. Não salvei no CT-e '+(candCte||'?')+' — confira a captura antes de gravar.','err');
+     if(item){item.status='conferencia';item.ciotConflito={slug,comCte:dono.numeroCte||'',comChave:onlyDigits(dono.chaveCte||dono.id||'')};item.pendencias=['⚠ CIOT '+ciotPretty(slug)+' já está no CT-e '+(dono.numeroCte||'?')+' — captura duplicada, conferir no EFrete'];item.updatedAt=new Date().toISOString();}
+     renderAll();
+     if(state.batch.active&&!replay)advanceBatch(item||null,'');
+     return;}}
   if(item){item.numeroCiot=slug;item.ciotPdfUrl=pdfUrl;item.ciotHasPdf=!!res.pdfBase64||!!item.ciotHasPdf;item.status='emitido';item.emitidoAt=res.at||new Date().toISOString();item.updatedAt=new Date().toISOString();item.emitidoBy=item.emitidoBy||state.user.email||'';item.emitidoByName=item.emitidoByName||state.user.nome||'';item.ciotBy=item.ciotBy||state.user.email||'';item.ciotByName=item.ciotByName||state.user.nome||'';
     await fsSet(CIOT_COLLECTION,item.chaveCte||item.id,item);await loadHistory();renderAll();
     if(!replay){toast('CIOT '+ciotPretty(slug)+' salvo no histórico'+(res.pdfBase64?' com PDF':''),'ok');
