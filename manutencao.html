@@ -9,7 +9,7 @@
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js" defer></script>
 <script>
 /* ══ FIREBASE — Atlas Manutenção ══
    Mesma config do cadastros.html / index.html.
@@ -2229,6 +2229,7 @@ async function atlasFsGetDoc(collection, docId) {
 }
 
 async function atlasFsSetDoc(collection, docId, data, opts = {}) {
+  if (collection === 'ordens_servico') _osDirty = true;
   let parentErr = null;
   let directErr = null;
   if (atlasHasParentBridge()) {
@@ -2252,6 +2253,7 @@ async function atlasFsSetDoc(collection, docId, data, opts = {}) {
 }
 
 async function atlasFsAddDoc(collection, data) {
+  if (collection === 'ordens_servico') _osDirty = true;
   let parentErr = null;
   let directErr = null;
   if (atlasHasParentBridge()) {
@@ -2275,6 +2277,7 @@ async function atlasFsAddDoc(collection, data) {
 }
 
 async function atlasFsDeleteDoc(collection, docId) {
+  if (collection === 'ordens_servico') _osDirty = true;
   let parentErr = null;
   let directErr = null;
   if (atlasHasParentBridge()) {
@@ -2433,7 +2436,29 @@ function normalizarOS(id, d) {
     desc: d.desc || d.problema || servicoResumo(d),
   };
 }
-async function loadOrdensServico() {
+/* Gate de frescor da coleção ordens_servico. Trocar entre dashboard/gestão/kanban
+   re-chamava loadOrdensServico, re-buscando a coleção inteira a cada clique. Com o
+   gate, navegação sem escrita intermediária re-renderiza a partir do cache em
+   memória (MNT_CACHE.ordens/OS_DB) — resultado idêntico, sem refetch. Qualquer
+   escrita de OS marca _osDirty (nos helpers de escrita), forçando refetch; o
+   auto-refresh também força para captar mudanças de outros usuários. */
+let _osTs = 0, _osDirty = false;
+const OS_TTL = 20000;
+function _osRenderFromCache(){
+  renderPainelGeral();
+  renderPainelFrota();
+  renderKanbanReais();
+  renderDashboardOSReais();
+  renderPreventivaReais();
+  renderAprovacoesReais();
+  if (document.getElementById('view-preventiva')?.classList.contains('on')) carregarPlanos();
+  else atualizarKPIs && setTimeout(atualizarKPIs, 0);
+}
+async function loadOrdensServico(force) {
+  if (!force && !_osDirty && MNT_CACHE.ordens && (Date.now() - _osTs) < OS_TTL) {
+    _osRenderFromCache();
+    return;
+  }
   const tbody = document.getElementById('gestao-tbody');
   if (tbody) tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Carregando O.S reais...</td></tr>';
   try {
@@ -2448,6 +2473,7 @@ async function loadOrdensServico() {
     MNT_CACHE.ordens = ordens;
     Object.keys(OS_DB).forEach(k => delete OS_DB[k]);
     ordens.forEach(os => { OS_DB[os.id] = os; });
+    _osTs = Date.now(); _osDirty = false;
     renderPainelGeral();
     renderPainelFrota();
     renderKanbanReais();
@@ -5283,7 +5309,7 @@ let _mntAutoRefreshTimer = null;
 function iniciarAutoRefresh() {
   if (_mntAutoRefreshTimer) clearInterval(_mntAutoRefreshTimer);
   _mntAutoRefreshTimer = setInterval(async () => {
-    try { await loadOrdensServico(); } catch(e) { console.warn('[AutoRefresh] Erro:', e.message); }
+    try { await loadOrdensServico(true); } catch(e) { console.warn('[AutoRefresh] Erro:', e.message); }
   }, 60000); // 60 segundos
 }
 
