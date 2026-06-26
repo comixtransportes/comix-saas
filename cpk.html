@@ -467,12 +467,13 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
     <span id="cpk-hdr-user" style="font-size:10px;color:#5a7a9a;font-family:var(--m)"></span>
   </div>
 
-  <!-- TABBAR (6 abas) -->
+  <!-- TABBAR (7 abas) -->
   <div class="cpk-tabbar" id="cpk-tabbar">
     <button class="cpk-tab on" data-tab="vg"       onclick="cpkGoTab('vg',this)">Visão Geral</button>
     <button class="cpk-tab"    data-tab="rotas"    onclick="cpkGoTab('rotas',this)">Rotas</button>
     <button class="cpk-tab"    data-tab="placas"   onclick="cpkGoTab('placas',this)">Placas</button>
     <button class="cpk-tab"    data-tab="clientes" onclick="cpkGoTab('clientes',this)">Clientes</button>
+    <button class="cpk-tab"    data-tab="depreciacao" onclick="cpkGoTab('depreciacao',this)">Depreciação</button>
     <button class="cpk-tab"    data-tab="dados"    onclick="cpkGoTab('dados',this)">Dados</button>
     <div class="tabbar-right">
       <div class="mes-field" id="f-mes-field">
@@ -662,6 +663,109 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
       </div>
     </div>
 
+    <!-- ══════════ DEPRECIAÇÃO ══════════ -->
+    <div class="cpk-pane" id="pane-depreciacao">
+      <div class="cpk-info"><span>Depreciação contábil da <strong>frota própria</strong> (agregados ficam de fora, como em todo o CPK). Calcula o custo mensal de perda de valor por <strong>placa</strong> e o dilui automaticamente no custo da frota, do CPK por placa, das rotas e dos clientes. A depreciação é um <strong>custo mensal fixo</strong> do mês selecionado — incide mesmo quando a placa não rodou KM no mês (apenas não há diluição por km nesse caso). <b>CPK Depreciação = Depreciação mensal da placa ÷ KM da placa no mês.</b></span></div>
+
+      <div class="kpi-row" id="dep-kpis"></div>
+
+      <div class="insight-row" id="dep-alertas"></div>
+
+      <!-- Filtros locais + ações -->
+      <div class="cpk-filters" style="border:1px solid var(--bd2);border-radius:var(--r)">
+        <span class="fl-lbl">Filtrar</span>
+        <select id="dep-f-tipo" class="tb-ctl" onchange="cpkRenderDep()" title="Tipo de ativo">
+          <option value="">Tipo: todos</option>
+          <option value="cavalo">Cavalo mecânico</option>
+          <option value="carreta">Carreta</option>
+          <option value="compressor">Compressor</option>
+          <option value="outro">Outro ativo</option>
+        </select>
+        <select id="dep-f-marca" class="tb-ctl" onchange="cpkRenderDep()" title="Marca"><option value="">Marca: todas</option></select>
+        <select id="dep-f-status" class="tb-ctl" onchange="cpkRenderDep()" title="Status">
+          <option value="">Status: todos</option>
+          <option value="ativo">Ativo</option>
+          <option value="vendido">Vendido</option>
+          <option value="baixado">Baixado</option>
+          <option value="inativo">Inativo</option>
+        </select>
+        <input type="text" id="dep-f-placa" class="tb-ctl" placeholder="Buscar placa / modelo…" style="width:180px" oninput="cpkRenderDep()">
+        <span class="fl-sep"></span>
+        <button class="btn-apply" onclick="cpkDepNovo()">＋ Novo veículo</button>
+        <button class="btn-sec" onclick="cpkDepToggle('dep-params-panel')">⚙ Parâmetros</button>
+        <button class="btn-sec" onclick="cpkDepToggle('dep-import-panel')">⬆ Importar</button>
+        <button class="btn-sec" onclick="cpkDepExport()">⬇ Exportar CSV</button>
+      </div>
+
+      <!-- Parâmetros gerais por tipo de ativo (oculto por padrão) -->
+      <div id="dep-params-panel" style="display:none">
+        <div class="cpk-form">
+          <h3>Parâmetros padrão por tipo de ativo</h3>
+          <div style="font-size:10.5px;color:var(--mu);margin:-4px 0 10px">Valores sugeridos ao cadastrar um veículo do tipo. Cada placa permite edição individual — estes padrões não sobrescrevem registros já salvos.</div>
+          <div id="dep-params-grid"></div>
+          <div class="form-actions">
+            <button class="btn-save" id="dep-params-save" onclick="cpkDepParamsSalvar()">Salvar parâmetros</button>
+            <button class="btn-cancel" onclick="cpkDepToggle('dep-params-panel')">Fechar</button>
+            <span id="dep-params-msg" style="font-size:11px;color:var(--mu)"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Importação em massa (oculto por padrão) -->
+      <div id="dep-import-panel" style="display:none">
+        <div class="two-col">
+          <div class="cpk-form">
+            <h3>Importar base de depreciação</h3>
+            <div class="upload-area" id="dep-drop">
+              <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-file" onchange="cpkDepImportFile(event)">
+              <div class="ua-ico">📂</div>
+              <div class="ua-txt">Arraste a planilha ou <b>clique para selecionar</b></div>
+              <div class="ua-fn">Colunas: Placa · Tipo · Marca · Modelo · Ano fabricação · Ano modelo · Valor de compra · Data de compra · Valor residual · Período em meses · Método · Percentual anual · Status</div>
+            </div>
+            <div id="dep-import-info" style="margin-top:10px"></div>
+            <div class="form-actions">
+              <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--mu)">
+                <input type="checkbox" id="dep-import-substituir"> Substituir toda a base (em vez de mesclar por placa)
+              </label>
+            </div>
+            <div class="form-actions">
+              <button class="btn-save" id="dep-import-save" onclick="cpkDepImportSalvar()" disabled>Salvar no Firestore</button>
+              <button class="btn-cancel" onclick="cpkDepImportLimpar()">Limpar prévia</button>
+              <button class="btn-sec" onclick="cpkDepModelo()">⬇ Baixar modelo .csv</button>
+            </div>
+          </div>
+          <div>
+            <div class="cpk-nd" style="align-items:flex-start"><span><b>Regras da importação.</b> Apenas placas de <b>frota própria</b> são aceitas (agregados são ignorados). Método aceita <b>linear</b>, <b>percentual</b> ou <b>manual</b>. Datas em DD/MM/AAAA ou AAAA-MM-DD. Valores aceitam 1.234,56 ou 1234.56. Linhas sem placa são ignoradas.</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabela consolidada -->
+      <div class="cpk-tw">
+        <div class="cpk-th3">
+          <span class="cpk-tt">Depreciação por veículo — frota própria</span>
+          <span class="cpk-tc" id="dep-tbl-meta"></span>
+        </div>
+        <div class="cpk-to" style="max-height:520px"><table class="dt" id="tbl-dep">
+          <thead><tr>
+            <th onclick="cpkDepSort('placa')">Placa</th>
+            <th onclick="cpkDepSort('tipo')">Tipo</th>
+            <th onclick="cpkDepSort('marca')">Marca/Modelo</th>
+            <th class="r" onclick="cpkDepSort('ano')">Ano</th>
+            <th class="r" onclick="cpkDepSort('valorCompra')">Vlr compra</th>
+            <th class="r" onclick="cpkDepSort('valorResidual')">Residual</th>
+            <th class="r" onclick="cpkDepSort('valorDepreciavel')">Base depr.</th>
+            <th class="r" onclick="cpkDepSort('depMensalNoMes')">Depr. mensal</th>
+            <th class="r" onclick="cpkDepSort('acumulado')">Depr. acum.</th>
+            <th class="r" onclick="cpkDepSort('valorContabil')">Vlr atual</th>
+            <th onclick="cpkDepSort('unidade')">Unid.</th>
+            <th onclick="cpkDepSort('status')">Status</th>
+            <th>Ações</th>
+          </tr></thead><tbody></tbody>
+        </table></div>
+      </div>
+    </div>
+
     <!-- ══════════ DADOS ══════════ -->
     <div class="cpk-pane" id="pane-dados">
       <div class="cpk-info"><span>Importe a tabela de <strong>KM percorrido por placa</strong> do mês selecionado. O sistema valida placa, classificação (Frota), KM e duplicidades. Os KM importados alimentam o cálculo do CPK em todas as abas.</span></div>
@@ -712,6 +816,78 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
       </div>
     </div>
 
+  </div>
+</div>
+
+<!-- MODAL — CADASTRO/EDIÇÃO DE DEPRECIAÇÃO POR VEÍCULO -->
+<div class="modal-backdrop" id="dep-modal">
+  <div class="modal wide">
+    <div class="modal-hdr">
+      <h3 id="dep-modal-title">Depreciação do veículo</h3>
+      <button class="modal-close" onclick="cpkDepModalClose()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="cpk-form" style="border:none;padding:0">
+        <div class="form-grid">
+          <div class="form-field"><label>Placa *</label><input type="text" id="dep-i-placa" maxlength="8" oninput="this.value=this.value.toUpperCase();cpkDepFormPreview()"></div>
+          <div class="form-field"><label>Tipo de ativo *</label>
+            <select id="dep-i-tipo" onchange="cpkDepFormTipoChange()">
+              <option value="cavalo">Cavalo mecânico</option>
+              <option value="carreta">Carreta</option>
+              <option value="compressor">Compressor</option>
+              <option value="outro">Outro ativo da frota</option>
+            </select>
+          </div>
+          <div class="form-field"><label>Marca</label><input type="text" id="dep-i-marca" oninput="cpkDepFormPreview()"></div>
+          <div class="form-field"><label>Modelo</label><input type="text" id="dep-i-modelo"></div>
+          <div class="form-field"><label>Ano fabricação</label><input type="number" id="dep-i-anoFab" min="1980" max="2100"></div>
+          <div class="form-field"><label>Ano modelo</label><input type="number" id="dep-i-anoMod" min="1980" max="2100"></div>
+          <div class="form-field"><label>Valor de compra (R$) *</label><input type="text" id="dep-i-valorCompra" inputmode="decimal" oninput="cpkDepFormPreview()"></div>
+          <div class="form-field"><label>Data de compra *</label><input type="date" id="dep-i-dataCompra" oninput="cpkDepFormPreview()"></div>
+          <div class="form-field"><label>Valor residual (R$)</label><input type="text" id="dep-i-valorResidual" inputmode="decimal" oninput="cpkDepFormPreview()"></div>
+          <div class="form-field"><label>Período (meses) *</label><input type="number" id="dep-i-periodoMeses" min="0" max="600" oninput="cpkDepFormPreview()"></div>
+          <div class="form-field"><label>Método de depreciação</label>
+            <select id="dep-i-metodo" onchange="cpkDepFormMetodoChange();cpkDepFormPreview()">
+              <option value="linear">Linear</option>
+              <option value="percentual">Percentual anual</option>
+              <option value="manual">Manual (valor mensal)</option>
+            </select>
+          </div>
+          <div class="form-field" id="dep-i-perc-wrap"><label>Percentual anual (%)</label><input type="text" id="dep-i-percentualAnual" inputmode="decimal" oninput="cpkDepFormPreview()"></div>
+          <div class="form-field" id="dep-i-manual-wrap" style="display:none"><label>Valor mensal manual (R$)</label><input type="text" id="dep-i-valorManualMensal" inputmode="decimal" oninput="cpkDepFormPreview()"></div>
+          <div class="form-field"><label>Status do ativo</label>
+            <select id="dep-i-status" onchange="cpkDepFormPreview()">
+              <option value="ativo">Ativo</option>
+              <option value="vendido">Vendido</option>
+              <option value="baixado">Baixado</option>
+              <option value="inativo">Inativo</option>
+            </select>
+          </div>
+        </div>
+        <div id="dep-form-err"></div>
+        <div class="detail-sec" style="margin-top:12px">Prévia do cálculo — <span id="dep-form-mes" style="color:var(--ac)">—</span></div>
+        <div id="dep-form-preview" style="margin-top:6px"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-danger" id="dep-modal-del" style="margin-right:auto;display:none" onclick="cpkDepExcluir()">Excluir</button>
+      <button class="btn-cancel" onclick="cpkDepModalClose()">Cancelar</button>
+      <button class="btn-save" id="dep-modal-save" onclick="cpkDepSalvarVeic()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL — MEMÓRIA DE CÁLCULO DA PLACA -->
+<div class="modal-backdrop" id="mem-modal">
+  <div class="modal">
+    <div class="modal-hdr">
+      <h3 id="mem-modal-title">Memória de cálculo</h3>
+      <button class="modal-close" onclick="cpkMemModalClose()">✕</button>
+    </div>
+    <div class="modal-body" id="mem-modal-body"></div>
+    <div class="modal-foot">
+      <button class="btn-cancel" onclick="cpkMemModalClose()">Fechar</button>
+    </div>
   </div>
 </div>
 
@@ -1301,7 +1477,7 @@ async function cpkLoadAll(){
   await cpkLoadFrota();
 
   cpkLoaderMsg('Carregando custos e KM do mês…');
-  await Promise.allSettled([ cpkLoadCusto(CPK.filtros.mes), cpkLoadKmImport(CPK.filtros.mes) ]);
+  await Promise.allSettled([ cpkLoadCusto(CPK.filtros.mes), cpkLoadKmImport(CPK.filtros.mes), cpkLoadDep() ]);
 
   cpkLoaderMsg('Solicitando bases ao Atlas (SZB, SZY, SZC)…');
   for(const t of CPK_BASES){ if(!cpkTryParentBase(t)) cpkRequestAtlasBase(t); }
@@ -1325,7 +1501,7 @@ function cpkMaybeRecalc(){
   cpkCalculate(); cpkRenderActive();
 }
 async function cpkReload(){
-  CPK.szbLoaded=CPK.szyLoaded=CPK.szcLoaded=false; CPK.custoLoaded=false; CPK.kmImportLoaded=false; CPK.frotaLoaded=false;
+  CPK.szbLoaded=CPK.szyLoaded=CPK.szcLoaded=false; CPK.custoLoaded=false; CPK.kmImportLoaded=false; CPK.frotaLoaded=false; CPK.depLoaded=false;
   cpkSyncBadge('Recarregando…');
   const el=document.getElementById('cpk-global-loader');
   if(el){ el.classList.remove('hidden'); }
@@ -1418,6 +1594,11 @@ function cpkCalculate(){
   CPK.aggPlaca=[]; CPK.aggRota=[]; CPK.aggCliente=[];
   CPK.diag={semCadastro:[], indefinidas:[], semKm:[], semCusto:false};
   CPK.receitaComplementar=0; // Cartas Frete Complementar (FSC0000): receita real, fora da análise por placa
+
+  // Depreciação por placa (frota própria) incidente no mês — custo mensal fixo,
+  // fora da reconciliação do DRE (não existe lançamento equivalente no Mapinha).
+  // byPlaca[placa] = depreciação mensal da placa no mês selecionado (R$). Vazio = sem efeito.
+  const depByPlaca = cpkDepIndex(mes).byPlaca;
 
   // 1) pool de custo da frota (DRE) no escopo
   const pool=cpkPoolScope();
@@ -1522,10 +1703,43 @@ function cpkCalculate(){
     }
   }
 
+  // Placa com DEPRECIAÇÃO no mês permanece como custo da frota mesmo sem CTRC/KM
+  // (regra: a depreciação é custo fixo mensal; sem KM apenas não há diluição por km).
+  for(const placa in depByPlaca){
+    if(aggP[placa])continue;
+    if(!(depByPlaca[placa]>0))continue;
+    const v=cpkVeic(placa);
+    if(!v||v.vinculo!=='proprio')continue;
+    const filEst=cpkFilialDe({placa,unidade:v.unidade},scopeArr);
+    if(scope.size&&filEst&&!scope.has(filEst))continue;
+    if(f.placa && placa!==cpkNormPlaca(f.placa))continue;
+    const imp=CPK.kmImport[placa];
+    const km=imp&&imp.km>0?imp.km:0;
+    aggP[placa]={ placa, frota:v.frota, motorista:v.motorista, unidade:v.unidade, tipo:v.tipo,
+      viagens:0, faturamento:0, km_szb:0, km_total:km, fonte_km:km>0?'importado':'pendente',
+      clientes:{}, rotas:{}, semReceita:true, somenteCusto:true };
+    if(km>0) totalKm+=km; else if(!CPK.diag.semKm.includes(placa)) CPK.diag.semKm.push(placa);
+  }
+
   // Como placas de custo podem ter sido adicionadas, atualiza os totais de referência.
   CPK.totalKm=totalKm;
   CPK.cpkRate = totalKm>0 ? CPK.pool/totalKm : null;
   rate=CPK.cpkRate;
+
+  // ── DEPRECIAÇÃO NO POOL DA FROTA ──────────────────────────────────────
+  // Soma a depreciação mensal das placas no escopo (já presentes em aggP) e a
+  // adiciona ao custo total da frota. É um custo direto por placa (sem rateio,
+  // sem reconciliação): cada placa carrega exatamente a sua depreciação.
+  let depScopeTotal=0;
+  for(const placa in aggP){ depScopeTotal += (+depByPlaca[placa]||0); }
+  pool.dep = depScopeTotal;
+  if(depScopeTotal>0){
+    pool.total += depScopeTotal;
+    CPK.pool = pool.total;            // poolBreak referencia o mesmo objeto (pool)
+    CPK.cpkRate = totalKm>0 ? CPK.pool/totalKm : null;
+    rate = CPK.cpkRate;
+  }
+  CPK.depByPlaca = depByPlaca;        // disponível para a memória de cálculo
 
   const inScope = pl => !!aggP[pl];
   function somentePlacasEscopo(mapa){
@@ -1564,6 +1778,8 @@ function cpkCalculate(){
     }
   });
   const igualFil={}; _scopeFils.forEach(f=>{ const n=placasPorFil[f].length; igualFil[f]=n?1/n:0; });
+  // Depreciação é 100% apontada por placa (sem resíduo) → entra integralmente no "medido".
+  apontTotalAll += depScopeTotal;
 
   const baldeA = balde => _scopeFils.reduce((s,f)=>s+(((recFil[f]||{})[balde]||{}).A||0),0);
   const balExc = balde => _scopeFils.some(f=>((recFil[f]||{})[balde]||{}).excedeu);
@@ -1573,6 +1789,7 @@ function cpkCalculate(){
     cp:{apontado:baldeA('cp'),dre:pool.cp,pct:pool.cp>0?baldeA('cp')/pool.cp:0,excedeu:balExc('cp')},
     ce:{apontado:baldeA('ce'),dre:pool.ce,pct:pool.ce>0?baldeA('ce')/pool.ce:0,excedeu:balExc('ce')},
     ped:{apontado:baldeA('ped'),dre:pool.ped,pct:pool.ped>0?baldeA('ped')/pool.ped:0,excedeu:balExc('ped')},
+    dep:{apontado:depScopeTotal,dre:pool.dep||0,pct:1,excedeu:false},
     medidoPct: pool.total>0? apontTotalAll/pool.total : 0,
     apontadoTotal:apontTotalAll, dreTotal:pool.total,
     qtdRateio: Object.values(aggP).length
@@ -1583,7 +1800,8 @@ function cpkCalculate(){
     const rf=recFil[f]||{}; const ig=igualFil[f]||0;
     const g=balde=>{ const rc=rf[balde]; return rc?((rc.placed[pa.placa]||0)+rc.residuo*ig):0; };
     const diesel=g('diesel'), co=g('co'), cp=g('cp'), ce=g('ce'), ped=g('ped');
-    return { diesel, co, ped, cp, ce, total:diesel+co+cp+ce+ped };
+    const dep=(+depByPlaca[pa.placa]||0); // depreciação mensal direta da placa (sem rateio)
+    return { diesel, co, ped, cp, ce, dep, total:diesel+co+cp+ce+ped+dep };
   }
 
   // 5) métricas por placa (custo medido + resíduo rateado)
@@ -1685,6 +1903,7 @@ function cpkRenderActive(){
     case 'rotas': cpkRenderRotas(); break;
     case 'placas': cpkRenderPlacas(); break;
     case 'clientes': cpkRenderClientes(); break;
+    case 'depreciacao': cpkRenderDep(); break;
     case 'dados': cpkRenderDados(); break;
   }
 }
@@ -2017,7 +2236,7 @@ function cpkRenderVG(){
   if(compMeta)compMeta.textContent = CPK.filtros.unidade?('Filial '+CPK.filtros.unidade):'Consolidado (SC+PR+SP)';
 
   // ── Composição de custos: rosca com % dentro + legenda com valores ──
-  const comp=[['Combustível',pool.diesel,CPK_COL.am],['Custo Op.',pool.co,CPK_COL.ac],['Pessoal',pool.cp,CPK_COL.pu],['Pedágio',pool.ped,CPK_COL.gn]].filter(c=>c[1]>0);
+  const comp=[['Combustível',pool.diesel,CPK_COL.am],['Custo Op.',pool.co,CPK_COL.ac],['Pessoal',pool.cp,CPK_COL.pu],['Pedágio',pool.ped,CPK_COL.gn],['Depreciação',pool.dep,CPK_COL.cy]].filter(c=>c[1]>0);
   const compTot=comp.reduce((s,c)=>s+c[1],0)||1;
   const leg=document.getElementById('vg-comp-legend');
   if(comp.length){
@@ -2081,7 +2300,7 @@ function cpkRenderVGInsights(margem, margemPct){
     }
   }
   const pb=CPK.poolBreak||{};
-  const comp=[['Combustível',pb.diesel],['Custo Op.',pb.co],['Pessoal',pb.cp],['Pedágio',pb.ped]]
+  const comp=[['Combustível',pb.diesel],['Custo Op.',pb.co],['Pessoal',pb.cp],['Pedágio',pb.ped],['Depreciação',pb.dep]]
     .filter(c=>c[1]>0).sort((a,b)=>b[1]-a[1]);
   if(comp.length&&pb.total>0){
     const top=comp[0];
@@ -2321,7 +2540,7 @@ function cpkRenderPlacas(){
 
   // composição do custo (doughnut, mesma do DRE)
   const pb=CPK.poolBreak||{};
-  const comp=[['Combustível',pb.diesel,CPK_COL.am],['Custo Op.',pb.co,CPK_COL.ac],['Pessoal',pb.cp,CPK_COL.pu],['Pedágio',pb.ped,CPK_COL.gn]].filter(c=>c[1]>0);
+  const comp=[['Combustível',pb.diesel,CPK_COL.am],['Custo Op.',pb.co,CPK_COL.ac],['Pessoal',pb.cp,CPK_COL.pu],['Pedágio',pb.ped,CPK_COL.gn],['Depreciação',pb.dep,CPK_COL.cy]].filter(c=>c[1]>0);
   if(comp.length){
     cpkChart('ch-placas-comp',{ type:'doughnut',
       data:{ labels:comp.map(c=>c[0]), datasets:[{ data:comp.map(c=>c[1]), backgroundColor:comp.map(c=>c[2]), borderWidth:1, borderColor:'#fff' }] },
@@ -2353,7 +2572,7 @@ function cpkRenderPlacas(){
     <td>${cpkAbrev(p.cliente_princ,16)}</td>
     <td>${p.rota_princ||'—'}</td>
     <td>${cpkStatusBadge(p.status)}</td>
-    <td></td></tr>`;}).join('') : cpkEmptyRow(16);
+    <td><button class="btn-icon" title="Memória de cálculo" onclick="cpkPlacaMemoria('${p.placa}')">𝑓</button></td></tr>`;}).join('') : cpkEmptyRow(16);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -2657,10 +2876,699 @@ function cpkSetupDrop(){
 }
 
 // ════════════════════════════════════════════════════════════════════
+//  ABA DEPRECIAÇÃO — calculadora contábil por veículo (frota própria)
+//  Persistência: doc único 'DEPRECIACAO' na coleção cpk_lancamentos
+//  (mesma já liberada na ponte do Atlas — sem lógica paralela de storage).
+//    { veiculos:{ PLACA:{...campos} }, params:{ tipo:{...} }, meta:{...} }
+//  A depreciação NÃO entra na reconciliação do DRE (não há lançamento
+//  equivalente no Mapinha): é um custo direto, mensal e fixo, por placa.
+// ════════════════════════════════════════════════════════════════════
+const CPK_DEP_COL = 'cpk_lancamentos';
+const CPK_DEP_DOC = 'DEPRECIACAO';
+const CPK_DEP_TIPOS = ['cavalo','carreta','compressor','outro'];
+
+function cpkDepParamsDefault(){
+  return {
+    cavalo:    { prazo:60,  percAnual:20, residualPct:10, metodo:'linear' },
+    carreta:   { prazo:72,  percAnual:14, residualPct:10, metodo:'linear' },
+    compressor:{ prazo:120, percAnual:8,  residualPct:5,  metodo:'linear' },
+    outro:     { prazo:60,  percAnual:20, residualPct:10, metodo:'linear' }
+  };
+}
+function cpkDepParam(tipo){
+  const p=(CPK.depData&&CPK.depData.params)||cpkDepParamsDefault();
+  return p[tipo]||p.outro||cpkDepParamsDefault().outro;
+}
+function cpkPodeEditarDep(){ return cpkPodeSalvarKm(); }
+
+function cpkDepTipoLabel(t){ return {cavalo:'Cavalo mecânico',carreta:'Carreta',compressor:'Compressor',outro:'Outro ativo'}[t]||(t||'—'); }
+function cpkDepMetodoLabel(m){ return {linear:'Linear',percentual:'% anual',manual:'Manual'}[m]||(m||'—'); }
+function cpkDepStatusBadge(s){
+  s=(s||'ativo').toLowerCase();
+  const cfg={ativo:'bg',vendido:'bm',baixado:'ba',inativo:'bm'};
+  const lbl={ativo:'Ativo',vendido:'Vendido',baixado:'Baixado',inativo:'Inativo'};
+  return `<span class="bdg ${cfg[s]||'bm'}">${lbl[s]||s}</span>`;
+}
+
+// ── CARGA ──────────────────────────────────────────────────────────
+async function cpkLoadDep(){
+  if(CPK.depLoaded) return;
+  CPK.depData={ veiculos:{}, params:cpkDepParamsDefault() };
+  try{
+    const doc=await cpkFsGetDoc(CPK_DEP_COL,CPK_DEP_DOC);
+    if(doc&&doc.data){
+      CPK.depData.veiculos=doc.data.veiculos||{};
+      CPK.depData.params=Object.assign(cpkDepParamsDefault(), doc.data.params||{});
+    }
+  }catch(e){ cpkLog('Dep load erro:',e.message); }
+  CPK.depLoaded=true; CPK._depVer=(CPK._depVer||0)+1;
+  cpkLog('Depreciação:',Object.keys(CPK.depData.veiculos||{}).length,'veículo(s)');
+}
+
+async function cpkDepPersist(){
+  CPK.depData=CPK.depData||{ veiculos:{}, params:cpkDepParamsDefault() };
+  const dd=CPK.depData;
+  const payload={
+    tipo:'depreciacao_frota',
+    veiculos:dd.veiculos||{}, params:dd.params||cpkDepParamsDefault(),
+    meta:{ count:Object.keys(dd.veiculos||{}).length, atualizadoEm:new Date().toISOString(),
+      atualizadoPor:(CPK.user&&CPK.user.email)||'' }
+  };
+  await cpkFsSet(CPK_DEP_COL,CPK_DEP_DOC,payload,false);
+  CPK._depVer=(CPK._depVer||0)+1;
+}
+
+// ── CÁLCULO POR VEÍCULO ────────────────────────────────────────────
+//  Linear:     base = (compra − residual) / período
+//  Percentual: base = compra × (%anual/100) / 12
+//  Manual:     base = valor mensal informado
+//  Acumulado e contábil consideram o nº de meses decorridos até o mês.
+function cpkDepCalc(rec, mes){
+  const out={ valido:false, problemas:[], metodo:(rec.metodo||'linear').toString().toLowerCase(),
+    status:(rec.status||'ativo').toString().toLowerCase(),
+    valorCompra:0, valorResidual:0, valorDepreciavel:0, depMensalBase:0, depMensalNoMes:0,
+    mesesDecorridos:0, mesesMax:0, acumulado:0, valorContabil:0, encerrada:false };
+  const vc=cpkNum(rec.valorCompra), vrIn=cpkNum(rec.valorResidual);
+  const per=Math.round(cpkNum(rec.periodoMeses));
+  const perc=cpkNum(rec.percentualAnual), manual=cpkNum(rec.valorManualMensal);
+  const metodo=out.metodo, status=out.status;
+  out.valorCompra=vc;
+  const vr=Math.min(Math.max(0,vrIn), vc>0?vc:vrIn);
+  out.valorResidual=vr;
+
+  if(!(vc>0)) out.problemas.push('sem-valor-compra');
+  if(metodo==='linear' && !(per>0)) out.problemas.push('sem-periodo');
+  if(metodo==='percentual' && !(perc>0)) out.problemas.push('sem-percentual');
+  if(vrIn>vc && vc>0) out.problemas.push('residual-maior-compra');
+
+  const valorDepreciavel=Math.max(0, vc - vr);
+  out.valorDepreciavel=valorDepreciavel;
+
+  let base=0;
+  if(metodo==='manual') base=Math.max(0,manual);
+  else if(metodo==='percentual') base=(vc>0&&perc>0)? vc*(perc/100)/12 : 0;
+  else base=(per>0)? valorDepreciavel/per : 0;
+  out.depMensalBase=base;
+
+  let mesesMax=Infinity;
+  if(metodo==='linear' && per>0) mesesMax=per;
+  else if(base>0 && valorDepreciavel>0) mesesMax=Math.ceil(valorDepreciavel/base - 1e-9);
+  out.mesesMax=isFinite(mesesMax)?mesesMax:0;
+
+  const mc=cpkMesRefDe(rec.dataCompra);
+  let meses=0;
+  if(!mc){ out.problemas.push('sem-data-compra'); }
+  else if(mes){
+    if(mc>mes){ out.problemas.push('compra-futura'); meses=0; }
+    else { const [ay,am]=mc.split('-').map(Number),[by,bm]=mes.split('-').map(Number); meses=(by-ay)*12+(bm-am)+1; }
+  }
+  out.mesesDecorridos=meses;
+
+  const mesesEfet=Math.max(0, Math.min(meses, isFinite(mesesMax)?mesesMax:meses));
+  let acum=base*mesesEfet;
+  if(valorDepreciavel>0) acum=Math.min(acum, valorDepreciavel);
+  out.acumulado=acum;
+  out.valorContabil=Math.max(vc-acum, vr);
+  out.encerrada=(isFinite(mesesMax)&&meses>=mesesMax) || (valorDepreciavel>0 && acum>=valorDepreciavel-0.005);
+
+  const incide = status==='ativo' && base>0 && meses>=1 && meses<=(isFinite(mesesMax)?mesesMax:meses);
+  let parcela=base;
+  if(incide && valorDepreciavel>0){ const restanteAntes=valorDepreciavel-base*(meses-1); parcela=Math.max(0,Math.min(base,restanteAntes)); }
+  out.depMensalNoMes=incide?parcela:0;
+
+  out.valido = base>0 && out.problemas.filter(p=>p!=='compra-futura'&&p!=='sem-data-compra').length===0;
+  return out;
+}
+
+// ── ÍNDICE POR MÊS (cacheado) — alimenta o motor e a aba ────────────
+function cpkDepIndex(mes){
+  const dd=CPK.depData||{veiculos:{}};
+  const key=(mes||'')+'|'+(CPK._dataVer||0)+'|'+(CPK._depVer||0);
+  if(CPK._depIdxCache && CPK._depIdxCache.key===key) return CPK._depIdxCache.val;
+  const byPlaca={}, list=[];
+  const veics=dd.veiculos||{};
+  for(const pl in veics){
+    const rec=veics[pl]||{};
+    const placa=cpkNormPlaca(rec.placa||pl);
+    if(!placa)continue;
+    const v=cpkVeic(placa);
+    if(v && v.vinculo==='agregado') continue;            // frota própria apenas (regra do CPK)
+    const ehProprio = v ? v.vinculo==='proprio' : true;  // registro manual sem cadastro também conta
+    const calc=cpkDepCalc(rec, mes);
+    const row=Object.assign({}, rec, {
+      placa,
+      unidade:(v&&v.unidade)||rec.unidade||'',
+      vinc:(v&&v.vinculo)||'',
+      cadastrado:!!v,
+      ano: rec.anoFab||rec.anoMod||''
+    }, calc);
+    list.push(row);
+    if(ehProprio && calc.depMensalNoMes>0) byPlaca[placa]=calc.depMensalNoMes;
+  }
+  const val={byPlaca, list};
+  CPK._depIdxCache={key,val};
+  return val;
+}
+
+// ── LISTA FILTRADA (unidade global + filtros locais da aba) ─────────
+function cpkDepListaFiltrada(){
+  const idx=cpkDepIndex(CPK.filtros.mes);
+  const gv=id=>{const e=document.getElementById(id);return e?e.value:'';};
+  const fu=CPK.filtros.unidade, ft=gv('dep-f-tipo'), fm=gv('dep-f-marca'), fs=gv('dep-f-status');
+  const fq=cpkNormStr(gv('dep-f-placa'));
+  return idx.list.filter(r=>{
+    if(fu && (r.unidade||'')!==fu) return false;
+    if(ft && (r.tipo||'')!==ft) return false;
+    if(fm && (r.marca||'')!==fm) return false;
+    if(fs && (r.status||'')!==fs) return false;
+    if(fq && !cpkNormStr((r.placa||'')+' '+(r.marca||'')+' '+(r.modelo||'')).includes(fq)) return false;
+    return true;
+  });
+}
+
+// ── ORDENAÇÃO ──────────────────────────────────────────────────────
+function cpkDepSort(c){
+  const s=CPK.depSort||(CPK.depSort={c:'depMensalNoMes',d:-1});
+  if(s.c===c)s.d=-s.d; else { s.c=c; s.d=-1; }
+  cpkRenderDep();
+}
+
+// ── RENDER DA ABA ──────────────────────────────────────────────────
+function cpkRenderDep(){
+  if(!CPK.depData){ CPK.depData={veiculos:{},params:cpkDepParamsDefault()}; }
+  const mes=CPK.filtros.mes;
+  const idx=cpkDepIndex(mes);
+
+  // opções de marca (preserva seleção)
+  const selMarca=document.getElementById('dep-f-marca');
+  if(selMarca){
+    const cur=selMarca.value;
+    const marcas=[...new Set(idx.list.map(r=>r.marca).filter(Boolean))].sort();
+    selMarca.innerHTML='<option value="">Marca: todas</option>'+marcas.map(m=>`<option value="${m}">${m}</option>`).join('');
+    selMarca.value=marcas.includes(cur)?cur:'';
+  }
+
+  const lista=cpkDepListaFiltrada();
+
+  // ── KPIs (regra 13) ──
+  const totCompra=lista.reduce((s,r)=>s+(+r.valorCompra||0),0);
+  const totResidual=lista.reduce((s,r)=>s+(+r.valorResidual||0),0);
+  const totMensal=lista.reduce((s,r)=>s+(+r.depMensalNoMes||0),0);
+  const totAcum=lista.reduce((s,r)=>s+(+r.acumulado||0),0);
+  const totContabil=lista.reduce((s,r)=>s+(+r.valorContabil||0),0);
+  const ativosComDep=lista.filter(r=>r.depMensalNoMes>0).length;
+  document.getElementById('dep-kpis').innerHTML =
+    cpkKpi('truck','pu','Veículos depreciando', ativosComDep,
+      lista.length+' no cadastro'+(CPK.filtros.unidade?(' · '+CPK.filtros.unidade):'')) +
+    cpkKpi('wallet','','Valor de compra', cpkFmtComp(totCompra), cpkFmt(totCompra)) +
+    cpkKpi('scale','cy','Residual estimado', cpkFmtComp(totResidual), '') +
+    cpkKpi('layers','am','Depreciação mensal', cpkFmt(totMensal), cpkMesLabel(mes)) +
+    cpkKpi('calendar','pu','Depreciação acumulada', cpkFmtComp(totAcum), 'até o mês') +
+    cpkKpi('dollar','gn','Valor contábil atual', cpkFmtComp(totContabil), 'frota no escopo');
+
+  // ── ALERTAS (regra 21) ──
+  cpkDepRenderAlertas(idx, lista, mes);
+
+  // ── PARÂMETROS POR TIPO ──
+  cpkDepRenderParams();
+
+  // ── TABELA CONSOLIDADA (regra 12) ──
+  const s=CPK.depSort||{c:'depMensalNoMes',d:-1};
+  const rows=lista.slice().sort((a,b)=>{
+    let va=a[s.c], vb=b[s.c];
+    if(s.c==='ano'){ va=+(a.anoFab||a.anoMod||0); vb=+(b.anoFab||b.anoMod||0); }
+    if(va==null)va=-Infinity; if(vb==null)vb=-Infinity;
+    if(typeof va==='string'||typeof vb==='string'){ va=String(a[s.c]??'').toLowerCase(); vb=String(b[s.c]??'').toLowerCase(); return va<vb?-s.d:va>vb?s.d:0; }
+    return (va-vb)*s.d;
+  });
+  const body=document.querySelector('#tbl-dep tbody');
+  const pode=cpkPodeEditarDep();
+  if(rows.length){
+    body.innerHTML=rows.map(r=>{
+      const anoTxt=(r.anoFab||'—')+(r.anoMod&&r.anoMod!==r.anoFab?('/'+String(r.anoMod).slice(-2)):'');
+      const semKmNoMes = r.status==='ativo' && r.depMensalNoMes>0 && !(CPK.kmImport&&CPK.kmImport[r.placa]&&CPK.kmImport[r.placa].km>0)
+        && !(CPK.aggPlaca||[]).some(p=>p.placa===r.placa&&p.km_total>0);
+      const flags=[];
+      if(r.encerrada) flags.push('<span class="bdg ba" title="Depreciação encerrada">encerrada</span>');
+      if(semKmNoMes) flags.push('<span class="bdg bm" title="Sem KM no mês — sem diluição por km">s/ km</span>');
+      if(!r.cadastrado) flags.push('<span class="bdg bp" title="Sem cadastro em Veículos">manual</span>');
+      return `<tr>
+        <td><b>${r.placa}</b>${flags.length?(' '+flags.join(' ')):''}</td>
+        <td>${cpkDepTipoLabel(r.tipo)}</td>
+        <td>${cpkAbrev(((r.marca||'')+' '+(r.modelo||'')).trim()||'—',22)}</td>
+        <td class="r">${anoTxt}</td>
+        <td class="r">${cpkFmt(r.valorCompra)}</td>
+        <td class="r">${cpkFmt(r.valorResidual)}</td>
+        <td class="r">${cpkFmt(r.valorDepreciavel)}</td>
+        <td class="r"><b>${r.depMensalNoMes>0?cpkFmt(r.depMensalNoMes):'<span style=\"color:var(--mu)\">—</span>'}</b></td>
+        <td class="r">${cpkFmt(r.acumulado)}</td>
+        <td class="r">${cpkFmt(r.valorContabil)}</td>
+        <td>${r.unidade||'—'}</td>
+        <td>${cpkDepStatusBadge(r.status)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn-icon" title="Memória de cálculo" onclick="cpkPlacaMemoria('${r.placa}')">𝑓</button>
+          <button class="btn-icon" title="Recalcular" onclick="cpkDepRecalc('${r.placa}')">↻</button>
+          <button class="btn-icon" title="${pode?'Editar':'Sem permissão'}" ${pode?`onclick="cpkDepEditar('${r.placa}')"`:'disabled'}>✎</button>
+        </td></tr>`;
+    }).join('');
+  } else {
+    body.innerHTML=cpkEmptyRow(13,'Nenhum veículo na base de depreciação para o filtro atual. Use “＋ Novo veículo” ou “⬆ Importar”.');
+  }
+  const meta=document.getElementById('dep-tbl-meta');
+  if(meta) meta.textContent = `${rows.length} veículo(s) · mensal ${cpkFmt(totMensal)} · ${cpkMesLabel(mes)}`;
+}
+
+function cpkDepRenderAlertas(idx, lista, mes){
+  const host=document.getElementById('dep-alertas'); if(!host)return;
+  const out=[];
+  const semCompra=lista.filter(r=>!(+r.valorCompra>0)).length;
+  const semPeriodo=lista.filter(r=>r.metodo==='linear'&&!(+r.periodoMeses>0)).length;
+  const encerradas=lista.filter(r=>r.encerrada).length;
+  const contabilZero=lista.filter(r=>r.valorContabil<=0.01 && r.valorCompra>0).length;
+  const semKm=lista.filter(r=>r.status==='ativo'&&r.depMensalNoMes>0
+      && !(CPK.kmImport&&CPK.kmImport[r.placa]&&CPK.kmImport[r.placa].km>0)
+      && !(CPK.aggPlaca||[]).some(p=>p.placa===r.placa&&p.km_total>0)).length;
+  // frota própria ativa sem registro de depreciação
+  const cadastradas=new Set(Object.keys((CPK.depData&&CPK.depData.veiculos)||{}).map(cpkNormPlaca));
+  const fu=CPK.filtros.unidade;
+  const semConfig=(CPK.frota||[]).filter(v=>v.vinculo==='proprio' && !cadastradas.has(v.placa)
+      && !cpkPlacaIgnorada(v.placa) && !cpkPlacaReceitaCompl(v.placa)
+      && (!fu || v.unidade===fu)).length;
+
+  if(semConfig) out.push(cpkInsight('am','truck','Frota própria sem depreciação',
+    '<b>'+semConfig+'</b> placa(s) de frota própria sem registro de depreciação'+(fu?(' em '+fu):'')+'. Cadastre para refletir o custo real no CPK.'));
+  if(semCompra) out.push(cpkInsight('rd','alert','Sem valor de compra','<b>'+semCompra+'</b> registro(s) sem valor de compra — não geram depreciação.'));
+  if(semPeriodo) out.push(cpkInsight('rd','alert','Sem período (linear)','<b>'+semPeriodo+'</b> registro(s) lineares sem período em meses.'));
+  if(semKm) out.push(cpkInsight('am','road','Sem KM no mês','<b>'+semKm+'</b> placa(s) com depreciação mas sem KM em '+cpkMesLabel(mes)+' — custo entra na frota, sem CPK por km.'));
+  if(encerradas) out.push(cpkInsight('am','check','Depreciação encerrada','<b>'+encerradas+'</b> ativo(s) já totalmente depreciado(s) — sem custo mensal adicional.'));
+  if(contabilZero) out.push(cpkInsight('am','wallet','Valor contábil zerado','<b>'+contabilZero+'</b> ativo(s) com valor contábil no piso residual.'));
+  if(!out.length) out.push(cpkInsight('gn','check','Base consistente','Nenhum alerta de depreciação no escopo atual.'));
+  host.innerHTML=out.join('');
+}
+
+function cpkDepRenderParams(){
+  const grid=document.getElementById('dep-params-grid'); if(!grid)return;
+  const P=(CPK.depData&&CPK.depData.params)||cpkDepParamsDefault();
+  grid.innerHTML='<div class="form-grid">'+CPK_DEP_TIPOS.map(t=>{
+    const p=P[t]||cpkDepParamsDefault()[t];
+    return `<div class="cpk-card" style="padding:11px 12px">
+      <div class="ck-lbl" style="margin-bottom:7px">${cpkDepTipoLabel(t)}</div>
+      <div class="form-field" style="margin-bottom:6px"><label>Prazo (meses)</label><input type="number" id="dep-p-${t}-prazo" value="${p.prazo||''}" min="0" max="600"></div>
+      <div class="form-field" style="margin-bottom:6px"><label>% anual padrão</label><input type="text" id="dep-p-${t}-perc" value="${p.percAnual||''}" inputmode="decimal"></div>
+      <div class="form-field" style="margin-bottom:6px"><label>Residual % padrão</label><input type="text" id="dep-p-${t}-resid" value="${p.residualPct||''}" inputmode="decimal"></div>
+      <div class="form-field"><label>Método padrão</label>
+        <select id="dep-p-${t}-metodo">
+          <option value="linear"${p.metodo==='linear'?' selected':''}>Linear</option>
+          <option value="percentual"${p.metodo==='percentual'?' selected':''}>Percentual anual</option>
+          <option value="manual"${p.metodo==='manual'?' selected':''}>Manual</option>
+        </select>
+      </div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
+async function cpkDepParamsSalvar(){
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão para editar parâmetros.'); return; }
+  const P={};
+  CPK_DEP_TIPOS.forEach(t=>{
+    const g=id=>{const e=document.getElementById('dep-p-'+t+'-'+id);return e?e.value:'';};
+    P[t]={ prazo:Math.round(cpkNum(g('prazo'))), percAnual:cpkNum(g('perc')), residualPct:cpkNum(g('resid')), metodo:g('metodo')||'linear' };
+  });
+  CPK.depData=CPK.depData||{veiculos:{}}; CPK.depData.params=P;
+  const msg=document.getElementById('dep-params-msg'); if(msg)msg.textContent='Salvando…';
+  try{ await cpkDepPersist(); if(msg)msg.textContent='✓ Parâmetros salvos.'; cpkToast('Parâmetros de depreciação salvos.'); }
+  catch(e){ if(msg)msg.textContent='Erro ao salvar.'; cpkToast('Erro: '+(e.message||e)); }
+}
+
+function cpkDepToggle(id){
+  const el=document.getElementById(id); if(!el)return;
+  el.style.display = el.style.display==='none' ? 'block' : 'none';
+  if(el.style.display!=='none' && id==='dep-params-panel') cpkDepRenderParams();
+}
+
+// ── MODAL: NOVO / EDITAR VEÍCULO ───────────────────────────────────
+function cpkDepNovo(){
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão para cadastrar depreciação.'); return; }
+  CPK._depEdit='';
+  document.getElementById('dep-modal-title').textContent='Novo veículo — depreciação';
+  document.getElementById('dep-modal-del').style.display='none';
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v;};
+  ['dep-i-placa','dep-i-marca','dep-i-modelo','dep-i-anoFab','dep-i-anoMod','dep-i-valorCompra','dep-i-dataCompra','dep-i-valorResidual','dep-i-periodoMeses','dep-i-percentualAnual','dep-i-valorManualMensal'].forEach(id=>set(id,''));
+  set('dep-i-tipo','cavalo'); set('dep-i-metodo','linear'); set('dep-i-status','ativo');
+  cpkDepFormTipoChange(true);   // aplica defaults do tipo
+  cpkDepFormMetodoChange();
+  document.getElementById('dep-form-err').innerHTML='';
+  document.getElementById('dep-modal').classList.add('open');
+  cpkDepFormPreview();
+}
+function cpkDepEditar(placa){
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão para editar.'); return; }
+  const rec=(CPK.depData&&CPK.depData.veiculos&&CPK.depData.veiculos[cpkNormPlaca(placa)]); if(!rec)return;
+  CPK._depEdit=cpkNormPlaca(placa);
+  document.getElementById('dep-modal-title').textContent='Editar depreciação · '+CPK._depEdit;
+  document.getElementById('dep-modal-del').style.display='inline-flex';
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=(v==null?'':v);};
+  set('dep-i-placa',rec.placa||placa); set('dep-i-tipo',rec.tipo||'outro');
+  set('dep-i-marca',rec.marca); set('dep-i-modelo',rec.modelo);
+  set('dep-i-anoFab',rec.anoFab); set('dep-i-anoMod',rec.anoMod);
+  set('dep-i-valorCompra',rec.valorCompra); set('dep-i-dataCompra',cpkNormDate(rec.dataCompra)||'');
+  set('dep-i-valorResidual',rec.valorResidual); set('dep-i-periodoMeses',rec.periodoMeses);
+  set('dep-i-metodo',rec.metodo||'linear'); set('dep-i-percentualAnual',rec.percentualAnual);
+  set('dep-i-valorManualMensal',rec.valorManualMensal); set('dep-i-status',rec.status||'ativo');
+  cpkDepFormMetodoChange();
+  document.getElementById('dep-form-err').innerHTML='';
+  document.getElementById('dep-modal').classList.add('open');
+  cpkDepFormPreview();
+}
+function cpkDepModalClose(){ document.getElementById('dep-modal').classList.remove('open'); }
+
+function cpkDepFormTipoChange(forceDefaults){
+  const tipo=document.getElementById('dep-i-tipo').value;
+  // ao criar (ou trocar tipo em registro novo) sugere os padrões do tipo — sem sobrescrever edição
+  if(forceDefaults || !CPK._depEdit){
+    const p=cpkDepParam(tipo);
+    const set=(id,v)=>{const e=document.getElementById(id);if(e&&!e.value)e.value=v;};
+    const setF=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v;};
+    setF('dep-i-periodoMeses',p.prazo||''); setF('dep-i-metodo',p.metodo||'linear');
+    setF('dep-i-percentualAnual',p.percAnual||'');
+    // residual sugerido a partir do % e do valor de compra atual, se houver
+    const vc=cpkNum(document.getElementById('dep-i-valorCompra').value);
+    if(vc>0 && p.residualPct>0) setF('dep-i-valorResidual', Math.round(vc*p.residualPct/100));
+    cpkDepFormMetodoChange();
+  }
+  cpkDepFormPreview();
+}
+function cpkDepFormMetodoChange(){
+  const m=document.getElementById('dep-i-metodo').value;
+  document.getElementById('dep-i-perc-wrap').style.display = m==='percentual' ? 'flex' : 'none';
+  document.getElementById('dep-i-manual-wrap').style.display = m==='manual' ? 'flex' : 'none';
+}
+function cpkDepFormColeta(){
+  const g=id=>{const e=document.getElementById(id);return e?e.value.trim():'';};
+  return {
+    placa:cpkNormPlaca(g('dep-i-placa')), tipo:g('dep-i-tipo'),
+    marca:g('dep-i-marca'), modelo:g('dep-i-modelo'),
+    anoFab:g('dep-i-anoFab')?Math.round(cpkNum(g('dep-i-anoFab'))):'',
+    anoMod:g('dep-i-anoMod')?Math.round(cpkNum(g('dep-i-anoMod'))):'',
+    valorCompra:cpkNum(g('dep-i-valorCompra')), dataCompra:cpkNormDate(g('dep-i-dataCompra')),
+    valorResidual:cpkNum(g('dep-i-valorResidual')), periodoMeses:Math.round(cpkNum(g('dep-i-periodoMeses'))),
+    metodo:g('dep-i-metodo'), percentualAnual:cpkNum(g('dep-i-percentualAnual')),
+    valorManualMensal:cpkNum(g('dep-i-valorManualMensal')), status:g('dep-i-status')
+  };
+}
+function cpkDepFormValida(rec){
+  const erros=[];
+  if(!rec.placa) erros.push('Placa é obrigatória.');
+  if(!rec.tipo) erros.push('Tipo de ativo é obrigatório.');
+  if(!(rec.valorCompra>0)) erros.push('Valor de compra deve ser maior que zero.');
+  if(rec.metodo!=='manual' && rec.metodo==='linear' && !(rec.periodoMeses>0)) erros.push('Período de depreciação não pode ser zero.');
+  if(rec.metodo==='percentual' && !(rec.percentualAnual>0)) erros.push('Percentual anual deve ser maior que zero.');
+  if(rec.metodo==='manual' && !(rec.valorManualMensal>0)) erros.push('Informe o valor mensal manual.');
+  if(rec.valorResidual>rec.valorCompra) erros.push('Valor residual não pode ser maior que o valor de compra.');
+  if(!rec.dataCompra) erros.push('Data de compra é obrigatória.');
+  else { const hoje=new Date().toISOString().slice(0,7); if(cpkMesRefDe(rec.dataCompra)>hoje) erros.push('Data de compra não pode ser no futuro.'); }
+  return erros;
+}
+function cpkDepFormPreview(){
+  const rec=cpkDepFormColeta(), mes=CPK.filtros.mes;
+  document.getElementById('dep-form-mes').textContent=cpkMesLabel(mes);
+  const calc=cpkDepCalc(rec, mes);
+  const erros=cpkDepFormValida(rec);
+  const errBox=document.getElementById('dep-form-err');
+  const avisos=[];
+  if(cpkMesRefDe(rec.dataCompra) && cpkMesRefDe(rec.dataCompra)>mes) avisos.push('Compra posterior ao mês selecionado — sem depreciação neste mês.');
+  if(calc.encerrada) avisos.push('Ativo já totalmente depreciado até o mês selecionado.');
+  if(rec.status!=='ativo') avisos.push('Status “'+(rec.status)+'” — não gera custo mensal no CPK.');
+  let errHtml='';
+  if(erros.length) errHtml+='<div class="cpk-err" style="margin-top:8px"><span>'+erros.map(e=>'• '+e).join('<br>')+'</span></div>';
+  if(avisos.length) errHtml+='<div class="cpk-nd" style="margin-top:8px"><span>'+avisos.map(e=>'• '+e).join('<br>')+'</span></div>';
+  errBox.innerHTML=errHtml;
+  document.getElementById('dep-modal-save').disabled = erros.length>0 || !cpkPodeEditarDep();
+  const dr=(l,v)=>`<div class="detail-row"><span class="detail-lbl">${l}</span><span class="detail-val">${v}</span></div>`;
+  document.getElementById('dep-form-preview').innerHTML=
+    dr('Valor depreciável', cpkFmt(calc.valorDepreciavel))+
+    dr('Depreciação mensal (base · '+cpkDepMetodoLabel(calc.metodo)+')', cpkFmt(calc.depMensalBase))+
+    dr('Depreciação no mês', calc.depMensalNoMes>0?cpkFmt(calc.depMensalNoMes):'—')+
+    dr('Meses decorridos', (calc.mesesDecorridos||0)+(calc.mesesMax?(' / '+calc.mesesMax):''))+
+    dr('Depreciação acumulada', cpkFmt(calc.acumulado))+
+    dr('Valor contábil atual', cpkFmt(calc.valorContabil));
+}
+async function cpkDepSalvarVeic(){
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão.'); return; }
+  const rec=cpkDepFormColeta();
+  const erros=cpkDepFormValida(rec);
+  if(erros.length){ cpkToast('Corrija os campos destacados.'); return; }
+  CPK.depData=CPK.depData||{veiculos:{},params:cpkDepParamsDefault()};
+  CPK.depData.veiculos=CPK.depData.veiculos||{};
+  // se a placa mudou na edição, remove a chave antiga
+  if(CPK._depEdit && CPK._depEdit!==rec.placa) delete CPK.depData.veiculos[CPK._depEdit];
+  rec._editadoEm=new Date().toISOString(); rec._editadoPor=(CPK.user&&CPK.user.email)||'';
+  CPK.depData.veiculos[rec.placa]=rec;
+  const btn=document.getElementById('dep-modal-save'); if(btn){btn.disabled=true;btn.textContent='Salvando…';}
+  try{
+    await cpkDepPersist();
+    cpkToast('Depreciação de '+rec.placa+' salva.');
+    cpkDepModalClose();
+    cpkCalculate(); cpkRenderActive();
+  }catch(e){ cpkToast('Erro ao salvar: '+(e.message||e)); }
+  finally{ if(btn){btn.textContent='Salvar';btn.disabled=false;} }
+}
+async function cpkDepExcluir(){
+  const placa=CPK._depEdit; if(!placa)return;
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão.'); return; }
+  if(!confirm('Excluir a depreciação da placa '+placa+'? O custo deixará de ser diluído no CPK.')) return;
+  if(CPK.depData&&CPK.depData.veiculos) delete CPK.depData.veiculos[placa];
+  try{
+    await cpkDepPersist();
+    cpkToast('Depreciação de '+placa+' excluída.');
+    cpkDepModalClose();
+    cpkCalculate(); cpkRenderActive();
+  }catch(e){ cpkToast('Erro ao excluir: '+(e.message||e)); }
+}
+function cpkDepRecalc(placa){
+  // recálculo é determinístico a partir dos parâmetros salvos: apenas reprocessa e re-renderiza.
+  CPK._depIdxCache=null;
+  cpkCalculate(); cpkRenderActive();
+  cpkToast('Recalculado · '+cpkNormPlaca(placa));
+}
+
+// ── IMPORTAÇÃO EM MASSA ────────────────────────────────────────────
+function cpkDepDetectaCols(headers){
+  const norm=s=>cpkNormStr(s).replace(/[^A-Z0-9 ]/g,'');
+  const map={};
+  const def={
+    placa:['PLACA','VEICULO','VEÍCULO'],
+    tipo:['TIPO','TIPO ATIVO','TIPO DE ATIVO','CATEGORIA'],
+    marca:['MARCA'], modelo:['MODELO'],
+    anoFab:['ANO FABRICACAO','ANO FAB','ANO FABRICAÇÃO','ANO DE FABRICACAO'],
+    anoMod:['ANO MODELO','ANO MOD'],
+    valorCompra:['VALOR DE COMPRA','VALOR COMPRA','VLR COMPRA','COMPRA'],
+    dataCompra:['DATA DE COMPRA','DATA COMPRA','DT COMPRA'],
+    valorResidual:['VALOR RESIDUAL','RESIDUAL','VLR RESIDUAL'],
+    periodoMeses:['PERIODO EM MESES','PERIODO','PERÍODO','MESES','PRAZO'],
+    metodo:['METODO','MÉTODO','METODO DEPRECIACAO','METODO DE DEPRECIACAO'],
+    percentualAnual:['PERCENTUAL ANUAL','PERC ANUAL','% ANUAL','PERCENTUAL'],
+    status:['STATUS','SITUACAO','SITUAÇÃO']
+  };
+  headers.forEach((h,i)=>{ const n=norm(h);
+    for(const k in def){ if(map[k]==null){ for(const alias of def[k]){ if(n===alias||(alias.length>3&&n.includes(alias))){ map[k]=i; break; } } } }
+  });
+  return map;
+}
+function cpkDepNormTipo(v){
+  const n=cpkNormStr(v);
+  if(/CAVALO|TRATOR|TOCO|CAMINHAO TRATOR/.test(n))return'cavalo';
+  if(/CARRETA|REBOQUE|SEMIRR|SEMI|IMPLEMENTO|TANQUE|SILO/.test(n))return'carreta';
+  if(/COMPRESSOR/.test(n))return'compressor';
+  if(!n)return'outro';
+  return 'outro';
+}
+function cpkDepNormMetodo(v){
+  const n=cpkNormStr(v);
+  if(/PERC|%/.test(n))return'percentual';
+  if(/MANUAL|FIXO/.test(n))return'manual';
+  return'linear';
+}
+function cpkDepNormStatus(v){
+  const n=cpkNormStr(v);
+  if(/VEND/.test(n))return'vendido';
+  if(/BAIX/.test(n))return'baixado';
+  if(/INATIV|DESATIV/.test(n))return'inativo';
+  return'ativo';
+}
+async function cpkDepImportFile(ev){
+  const file=ev.target.files&&ev.target.files[0]; if(!file)return;
+  const info=document.getElementById('dep-import-info');
+  info.innerHTML='<div class="cpk-info">⏳ <span>Lendo planilha…</span></div>';
+  if(!CPK.frota||!CPK.frota.length){ try{ await cpkLoadFrota(); }catch(_){} }
+  try{
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+    if(!rows.length){ info.innerHTML='<div class="cpk-err">⛔ <span>Planilha vazia.</span></div>'; return; }
+    let hIdx=0, cols={};
+    for(let i=0;i<Math.min(rows.length,8);i++){ const c=cpkDepDetectaCols(rows[i].map(String)); if(c.placa!=null && (c.valorCompra!=null||c.periodoMeses!=null)){ hIdx=i; cols=c; break; } }
+    if(cols.placa==null){ info.innerHTML='<div class="cpk-err">⛔ <span>Não encontrei a coluna <b>Placa</b>. Verifique os títulos.</span></div>'; return; }
+    const validos={}, inconsist=[];
+    rows.slice(hIdx+1).forEach(r=>{
+      const get=k=>cols[k]!=null?r[cols[k]]:'';
+      const placa=cpkNormPlaca(get('placa')); if(!placa)return;
+      if(cpkPlacaIgnorada(placa)||cpkPlacaReceitaCompl(placa)){ inconsist.push({placa,problema:'Placa-controle — ignorada'}); return; }
+      const v=cpkVeic(placa);
+      if(v&&v.vinculo==='agregado'){ inconsist.push({placa,problema:'Agregado — fora do escopo Frota'}); return; }
+      const valorCompra=cpkNum(get('valorCompra'));
+      if(!(valorCompra>0)){ inconsist.push({placa,problema:'Valor de compra ausente/zero'}); return; }
+      validos[placa]={
+        placa, tipo:cpkDepNormTipo(get('tipo')), marca:cpkStr(get('marca')), modelo:cpkStr(get('modelo')),
+        anoFab:get('anoFab')?Math.round(cpkNum(get('anoFab'))):'', anoMod:get('anoMod')?Math.round(cpkNum(get('anoMod'))):'',
+        valorCompra, dataCompra:cpkNormDate(get('dataCompra')), valorResidual:cpkNum(get('valorResidual')),
+        periodoMeses:Math.round(cpkNum(get('periodoMeses'))), metodo:cpkDepNormMetodo(get('metodo')),
+        percentualAnual:cpkNum(get('percentualAnual')), status:cpkDepNormStatus(get('status'))
+      };
+    });
+    CPK._depImport={ fileName:file.name, validos, inconsist, count:Object.keys(validos).length };
+    let html=`<div class="cpk-${Object.keys(validos).length?'ok':'nd'}">${Object.keys(validos).length?'✓':'⚠'} <span>
+      <b>${cpkAbrev(file.name,28)}</b>: <b>${Object.keys(validos).length}</b> veículo(s) válido(s) · <b>${inconsist.length}</b> inconsistência(s).</span></div>`;
+    if(inconsist.length){
+      html+='<div style="margin-top:8px;max-height:150px;overflow:auto;border:1px solid var(--bd2);border-radius:6px"><table class="dt"><thead><tr><th>Placa</th><th>Problema</th></tr></thead><tbody>'+
+        inconsist.slice(0,200).map(i=>`<tr><td><b>${i.placa}</b></td><td style="color:var(--am)">${i.problema}</td></tr>`).join('')+'</tbody></table></div>';
+    }
+    info.innerHTML=html;
+    const btn=document.getElementById('dep-import-save'); if(btn)btn.disabled=!(Object.keys(validos).length>0 && cpkPodeEditarDep());
+  }catch(e){ info.innerHTML='<div class="cpk-err">⛔ <span>Erro ao ler: '+(e.message||e)+'</span></div>'; }
+}
+function cpkDepImportLimpar(){
+  CPK._depImport=null;
+  const fi=document.getElementById('dep-file'); if(fi)fi.value='';
+  const info=document.getElementById('dep-import-info'); if(info)info.innerHTML='';
+  const btn=document.getElementById('dep-import-save'); if(btn)btn.disabled=true;
+}
+async function cpkDepImportSalvar(){
+  const imp=CPK._depImport;
+  if(!imp||!imp.count){ cpkToast('Nada válido para importar.'); return; }
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão.'); return; }
+  const substituir=document.getElementById('dep-import-substituir').checked;
+  CPK.depData=CPK.depData||{veiculos:{},params:cpkDepParamsDefault()};
+  let veics = substituir ? {} : Object.assign({}, CPK.depData.veiculos||{});
+  Object.keys(imp.validos).forEach(pl=>{ veics[pl]=Object.assign({}, imp.validos[pl], {_editadoEm:new Date().toISOString(),_editadoPor:(CPK.user&&CPK.user.email)||''}); });
+  CPK.depData.veiculos=veics;
+  const btn=document.getElementById('dep-import-save'); if(btn){btn.disabled=true;btn.textContent='Salvando…';}
+  try{
+    await cpkDepPersist();
+    cpkToast('Base de depreciação importada: '+imp.count+' veículo(s).');
+    cpkDepImportLimpar();
+    cpkDepToggle('dep-import-panel');
+    cpkCalculate(); cpkRenderActive();
+  }catch(e){ cpkToast('Erro ao salvar: '+(e.message||e)); }
+  finally{ if(btn){btn.textContent='Salvar no Firestore';btn.disabled=false;} }
+}
+function cpkDepModelo(){
+  const csv='Placa;Tipo;Marca;Modelo;Ano fabricacao;Ano modelo;Valor de compra;Data de compra;Valor residual;Periodo em meses;Metodo;Percentual anual;Status\n'+
+    'ABC1D23;Cavalo;Scania;R450;2021;2022;620000,00;15/03/2021;62000,00;60;linear;;ativo\n'+
+    'XYZ4E56;Carreta;Randon;Silo;2020;2020;180000,00;10/06/2020;18000,00;72;linear;;ativo\n';
+  const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='modelo_depreciacao_frota.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+}
+
+// ── EXPORTAÇÃO ─────────────────────────────────────────────────────
+function cpkDepExport(){
+  const lista=cpkDepListaFiltrada();
+  if(!lista.length){ cpkToast('Sem dados para exportar no filtro atual.'); return; }
+  const esc=v=>{ const s=(v==null?'':String(v)).replace(/"/g,'""'); return /[;"\n]/.test(s)?('"'+s+'"'):s; };
+  const head=['Placa','Tipo','Marca','Modelo','Ano fab.','Ano modelo','Valor compra','Data compra','Valor residual','Base depreciavel','Metodo','% anual','Periodo meses','Depreciacao mensal','Depreciacao acumulada','Valor contabil','Unidade','Status'];
+  const lines=[head.join(';')];
+  lista.forEach(r=>{
+    lines.push([r.placa,cpkDepTipoLabel(r.tipo),r.marca||'',r.modelo||'',r.anoFab||'',r.anoMod||'',
+      r.valorCompra||0,cpkNormDate(r.dataCompra)||'',r.valorResidual||0,r.valorDepreciavel||0,
+      cpkDepMetodoLabel(r.metodo),r.percentualAnual||'',r.periodoMeses||'',
+      (r.depMensalNoMes||0).toFixed(2),(r.acumulado||0).toFixed(2),(r.valorContabil||0).toFixed(2),
+      r.unidade||'',r.status||''].map(esc).join(';'));
+  });
+  const blob=new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='depreciacao_'+(CPK.filtros.mes||'')+'.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+  cpkToast('Exportado: '+lista.length+' veículo(s).');
+}
+
+// ── MEMÓRIA DE CÁLCULO DA PLACA (inclui depreciação) ───────────────
+function cpkPlacaMemoria(placa){
+  placa=cpkNormPlaca(placa);
+  const pa=(CPK.aggPlaca||[]).find(p=>p.placa===placa);
+  const dep=(CPK.depByPlaca&&CPK.depByPlaca[placa])||0;
+  const idx=cpkDepIndex(CPK.filtros.mes);
+  const depRec=idx.list.find(r=>r.placa===placa);
+  const body=document.getElementById('mem-modal-body');
+  document.getElementById('mem-modal-title').textContent='Memória de cálculo · '+placa;
+  const dr=(l,v,strong)=>`<div class="detail-row"><span class="detail-lbl">${l}</span><span class="detail-val"${strong?' style="font-weight:700"':''}>${v}</span></div>`;
+  const sec=t=>`<div class="detail-sec">${t}</div>`;
+  if(!pa){
+    let html=sec('Placa fora do cálculo no mês');
+    html+='<div class="cpk-nd" style="margin-top:8px"><span>Esta placa não está no cálculo do CPK no escopo/mês atual (sem CTRC, KM ou custo apontado).</span></div>';
+    if(depRec) html+=sec('Depreciação cadastrada')+dr('Depreciação mensal', dep>0?cpkFmt(dep):'—')+dr('Valor contábil', cpkFmt(depRec.valorContabil));
+    body.innerHTML=html;
+    document.getElementById('mem-modal').classList.add('open');
+    return;
+  }
+  const c=pa.custo_comp||{diesel:0,co:0,cp:0,ce:0,ped:0,dep:0,total:pa.custo_total||0};
+  const km=pa.km_total||0;
+  const cpkDep = km>0 ? dep/km : null;
+  const partPlaca = c.total>0 ? dep/c.total*100 : null;
+  const partFrota = (CPK.pool>0) ? dep/CPK.pool*100 : null;
+  const linhaCusto=(l,v)=>{ const pct=c.total>0?(v/c.total*100):0; return dr(l, cpkFmt(v)+'  ·  '+cpkFmtPct(pct,1)); };
+
+  let html='';
+  html+=sec('Composição do custo da placa');
+  html+=linhaCusto('Combustível (diesel + ARLA)', c.diesel||0);
+  html+=linhaCusto('Custo operacional', c.co||0);
+  html+=linhaCusto('Pessoal (rateio)', c.cp||0);
+  html+=linhaCusto('Pedágio', c.ped||0);
+  html+=linhaCusto('Depreciação', c.dep||0);
+  html+=dr('Custo total da placa', cpkFmt(c.total), true);
+
+  html+=sec('Operação no mês');
+  html+=dr('KM no mês', km>0?cpkFmtKm(km):'—'+' (sem diluição por km)');
+  html+=dr('Fonte do KM', (pa.fonte_km||'—'));
+  html+=dr('CPK da placa', pa.cpk!=null?cpkFmt(pa.cpk)+' /km':'—', true);
+  html+=dr('Receita / km', pa.receita_km!=null?cpkFmt(pa.receita_km)+' /km':'—');
+  html+=dr('Margem / km', pa.margem_km!=null?cpkFmt(pa.margem_km)+' /km':'—');
+
+  html+=sec('Depreciação — detalhamento');
+  if(depRec){
+    html+=dr('Método', cpkDepMetodoLabel(depRec.metodo));
+    html+=dr('Valor de compra', cpkFmt(depRec.valorCompra));
+    html+=dr('Base depreciável', cpkFmt(depRec.valorDepreciavel));
+    html+=dr('Meses decorridos', (depRec.mesesDecorridos||0)+(depRec.mesesMax?(' / '+depRec.mesesMax):''));
+  }
+  html+=dr('Depreciação mensal', dep>0?cpkFmt(dep):'—', true);
+  html+=dr('KM utilizado', km>0?cpkFmtKm(km):'sem KM no mês');
+  html+=dr('CPK da depreciação', cpkDep!=null?cpkFmt(cpkDep)+' /km':'—', true);
+  html+=dr('Participação no custo da placa', partPlaca!=null?cpkFmtPct(partPlaca,1):'—');
+  html+=dr('Participação no custo da frota', partFrota!=null?cpkFmtPct(partFrota,2):'—');
+  if(!depRec || dep<=0){
+    html+='<div class="cpk-nd" style="margin-top:8px"><span>Sem depreciação ativa para esta placa no mês (sem cadastro, encerrada, ou status não-ativo).</span></div>';
+  }
+  body.innerHTML=html;
+  document.getElementById('mem-modal').classList.add('open');
+}
+function cpkMemModalClose(){ document.getElementById('mem-modal').classList.remove('open'); }
+
+// ── DRAG & DROP da importação de depreciação ───────────────────────
+function cpkDepSetupDrop(){
+  const drop=document.getElementById('dep-drop'); if(!drop)return;
+  const fi=document.getElementById('dep-file');
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag');}));
+  drop.addEventListener('drop',e=>{ const f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f&&fi){ const dt=new DataTransfer(); dt.items.add(f); fi.files=dt.files; cpkDepImportFile({target:fi}); } });
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  BOOT
 // ════════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded',function(){
   try{ cpkSetupDrop(); }catch(_){}
+  try{ cpkDepSetupDrop(); }catch(_){}
   cpkInit();
 });
 
