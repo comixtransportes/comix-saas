@@ -850,7 +850,7 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
     <div class="modal-body">
       <div class="cpk-form" style="border:none;padding:0">
         <div class="form-grid">
-          <div class="form-field"><label>Placa / código *</label><input type="text" id="dep-i-placa" maxlength="8" oninput="this.value=this.value.toUpperCase();cpkDepFormPreview()"></div>
+          <div class="form-field"><label>Placa / código *</label><input type="text" id="dep-i-placa" maxlength="24" oninput="this.value=this.value.toUpperCase();cpkDepFormPreview()"></div>
           <div class="form-field"><label>Tipo de ativo *</label>
             <select id="dep-i-tipo" onchange="cpkDepFormTipoChange()">
               <option value="cavalo">Cavalo mecânico</option>
@@ -933,7 +933,7 @@ const CPK = {
   szb:null, szbLoaded:false,
   szy:{},   szyLoaded:false,
   szc:[],   szcLoaded:false,        // abastecimento (diesel por placa)
-  frota:[], frotaLoaded:false,
+  frota:[], compressores:[], frotaLoaded:false,
   filiais:[], centrosCusto:[], grupoMap:{},
 
   // custo (espelho Mapinha) — cache por mês
@@ -1288,6 +1288,11 @@ async function cpkFsGet(col,query){
   try{ let ref=_db.collection(col); if(query&&query.orderBy)ref=ref.orderBy(query.orderBy,query.orderDir||'asc'); if(query&&query.limit)ref=ref.limit(+query.limit); const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); }
   catch(e){cpkLog('FsGet erro',col,e.message);return[];}
 }
+async function cpkFsGetDireto(col,query){
+  if(!_db)cpkGetFb(); if(!_db)return[];
+  try{ let ref=_db.collection(col); if(query&&query.orderBy)ref=ref.orderBy(query.orderBy,query.orderDir||'asc'); if(query&&query.limit)ref=ref.limit(+query.limit); const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); }
+  catch(e){cpkLog('FsGet direto erro',col,e.message);return[];}
+}
 async function cpkFsGetDoc(col,id){
   if(window.self!==window.top){const r=await cpkFsBridge(col,'getDoc',{docId:id});return r&&r.exists?{id:r.id,data:r.data}:null;}
   if(!_db)cpkGetFb(); if(!_db)return null;
@@ -1393,6 +1398,19 @@ function cpkDepStatusFromVeic(v){
   if(/INATIV|DESATIV|INATIVO/.test(n)) return 'inativo';
   return 'ativo';
 }
+function cpkDepCodigoCompressor(c,id){
+  c=c||{};
+  return cpkNormPlaca(c.identificacao||c.codigo||c.cod||c.numero||c.serie||id||'');
+}
+function cpkDepDisplayCodigoCompressor(c,id){
+  c=c||{};
+  return String(c.identificacao||c.codigo||c.cod||c.numero||c.serie||id||'').trim().toUpperCase();
+}
+function cpkDepStatusFromCompressor(c){ return cpkDepStatusFromVeic({status:(c&&c.status)||''}); }
+function cpkDepCarretaSubtipo(v){
+  v=v||{};
+  return String(v.tipoCarreta||v.tipo_carreta||v.tipoDaCarreta||v.tipo_da_carreta||v.subtipo||v.carreta_tipo||v.tipoImplemento||v.tipo_implemento||'').trim();
+}
 function cpkDepVeicEhFrotaPropria(v,tipo){
   if(!v)return false;
   const tv=String(v.tipoVinculoRaw||'').toUpperCase().trim();
@@ -1406,9 +1424,18 @@ function cpkDepVeicEhFrotaPropria(v,tipo){
 }
 async function cpkLoadFrota(){
   try{
-    let result=await cpkFsGet('veiculos');
-    // corrida de auth no portal pode devolver vazio na 1ª tentativa → 1 retry curto
-    if((!result||!result.length)){ await new Promise(r=>setTimeout(r,900)); result=await cpkFsGet('veiculos'); }
+    const veicPromise=(async()=>{
+      let result=await cpkFsGet('veiculos');
+      // corrida de auth no portal pode devolver vazio na 1ª tentativa → 1 retry curto
+      if((!result||!result.length)){ await new Promise(r=>setTimeout(r,900)); result=await cpkFsGet('veiculos'); }
+      return result||[];
+    })();
+    const compPromise=(async()=>{
+      try{ return await cpkFsGet('compressores'); }
+      catch(e){ cpkLog('Compressores via ponte indisponível, tentando leitura direta:',e.message); return await cpkFsGetDireto('compressores'); }
+    })();
+    const [result, compressoresRaw]=await Promise.all([veicPromise, compPromise]);
+
     CPK.frota=(result||[]).map(d=>{
       const v=d.data||{};
       const tv=String(v.tipo_vinculo||v.vinculo||'').toUpperCase().trim();
@@ -1417,22 +1444,41 @@ async function cpkLoadFrota(){
       let vinculoInferido=false;
       if(!vinculo){ const pref=frotaCode.slice(0,2); vinculo=pref==='CP'?'proprio':pref==='CA'?'agregado':''; vinculoInferido=!!vinculo; }
       const placaCod=cpkDepCodigoVeic(v,d.id);
+      const subtipoCarreta=cpkDepCarretaSubtipo(v);
       return { id:d.id, placa:placaCod, codigo:placaCod, frota:frotaCode, motorista:v.motorista||'',
                unidade:cpkUnidadeVeic(v), vinculo, tipoVinculoRaw:tv, vinculoInferido,
                marca:v.marca||v.fabricante||v.marca_veiculo||'', modelo:v.modelo||v.modelo_veiculo||'',
                anoFab:cpkDepAnoCampo(v,'fab'), anoMod:cpkDepAnoCampo(v,'mod'),
-               tipo:cpkDepTipoRawVeic(v), subtipo:v.subtipo||v.tipo_carreta||'',
+               tipo:cpkDepTipoRawVeic(v), subtipo:subtipoCarreta,
+               tipoCarreta:subtipoCarreta,
                disponibilidade:(v.disponibilidade||v.status||v.situacao||'').toString() };
     });
+
+    CPK.compressores=(compressoresRaw||[]).map(d=>{
+      const c=d.data||{};
+      const codigo=cpkDepCodigoCompressor(c,d.id);
+      const codigoDisplay=cpkDepDisplayCodigoCompressor(c,d.id);
+      const tv=String(c.vinculo||c.tipo_vinculo||'FROTA').toUpperCase().trim();
+      return { id:d.id, placa:codigo, codigo, codigoDisplay, frota:'',
+               unidade:c.unidade||'', vinculo:tv==='AGREGADO'?'agregado':'proprio', tipoVinculoRaw:tv,
+               marca:c.marca||c.fabricante||'', modelo:c.modelo||c.descricao||c.observacao||'',
+               anoFab:cpkDepAnoCampo(c,'fab'), anoMod:cpkDepAnoCampo(c,'mod'),
+               tipo:'compressor', subtipo:'', serie:c.serie||'', identificacao:c.identificacao||'',
+               disponibilidade:(c.status||c.situacao||'').toString() };
+    }).filter(c=>c.codigo);
+
     CPK.frotaLoaded=true; CPK._dataVer=(CPK._dataVer||0)+1;
     // índice por placa normalizada (lookup O(1) e consistente com a importação)
     CPK.frotaIdx=new Map();
     CPK.frota.forEach(v=>{ if(v.placa)CPK.frotaIdx.set(v.placa,v); });
+    CPK.compressoresIdx=new Map();
+    CPK.compressores.forEach(c=>{ if(c.codigo)CPK.compressoresIdx.set(c.codigo,c); if(c.codigoDisplay)CPK.compressoresIdx.set(cpkNormPlaca(c.codigoDisplay),c); });
     const pr=CPK.frota.filter(v=>v.vinculo==='proprio').length;
-    cpkLog('Frota:',CPK.frota.length,'veículos ('+pr+' próprios)');
-  }catch(e){ cpkLog('Frota erro:',e.message); CPK.frota=[]; CPK.frotaIdx=new Map(); CPK.frotaLoaded=true; }
+    cpkLog('Frota:',CPK.frota.length,'veículos ('+pr+' próprios) · Compressores:',CPK.compressores.length);
+  }catch(e){ cpkLog('Frota erro:',e.message); CPK.frota=[]; CPK.compressores=[]; CPK.frotaIdx=new Map(); CPK.compressoresIdx=new Map(); CPK.frotaLoaded=true; }
 }
 function cpkVeic(placa){ const p=cpkNormPlaca(placa); return (CPK.frotaIdx&&CPK.frotaIdx.get(p))||CPK.frota.find(v=>v.placa===p); }
+function cpkComp(placa){ const p=cpkNormPlaca(placa); return (CPK.compressoresIdx&&CPK.compressoresIdx.get(p))||(CPK.compressores||[]).find(c=>c.codigo===p||cpkNormPlaca(c.codigoDisplay)===p); }
 function cpkVinculoPlaca(placa, frotaSZB){
   const v=cpkVeic(placa);
   if(v&&v.vinculo) return v.vinculo;
@@ -3108,23 +3154,26 @@ function cpkDepIndex(mes){
     const rec=veics[pl]||{};
     const placa=cpkNormPlaca(rec.placa||pl);
     if(!placa)continue;
-    const v=cpkVeic(placa);
-    const tipo=cpkDepTipoNorm(rec.tipo || (v&&cpkDepTipoFromVeic(v)) || 'outro');
-    if(v && !cpkDepVeicEhFrotaPropria(v,tipo)) continue; // frota própria apenas (regra do CPK)
-    const ehProprio = v ? cpkDepVeicEhFrotaPropria(v,tipo) : true;  // registro manual sem cadastro também conta
-    const anoFab=cpkDepAnoParts(rec.anoFab || (v&&v.anoFab) || (v&&v.ano) || '').fab;
-    const anoMod=cpkDepAnoParts(rec.anoMod || (v&&v.anoMod) || (v&&v.ano) || '').mod;
+    const veic=cpkVeic(placa), comp=cpkComp(placa);
+    const tipo=cpkDepTipoNorm(rec.tipo || (veic&&cpkDepTipoFromVeic(veic)) || (comp?'compressor':'outro'));
+    const cad=(tipo==='compressor'&&comp)?comp:veic;
+    if(cad && !cpkDepVeicEhFrotaPropria(cad,tipo)) continue; // frota própria apenas (regra do CPK)
+    const ehProprio = cad ? cpkDepVeicEhFrotaPropria(cad,tipo) : true;  // registro manual sem cadastro também conta
+    const anoFab=cpkDepAnoParts(rec.anoFab || (cad&&cad.anoFab) || (cad&&cad.ano) || '').fab;
+    const anoMod=cpkDepAnoParts(rec.anoMod || (cad&&cad.anoMod) || (cad&&cad.ano) || '').mod;
     const calc=cpkDepCalc(Object.assign({},rec,{tipo}), mes);
     const row=Object.assign({}, rec, {
       placa, tipo,
-      frota:rec.frota || (v&&v.frota) || '',
-      marca:rec.marca || (v&&v.marca) || '',
-      modelo:rec.modelo || (v&&v.modelo) || '',
+      codigo:rec.codigo || (comp&&comp.codigoDisplay) || placa,
+      frota:rec.frota || (cad&&cad.frota) || '',
+      tipoCarreta:rec.tipoCarreta || (cad&&cad.tipoCarreta) || (cad&&cad.subtipo) || '',
+      marca:rec.marca || (cad&&cad.marca) || '',
+      modelo:rec.modelo || (cad&&cad.modelo) || (comp&&comp.serie) || '',
       anoFab, anoMod,
-      unidade:(v&&v.unidade)||rec.unidade||'',
-      vinc:(v&&v.vinculo)||'',
-      cadastrado:!!v,
-      origemCadastro:!!v,
+      unidade:(cad&&cad.unidade)||rec.unidade||'',
+      vinc:(cad&&cad.vinculo)||'',
+      cadastrado:!!cad,
+      origemCadastro:!!cad,
       ano: anoFab||anoMod||''
     }, calc);
     list.push(row);
@@ -3142,11 +3191,11 @@ function cpkDepIndex(mes){
     if(!cpkDepVeicEhFrotaPropria(v,tipo)) return;
     if(cpkPlacaIgnorada(placa) || cpkPlacaReceitaCompl(placa)) return;
     const p=cpkDepParam(tipo);
-    const anoFab=cpkDepAnoParts(v.anoFab||v.ano||'').fab;
-    const anoMod=cpkDepAnoParts(v.anoMod||v.ano||'').mod;
+    const anoFab=cpkDepAnoParts(v.anoFab||v.anoMod||v.ano||'').fab;
+    const anoMod=cpkDepAnoParts(v.anoMod||v.anoFab||v.ano||'').mod;
     const rec={
       placa, tipo,
-      frota:v.frota||'',
+      frota:v.frota||'', tipoCarreta:v.tipoCarreta||v.subtipo||'',
       marca:v.marca||'', modelo:v.modelo||v.subtipo||'',
       anoFab, anoMod,
       valorCompra:0, valorResidual:0, periodoMeses:Math.round(cpkNum(p.prazo||0)),
@@ -3157,6 +3206,31 @@ function cpkDepIndex(mes){
     list.push(Object.assign({}, rec, {
       unidade:v.unidade||'', vinc:v.vinculo||'proprio', cadastrado:true,
       origemCadastro:true, semDep:true, ano:anoFab||anoMod||''
+    }, calc));
+    seen.add(placa);
+  });
+
+  // Compressores cadastrados na aba Compressores do módulo Frota
+  // ficam em coleção própria ('compressores'), não em 'veiculos'.
+  (CPK.compressores||[]).forEach(c=>{
+    const placa=cpkNormPlaca(c.codigo||c.codigoDisplay||c.identificacao||c.id||'');
+    if(!placa || seen.has(placa)) return;
+    const tipo='compressor';
+    if(!cpkDepVeicEhFrotaPropria(c,tipo)) return;
+    const p=cpkDepParam(tipo);
+    const anoFab=cpkDepAnoParts(c.anoFab||c.anoMod||c.ano||'').fab;
+    const anoMod=cpkDepAnoParts(c.anoMod||c.anoFab||c.ano||'').mod;
+    const rec={
+      placa, tipo, codigo:c.codigoDisplay||c.codigo||placa,
+      frota:'', marca:c.marca||'', modelo:c.modelo||c.serie||'',
+      anoFab, anoMod,
+      valorCompra:0, valorResidual:0, periodoMeses:Math.round(cpkNum(p.prazo||0)),
+      metodo:p.metodo||'linear', percentualAnual:cpkNum(p.percAnual||0), valorManualMensal:0,
+      status:cpkDepStatusFromCompressor(c), unidade:c.unidade||''
+    };
+    const calc=cpkDepCalc(rec, mes);
+    list.push(Object.assign({}, rec, {
+      vinc:c.vinculo||'proprio', cadastrado:true, origemCadastro:true, semDep:true, ano:anoFab||anoMod||''
     }, calc));
     seen.add(placa);
   });
@@ -3179,7 +3253,7 @@ function cpkDepListaFiltrada(){
     if(ft && (r.tipo||'')!==ft) return false;
     if(fm && (r.marca||'')!==fm) return false;
     if(fs && (r.status||'')!==fs) return false;
-    if(fq && !cpkNormStr((r.placa||'')+' '+(r.frota||'')+' '+(r.marca||'')+' '+(r.modelo||'')).includes(fq)) return false;
+    if(fq && !cpkNormStr((r.placa||'')+' '+(r.codigo||'')+' '+(r.frota||'')+' '+(r.tipoCarreta||'')+' '+(r.marca||'')+' '+(r.modelo||'')).includes(fq)) return false;
     return true;
   });
 }
@@ -3192,6 +3266,13 @@ function cpkDepSort(c){
 }
 
 // ── RENDER DA ABA ──────────────────────────────────────────────────
+function cpkDepAnoDisplay(r){
+  const fab=String((r&&r.anoFab)||'').match(/\d{4}/);
+  const mod=String((r&&r.anoMod)||'').match(/\d{4}/);
+  const a=fab?fab[0]:(mod?mod[0]:'');
+  const b=mod?mod[0]:(fab?fab[0]:'');
+  return (a||b) ? ((a||b)+'/'+(b||a)) : '—';
+}
 function cpkDepRowFlags(r){
   const semKmNoMes = r.status==='ativo' && r.depMensalNoMes>0 && !(CPK.kmImport&&CPK.kmImport[r.placa]&&CPK.kmImport[r.placa].km>0)
     && !(CPK.aggPlaca||[]).some(p=>p.placa===r.placa&&p.km_total>0);
@@ -3256,10 +3337,10 @@ function cpkRenderDep(){
   const pode=cpkPodeEditarDep();
   const aba=CPK_DEP_ABAS.includes(CPK.depAba)?CPK.depAba:'cavalo';
   const leadHead = aba==='compressor'
-    ? `<th onclick="cpkDepSort('frota')">Frota/Código</th>`
+    ? `<th onclick="cpkDepSort('codigo')">Código</th>`
     : (aba==='cavalo'
       ? `<th onclick="cpkDepSort('placa')">Placa</th><th onclick="cpkDepSort('frota')">Frota</th>`
-      : `<th onclick="cpkDepSort('placa')">Placa</th><th onclick="cpkDepSort('tipo')">Tipo</th>`);
+      : `<th onclick="cpkDepSort('placa')">Placa</th><th onclick="cpkDepSort('frota')">Frota</th><th onclick="cpkDepSort('tipoCarreta')">Tipo</th>`);
   const headHtml = leadHead+
     `<th onclick="cpkDepSort('marca')">Marca/Modelo</th>
      <th class="r" onclick="cpkDepSort('ano')">Ano</th>
@@ -3273,21 +3354,22 @@ function cpkRenderDep(){
      <th onclick="cpkDepSort('status')">Status</th>
      <th>Ações</th>`;
   if(head) head.innerHTML=headHtml;
-  const colspan = aba==='compressor' ? 12 : 13;
+  const colspan = aba==='compressor' ? 12 : (aba==='carreta' ? 14 : 13);
   const leadCells = r=>{
     const flags=cpkDepRowFlags(r);
     const plate=`<span class="dep-plate">${r.placa}</span>${flags.length?(' '+flags.join(' ')):''}`;
+    const frota=`<span class="dep-plate">${r.frota||'—'}</span>`;
     if(aba==='compressor'){
-      return `<td><span class="dep-plate">${r.frota||r.placa||'—'}</span>${flags.length?(' '+flags.join(' ')):''}</td>`;
+      return `<td><span class="dep-plate">${r.codigo||r.placa||'—'}</span>${flags.length?(' '+flags.join(' ')):''}</td>`;
     }
     if(aba==='cavalo'){
-      return `<td>${plate}</td><td class="mono">${r.frota||'—'}</td>`;
+      return `<td>${plate}</td><td>${frota}</td>`;
     }
-    return `<td>${plate}</td><td>${cpkDepTipoLabel(r.tipo)}</td>`;
+    return `<td>${plate}</td><td>${frota}</td><td>${cpkAbrev(r.tipoCarreta||'—',18)}</td>`;
   };
   if(rows.length){
     body.innerHTML=rows.map(r=>{
-      const anoTxt=(r.anoFab||'—')+(r.anoMod&&r.anoMod!==r.anoFab?('/'+String(r.anoMod).slice(-2)):'');
+      const anoTxt=cpkDepAnoDisplay(r);
       return `<tr>
         ${leadCells(r)}
         <td>${cpkAbrev(((r.marca||'')+' '+(r.modelo||'')).trim()||'—',22)}</td>
@@ -3326,12 +3408,18 @@ function cpkDepRenderAlertas(idx, lista, mes){
   // frota própria ativa sem registro de depreciação
   const cadastradas=new Set(Object.keys((CPK.depData&&CPK.depData.veiculos)||{}).map(cpkNormPlaca));
   const fu=CPK.filtros.unidade;
-  const semConfig=(CPK.frota||[]).filter(v=>{
+  const semConfigFrota=(CPK.frota||[]).filter(v=>{
       const tipo=cpkDepTipoFromVeic(v);
       return CPK_DEP_ABAS.includes(tipo) && cpkDepVeicEhFrotaPropria(v,tipo) && !cadastradas.has(v.placa)
         && !cpkPlacaIgnorada(v.placa) && !cpkPlacaReceitaCompl(v.placa)
         && (!fu || v.unidade===fu);
     }).length;
+  const semConfigComp=(CPK.compressores||[]).filter(c=>{
+      const p=cpkNormPlaca(c.codigo||c.codigoDisplay||c.identificacao||c.id||'');
+      return p && cpkDepVeicEhFrotaPropria(c,'compressor') && !cadastradas.has(p)
+        && (!fu || c.unidade===fu);
+    }).length;
+  const semConfig=semConfigFrota+semConfigComp;
 
   if(semConfig) out.push(cpkInsight('am','truck','Frota própria sem depreciação',
     '<b>'+semConfig+'</b> placa(s) de frota própria sem registro de depreciação'+(fu?(' em '+fu):'')+'. Cadastre para refletir o custo real no CPK.'));
@@ -3403,18 +3491,18 @@ function cpkDepEditarItem(placa){
   if(!cpkPodeEditarDep()){ cpkToast('Sem permissão para editar.'); return; }
   const pn=cpkNormPlaca(placa);
   if(CPK.depData&&CPK.depData.veiculos&&CPK.depData.veiculos[pn]){ cpkDepEditar(pn); return; }
-  const v=cpkVeic(pn);
+  const v=cpkVeic(pn)||cpkComp(pn);
   CPK._depEdit='';
   document.getElementById('dep-modal-title').textContent='Parâmetros de depreciação · '+pn;
   document.getElementById('dep-modal-del').style.display='none';
   const set=(id,val)=>{const e=document.getElementById(id);if(e)e.value=(val==null?'':val);};
   ['dep-i-marca','dep-i-modelo','dep-i-anoFab','dep-i-anoMod','dep-i-valorCompra','dep-i-dataCompra','dep-i-valorResidual','dep-i-periodoMeses','dep-i-percentualAnual','dep-i-valorManualMensal'].forEach(id=>set(id,''));
   set('dep-i-placa',pn);
-  const tipo=cpkDepTipoFromVeic(v)||CPK.depAba||'cavalo';
+  const tipo=(v&&v.tipo==='compressor')?'compressor':(cpkDepTipoFromVeic(v)||CPK.depAba||'cavalo');
   set('dep-i-tipo',tipo);
-  set('dep-i-marca',(v&&v.marca)||''); set('dep-i-modelo',(v&&(v.modelo||v.subtipo))||'');
-  set('dep-i-anoFab',cpkDepAnoParts((v&&v.anoFab)||(v&&v.ano)||'').fab);
-  set('dep-i-anoMod',cpkDepAnoParts((v&&v.anoMod)||(v&&v.ano)||'').mod);
+  set('dep-i-marca',(v&&v.marca)||''); set('dep-i-modelo',(v&&(v.modelo||v.subtipo||v.serie))||'');
+  set('dep-i-anoFab',cpkDepAnoParts((v&&v.anoFab)||(v&&v.anoMod)||(v&&v.ano)||'').fab);
+  set('dep-i-anoMod',cpkDepAnoParts((v&&v.anoMod)||(v&&v.anoFab)||(v&&v.ano)||'').mod);
   set('dep-i-status',cpkDepStatusFromVeic(v));
   cpkDepFormTipoChange(true);
   cpkDepFormMetodoChange();
@@ -3429,11 +3517,11 @@ function cpkDepEditar(placa){
   document.getElementById('dep-modal-title').textContent='Editar depreciação · '+CPK._depEdit;
   document.getElementById('dep-modal-del').style.display='inline-flex';
   const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=(v==null?'':v);};
-  const v=cpkVeic(placa);
+  const v=cpkVeic(placa)||cpkComp(placa);
   set('dep-i-placa',rec.placa||placa); set('dep-i-tipo',cpkDepTipoNorm(rec.tipo||(v&&cpkDepTipoFromVeic(v))||'outro'));
-  set('dep-i-marca',rec.marca||(v&&v.marca)||''); set('dep-i-modelo',rec.modelo||(v&&(v.modelo||v.subtipo))||'');
-  set('dep-i-anoFab',cpkDepAnoParts(rec.anoFab||(v&&v.anoFab)||(v&&v.ano)||'').fab);
-  set('dep-i-anoMod',cpkDepAnoParts(rec.anoMod||(v&&v.anoMod)||(v&&v.ano)||'').mod);
+  set('dep-i-marca',rec.marca||(v&&v.marca)||''); set('dep-i-modelo',rec.modelo||(v&&(v.modelo||v.subtipo||v.serie))||'');
+  set('dep-i-anoFab',cpkDepAnoParts(rec.anoFab||(v&&v.anoFab)||(v&&v.anoMod)||(v&&v.ano)||'').fab);
+  set('dep-i-anoMod',cpkDepAnoParts(rec.anoMod||(v&&v.anoMod)||(v&&v.anoFab)||(v&&v.ano)||'').mod);
   set('dep-i-valorCompra',rec.valorCompra); set('dep-i-dataCompra',cpkNormDate(rec.dataCompra)||'');
   set('dep-i-valorResidual',rec.valorResidual); set('dep-i-periodoMeses',rec.periodoMeses);
   set('dep-i-metodo',rec.metodo||'linear'); set('dep-i-percentualAnual',rec.percentualAnual);
