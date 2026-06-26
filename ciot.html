@@ -863,23 +863,33 @@ async function dispatchBatchItem(){
   finishBatch();
 }
 function finishBatch(){const b=state.batch;const emit=b.emitidos;b.active=false;log('✅ Lote concluído: '+emit+'/'+b.total+' CIOT(s) emitido(s).','ok');toast('Lote concluído: '+emit+' CIOT(s) emitido(s).','ok');renderTable();}
-async function advanceBatch(emittedItem,slug){
+async function advanceBatch(emittedItem,slug,opts){
+  opts=opts||{};
+  const emitted=opts.emitted!==false;   // true = emissão real confirmada; false = conflito/skip (não conta no total)
   const b=state.batch;
   if(!b.active)return;
-  const k1=emittedItem?itemKey(emittedItem):'';
-  const k2=emittedItem&&emittedItem.chaveCte?String(emittedItem.chaveCte):'';
+  // v14.1: só mexe na fila quando o item conferido é o ALVO ATUAL do lote. Um resultado de OUTRO CT-e
+  // (captura cruzada/avulsa) NÃO pode avançar nem contar o lote — era assim que a fila desencaixava e "parava".
+  const headKey=String(b.queue[b.idx]||'');
+  const itKeys=emittedItem?[String(emittedItem.chaveCte||''),itemKey(emittedItem)].filter(Boolean):[];
+  const isHead=!!headKey&&itKeys.some(k=>k===headKey);
+  if(emittedItem&&!isHead){log('Lote: emissão do CT-e '+((emittedItem.numeroCte)||'?')+' não é o alvo atual da fila — não avancei por ela (evita desencaixe).','warn');return;}
+  if(!emittedItem){ // CIOT sem CT-e da fila (avulso): aguarda o RESULT real do alvo atual, não avança
+    if(slug)log('Lote: CIOT '+ciotPretty(slug)+' sem CT-e da fila correspondente — não avancei o lote por ele.','warn');
+    return;}
+  const k1=itemKey(emittedItem);
+  const k2=emittedItem.chaveCte?String(emittedItem.chaveCte):'';
   const ks=slug?('ciot:'+slug):'';
   if(!b.emittedKeys)b.emittedKeys=new Set();
-  if((k1&&b.emittedKeys.has(k1))||(k2&&b.emittedKeys.has(k2))||(ks&&b.emittedKeys.has(ks)))return;   // já contabilizado (resultado reentregue)
+  if((k1&&b.emittedKeys.has(k1))||(k2&&b.emittedKeys.has(k2)))return;   // já contabilizado (resultado reentregue)
   if(k1)b.emittedKeys.add(k1);if(k2)b.emittedKeys.add(k2);if(ks)b.emittedKeys.add(ks);
-  b.emitidos++;
-  // limpa o marcado do item emitido
-  if(emittedItem){state.checked.delete(itemKey(emittedItem));if(emittedItem.chaveCte)state.checked.delete(String(emittedItem.chaveCte));}
+  if(emitted)b.emitidos++;
+  // limpa o marcado do item processado
+  state.checked.delete(itemKey(emittedItem));if(emittedItem.chaveCte)state.checked.delete(String(emittedItem.chaveCte));
   b.idx++;
   syncBatchControls();
   if(b.idx>=b.queue.length){finishBatch();return;}
-  // pequeno respiro: deixa a extensão encerrar a rotina e voltar à tela inicial do CIOT antes do próximo disparo
-  log('Lote: emissão capturada. Preparando o próximo CT-e…','info');
+  log(emitted?'Lote: emissão capturada. Preparando o próximo CT-e…':'Lote: item deixado para conferência manual. Seguindo para o próximo CT-e…','info');
   setTimeout(()=>{dispatchBatchItem().catch(e=>{log('Lote: erro ao disparar o próximo: '+e.message,'err');});},1800);
 }
 function downloadJSON(obj,name){const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
@@ -1029,7 +1039,10 @@ function b64ToBlob(b64,type){const bin=atob(b64);const arr=new Uint8Array(bin.le
 function findItemByResult(res){const chave=onlyDigits(res.chaveCte||'');const cte=String(res.numeroCte||'').trim();const pools=[state.history||[],state.items||[]];
   for(const pool of pools){const hit=chave&&pool.find(x=>onlyDigits(x.chaveCte||x.id||'')===chave);if(hit)return hit;}
   for(const pool of pools){const hit=cte&&pool.find(x=>String(x.numeroCte||'')===cte);if(hit)return hit;}
-  return (state.items||[]).find(x=>['preenchendo','conferencia','pronto'].includes(x.status))||null;}
+  // v14.1: SEM PALPITE. Sem chave/CT-e que case, NÃO adivinha um item "em andamento" — esse chute era a
+  // causa raiz de um CIOT cair no CT-e errado (mesmo número em dois CT-es). Retorna null → o resultado vira
+  // registro avulso (ou é barrado pela conferência anti-duplicidade), nunca sequestra um CT-e da fila.
+  return null;}
 function pdfTypeKey(type){type=String(type||'ciot').toLowerCase();return (type==='encerramento'||type==='cancelamento'||type==='final')?'encerramento':'ciot';}
 function pdfCacheKey(slug,type){return String(slug||'')+'__'+pdfTypeKey(type);}
 function pdfDocId(slug,type){const base=String(slug).replace(/\//g,'_');return pdfTypeKey(type)==='encerramento'?base+'_encerramento':base;}
@@ -1044,6 +1057,9 @@ async function loadCiotPdfBase64(slug,type='ciot'){const tipo=pdfTypeKey(type);c
 async function fetchCiotPdfBase64FromUrl(pdfUrl){try{if(!pdfUrl)return '';const resp=await fetch(pdfUrl,{credentials:'include',cache:'no-store'});if(!resp.ok)return '';const ct=String(resp.headers.get('content-type')||'').toLowerCase();const buf=await resp.arrayBuffer();const head=new Uint8Array(buf.slice(0,5));const isPdf=ct.includes('pdf')||(head[0]===0x25&&head[1]===0x50&&head[2]===0x44&&head[3]===0x46);if(!isPdf)return '';const bytes=new Uint8Array(buf);let bin='';const chunk=0x8000;for(let i=0;i<bytes.length;i+=chunk)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+chunk));return btoa(bin);}catch(_){return '';}}
 async function ensureOriginalPdfBeforeWork(item){try{const slug=normCiotNumero((item&&item.numeroCiot)||'');if(!slug)return;const already=await loadCiotPdfBase64(slug,'ciot');if(already)return;const url=(item&&item.ciotPdfEmissaoUrl)||(!ciotIsClosed(item)&&(item&&item.ciotPdfUrl))||buildCiotPdfUrl(slug);let b64=await fetchCiotPdfBase64FromUrl(url);if(!b64&&!ciotIsClosed(item))b64=await requestPdfFromExtension(url);if(b64){state.pdfCache[pdfCacheKey(slug,'ciot')]=b64;await persistCiotPdf(slug,b64,'ciot');log('PDF original do CIOT '+ciotPretty(slug)+' preservado antes do encerramento/cancelamento.','ok');}}catch(e){log('Não consegui preservar o PDF original antes do encerramento: '+e.message,'warn');}}
 async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(res.numeroCiot||res.numeroCiotPretty||'');if(!slug){log('Resultado de emissão sem número de CIOT reconhecível.','warn');return;}
+  // v14.1: respeita o veredito da extensão. Se a tela do EFrete não confirmou o CT-e da tarefa ('diverge'),
+  // é releitura da emissão anterior — não grava e, no lote, não avança para o item errado.
+  if(String(res.conferido||'').toLowerCase()==='diverge'){log('⛔ Resultado RECUSADO: a extensão marcou o CIOT '+ciotPretty(slug)+' como DIVERGENTE do CT-e '+(res.numeroCte||'?')+' (releitura da emissão anterior). Não gravei. Reemita o CT-e '+(res.numeroCte||'?')+' se necessário.','err');return;}
   const replay=ciotAlreadyShown(slug);   // já exibido antes (reenvio da extensão no load/Ctrl+R)
   if(replay&&!res.pdfBase64){state.__lastCiotApplied=slug;return;}   // reload puro: não reabre PDF, não regrava, não notifica
   if(state.__lastCiotApplied===slug&&!res.pdfBase64)return;   // idempotente na sessão; RESULT com PDF ainda passa
@@ -1075,7 +1091,7 @@ async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(re
      toast('⚠️ CIOT '+ciotPretty(slug)+' já consta no CT-e '+(dono.numeroCte||'?')+'. Não salvei no CT-e '+(candCte||'?')+' — confira a captura antes de gravar.','err');
      if(item){item.status='conferencia';item.ciotConflito={slug,comCte:dono.numeroCte||'',comChave:onlyDigits(dono.chaveCte||dono.id||'')};item.pendencias=['⚠ CIOT '+ciotPretty(slug)+' já está no CT-e '+(dono.numeroCte||'?')+' — captura duplicada, conferir no EFrete'];item.updatedAt=new Date().toISOString();}
      renderAll();
-     if(state.batch.active&&!replay)advanceBatch(item||null,'');
+     if(state.batch.active&&!replay)advanceBatch(item||null,'',{emitted:false});
      return;}}
   const existingSame=(state.history||[]).find(x=>String(x.numeroCiot||'').replace(/[^\d]/g,'')===slug.replace(/[^\d]/g,''));
   if(!item&&existingSame){log('Resultado do EFrete ignorado: CIOT '+ciotPretty(slug)+' já existe no histórico e o retorno não trouxe CT-e/chave. Evitei criar duplicado avulso ao abrir/cancelar/consultar o CIOT.','warn');markCiotShown(slug);return;}
@@ -1092,7 +1108,11 @@ async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(re
   markCiotShown(slug);
   if(opts.autoOpen!==false&&!replay)openCiotPdfBySlug(slug,pdfUrl);
 }catch(e){log('Erro ao aplicar emissão do CIOT: '+e.message,'err');}}
-function sniffCiotFromLog(message){const slug=normCiotNumero(message||'');if(!slug)return;if(state.__lastCiotApplied===slug)return;if(/(emitid|registrad)/i.test(String(message))){applyEmissionResult({numeroCiot:slug},{autoOpen:false});}}
+// v14.1: NÃO grava emissão a partir de TEXTO DE LOG. O log "CIOT emitido detectado: <num>…" não carrega a
+// identidade do CT-e (chave/número), então gravar por aqui chamava findItemByResult sem chave e o número caía
+// num CT-e arbitrário da fila — gerando o MESMO CIOT em dois CT-es e desencaixando o lote. A fonte de verdade
+// é o evento COMIX_AUTO_EFRETE_RESULT (traz chaveCte, numeroCte e o veredito "conferido"). Aqui não fazemos nada.
+function sniffCiotFromLog(_message){ /* no-op proposital — ver comentário acima */ }
 function ciotFinalPdfUrl(h){return (h&&(h.ciotEncerramentoPdfUrl||h.ciotFinalPdfUrl||h.ciotCancelamentoPdfUrl||h.ciotPdfEncerramentoUrl))||'';}
 function samePdfRef(a,b){a=String(a||'').trim();b=String(b||'').trim();return !!a&&!!b&&a===b;}
 function ciotIsClosed(h){return ['encerrado','cancelado'].includes(String((h&&h.status)||'').toLowerCase());}
