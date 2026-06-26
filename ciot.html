@@ -1034,10 +1034,14 @@ async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(re
   const pdfUrl=res.pdfUrl||buildCiotPdfUrl(slug);
   const item=findItemByResult(res);
   const itemStatusBefore=String((item&&item.status)||'').toLowerCase();
-  if(item&&['encerrado','cancelado'].includes(itemStatusBefore)){
-    // Se a extensão reenviar um resultado genérico depois do encerramento/cancelamento,
-    // não trate como nova emissão: isso preserva o PDF original do CIOT e evita sobrescrever pelo PDF final.
-    log('Resultado genérico de emissão ignorado para CIOT '+ciotPretty(slug)+' porque o registro já está '+itemStatusBefore+'. PDFs mantidos separados.','info');
+  const workItem=state.work&&state.work.currentKey?workItemByKey(state.work.currentKey):null;
+  const workSlug=normCiotNumero((workItem&&workItem.numeroCiot)||(item&&item.numeroCiot)||'');
+  const workInProgress=!!(state.work&&state.work.active&&workSlug&&workSlug===slug);
+  if(item&&(['encerrado','cancelado','encerrando','cancelando'].includes(itemStatusBefore)||workInProgress)){
+    // Durante o encerramento/cancelamento a extensão pode reenviar um RESULT genérico com o PDF final.
+    // Esse retorno NÃO é emissão: se gravar como tipo "ciot", ele substitui a declaração original.
+    // Portanto, só o COMIX_AUTO_EFRETE_WORK_RESULT pode gravar PDF de ENC; o CIOT original fica intocado.
+    log('Resultado genérico de emissão ignorado para CIOT '+ciotPretty(slug)+' porque o registro está em '+(itemStatusBefore||'encerramento/cancelamento')+'. PDFs mantidos separados.','info');
     return;
   }
   if(res.pdfBase64){state.pdfCache[pdfCacheKey(slug,'ciot')]=res.pdfBase64;persistCiotPdf(slug,res.pdfBase64,'ciot');}
@@ -1074,18 +1078,20 @@ async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(re
 function sniffCiotFromLog(message){const slug=normCiotNumero(message||'');if(!slug)return;if(state.__lastCiotApplied===slug)return;if(/(emitid|registrad)/i.test(String(message))){applyEmissionResult({numeroCiot:slug},{autoOpen:false});}}
 function ciotFinalPdfUrl(h){return (h&&(h.ciotEncerramentoPdfUrl||h.ciotFinalPdfUrl||h.ciotCancelamentoPdfUrl||h.ciotPdfEncerramentoUrl))||'';}
 function samePdfRef(a,b){a=String(a||'').trim();b=String(b||'').trim();return !!a&&!!b&&a===b;}
-function ciotEmissionPdfUrl(h){if(!h)return '';const st=String(h.status||'').toLowerCase();const closed=['encerrado','cancelado'].includes(st);const finalUrl=ciotFinalPdfUrl(h);let url=h.ciotPdfEmissaoUrl||h.ciotPdfOriginalUrl||h.ciotPdfDeclaradoUrl||'';if(url&&samePdfRef(url,finalUrl))url='';if(url)return url;if(!closed){url=h.ciotPdfUrl||buildCiotPdfUrl(h.numeroCiot);if(!samePdfRef(url,finalUrl))return url;}return '';}
-function openCiotPdf(id,type='ciot'){const h=(state.history||[]).find(x=>(x.id||x.chaveCte)===id)||(state.items||[]).find(x=>(x.id||x.chaveCte)===id);if(!h||!h.numeroCiot){toast('Este registro ainda não tem número de CIOT.','warn');return;}const tipo=pdfTypeKey(type);let pdfUrl='';let opts={};if(tipo==='encerramento'){pdfUrl=ciotFinalPdfUrl(h)||((['encerrado','cancelado'].includes(String(h.status||'').toLowerCase()))?h.ciotPdfUrl:'')||buildCiotPdfUrl(h.numeroCiot);opts={persistFetched:true};}else{pdfUrl=ciotEmissionPdfUrl(h)||buildCiotPdfUrl(h.numeroCiot);opts={persistFetched:false};}openCiotPdfBySlug(h.numeroCiot,pdfUrl,tipo,opts);}
-async function openCiotPdfBySlug(slug,pdfUrl,type='ciot',opts={}){slug=normCiotNumero(slug)||String(slug||'');const tipo=pdfTypeKey(type);pdfUrl=pdfUrl||buildCiotPdfUrl(slug);const persistFetched=opts.persistFetched!==false;state.pdfCurrent={slug,pdfUrl,type:tipo};$('pdfTitle').textContent=(tipo==='encerramento'?'Encerramento do CIOT ':'CIOT ')+ciotPretty(slug);$('pdfFallback').classList.remove('on');$('pdfModal').classList.add('on');const frame=$('pdfFrame');frame.src='about:blank';
+function ciotIsClosed(h){return ['encerrado','cancelado'].includes(String((h&&h.status)||'').toLowerCase());}
+function ciotEmissionPdfUrl(h){if(!h)return '';const closed=ciotIsClosed(h);const finalUrl=ciotFinalPdfUrl(h);let url=h.ciotPdfEmissaoUrl||h.ciotPdfOriginalUrl||h.ciotPdfDeclaradoUrl||'';if(url&&samePdfRef(url,finalUrl))url='';if(url&&!closed)return url;if(!closed){url=h.ciotPdfUrl||buildCiotPdfUrl(h.numeroCiot);if(!samePdfRef(url,finalUrl))return url;}return '';}
+function openCiotPdf(id,type='ciot'){const h=(state.history||[]).find(x=>(x.id||x.chaveCte)===id)||(state.items||[]).find(x=>(x.id||x.chaveCte)===id);if(!h||!h.numeroCiot){toast('Este registro ainda não tem número de CIOT.','warn');return;}const tipo=pdfTypeKey(type);let pdfUrl='';let opts={};if(tipo==='encerramento'){pdfUrl=ciotFinalPdfUrl(h)||((['encerrado','cancelado'].includes(String(h.status||'').toLowerCase()))?h.ciotPdfUrl:'')||buildCiotPdfUrl(h.numeroCiot);opts={persistFetched:true,allowUrlFetch:true};}else{pdfUrl=ciotEmissionPdfUrl(h);opts={persistFetched:false,allowUrlFetch:!ciotIsClosed(h)};}openCiotPdfBySlug(h.numeroCiot,pdfUrl,tipo,opts);}
+async function openCiotPdfBySlug(slug,pdfUrl,type='ciot',opts={}){slug=normCiotNumero(slug)||String(slug||'');const tipo=pdfTypeKey(type);const allowUrlFetch=opts.allowUrlFetch!==false;pdfUrl=pdfUrl||(allowUrlFetch?buildCiotPdfUrl(slug):'');const persistFetched=opts.persistFetched!==false;state.pdfCurrent={slug,pdfUrl,type:tipo};$('pdfTitle').textContent=(tipo==='encerramento'?'Encerramento do CIOT ':'CIOT ')+ciotPretty(slug);$('pdfFallback').classList.remove('on');$('pdfModal').classList.add('on');const frame=$('pdfFrame');frame.src='about:blank';
   let b64=await loadCiotPdfBase64(slug,tipo);
-  if(!b64&&pdfUrl){b64=await fetchCiotPdfBase64FromUrl(pdfUrl);if(b64){state.pdfCache[pdfCacheKey(slug,tipo)]=b64;if(persistFetched)persistCiotPdf(slug,b64,tipo);}}
+  if(tipo==='ciot'&&b64){const finalB64=await loadCiotPdfBase64(slug,'encerramento');if(finalB64&&finalB64===b64){b64='';delete state.pdfCache[pdfCacheKey(slug,'ciot')];log('PDF CIOT '+ciotPretty(slug)+' não aberto: o arquivo salvo como CIOT é igual ao encerramento. Evitei mostrar o PDF final no botão CIOT.','warn');}}
+  if(!b64&&pdfUrl&&allowUrlFetch){b64=await fetchCiotPdfBase64FromUrl(pdfUrl);if(b64){state.pdfCache[pdfCacheKey(slug,tipo)]=b64;if(persistFetched)persistCiotPdf(slug,b64,tipo);}}
   if(b64){try{const blob=b64ToBlob(b64,'application/pdf');if(state.__pdfBlobUrl)URL.revokeObjectURL(state.__pdfBlobUrl);state.__pdfBlobUrl=URL.createObjectURL(blob);frame.src=state.__pdfBlobUrl;return;}catch(_){}
   }
   if(state.__pdfBlobUrl){URL.revokeObjectURL(state.__pdfBlobUrl);state.__pdfBlobUrl=null;}
   $('pdfFallback').classList.add('on');}
 function closeCiotPdf(){$('pdfModal').classList.remove('on');const f=$('pdfFrame');if(f)f.src='about:blank';if(state.__pdfBlobUrl){URL.revokeObjectURL(state.__pdfBlobUrl);state.__pdfBlobUrl=null;}}
-function pdfOpenNewTab(){const c=state.pdfCurrent;if(!c)return;window.open(state.__pdfBlobUrl||c.pdfUrl,'_blank');}
-async function pdfDownload(){const c=state.pdfCurrent;if(!c)return;const b64=state.pdfCache[pdfCacheKey(c.slug,c.type)]||await loadCiotPdfBase64(c.slug,c.type);if(b64){const a=document.createElement('a');a.href=URL.createObjectURL(b64ToBlob(b64,'application/pdf'));a.download=(pdfTypeKey(c.type)==='encerramento'?'CIOT-Encerramento-':'CIOT-')+c.slug.replace(/\//g,'_')+'.pdf';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500);}else{window.open(c.pdfUrl,'_blank');}}
+function pdfOpenNewTab(){const c=state.pdfCurrent;if(!c)return;if(state.__pdfBlobUrl||c.pdfUrl)window.open(state.__pdfBlobUrl||c.pdfUrl,'_blank');else toast('PDF original do CIOT não está anexado. Use o botão ENC para o encerramento.','warn');}
+async function pdfDownload(){const c=state.pdfCurrent;if(!c)return;let b64=state.pdfCache[pdfCacheKey(c.slug,c.type)]||await loadCiotPdfBase64(c.slug,c.type);if(pdfTypeKey(c.type)==='ciot'&&b64){const finalB64=await loadCiotPdfBase64(c.slug,'encerramento');if(finalB64&&finalB64===b64)b64='';}if(b64){const a=document.createElement('a');a.href=URL.createObjectURL(b64ToBlob(b64,'application/pdf'));a.download=(pdfTypeKey(c.type)==='encerramento'?'CIOT-Encerramento-':'CIOT-')+c.slug.replace(/\//g,'_')+'.pdf';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500);}else if(c.pdfUrl){window.open(c.pdfUrl,'_blank');}else{toast('PDF original do CIOT não está anexado.','warn');}}
 
 
 /* ── v15: Encerramento/Cancelamento em lote pelo Auto EFrete ── */
