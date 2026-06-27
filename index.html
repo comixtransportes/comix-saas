@@ -1161,6 +1161,151 @@ function atlasSlimRows(id, raw){
 /* Compat: alias preservado caso código antigo chame atlasSlimSZBRows. */
 function atlasSlimSZBRows(raw){ return atlasSlimRows('szb', raw); }
 
+/* ══════════════════════════════════════════════════════════════════════
+   SZB INCREMENTAL — chave determinística, dedup e merge (upsert)
+
+   Objetivo: a planilha diária do SZB traz um período X→hoje; a maior parte
+   das linhas já foi carregada ontem. Em vez de reler/regravar tudo, fazemos
+   um UPSERT: mantém a base existente, ADICIONA as linhas novas, SUBSTITUI as
+   divergentes pela versão mais recente da planilha e IGNORA as idênticas.
+   Resultado final = mesmo conteúdo que uma carga completa produziria para as
+   chaves presentes na planilha, preservando também o histórico já acumulado
+   (linhas fora da janela atual que só existem na base).
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* Normalização SÓ para a CHAVE (não altera o valor salvo): trim, colapsa
+   espaços duplicados e caixa alta. Garante que o mesmo CT-e/CTRC não vire
+   duas chaves por padding do Protheus ou variação de caixa. */
+function atlasSZBNormVal(v){
+  return String(v==null?'':v).replace(/\s+/g,' ').trim().toUpperCase();
+}
+
+/* Hash de string rápido (djb2 xor) → base36. Usado só como último recurso
+   de chave e no fingerprint da base. */
+function atlasStrHash(s){
+  let h=5381>>>0;
+  for(let i=0;i<s.length;i++){ h=(((h<<5)+h) ^ s.charCodeAt(i))>>>0; }
+  return h.toString(36);
+}
+
+/* Assinatura de conteúdo da linha (já "slim") para detectar conteúdo idêntico
+   vs. divergente. Comparação fiel a uma carga completa: qualquer valor
+   diferente troca a assinatura → substitui pela linha mais recente. */
+function atlasSZBContentSig(r){
+  r=r||{};
+  const keys=Object.keys(r).sort();
+  let s='';
+  for(let i=0;i<keys.length;i++){ const k=keys[i]; s+=k+'\u0000'+String(r[k])+'\u0001'; }
+  return s;
+}
+
+/* Hash normalizado da linha — último recurso de chave quando faltam todos os
+   identificadores (Chave CT-e, CTRC, etc.). */
+function atlasSZBRowHash(r){
+  r=r||{};
+  const keys=Object.keys(r).sort();
+  let s='';
+  for(let i=0;i<keys.length;i++){ const k=keys[i]; s+=k+'\u0000'+atlasSZBNormVal(r[k])+'\u0001'; }
+  return atlasStrHash(s);
+}
+
+/* Chave única determinística por linha do SZB. Prioridade:
+   1) Chave CT-e (Chave CTE / Chave CT-e / Chave Cte);
+   2) Filial + Numero CTRC + Serie (todos presentes);
+   3) Filial + Numero CTRC + Dt. Emissao + Valor Total + Placa Veicul;
+   4) hash normalizado da linha (último recurso). */
+function atlasSZBRowKey(r){
+  r=r||{};
+  const chave = r['Chave CTE'] != null && r['Chave CTE']!=='' ? r['Chave CTE']
+              : (r['Chave CT-e'] != null && r['Chave CT-e']!=='' ? r['Chave CT-e']
+              : (r['Chave Cte']  != null && r['Chave Cte'] !=='' ? r['Chave Cte'] : ''));
+  const ch = atlasSZBNormVal(chave);
+  if(ch) return 'C|'+ch;
+
+  const fil   = atlasSZBNormVal(r['Filial']);
+  const ctrc  = atlasSZBNormVal(r['Numero CTRC']);
+  const serie = atlasSZBNormVal(r['Serie']);
+  if(fil && ctrc && serie) return 'F|'+fil+'|'+ctrc+'|'+serie;
+
+  // Faltou algum dado da combinação acima → fallback ampliado.
+  const dt = atlasSZBNormVal(r['Dt. Emissao']);
+  const vt = atlasSZBNormVal(r['Valor Total']);
+  const pl = atlasSZBNormVal(r['Placa Veicul']);
+  if((fil||ctrc) && (dt||vt||pl)) return 'G|'+fil+'|'+ctrc+'|'+dt+'|'+vt+'|'+pl;
+
+  return 'H|'+atlasSZBRowHash(r);
+}
+
+/* Fingerprint da base inteira (sobre as linhas slim já no formato de gravação).
+   Dois hashes independentes + contagem + bytes ≈ colisão acidental
+   desprezível para o nosso volume. Usado para pular regravação no Firestore
+   quando o conteúdo é exatamente igual ao já salvo. */
+function atlasBaseFingerprint(slim){
+  let h1=0x811c9dc5>>>0, h2=5381>>>0, len=0;
+  for(let i=0;i<slim.length;i++){
+    const s=JSON.stringify(slim[i]);
+    len+=s.length;
+    for(let j=0;j<s.length;j++){
+      const c=s.charCodeAt(j);
+      // FNV-1a (32 bits)
+      h1=(h1^c)>>>0; h1=(h1 + ((h1<<1)+(h1<<4)+(h1<<7)+(h1<<8)+(h1<<24)))>>>0;
+      // djb2
+      h2=(((h2<<5)+h2) ^ c)>>>0;
+    }
+  }
+  return slim.length+'_'+len+'_'+h1.toString(36)+'_'+h2.toString(36);
+}
+
+/* Merge incremental do SZB (upsert). Recebe as linhas recém-lidas da planilha
+   (colunas completas) e devolve a base consolidada SLIM + estatísticas.
+   Busca a base existente em: window.ATLAS_DATA.szb → IndexedDB → Firestore. */
+async function atlasMergeSZBIncremental(newRowsFull){
+  // Padroniza tudo para SLIM (= formato de gravação). Torna a comparação de
+  // conteúdo justa (full × slim sempre divergiria) e mantém a memória leve.
+  const newRows = atlasSlimRows('szb', newRowsFull || []);
+
+  // 1) Base existente — prioridade memória → IDB → Firestore (o onSnapshot
+  //    mantém a memória sincronizada com a nuvem durante a sessão).
+  let existing = null;
+  const mem = window.ATLAS_DATA && window.ATLAS_DATA['szb'];
+  if(mem && Array.isArray(mem.rows) && mem.rows.length) existing = mem.rows;
+  if(!existing){
+    try{ const c = await atlasLoadBase('szb'); if(c && Array.isArray(c.rows) && c.rows.length) existing = c.rows; }catch(_){}
+  }
+  if(!existing){
+    try{ const f = await atlasLoadBaseFromFirestore('szb'); if(f && Array.isArray(f.rows) && f.rows.length) existing = f.rows; }catch(_){}
+  }
+  const existingSlim = atlasSlimRows('szb', existing || []);
+
+  // 2) Índice da base atual por chave (last-wins se já houver dup pré-existente).
+  const map = new Map();
+  for(let i=0;i<existingSlim.length;i++){
+    map.set(atlasSZBRowKey(existingSlim[i]), existingSlim[i]);
+  }
+
+  // 3) Upsert das linhas novas.
+  let added=0, updated=0, dup=0;
+  for(let i=0;i<newRows.length;i++){
+    const nr=newRows[i];
+    const k=atlasSZBRowKey(nr);
+    const prev=map.get(k);
+    if(prev===undefined){ map.set(k,nr); added++; }
+    else if(atlasSZBContentSig(prev)===atlasSZBContentSig(nr)){ dup++; /* idêntica → ignora */ }
+    else { map.set(k,nr); updated++; } /* divergente → planilha mais recente vence */
+  }
+
+  const finalRows=[...map.values()];
+  return {
+    finalRows,
+    stats:{
+      rowsIn:newRows.length,
+      existing:existingSlim.length,
+      added, updated, dup,
+      finalCount:finalRows.length
+    }
+  };
+}
+
 /* ── Divide as linhas em pedaços que cabem num doc Firestore. ── */
 function atlasChunkRows(slimRows){
   const chunks=[];
@@ -1189,22 +1334,50 @@ async function atlasSaveBaseToFirestore(id, payload){
   if(!payload || !Array.isArray(payload.rows) || !payload.rows.length) throw new Error(`Payload ${id.toUpperCase()} vazio.`);
   
   const slim = atlasSlimRows(id, payload.rows);
+
+  // Fingerprint do conteúdo slim (1 passada). Serve para (a) pular a regravação
+  // quando a nuvem já tem exatamente este conteúdo e (b) estimar o tamanho em MB
+  // sem uma segunda passada de JSON.stringify por chunk.
+  const fp = atlasBaseFingerprint(slim);
+
   const chunks = atlasChunkRows(slim);
   if(chunks.length > ATLAS_CLOUD_MAX_CHUNKS){
     throw new Error(`${id.toUpperCase()} gerou ${chunks.length} chunks (limite ${ATLAS_CLOUD_MAX_CHUNKS}). Arquivo grande demais.`);
   }
-  
-  const totalMB = chunks.reduce((a,c)=>a + JSON.stringify(c).length, 0) / 1024 / 1024;
+
+  const approxBytes = Number((fp.split('_')[1]) || 0); // soma dos bytes JSON das linhas
+  const totalMB = approxBytes / 1024 / 1024;
   dbLog(`☁ ${id.toUpperCase()} → Firestore: ${chunks.length} chunks, ${totalMB.toFixed(2)}MB...`,'info');
-  
+
   const docRef = atlasCloudDocRef(id);
-  
+
+  // 0) JÁ ESTÁ ATUALIZADA? Lê o meta (leve) UMA vez e reaproveita no passo 1.
+  //    Se o fingerprint salvo é idêntico ao atual E o nº de chunks bate, o
+  //    conteúdo é exatamente o mesmo → não regrava nada. Como o fp deriva do
+  //    conteúdo slim exato, isso é seguro cross-device.
+  //    OBS: NÃO fazemos gravação parcial de "apenas chunks alterados": ao
+  //    adicionar/remover linhas as fronteiras dos chunks deslocam (rebalance),
+  //    então "chunk N" muda mesmo sem mudança lógica — diff por chunk geraria
+  //    risco de inconsistência cross-device. Por segurança, quando há QUALQUER
+  //    mudança, regravamos a base inteira (rápido) e o meta por último (commit).
+  let __oldMetaSnap = null;
+  try{
+    __oldMetaSnap = await docRef.get();
+    if(__oldMetaSnap.exists){
+      const om = __oldMetaSnap.data();
+      if(om.fp && om.fp === fp && (om.numChunks||0) === chunks.length){
+        dbLog(`✓ ${id.toUpperCase()} já estava atualizada na nuvem (fingerprint idêntico) — regravação ignorada.`,'ok');
+        return { chunks: chunks.length, mb: totalMB, skipped: true };
+      }
+    }
+  }catch(_){ /* sem meta / sem permissão de leitura: segue para gravação completa */ }
+
   // 1) Limpa chunks antigos que tenham sobrado de carga maior anterior.
   //    Falha de permissão aqui é inofensiva (novos chunks sobrescrevem os antigos
   //    e numChunks é atualizado no passo 3), mas indica que as Firestore Rules
   //    precisam permitir delete em bases_szb/meta/chunks e bases_cloud/{id}/chunks.
   try{
-    const oldMetaSnap = await docRef.get();
+    const oldMetaSnap = __oldMetaSnap || await docRef.get();
     if(oldMetaSnap.exists){
       const oldN = oldMetaSnap.data().numChunks || 0;
       if(oldN > chunks.length){
@@ -1321,6 +1494,7 @@ async function atlasSaveBaseToFirestore(id, payload){
       email: curUser.email || '',
       uid: curUser.uid || '',
       numChunks: chunks.length,
+      fp: fp, // fingerprint do conteúdo → habilita o skip de regravação idêntica
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
 
@@ -1330,6 +1504,7 @@ async function atlasSaveBaseToFirestore(id, payload){
   }
   
   dbLog(`✓ ${id.toUpperCase()} salvo no Firestore (${chunks.length} chunks, ${totalMB.toFixed(2)}MB) — visível em qualquer navegador`,'ok');
+  return { chunks: chunks.length, mb: totalMB, skipped: false };
 }
 
 /* Compat: chamada antiga específica do SZB. */
@@ -1396,7 +1571,7 @@ async function atlasLoadSZBFromPDCloud(){
 
 /* ── Wrapper de gravação. Bloqueante com feedback claro. ── */
 async function atlasSaveBaseToCloud(id, payload){
-  await atlasSaveBaseToFirestore(id, payload);
+  return await atlasSaveBaseToFirestore(id, payload);
 }
 /* Compat: nome antigo. */
 async function atlasSaveSZBToPDCloud(payload){
@@ -1726,14 +1901,42 @@ function dbRowsFromSheet(ws){
   });
 }
 function dbNormalizeRows(raw){
-  return (raw||[]).map(r=>{
-    const o={};
-    for(const k of Object.keys(r||{})){
-      const nk=String(k).replace(/\s+/g,' ').trim();
-      if(nk) o[nk]=r[k];
+  raw = raw || [];
+  if(!raw.length) return [];
+  // Helper barato: a linha tem ao menos um valor não vazio? (evita
+  // Object.values(...).some(...) que aloca um array por linha).
+  const hasValue = (o)=>{ for(const k in o){ const v=o[k]; if(v!==''&&v!=null) return true; } return false; };
+
+  // Os cabeçalhos são idênticos em todas as linhas (mesma planilha). Calcula o
+  // mapa chave-original → chave-normalizada UMA vez (regex roda O(colunas) e não
+  // O(linhas×colunas)). Se nenhuma chave precisa de limpeza, usa o fast-path e
+  // nem reconstrói os objetos.
+  const remap = new Map();
+  let needsRemap = false;
+  for(const k of Object.keys(raw[0]||{})){
+    const nk = String(k).replace(/\s+/g,' ').trim();
+    remap.set(k, nk);
+    if(nk !== k || !nk) needsRemap = true;
+  }
+
+  const out = [];
+  if(!needsRemap){
+    for(let i=0;i<raw.length;i++){ const r=raw[i]; if(r && hasValue(r)) out.push(r); }
+    return out;
+  }
+
+  for(let i=0;i<raw.length;i++){
+    const r = raw[i];
+    if(!r) continue;
+    const o = {};
+    for(const k in r){
+      let nk = remap.get(k);
+      if(nk === undefined){ nk = String(k).replace(/\s+/g,' ').trim(); remap.set(k, nk); } // chave nova numa linha posterior
+      if(nk) o[nk] = r[k];
     }
-    return o;
-  }).filter(r=>Object.values(r).some(v=>v!==''&&v!=null));
+    if(hasValue(o)) out.push(o);
+  }
+  return out;
 }
 function dbXmlDecode(v){
   return String(v==null?'':v)
@@ -1853,14 +2056,20 @@ async function dbXmlFallbackRows(buf,id){
   dbPct(id,99);
   return rows;
 }
-async function dbReadRows(file,id,buf){
+async function dbReadRows(file,id,buf,perf){
+  perf = perf || {};
+  const tParse0 = performance.now();
   let raw=[];
   try{
-    let wb=XLSX.read(buf,{type:'array',cellDates:false,cellNF:false,cellHTML:false,cellStyles:false});
+    // dense:true → estrutura interna mais leve e parse mais rápido em planilhas
+    // grandes (SE1/SE2/SE5/SZB do Protheus). A saída de sheet_to_json é
+    // idêntica à do modo esparso; muda só a representação interna do worksheet.
+    let wb=XLSX.read(buf,{type:'array',cellDates:false,dense:true,cellNF:false,cellHTML:false,cellStyles:false});
     let ws=dbPickSheet(wb);
     raw=dbRowsFromSheet(ws);
     if(!raw.length){
-      wb=XLSX.read(buf,{type:'array',cellDates:false,dense:true,cellNF:false,cellHTML:false,cellStyles:false});
+      // Fallback esparso (raro): alguns .xls antigos parseiam melhor sem dense.
+      wb=XLSX.read(buf,{type:'array',cellDates:false,cellNF:false,cellHTML:false,cellStyles:false});
       ws=dbPickSheet(wb);
       raw=dbRowsFromSheet(ws);
     }
@@ -1869,23 +2078,54 @@ async function dbReadRows(file,id,buf){
     raw=[];
   }
   if(!raw.length && /\.xlsm?$/i.test(file.name||'')) raw=await dbXmlFallbackRows(buf,id);
-  return dbNormalizeRows(raw);
+  perf.parse = performance.now() - tParse0;
+
+  const tNorm0 = performance.now();
+  const out = dbNormalizeRows(raw);
+  perf.normalize = performance.now() - tNorm0;
+  return out;
 }
 
 async function dbProc(file,id){
   const t0=Date.now();
   dbSt(id,'busy','Lendo...');dbProg(id,true);dbPct(id,10);
   dbLog(`📂 ${file.name} (${dbSz(file.size)})`,'info');
+  const __perf={ read:0, parse:0, normalize:0, merge:0, idb:0, firestore:0, chunks:0, mb:0, skipped:false };
   try {
+    const tRead0=performance.now();
     const buf=await file.arrayBuffer(); dbPct(id,35);
-    const rows=await dbReadRows(file,id,buf); dbPct(id,100);
-    if(!rows.length){
+    __perf.read=performance.now()-tRead0;
+
+    const parsedRows=await dbReadRows(file,id,buf,__perf); dbPct(id,80);
+    if(!parsedRows.length){
       throw new Error('0 linhas lidas. O arquivo foi aberto, mas nenhuma linha de dados foi encontrada; não gravei base vazia.');
     }
+
+    // ── SZB: merge incremental (upsert). Demais bases: comportamento atual. ──
+    let rows = parsedRows;
+    let szbStats = null;
+    if(id==='szb'){
+      const tM0=performance.now();
+      const mr=await atlasMergeSZBIncremental(parsedRows);
+      __perf.merge=performance.now()-tM0;
+      rows=mr.finalRows;
+      szbStats=mr.stats;
+      dbLog(`🔁 SZB incremental — lidas:${dbFmt(szbStats.rowsIn)} · já existiam:${dbFmt(szbStats.existing)} · novas:${dbFmt(szbStats.added)} · atualizadas:${dbFmt(szbStats.updated)} · duplicadas ignoradas:${dbFmt(szbStats.dup)} · total final:${dbFmt(szbStats.finalCount)}`,'info');
+    }
+    dbPct(id,90);
+
+    if(!rows.length){
+      throw new Error('Base consolidada vazia — gravação abortada para não sobrescrever a nuvem com base vazia.');
+    }
+
     const tsNow=new Date().toISOString();
     const usuarioAtual=(window._atlasUser||document.getElementById('user-name')?.textContent||'—').trim();
     window.ATLAS_DATA[id]={rows,file:file.name,ts:tsNow,count:rows.length,user:usuarioAtual};
+
+    const tIdb0=performance.now();
     await atlasSaveBase(id, window.ATLAS_DATA[id]);
+    __perf.idb=performance.now()-tIdb0;
+
     atlasSaveLogCloud(id, window.ATLAS_DATA[id]); // log opcional, não bloqueante
     /* Sincronização cross-device: bases registradas em ATLAS_CLOUD_BASES (szb, se1, se2, se5)
        vão para o Firestore. Marca o ts atual como "já é meu" para o onSnapshot
@@ -1894,28 +2134,58 @@ async function dbProc(file,id){
       __atlasWatchLastTs[id] = tsNow;
       __atlasWatchLastTs[id+'__serverMs'] = 0; // será preenchido quando o onSnapshot confirmar
       if(id==='szb') window.__atlasSZBLastTs = tsNow;
-      // BLOQUEANTE para sabermos se a nuvem aceitou. Se falhar, aparece no log e toast.
-      try {
-        await atlasSaveBaseToCloud(id, window.ATLAS_DATA[id]);
-        toast(`${id.toUpperCase()} salvo na nuvem — visível para todos`,'gn');
-      } catch(e) {
-        console.error('[Atlas dbProc] FALHA NA NUVEM ' + id + ':', e);
-        dbLog(`✗ ${id.toUpperCase()} NÃO foi salvo na nuvem: ${e.message}`,'err');
-        toast(`Falha ao salvar ${id.toUpperCase()} na nuvem: `+e.message,'rd');
+
+      // SZB sem mudanças (0 novas, 0 atualizadas): a nuvem já está consolidada →
+      // pula a regravação completa dos chunks (maior custo do upload). Demais
+      // bases: o próprio atlasSaveBaseToFirestore decide via fingerprint.
+      const szbNoChange = (id==='szb' && szbStats && szbStats.added===0 && szbStats.updated===0);
+      if(szbNoChange){
+        dbLog(`✓ SZB já estava atualizada na nuvem — nenhuma regravação necessária.`,'ok');
+        toast(`SZB já estava atualizada na nuvem`,'gn');
+        __perf.skipped=true;
+      } else {
+        // BLOQUEANTE para sabermos se a nuvem aceitou. Se falhar, aparece no log e toast.
+        const tFs0=performance.now();
+        try {
+          const sres=await atlasSaveBaseToCloud(id, window.ATLAS_DATA[id]);
+          __perf.firestore=performance.now()-tFs0;
+          if(sres){ __perf.chunks=sres.chunks||0; __perf.mb=sres.mb||0; __perf.skipped=!!sres.skipped; }
+          toast((sres&&sres.skipped) ? `${id.toUpperCase()} já estava atualizada na nuvem`
+                                     : `${id.toUpperCase()} salvo na nuvem — visível para todos`,'gn');
+        } catch(e) {
+          __perf.firestore=performance.now()-tFs0;
+          console.error('[Atlas dbProc] FALHA NA NUVEM ' + id + ':', e);
+          dbLog(`✗ ${id.toUpperCase()} NÃO foi salvo na nuvem: ${e.message}`,'err');
+          toast(`Falha ao salvar ${id.toUpperCase()} na nuvem: `+e.message,'rd');
+        }
       }
     }
     atlasBroadcast(id, window.ATLAS_DATA[id]);
+    dbPct(id,100);
     const sec=((Date.now()-t0)/1000).toFixed(1);
     dbSt(id,'ok',dbFmt(rows.length)+' reg.');
     document.getElementById('dbc-'+id).className='db-card loaded';
     const res=document.getElementById('dbres-'+id);
-    res.className='db-res ok';res.textContent=`✓ ${dbFmt(rows.length)} registros em ${sec}s`;
+    const __resExtra = szbStats ? ` (+${dbFmt(szbStats.added)} novas)` : '';
+    res.className='db-res ok';res.textContent=`✓ ${dbFmt(rows.length)} registros em ${sec}s${__resExtra}`;
     const tsEl=document.getElementById('dbts-'+id);
     if(tsEl)tsEl.textContent=new Date(tsNow).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     const usEl=document.getElementById('dbus-'+id);
     if(usEl)usEl.textContent=usuarioAtual;
     dbLog(`✓ ${id.toUpperCase()} — ${dbFmt(rows.length)} reg. em ${sec}s`,'ok');
     dbSummary();toast(`${id.toUpperCase()} carregado: ${dbFmt(rows.length)} registros`,'gn');
+
+    // ── Instrumentação de performance ──
+    const __fmt=(ms)=>((ms||0)/1000).toFixed(1)+'s';
+    console.log(
+      `[PERF][DOWNLOAD_BASE] ${id.toUpperCase()} total=${sec}s`
+      + ` read=${__fmt(__perf.read)} parse=${__fmt(__perf.parse)} norm=${__fmt(__perf.normalize)}`
+      + (id==='szb' ? ` merge=${__fmt(__perf.merge)}` : '')
+      + ` idb=${__fmt(__perf.idb)} firestore=${__fmt(__perf.firestore)}`
+      + ` rowsIn=${parsedRows.length} rowsFinal=${rows.length}`
+      + (szbStats ? ` novas=${szbStats.added} atualizadas=${szbStats.updated} duplicadas=${szbStats.dup}` : '')
+      + ` chunks=${__perf.chunks} mb=${(__perf.mb||0).toFixed(1)}${__perf.skipped?' (firestore-skip)':''}`
+    );
   } catch(err) {
     delete window.ATLAS_DATA[id];
     dbSt(id,'err','Erro');
@@ -1927,12 +2197,29 @@ async function dbProc(file,id){
   } finally{dbProg(id,false);}
 }
 function dbAll(){
-  let n=0;
+  // Coleta os arquivos selecionados e processa com CONCORRÊNCIA LIMITADA.
+  // Antes: forEach disparava todos os dbProc de uma vez (parse de múltiplas
+  // planilhas grandes + uploads simultâneos) → picos de memória no navegador.
+  // Agora: fila com pool (desktop 2–3, mobile 1). Botão e interface inalterados.
+  const tasks=[];
   DB_TABLES.forEach(id=>{
     const inp=document.querySelector(`#dbdrop-${id} input[type=file]`);
-    if(inp&&inp.files&&inp.files.length>0){dbProc(inp.files[0],id);n++;}
+    if(inp&&inp.files&&inp.files.length>0){ tasks.push({id, file: inp.files[0]}); }
   });
-  if(!n)toast('Selecione pelo menos um arquivo primeiro.','am');
+  if(!tasks.length){ toast('Selecione pelo menos um arquivo primeiro.','am'); return; }
+
+  const LIMIT = window.ATLAS_IS_MOBILE ? 1 : Math.min(3, tasks.length);
+  let i=0;
+  async function worker(){
+    while(i < tasks.length){
+      const t=tasks[i++];
+      try{ await dbProc(t.file, t.id); }
+      catch(e){ console.warn('[Atlas dbAll]', t.id, e && e.message); }
+    }
+  }
+  // Não bloqueia o clique: dispara o pool e retorna (cada base atualiza sua UI).
+  Promise.all(Array.from({length: Math.min(LIMIT, tasks.length)}, worker))
+    .catch(e=>console.warn('[Atlas dbAll] pool', e && e.message));
 }
 function dbSt(id,tp,tx){const e=document.getElementById('dbs-'+id);e.className='db-cs '+tp;e.textContent=tx;}
 function dbProg(id,on){const p=document.getElementById('dbprog-'+id);p.classList.toggle('on',on);if(!on)document.getElementById('dbpf-'+id).style.width='0%';}
