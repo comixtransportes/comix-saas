@@ -190,7 +190,7 @@ tr.work-err{background:var(--rd-bg)!important}
         </div>
         <div class="right">
           <div class="card grow">
-            <div class="card-h"><h2>Conferência do CIOT</h2><div class="toolbar"><button class="btn" onclick="saveSelected()" id="btnSave" disabled>Salvar</button><label class="batch-emit" title="LIGADO: o robô clica Emitir sozinho e encadeia as emissões sem parar na conferência. DESLIGADO (recomendado): o robô preenche e PARA; você confere e emite cada um, e o lote avança a cada emissão."><input type="checkbox" id="batchAutoEmit"> emitir automático</label><button class="btn blue" id="btnBatch" onclick="startBatch()" disabled title="Emite em sequência todos os CT-es marcados (prontos). Com 1 marcado, envia só ele.">⚡ Auto EFrete (lote)</button><button class="btn danger" id="btnBatchStop" onclick="stopBatch()" style="display:none">Parar lote</button><span class="batch-count muted" id="batchCount"></span></div></div>
+            <div class="card-h"><h2>Conferência do CIOT</h2><div class="toolbar"><button class="btn" onclick="saveSelected()" id="btnSave" disabled>Salvar</button><label class="batch-emit" title="LIGADO: o robô clica Emitir sozinho e encadeia as emissões sem parar na conferência. DESLIGADO (recomendado): o robô preenche e PARA; você confere e emite cada um, e o lote avança a cada emissão."><input type="checkbox" id="batchAutoEmit"> emitir automático</label><label class="batch-emit" title="Tempo máximo SEM atividade do robô em um item do lote. Estourado o limite, o CT-e é marcado como REVISAR e o lote segue para o próximo, sem travar a fila. O contador zera a cada ação do robô. Em emissão manual com conferências demoradas, aumente este valor.">timeout <input type="number" id="batchTimeoutSec" value="180" min="30" step="10" style="width:62px" title="Tempo-limite sem atividade do robô, em segundos (mín. 30)."> s</label><button class="btn blue" id="btnBatch" onclick="startBatch()" disabled title="Emite em sequência todos os CT-es marcados (prontos). Com 1 marcado, envia só ele.">⚡ Auto EFrete (lote)</button><button class="btn danger" id="btnBatchStop" onclick="stopBatch()" style="display:none">Parar lote</button><span class="batch-count muted" id="batchCount"></span></div></div>
             <div class="card-b scroll grow" id="detail"><div class="detail-empty">Selecione um CT-e importado para conferir, complementar e enviar para o Auto EFrete.</div></div>
           </div>
           <div class="card">
@@ -331,7 +331,7 @@ async function flushPending(){
   if(done){log(done+' registro(s) pendente(s) sincronizado(s) com o Firestore — agora visíveis a todos os usuários.','ok');loadHistory();}
 }
 function requestData(table){return new Promise(resolve=>{const handler=ev=>{const m=ev.data||{};if(m.type==='ATLAS_DATA_RESPONSE'&&m.table===table){window.removeEventListener('message',handler);resolve(m.payload)}};window.addEventListener('message',handler);try{parent.postMessage({type:'ATLAS_REQUEST_DATA',table},'*')}catch(_){resolve(null)}setTimeout(()=>{window.removeEventListener('message',handler);resolve(null)},12000)})}
-window.addEventListener('message',ev=>{const m=ev.data||{};if(m.type==='ATLAS_USER'){state.user=m;$('userChip').textContent=(m.nome||m.email||'Usuário')+' — '+(m.perfil||'');try{ciotApplyButtonPerms();}catch(_){}try{refreshCopiedMarks();}catch(_){}flushPending();window.__cadTries=(window.__cadTries||0);if(!state.cadComplete&&window.__cadTries<3){window.__cadTries++;log('Bridge do Atlas conectado. Recarregando cadastros e histórico (tentativa '+window.__cadTries+')…','info');loadCadastros();loadHistory();}else{loadHistory();}}if(m.type==='ATLAS_DATA_READY'){if(m.table==='szy')requestSZY();if(m.table==='szb')requestSZB();if(m.table==='sa2')requestSA2();}if(m.type==='COMIX_AUTO_EFRETE_LOG'&&m.message){const key=String(m.at||'')+'|'+m.message;if(key!==window.__lastRobotLogKey){window.__lastRobotLogKey=key;const low=m.message.toLowerCase();const tp=/(não emito|nao emito|pausad|pausei|recus|rejei|erro|falh|não consegui|nao consegui|faltam|falta\b)/.test(low)?'warn':'info';log('Robô: '+m.message,tp);}sniffCiotFromLog(m.message);}if(m.type==='COMIX_AUTO_EFRETE_RESULT'&&m.result){applyEmissionResult(m.result,{autoOpen:true});}if(m.type==='COMIX_AUTO_EFRETE_WORK_RESULT'&&m.result){applyWorkResult(m.result);}});
+window.addEventListener('message',ev=>{const m=ev.data||{};if(m.type==='ATLAS_USER'){state.user=m;$('userChip').textContent=(m.nome||m.email||'Usuário')+' — '+(m.perfil||'');try{ciotApplyButtonPerms();}catch(_){}try{refreshCopiedMarks();}catch(_){}flushPending();window.__cadTries=(window.__cadTries||0);if(!state.cadComplete&&window.__cadTries<3){window.__cadTries++;log('Bridge do Atlas conectado. Recarregando cadastros e histórico (tentativa '+window.__cadTries+')…','info');loadCadastros();loadHistory();}else{loadHistory();}}if(m.type==='ATLAS_DATA_READY'){if(m.table==='szy')requestSZY();if(m.table==='szb')requestSZB();if(m.table==='sa2')requestSA2();}if(m.type==='COMIX_AUTO_EFRETE_LOG'&&m.message){noteBatchActivity();const key=String(m.at||'')+'|'+m.message;if(key!==window.__lastRobotLogKey){window.__lastRobotLogKey=key;const low=m.message.toLowerCase();const tp=/(não emito|nao emito|pausad|pausei|recus|rejei|erro|falh|não consegui|nao consegui|faltam|falta\b)/.test(low)?'warn':'info';log('Robô: '+m.message,tp);}sniffCiotFromLog(m.message);}if(m.type==='COMIX_AUTO_EFRETE_RESULT'&&m.result){noteBatchActivity();applyEmissionResult(m.result,{autoOpen:true});}if(m.type==='COMIX_AUTO_EFRETE_WORK_RESULT'&&m.result){applyWorkResult(m.result);}});
 /* ══ PERMISSÕES DE BOTÕES (Auto EFrete lote / Emitir automático) ══
    Tratadas na tela de Permissões como botões:
    · btn_ciot_lote          → botão "⚡ Auto EFrete (lote)"
@@ -825,12 +825,40 @@ async function startBatch(){
   if(autoEmit)aviso+='\n\n⚠️ EMISSÃO AUTOMÁTICA LIGADA: o robô vai CLICAR EMITIR sozinho em cada CIOT, sem parar para sua conferência. CIOT emitido errado precisa ser cancelado no EFrete. Recomendo rodar os primeiros lotes com a emissão automática DESLIGADA para validar.';
   else aviso+='\n\nO robô vai PREENCHER cada um e PARAR na conferência; você confere e clica Emitir. A cada emissão o lote avança sozinho para o próximo.';
   if(!confirm(aviso))return;
-  state.batch={active:true,queue:ready.map(i=>i.chaveCte||itemKey(i)),idx:0,autoEmitir:autoEmit,emitidos:0,total:ready.length,emittedKeys:new Set()};
-  log('▶️ Lote iniciado: '+ready.length+' CT-e(s)'+(autoEmit?' · EMISSÃO AUTOMÁTICA LIGADA':' · parando na conferência (emissão manual)'),autoEmit?'warn':'ok');
+  const toSec=Math.max(30,Number($('batchTimeoutSec')?.value)||180);
+  state.batch={active:true,queue:ready.map(i=>i.chaveCte||itemKey(i)),idx:0,autoEmitir:autoEmit,emitidos:0,total:ready.length,emittedKeys:new Set(),timeoutMs:toSec*1000,lastActivityAt:Date.now(),watchTimer:null};
+  log('▶️ Lote iniciado: '+ready.length+' CT-e(s)'+(autoEmit?' · EMISSÃO AUTOMÁTICA LIGADA':' · parando na conferência (emissão manual)')+' · timeout '+toSec+'s sem atividade → revisar e avança',autoEmit?'warn':'ok');
   renderTable();
+  startBatchWatch();
   await dispatchBatchItem();
 }
-function stopBatch(){if(!state.batch.active)return;state.batch.active=false;log('⏹️ Lote interrompido por você. O CT-e em andamento no EFrete continua na tela; conclua ou descarte manualmente.','warn');toast('Lote interrompido.','warn');renderTable();}
+/* ═══ v13.3: WATCHDOG DE INATIVIDADE DO LOTE ════════════════════════════════════════════════════════
+   Se um item fica sem QUALQUER atividade do robô (nenhum log, nenhum RESULT) por mais que o timeout, o
+   lote marca o CT-e como REVISAR e avança — assim um item travado (robô bloqueado por divergência de
+   DOCUMENTO, EFrete pendurado, sessão caída, ou parado esperando emissão manual que ninguém fez) não
+   segura a fila inteira. O contador zera a cada sinal de vida do robô (noteBatchActivity). */
+function noteBatchActivity(){if(state.batch&&state.batch.active)state.batch.lastActivityAt=Date.now();}
+function clearBatchWatch(){if(state.batch&&state.batch.watchTimer){clearInterval(state.batch.watchTimer);state.batch.watchTimer=null;}}
+function startBatchWatch(){clearBatchWatch();if(state.batch)state.batch.watchTimer=setInterval(batchWatchTick,5000);}
+function batchWatchTick(){const b=state.batch;if(!b||!b.active){clearBatchWatch();return;}if(b.idx>=b.queue.length)return;const idle=Date.now()-(b.lastActivityAt||0);if(idle>=(b.timeoutMs||180000))onBatchTimeout();}
+async function onBatchTimeout(){const b=state.batch;if(!b.active||b.idx>=b.queue.length)return;
+  b.lastActivityAt=Date.now();   // evita refire imediato enquanto dispara o próximo
+  const key=b.queue[b.idx];
+  const item=state.items.find(i=>(i.chaveCte||itemKey(i))===key)||itemByKey(key);
+  const secs=Math.round((b.timeoutMs||180000)/1000);
+  if(item){
+    if(item.status!=='emitido'){item.status='revisar';item.revisarMsg='Sem retorno do robô por '+secs+'s no lote — pulado para não travar a fila. Verifique no EFrete: pode ter ficado parado na conferência (emissão manual), bloqueado por divergência de DOCUMENTO, ou a sessão caiu.';item.robotJobId='';item.updatedAt=new Date().toISOString();try{await fsSet(CIOT_COLLECTION,item.chaveCte||item.id,item);}catch(_){}}
+    log('⏱️ TIMEOUT no lote: CT-e '+(item.numeroCte||key)+' ficou '+secs+'s sem atividade do robô. Marquei como REVISAR e segui para o próximo (a fila não trava). Confira esse CT-e no EFrete.','warn');
+    toast('Timeout: CT-e '+(item.numeroCte||key)+' → revisar; lote seguiu.','warn');
+    state.checked.delete(itemKey(item));if(item.chaveCte)state.checked.delete(String(item.chaveCte));
+  }else{
+    log('⏱️ TIMEOUT no lote: item '+key+' sem atividade por '+secs+'s — segui para o próximo.','warn');
+  }
+  b.idx++;syncBatchControls();renderTable();
+  if(b.idx>=b.queue.length){finishBatch();return;}
+  dispatchBatchItem().catch(e=>{log('Lote: erro ao disparar após timeout: '+e.message,'err');});
+}
+function stopBatch(){if(!state.batch.active)return;state.batch.active=false;clearBatchWatch();log('⏹️ Lote interrompido por você. O CT-e em andamento no EFrete continua na tela; conclua ou descarte manualmente.','warn');toast('Lote interrompido.','warn');renderTable();}
 async function dispatchBatchItem(){
   const b=state.batch;
   if(!b.active)return;
@@ -853,19 +881,21 @@ async function dispatchBatchItem(){
       try{await fsSet(CIOT_COLLECTION,item.chaveCte||item.id,item);}catch(_){}
       log('Lote ('+(b.idx+1)+'/'+b.total+'): enviado CT-e '+(item.numeroCte||key)+(b.autoEmitir?' — robô vai emitir.':' — confira e emita no EFrete; o lote avança ao emitir.'),'ok');
       toast('Lote: enviado CT-e '+(item.numeroCte||key)+' ('+(b.idx+1)+'/'+b.total+')','ok');
+      noteBatchActivity();   // zera o relógio do watchdog para este item recém-disparado
       renderTable();
       return;   // aguarda a emissão (COMIX_AUTO_EFRETE_RESULT) para avançar
     }
     log('Lote: a extensão não respondeu ao CT-e '+(item.numeroCte||key)+'. Interrompi o lote aqui.','warn');
     toast('Extensão não respondeu; lote interrompido.','warn');
-    b.active=false;renderTable();return;
+    b.active=false;clearBatchWatch();renderTable();return;
   }
   // acabou a fila
   finishBatch();
 }
-function finishBatch(){const b=state.batch;const emit=b.emitidos;b.active=false;log('✅ Lote concluído: '+emit+'/'+b.total+' CIOT(s) emitido(s).','ok');toast('Lote concluído: '+emit+' CIOT(s) emitido(s).','ok');renderTable();}
+function finishBatch(){const b=state.batch;const emit=b.emitidos;b.active=false;clearBatchWatch();log('✅ Lote concluído: '+emit+'/'+b.total+' CIOT(s) emitido(s).','ok');toast('Lote concluído: '+emit+' CIOT(s) emitido(s).','ok');renderTable();}
 async function advanceBatch(emittedItem,slug,opts){
   opts=opts||{};
+  noteBatchActivity();   // chegou RESULT do robô → sinal de vida; zera o watchdog
   const emitted=opts.emitted!==false;   // true = emissão real confirmada; false = conflito/skip (não conta no total)
   const b=state.batch;
   if(!b.active)return;
