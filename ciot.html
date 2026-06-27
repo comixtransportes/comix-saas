@@ -1122,9 +1122,25 @@ let __pdfjsP=null;
 function loadPdfJs(){if(window.pdfjsLib&&window.pdfjsLib.getDocument)return Promise.resolve(window.pdfjsLib);if(__pdfjsP)return __pdfjsP;__pdfjsP=new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';s.onload=()=>{try{if(window.pdfjsLib)window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';res(window.pdfjsLib);}catch(e){rej(e);}};s.onerror=()=>rej(new Error('Falha ao carregar pdf.js do cdnjs'));document.head.appendChild(s);});return __pdfjsP;}
 function base64ToUint8(b64){const raw=atob(String(b64||''));const arr=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);return arr;}
 async function pdfTextFromBase64(b64){const lib=await loadPdfJs();if(!lib||!lib.getDocument)throw new Error('pdf.js indisponível');const pdf=await lib.getDocument({data:base64ToUint8(b64)}).promise;let out='';const n=Math.min(pdf.numPages,6);for(let p=1;p<=n;p++){const page=await pdf.getPage(p);const tc=await page.getTextContent();out+=' '+tc.items.map(it=>it.str).join(' ');}return out;}
-function docChaveFromPdfText(txt){const joined=String(txt||'').replace(/(?<=\d)[ \t.\-](?=\d)/g,'');const all=joined.match(/\d{44}/g)||[];const up=joined.toUpperCase();let chave='';const idx=up.indexOf('DOCUMENTO');if(idx>=0){const m=joined.slice(idx,idx+400).match(/\d{44}/);if(m)chave=m[0];}const ctes=all.filter(c=>c.substr(20,2)==='57');if(!chave||chave.substr(20,2)!=='57')chave=ctes[0]||chave||'';return {chave,cte:deriveCteFromChave(chave),all};}
-// Resolve a chave do DOCUMENTO do CIOT: 1º pelo que a extensão já leu na tela; 2º lendo o próprio PDF com pdf.js.
-async function resolveDocChave(res){let chave=onlyDigits(res&&res.documentoChavePdf||'');let cte=String(res&&res.documentoCtePdf||'');if(chave&&chave.length===44&&!cte)cte=deriveCteFromChave(chave);if(chave&&chave.length===44)return {chave,cte,fonte:'extensao'};if(res&&res.pdfBase64){try{const info=docChaveFromPdfText(await pdfTextFromBase64(res.pdfBase64));if(info.chave)return {chave:info.chave,cte:info.cte,fonte:'pdfjs'};}catch(_){ }}return {chave:'',cte:'',fonte:''};}
+function docChaveFromPdfText(txt){const joined=String(txt||'').replace(/(?<=\d)[ \t.\-]+(?=\d)/g,'');const all=joined.match(/\d{44}/g)||[];const up=joined.toUpperCase();let chave='';const idx=up.indexOf('DOCUMENTO');if(idx>=0){const m=joined.slice(idx,idx+400).match(/\d{44}/);if(m)chave=m[0];}const ctes=all.filter(c=>c.substr(20,2)==='57');if(!chave||chave.substr(20,2)!=='57')chave=ctes[0]||chave||'';return {chave,cte:deriveCteFromChave(chave),all};}
+function withTimeout(p,ms,fallback){return Promise.race([Promise.resolve(p).catch(()=>fallback),new Promise(r=>setTimeout(()=>r(fallback),ms))]);}
+// Resolve a chave do DOCUMENTO do CIOT. PRIORIDADE:
+//  1) chave lida pela EXTENSÃO direto dos BYTES do PDF (documentoFonte='pdfjs-ext') → AUTORIDADE (offline);
+//  2) backup: o Atlas lê o PDF real com pdf.js (cdnjs), com timeout;
+//  3) leitura de TELA da extensão (fraca) → só casamento positivo, nunca bloqueia.
+async function resolveDocChave(res){
+  const extChave=onlyDigits(res&&res.documentoChavePdf||'');
+  if(extChave.length===44 && String(res&&res.documentoFonte||'')==='pdfjs-ext'){
+    const cte=String(res.documentoCtePdf||'')||deriveCteFromChave(extChave);
+    return {chave:extChave,cte,fonte:'pdfjs'};   // veio dos bytes do PDF na extensão → confiável
+  }
+  if(res&&res.pdfBase64){
+    const info=await withTimeout((async()=>docChaveFromPdfText(await pdfTextFromBase64(res.pdfBase64)))(),9000,null);
+    if(info&&info.chave)return {chave:info.chave,cte:info.cte,fonte:'pdfjs'};
+  }
+  if(extChave.length===44){const cte=String(res.documentoCtePdf||'')||deriveCteFromChave(extChave);return {chave:extChave,cte,fonte:'extensao'};}
+  return {chave:'',cte:'',fonte:''};
+}
 function pdfTypeKey(type){type=String(type||'ciot').toLowerCase();return (type==='encerramento'||type==='cancelamento'||type==='final')?'encerramento':'ciot';}
 function pdfCacheKey(slug,type){return String(slug||'')+'__'+pdfTypeKey(type);}
 function pdfDocId(slug,type){const base=String(slug).replace(/\//g,'_');return pdfTypeKey(type)==='encerramento'?base+'_encerramento':base;}
@@ -1139,9 +1155,9 @@ async function loadCiotPdfBase64(slug,type='ciot'){const tipo=pdfTypeKey(type);c
 async function fetchCiotPdfBase64FromUrl(pdfUrl){try{if(!pdfUrl)return '';const resp=await fetch(pdfUrl,{credentials:'include',cache:'no-store'});if(!resp.ok)return '';const ct=String(resp.headers.get('content-type')||'').toLowerCase();const buf=await resp.arrayBuffer();const head=new Uint8Array(buf.slice(0,5));const isPdf=ct.includes('pdf')||(head[0]===0x25&&head[1]===0x50&&head[2]===0x44&&head[3]===0x46);if(!isPdf)return '';const bytes=new Uint8Array(buf);let bin='';const chunk=0x8000;for(let i=0;i<bytes.length;i+=chunk)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+chunk));return btoa(bin);}catch(_){return '';}}
 async function ensureOriginalPdfBeforeWork(item){try{const slug=normCiotNumero((item&&item.numeroCiot)||'');if(!slug)return;const already=await loadCiotPdfBase64(slug,'ciot');if(already)return;const url=(item&&item.ciotPdfEmissaoUrl)||(!ciotIsClosed(item)&&(item&&item.ciotPdfUrl))||buildCiotPdfUrl(slug);let b64=await fetchCiotPdfBase64FromUrl(url);if(!b64&&!ciotIsClosed(item))b64=await requestPdfFromExtension(url);if(b64){state.pdfCache[pdfCacheKey(slug,'ciot')]=b64;await persistCiotPdf(slug,b64,'ciot');log('PDF original do CIOT '+ciotPretty(slug)+' preservado antes do encerramento/cancelamento.','ok');}}catch(e){log('Não consegui preservar o PDF original antes do encerramento: '+e.message,'warn');}}
 async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(res.numeroCiot||res.numeroCiotPretty||'');if(!slug){log('Resultado de emissão sem número de CIOT reconhecível.','warn');return;}
-  // v14.1: respeita o veredito da extensão. Se a tela do EFrete não confirmou o CT-e da tarefa ('diverge'),
-  // é releitura da emissão anterior — não grava e, no lote, não avança para o item errado.
-  if(String(res.conferido||'').toLowerCase()==='diverge'){log('⛔ Resultado RECUSADO: a extensão marcou o CIOT '+ciotPretty(slug)+' como DIVERGENTE do CT-e '+(res.numeroCte||'?')+' (releitura da emissão anterior). Não gravei. Reemita o CT-e '+(res.numeroCte||'?')+' se necessário.','err');return;}
+  // v13.3: o veredito "conferido" da extensão é apenas uma DICA (leitura de tela é frágil). NÃO bloqueamos
+  // mais por ele aqui — quem decide é a conferência pelo PDF real (pdf.js) logo abaixo. Mantemos só um log.
+  if(String(res.conferido||'').toLowerCase()==='diverge'){log('ℹ️ A extensão sugeriu divergência de tela no CIOT '+ciotPretty(slug)+'. Vou conferir pelo PDF real e rotear para o CT-e certo.','info');}
   const replay=ciotAlreadyShown(slug);   // já exibido antes (reenvio da extensão no load/Ctrl+R)
   if(replay&&!res.pdfBase64){state.__lastCiotApplied=slug;return;}   // reload puro: não reabre PDF, não regrava, não notifica
   if(state.__lastCiotApplied===slug&&!res.pdfBase64)return;   // idempotente na sessão; RESULT com PDF ainda passa
@@ -1151,27 +1167,53 @@ async function applyEmissionResult(res,opts={}){try{const slug=normCiotNumero(re
      A fonte de verdade de a qual CT-e o CIOT pertence é a CHAVE impressa no campo DOCUMENTO do PDF — não o
      numeroCte/chaveCte da TAREFA (que numa emissão em sequência pode ter avançado). Roteamos o salvamento por
      essa chave. Se ela não casar com NENHUM CT-e do Atlas, PARAMOS e avisamos — nunca salvamos no CT-e errado. */
+  /* ═══ v13.3: ROTEAMENTO ROBUSTO (pente-fino) ════════════════════════════════════════════════════════
+     Regras (nesta ordem), pensadas para NUNCA largar uma emissão legítima e ao mesmo tempo nunca gravar no
+     CT-e errado:
+       • PADRÃO = salvar no CT-e da TAREFA (taskItem). Emissão legítima jamais é descartada.
+       • Conferência pelo PDF REAL (pdf.js) é a autoridade:
+           - PDF confirma o CT-e da tarefa  → salva na tarefa (confirmado).
+           - PDF aponta OUTRO CT-e que EXISTE no Atlas → a emissão real foi DESSE outro: salva lá (auto-cura)
+             e marca a tarefa como "revisar" (ela não emitiu de fato).
+           - PDF (lido com segurança) aponta um CT-e que NÃO existe no Atlas e ≠ tarefa → PARA e sinaliza,
+             sem gravar no errado (caso "pare e avise" do Maicon).
+       • Dica da extensão (innerText) só serve para casamento POSITIVO; nunca bloqueia.
+     A trava ANTI-DUPLICIDADE (mais abaixo) continua impedindo o MESMO nº de CIOT em dois CT-es. */
+  const taskItem=findItemByResult(res);
   const conf=await resolveDocChave(res);
-  let item;
-  if(conf.chave||conf.cte){
-    item=findItemByChaveCte(conf.chave,conf.cte);
-    if(!item){
-      log('⛔ CONFERÊNCIA (DOCUMENTO): o PDF do CIOT '+ciotPretty(slug)+' é do CT-e '+(conf.cte||'?')+(conf.chave?' (chave '+conf.chave+')':'')+', que não encontrei na fila nem no histórico. NÃO salvei em lugar nenhum. Importe/abra o CT-e '+(conf.cte||'?')+' e confira a emissão.','err');
-      toast('CIOT '+ciotPretty(slug)+': PDF é do CT-e '+(conf.cte||'?')+', não localizado no Atlas. Não salvei.','err');
-      if(state.batch.active&&!replay)advanceBatch(null,'',{emitted:false});
-      markCiotShown(slug);return;
+  let item=taskItem;            // padrão: nunca largar a emissão
+  let crossFrom=null;           // taskItem que ficou "órfão" quando houve auto-cura
+  let blocked=false;
+  if(conf.cte){
+    const confItem=findItemByChaveCte(conf.chave,conf.cte);
+    const taskCteStr=String((taskItem&&taskItem.numeroCte)||res.numeroCte||'');
+    if(taskItem&&conf.cte===taskCteStr){
+      item=taskItem;            // PDF confirma a tarefa
+      log('✓ DOCUMENTO conferido (PDF): CIOT '+ciotPretty(slug)+' é do CT-e '+conf.cte+'.','ok');
+    }else if(confItem){
+      item=confItem;            // auto-cura: o PDF é de outro CT-e conhecido
+      if(taskItem&&taskItem!==confItem)crossFrom=taskItem;
+      log('↪️ Auto-correção (PDF): o robô tinha casado o CIOT '+ciotPretty(slug)+' ao CT-e '+(taskCteStr||'?')+', mas o DOCUMENTO do PDF é do CT-e '+(confItem.numeroCte||conf.cte)+'. Salvei no CT-e CORRETO.','warn');
+    }else if(conf.fonte==='pdfjs'){
+      // PDF legível, aponta CT-e que não está no Atlas e ≠ tarefa → não grava no errado.
+      blocked=true;
+      log('⛔ CONFERÊNCIA (PDF): o CIOT '+ciotPretty(slug)+' é do CT-e '+conf.cte+' (chave '+conf.chave+'), que não encontrei na fila nem no histórico. NÃO gravei no CT-e '+(taskCteStr||'?')+'. Importe/abra o CT-e '+conf.cte+' e confira.','err');
+      toast('CIOT '+ciotPretty(slug)+': PDF é do CT-e '+conf.cte+', fora do Atlas. Não salvei no errado.','err');
     }
-    const taskItem=findItemByResult(res);
-    if(taskItem&&taskItem!==item){
-      log('↪️ Correção automática: o robô casou o CIOT '+ciotPretty(slug)+' ao CT-e '+(res.numeroCte||'?')+', mas o DOCUMENTO do PDF é do CT-e '+(item.numeroCte||conf.cte||'?')+'. Salvei no CT-e CORRETO ('+(item.numeroCte||'?')+'), via '+(conf.fonte||'PDF')+'.','warn');
-    }else{
-      log('✓ DOCUMENTO conferido: CIOT '+ciotPretty(slug)+' pertence ao CT-e '+(item.numeroCte||conf.cte||'?')+' (via '+(conf.fonte||'PDF')+').','ok');
-    }
-  }else{
-    // Não consegui ler o DOCUMENTO (sem chave da extensão e PDF ilegível/ausente). Não confia cegamente na tarefa:
-    // casa pelo melhor palpite, mas marca para conferência manual com o botão "Conferir PDF×CT-e".
-    item=findItemByResult(res);
-    if(item){log('⚠️ Não consegui ler o campo DOCUMENTO do PDF do CIOT '+ciotPretty(slug)+' para conferir automaticamente. Salvei pelo CT-e da tarefa ('+(item.numeroCte||'?')+') — confira depois com "Conferir PDF×CT-e".','warn');}
+    // (conf.fonte==='extensao' que não casou → ignora a dica e segue salvando na tarefa)
+  }
+  if(blocked){
+    if(taskItem){taskItem.status='conferencia';taskItem.pendencias=['⚠ CIOT '+ciotPretty(slug)+' (PDF) é do CT-e '+conf.cte+', fora do Atlas — conferir no EFrete'];taskItem.updatedAt=new Date().toISOString();try{await fsSet(CIOT_COLLECTION,taskItem.chaveCte||taskItem.id,taskItem);}catch(_){}}
+    renderAll();markCiotShown(slug);
+    if(state.batch.active&&!replay)advanceBatch(null,'',{emitted:false});
+    return;
+  }
+  if(crossFrom){
+    // a tarefa não emitiu de fato → volta para revisão para ser reemitida
+    crossFrom.status='revisar';crossFrom.robotJobId='';crossFrom.revisarMsg='O robô capturou, neste passo, o CIOT '+ciotPretty(slug)+', que pelo PDF é do CT-e '+(item.numeroCte||conf.cte)+'. Este CT-e ('+(crossFrom.numeroCte||'?')+') ainda NÃO foi emitido — reemita.';crossFrom.updatedAt=new Date().toISOString();
+    try{await fsSet(CIOT_COLLECTION,crossFrom.chaveCte||crossFrom.id,crossFrom);}catch(_){}
+    log('↩️ CT-e '+(crossFrom.numeroCte||'?')+' marcado como REVISAR: não chegou a ser emitido (o passo capturou o CIOT de outro CT-e).','warn');
+    if(state.batch.active&&!replay)advanceBatch(crossFrom,'',{emitted:false});   // tira a tarefa órfã do topo da fila
   }
   const itemStatusBefore=String((item&&item.status)||'').toLowerCase();
   const workItem=state.work&&state.work.currentKey?workItemByKey(state.work.currentKey):null;
