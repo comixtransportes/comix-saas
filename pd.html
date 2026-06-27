@@ -27,7 +27,7 @@
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 :root{
   --bg:#f0f2f5;--wh:#fff;--sf:#f7f8fa;--bd:#d1d9e6;--bd2:#e4e9f2;
-  --tx:#192135;--mu:#6b7a96;--ac:#1a56db;
+  --tx:#192135;--mu:#6b7a96;--ac:#1a56db;--ac-h:#1746b8;--ac-bg:#eff4ff;--rs:4px;--shd:0 1px 3px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.06);
   --gn:#057a55;--gbg:#dcfce7;--rd:#c81e1e;--rbg:#fee2e2;
   --am:#92400e;--abg:#fef3c7;
   --hd:#1e2d45;--ht:#e8edf5;--alt:#f5f7fb;
@@ -144,6 +144,26 @@ body{background:var(--bg);color:var(--tx);font-family:var(--f);font-size:12px;di
 .tab.on{color:var(--ac);border-bottom-color:var(--ac);}
 .bar-r{margin-left:auto;display:flex;align-items:center;gap:8px;}
 select.sel{border:1px solid var(--bd);border-radius:3px;padding:3px 6px;font-size:11px;font-family:var(--f);}
+/* ── Seletor de mês estilo calendário (espelha o cpk) ───────────── */
+.mes-field{position:relative;display:inline-flex;}
+.tb-mes{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--bd);border-radius:3px;padding:3px 8px;font-size:11px;font-family:var(--m);letter-spacing:-.2px;white-space:nowrap;background:var(--wh);color:var(--tx);height:24px;cursor:pointer;outline:none;}
+.tb-mes:hover{border-color:var(--ac);}
+.tb-mes-ic{color:var(--mu);flex-shrink:0;}
+.tb-mes:hover .tb-mes-ic{color:var(--ac);}
+.mes-pop{position:fixed;z-index:9999;width:236px;background:var(--wh);border:1px solid var(--bd);border-radius:8px;box-shadow:var(--shd);padding:10px;display:none;}
+.mes-pop.on{display:block;}
+.mes-pop-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;user-select:none;}
+.mes-pop-yr{font-family:var(--m);font-size:14px;font-weight:600;color:var(--tx);letter-spacing:.5px;min-width:54px;text-align:center;}
+.mes-nav{width:26px;height:26px;border:1px solid var(--bd);background:var(--wh);border-radius:5px;color:var(--mu);font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.12s;}
+.mes-nav:hover:not(:disabled){border-color:var(--ac);color:var(--ac);background:var(--ac-bg);}
+.mes-nav:disabled{opacity:.32;cursor:default;}
+.mes-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;}
+.mes-cell{font-family:var(--f);font-size:11.5px;font-weight:500;padding:7px 0;border:1px solid var(--bd2);border-radius:5px;background:var(--sf);color:var(--tx);cursor:pointer;text-align:center;transition:.12s;text-transform:capitalize;}
+.mes-cell:hover{border-color:var(--ac);color:var(--ac);background:var(--ac-bg);}
+.mes-cell.sel{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600;}
+.mes-cell.sel:hover{background:var(--ac-h);color:#fff;}
+.mes-cell.now{box-shadow:inset 0 0 0 1px var(--ac);}
+.mes-cell.disb{color:var(--mu);opacity:.4;cursor:default;pointer-events:none;}
 
 .content{flex:1;overflow:hidden;display:flex;flex-direction:column;}
 .pane{display:none;flex:1;overflow:hidden;}
@@ -667,7 +687,21 @@ html{ -webkit-text-size-adjust:100%; }
     <div class="bar-r">
       <div class="h-ts" id="h-ts" title="Última atualização da tabela SZB">🕐 Última atualização SZB: <span class="h-ts-v" id="h-ts-v">—</span></div>
       <button class="btn-sec" id="btn-pd-parametros" onclick="openParams()">⚙ Parâmetros</button>
-      <select class="sel" id="sm" onchange="recalc()"><option value="">—</option></select>
+      <select class="sel" id="sm" onchange="recalc()" style="display:none"><option value="">—</option></select>
+      <div class="mes-field" id="pd-mes-field">
+        <button type="button" class="tb-mes" id="pd-mes-trigger" onclick="pdToggleMesPop(event)" title="Período">
+          <svg class="tb-mes-ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span id="pd-mes-lbl">—</span>
+        </button>
+        <div class="mes-pop" id="pd-mes-pop" aria-hidden="true" onwheel="pdMesPopWheel(event)" title="Role para mudar o ano">
+          <div class="mes-pop-hd">
+            <button type="button" class="mes-nav" id="pd-mes-prev" onclick="pdMesPopYear(-1)" title="Ano anterior">‹</button>
+            <span class="mes-pop-yr" id="pd-mes-pop-yr">—</span>
+            <button type="button" class="mes-nav" id="pd-mes-next" onclick="pdMesPopYear(1)" title="Próximo ano">›</button>
+          </div>
+          <div class="mes-grid" id="pd-mes-grid"></div>
+        </div>
+      </div>
       <select class="sel" id="su" onchange="recalc()">
         <option value="17">SC</option>
         <option value="18">PR</option>
@@ -1700,6 +1734,83 @@ function mesLabel(mesStr) {
   return lbl.charAt(0).toUpperCase()+lbl.slice(1);
 }
 
+// ── Seletor de mês estilo calendário (espelha o cpk) ─────────────────
+// O <select id="sm"> (oculto) continua sendo o detentor do valor: recalc() e
+// fullRebuild() leem/escrevem nele. O calendário apenas grava sm.value e dispara recalc.
+const PD_MESES_ABREV=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+let _pdMesPopYear=null;
+function pdMesYears(){
+  const ys=[...new Set((window._PD_MESES||[]).map(m=>+String(m).split('-')[0]))].filter(Boolean);
+  if(!ys.length) ys.push(new Date().getFullYear());
+  return {min:Math.min(...ys), max:Math.max(...ys)};
+}
+function pdGetMes(){ const el=document.getElementById('sm'); return el?el.value:''; }
+function pdUpdateMesLabel(){
+  const lbl=document.getElementById('pd-mes-lbl'); if(!lbl) return;
+  const v=pdGetMes(); lbl.textContent = v ? mesLabel(v) : '—';
+}
+function pdToggleMesPop(ev){
+  if(ev)ev.stopPropagation();
+  const pop=document.getElementById('pd-mes-pop'); if(!pop)return;
+  if(pop.classList.contains('on')){ pdCloseMesPop(); return; }
+  const cur=(pdGetMes()||'').split('-');
+  const yr=pdMesYears();
+  _pdMesPopYear = cur[0]? +cur[0] : new Date().getFullYear();
+  _pdMesPopYear = Math.min(yr.max, Math.max(yr.min, _pdMesPopYear));
+  pdRenderMesPop();
+  const r=document.getElementById('pd-mes-trigger').getBoundingClientRect();
+  pop.style.top=(r.bottom+6)+'px';
+  pop.style.left=Math.max(8, r.right-236)+'px';
+  pop.classList.add('on'); pop.setAttribute('aria-hidden','false');
+  setTimeout(()=>document.addEventListener('click',pdMesPopOutside),0);
+}
+function pdCloseMesPop(){
+  const pop=document.getElementById('pd-mes-pop'); if(!pop)return;
+  pop.classList.remove('on'); pop.setAttribute('aria-hidden','true');
+  document.removeEventListener('click',pdMesPopOutside);
+}
+function pdMesPopOutside(e){
+  const fld=document.getElementById('pd-mes-field');
+  if(fld&&!fld.contains(e.target)) pdCloseMesPop();
+}
+function pdMesPopYear(delta){
+  const yr=pdMesYears();
+  if(_pdMesPopYear==null)_pdMesPopYear=new Date().getFullYear();
+  const ny=_pdMesPopYear+delta;
+  if(ny<yr.min||ny>yr.max)return;
+  _pdMesPopYear=ny; pdRenderMesPop();
+}
+function pdMesPopWheel(e){ e.preventDefault(); pdMesPopYear(e.deltaY>0?1:-1); }
+function pdRenderMesPop(){
+  const yr=pdMesYears();
+  const yrEl=document.getElementById('pd-mes-pop-yr'); if(yrEl)yrEl.textContent=_pdMesPopYear;
+  const prev=document.getElementById('pd-mes-prev'), next=document.getElementById('pd-mes-next');
+  if(prev)prev.disabled=_pdMesPopYear<=yr.min;
+  if(next)next.disabled=_pdMesPopYear>=yr.max;
+  const cur=(pdGetMes()||'').split('-');
+  const selY=cur[0]?+cur[0]:null, selM=cur[1]?+cur[1]:null;
+  const now=new Date(), nowY=now.getFullYear(), nowM=now.getMonth()+1;
+  const avail=window._PD_MESES_SET||new Set();
+  const grid=document.getElementById('pd-mes-grid'); if(!grid)return;
+  grid.innerHTML=PD_MESES_ABREV.map((nm,i)=>{
+    const m=i+1, mes=_pdMesPopYear+'-'+String(m).padStart(2,'0');
+    const has=avail.has(mes);
+    const cls=['mes-cell'];
+    if(selY===_pdMesPopYear&&selM===m)cls.push('sel');
+    if(nowY===_pdMesPopYear&&nowM===m)cls.push('now');
+    if(!has)cls.push('disb');
+    const oc=has?(' onclick="pdPickMes('+m+')"'):' disabled title="Sem dados neste mês"';
+    return '<button type="button" class="'+cls.join(' ')+'"'+oc+'>'+nm+'</button>';
+  }).join('');
+}
+function pdPickMes(m){
+  const mes=_pdMesPopYear+'-'+String(m).padStart(2,'0');
+  const sm=document.getElementById('sm'); if(!sm)return;
+  if(!(window._PD_MESES_SET&&window._PD_MESES_SET.has(mes)))return; // mês sem dados: ignora
+  sm.value=mes;
+  pdUpdateMesLabel(); pdCloseMesPop(); recalc();
+}
+
 // ═══════════════════════════════════════════════════════
 // XML PARSER
 // ═══════════════════════════════════════════════════════
@@ -1844,6 +1955,10 @@ function agg(arr){
   const n=s.v||1;
   return{...s,tm:s.p>0?s.f/s.p:0,cpk:s.cs/n,vpk:s.vs/n,mkp:s.ms/n};
 }
+// Data de hoje em ISO (yyyy-mm-dd) — usada para isolar dias FECHADOS na projeção.
+function pdHojeISO(){const h=new Date();return `${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,'0')}-${String(h.getDate()).padStart(2,'0')}`;}
+// Agregado considerando APENAS dias fechados (exclui o dia de hoje). Base da projeção.
+function aggFechado(arr){const hj=pdHojeISO();return agg(arr.filter(r=>r.data && r.data<hj));}
 
 // ═══════════════════════════════════════════════════════
 // FORMATTERS
@@ -2277,6 +2392,8 @@ function fullRebuild(){
   });
   if(meses.includes(curVal)) smEl.value=curVal;
   else smEl.value=meses[meses.length-1]||'';
+  window._PD_MESES=meses; window._PD_MESES_SET=new Set(meses);
+  pdUpdateMesLabel();
   console.log('[PERF][PD] fullRebuild enrich+meses '+(performance.now()-__t0).toFixed(1)+'ms ('+DATA.length+' reg)');
   recalc();
 }
@@ -2378,7 +2495,19 @@ function buildVG(uid, mes){
   const hojeAno=hoje.getFullYear(), hojeMes=hoje.getMonth()+1;
   const [mesAno2,mesN2]=mes.split('-').map(Number);
   const mesFechado=(mesAno2<hojeAno)||(mesAno2===hojeAno&&mesN2<hojeMes);
-  const proj=mesFechado?fat:fat+(diasAp_uteis>0?fat/diasAp_uteis:0)*diasR;
+  // === PROJEÇÃO contempla SOMENTE dias fechados (exclui o dia de hoje) ===
+  // O realizado (fat/prod) continua incluindo hoje; apenas a projeção ignora hoje,
+  // tratando o dia atual como um dia ainda por vir (projetado pela média dos fechados).
+  const dmFech=dm.filter(r=>r.data && r.data<hojeISO);
+  const fatFech=dmFech.reduce((a,r)=>a+r.fat,0);
+  const prodFech=dmFech.reduce((a,r)=>a+r.peso_t,0);
+  const datasFech=[...new Set(dmFech.map(r=>r.data))];
+  let diasUteisFech=0;
+  datasFech.forEach(d=>{const dt=new Date(d+'T12:00:00');const dow=dt.getDay();if(!(dow===0||ferSet.has(d)))diasUteisFech++;});
+  const diasRestFech=Math.max(diasOp-diasUteisFech,0);
+  // Projeção = realizado dos dias fechados + média/dia útil fechado × dias úteis restantes.
+  // Nunca abaixo do já realizado (que inclui hoje).
+  const proj=mesFechado?fat:Math.max(fatFech+(diasUteisFech>0?fatFech/diasUteisFech:0)*diasRestFech, fat);
   const pf    =paFat ?fat/paFat*100 :0;
   const pp    =paProd?prod/paProd*100:0;
   const ppj   =paFat ?proj/paFat*100:0;
@@ -2395,7 +2524,7 @@ function buildVG(uid, mes){
   const fduCls=uid!=='all'?'pa-filled':'';
 
   // Projetado = fat + media * dias úteis restantes (mês fechado: igual ao realizado)
-  const prodProj = mesFechado?prod:prod + (diasAp_uteis>0?prod/diasAp_uteis:0)*diasR;
+  const prodProj = mesFechado?prod:Math.max(prodFech+(diasUteisFech>0?prodFech/diasUteisFech:0)*diasRestFech, prod);
   const ppProdProj = paProd ? prodProj/paProd*100 : 0;
 
   document.getElementById('itb').innerHTML=[
@@ -2774,7 +2903,7 @@ function buildVG(uid, mes){
 //   Dias_trabalhados_GLOBAIS = dias distintos com qualquer registro na operação
 //   (= célula "Dias trabalhados" da planilha — NÃO os dias do cliente individualmente)
 // ═══════════════════════════════════════════════════════
-function calcProj(mes, fatReal, prodReal){
+function calcProj(mes, fatReal, prodReal, fatFech, prodFech){
   // Mês fechado (anterior ao mês atual): projetado = realizado
   const _hoje=new Date();
   const [_ano,_mesN]=mes.split('-').map(Number);
@@ -2782,11 +2911,16 @@ function calcProj(mes, fatReal, prodReal){
     return {fatProj:fatReal, prodProj:prodReal};
   }
   const diasOp=diasOpMes(_ano,_mesN);
-  // Usa o global calculado no recalc — mesma base da planilha
+  // _DIAS_TRAB_GLOBAL já exclui o dia de hoje → conta SÓ dias fechados (planilha "Dias trabalhados")
   const diasTrab=(window._MES_ATUAL_GLOBAL===mes ? window._DIAS_TRAB_GLOBAL : 0) || 0;
   if(diasTrab===0||diasOp===0) return {fatProj:fatReal, prodProj:prodReal};
-  const fatProj  = fatReal  / diasTrab * diasOp;
-  const prodProj = prodReal / diasTrab * diasOp;
+  // Projeção contempla SOMENTE dias fechados: usa o realizado dos dias fechados
+  // (sem hoje) quando o chamador informa; senão cai no realizado cheio (retrocompat.).
+  const baseFat  = (fatFech  !== undefined && fatFech  !== null) ? fatFech  : fatReal;
+  const baseProd = (prodFech !== undefined && prodFech !== null) ? prodFech : prodReal;
+  // A projeção nunca pode ficar abaixo do que já foi efetivamente realizado (inclui hoje).
+  const fatProj  = Math.max(baseFat  / diasTrab * diasOp, fatReal);
+  const prodProj = Math.max(baseProd / diasTrab * diasOp, prodReal);
   return {fatProj, prodProj};
 }
 
@@ -2803,7 +2937,8 @@ function buildCl(uid,mes){
     const[rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
     const s=agg(arr);
     const datas=[...new Set(arr.map(r=>r.data))];
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
+    const sF=aggFechado(arr);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p);
     return{rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj};
   }).sort((a,b)=>b.f-a.f);
   document.getElementById('cnt-cl').textContent=' — '+rows.length+' clientes';
@@ -2873,10 +3008,12 @@ function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
   const mesAtual = `${_hoje.getFullYear()}-${String(_hoje.getMonth()+1).padStart(2,'0')}`;
 
   // Para cada mês: realizado; para o mês atual usa fatProj via calcProj
+  const _hjISO = pdHojeISO();
   const fats = ult12.map(m=>{
     const fatReal = allRota.filter(r=>r.mes===m).reduce((a,r)=>a+r.fat,0);
     if(m === mesAtual){
-      const {fatProj} = calcProj(m, fatReal, 0);
+      const fatRealF = allRota.filter(r=>r.mes===m && r.data && r.data<_hjISO).reduce((a,r)=>a+r.fat,0);
+      const {fatProj} = calcProj(m, fatReal, 0, fatRealF, 0);
       return fatProj;
     }
     return fatReal;
@@ -2973,7 +3110,8 @@ function buildTa(uid,mes){
   const rows=Object.entries(g).map(([k,arr])=>{
     const[op,rota,rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
     const s=agg(arr);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
+    const sF=aggFechado(arr);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p);
     return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
   }).sort((a,b)=>b.f-a.f);
   rows.forEach(r=>{
@@ -3119,6 +3257,20 @@ function showTarivaHist(op,rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
   const valores=alteracoes.map(p=>p.tarifa);
   const cores=alteracoes.map(p=>p.tipo==='alta'?'rgba(5,122,85,1)':p.tipo==='queda'?'rgba(200,30,30,1)':p.tipo==='ultima'?'rgba(146,64,14,1)':'rgba(26,86,219,1)');
 
+  // Eixo Y com faixa controlada: sem isto, tarifa constante auto-escala numa faixa
+  // ínfima e diferenças de centavos viram uma "queda" visual gigante. Quando a variação
+  // é irrelevante (<1% da média) centralizamos o valor com folga → a linha fica reta.
+  const vMin=Math.min(...valores), vMax=Math.max(...valores);
+  const vAvg=(vMin+vMax)/2, spread=vMax-vMin;
+  let yMin, yMax;
+  if(vAvg>0 && spread < vAvg*0.01){
+    const pad=Math.max(vAvg*0.05,1);   // ±5% da tarifa (mín. R$1)
+    yMin=vAvg-pad; yMax=vAvg+pad;
+  }else{
+    const pad=Math.max(spread*0.3,0.5);
+    yMin=vMin-pad; yMax=vMax+pad;
+  }
+
   mkC('c-tv','line',labels,[{
     label:'Tarifa R$/t',
     data:valores,
@@ -3134,6 +3286,7 @@ function showTarivaHist(op,rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
     ytk:{callback:v=>'R$'+D2(v)},
     y:{beginAtZero:false},
     ex:{
+      layout:{padding:{top:24,left:10,right:18,bottom:4}},
       plugins:{
         legend:{display:false},
         tooltip:{
@@ -3156,7 +3309,7 @@ function showTarivaHist(op,rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
         },
         datalabels:{
           display:true,
-          align:'top',
+          align:(ctx)=>{const n=ctx.dataset.data.length;return ctx.dataIndex===0?'right':(ctx.dataIndex===n-1?'left':'top');},
           anchor:'end',
           offset:4,
           clip:false,
@@ -3172,7 +3325,7 @@ function showTarivaHist(op,rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
       },
       scales:{
         x:{ticks:{color:CT,font:{size:9},maxRotation:45,autoSkip:false},grid:{color:CG,lineWidth:.5}},
-        y:{ticks:{color:CT,font:{size:9},callback:v=>'R$'+D2(v)},grid:{color:CG,lineWidth:.5},beginAtZero:false}
+        y:{ticks:{color:CT,font:{size:9},callback:v=>'R$'+D2(v)},grid:{color:CG,lineWidth:.5},beginAtZero:false,min:yMin,max:yMax}
       }
     }
   });
@@ -3197,7 +3350,8 @@ function buildFr(uid,mes){
     // Motorista da última viagem (maior data)
     const arrOrd=arr.slice().sort((a,b)=>(b.data||'').localeCompare(a.data||''));
     const mt=arrOrd[0]?arrOrd[0].mot:'';
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
+    const sF=aggFechado(arr);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p);
     // Valor comparado depende do modo: ritmo=projetado, pontual=realizado
     const valComp = base==='ritmo' ? fatProj : s.f;
     const atingPct= meta>0 ? Math.min(valComp/meta*100,100) : 0;
@@ -3291,7 +3445,8 @@ function _buildCcTable(uid, mes, diaSel) {
   const rows=Object.entries(g).map(([k,arr])=>{
     const[rem,frt]=k.split('§');
     const s=agg(arr);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p);
+    const sF=aggFechado(arr);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p);
     // Dados do dia selecionado para este grupo
     const arrDia = gDia[k] || [];
     const sDia = arrDia.length ? agg(arrDia) : {p:0,f:0};
@@ -3306,10 +3461,13 @@ function _buildCcTable(uid, mes, diaSel) {
 
   // ── Linha Dupla: Faturamento Projetado Atual vs Faturamento Real Mês Anterior ──
   const gRemAtual=grp(d,r=>r.cli_dev||r.r_nome);
+  const _hjISO2 = pdHojeISO();
   const top10Atual=Object.entries(gRemAtual).map(([rem,arr])=>{
     const fatReal=arr.reduce((a,r)=>a+r.fat,0);
     const prodReal=arr.reduce((a,r)=>a+(r.prod||0),0);
-    const {fatProj}=calcProj(mes,fatReal,prodReal);
+    const fatRealF=arr.filter(r=>r.data && r.data<_hjISO2).reduce((a,r)=>a+r.fat,0);
+    const prodRealF=arr.filter(r=>r.data && r.data<_hjISO2).reduce((a,r)=>a+(r.prod||0),0);
+    const {fatProj}=calcProj(mes,fatReal,prodReal,fatRealF,prodRealF);
     return {rem,f:fatReal,fatProj};
   }).sort((a,b)=>b.f-a.f).slice(0,10);
   // Mês anterior
