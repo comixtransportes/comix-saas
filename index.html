@@ -1328,6 +1328,27 @@ function atlasChunkRows(slimRows){
 /* Alias compat. */
 function atlasChunkSZBRows(slimRows){ return atlasChunkRows(slimRows); }
 
+/* Versão do algoritmo de assinatura por chunk. Se mudar a forma de chunkar
+   ou de hashear, incremente: metas gravados com versão diferente são ignorados
+   (força regravação completa uma vez, populando as novas assinaturas). */
+const ATLAS_CHUNK_HASH_V = 1;
+
+/* Assinatura determinística de UM chunk (array de linhas slim). Usada para
+   gravar na nuvem só os chunks que realmente mudaram (diff por chunk). Mesmo
+   esquema de hash do fingerprint da base (FNV-1a + djb2 + tamanho), porém por
+   chunk. Como atlasSlimRows monta as linhas sempre na mesma ordem de chaves, a
+   serialização é estável entre cargas -> mesma assinatura p/ mesmo conteúdo. */
+function atlasChunkSig(chunkArr){
+  const s = JSON.stringify(chunkArr);
+  let h1=0x811c9dc5>>>0, h2=5381>>>0;
+  for(let j=0;j<s.length;j++){
+    const c=s.charCodeAt(j);
+    h1=(h1^c)>>>0; h1=(h1 + ((h1<<1)+(h1<<4)+(h1<<7)+(h1<<8)+(h1<<24)))>>>0; // FNV-1a
+    h2=(((h2<<5)+h2) ^ c)>>>0; // djb2
+  }
+  return s.length+'_'+h1.toString(36)+'_'+h2.toString(36);
+}
+
 /* ── Salva uma base no Firestore em chunks. Bloqueante; lança erro real. ── */
 async function atlasSaveBaseToFirestore(id, payload){
   if(!db || !curUser) throw new Error('Sem autenticação Firebase — recarregue e faça login.');
@@ -1406,13 +1427,41 @@ async function atlasSaveBaseToFirestore(id, payload){
     }
   }
   
-  // 2) Gravação ADAPTATIVA: começa rápida (paralelo 3), reduz pool se rate-limita,
-  // chega até sequencial em último caso. Cada chunk tem retry com backoff exponencial.
-  // Resultado: tipicamente 60-90s em vez de 4min, e continua confiável se Firestore
-  // estrangular a banda.
-  console.log('[Atlas Save] gravando ' + chunks.length + ' chunks em ' + docRef.path);
+  // 2) DIFF POR CHUNK + gravação ADAPTATIVA.
+  //    Antes regravávamos TODOS os chunks a cada mudança (1 linha nova => 35MB
+  //    reescritos => minutos). Agora calculamos uma assinatura por chunk e só
+  //    gravamos os chunks cujo conteúdo realmente mudou. Como o merge incremental
+  //    PRESERVA A ORDEM (linhas existentes mantêm posição; novas vão ao fim), no
+  //    caso comum "+N linhas no fim" só o último chunk (e eventuais novos) mudam:
+  //    de dezenas de gravações para 1-2. A correção é sempre exata, pois qualquer
+  //    chunk com assinatura diferente é regravado; só pulamos os byte-idênticos.
+  const newHashes = chunks.map(atlasChunkSig);
+  let oldHashes = null;
+  if(__oldMetaSnap && __oldMetaSnap.exists){
+    const __om = __oldMetaSnap.data();
+    // Só confiamos nas assinaturas antigas se forem da MESMA versão de algoritmo
+    // e self-consistentes (uma por chunk). Caso contrário, regrava tudo 1x.
+    if(__om && __om.chunkHashV === ATLAS_CHUNK_HASH_V
+       && Array.isArray(__om.chunkHashes)
+       && __om.chunkHashes.length === (__om.numChunks||0)){
+      oldHashes = __om.chunkHashes;
+    }
+  }
+  // Índices a gravar: chunk novo OU assinatura divergente. Sem assinaturas antigas
+  // válidas (1ª carga / meta legado / outro gravador) => regrava tudo uma vez para
+  // popular as assinaturas; as próximas cargas serão rápidas.
+  const toWrite = [];
+  for(let i=0;i<chunks.length;i++){
+    if(!oldHashes || i >= oldHashes.length || oldHashes[i] !== newHashes[i]) toWrite.push(i);
+  }
+  const skippedChunks = chunks.length - toWrite.length;
+  if(skippedChunks > 0){
+    dbLog(`⚡ ${id.toUpperCase()}: ${skippedChunks}/${chunks.length} chunks idênticos reaproveitados — gravando só ${toWrite.length}.`,'ok');
+  }
+  console.log('[Atlas Save] diff: gravando ' + toWrite.length + '/' + chunks.length + ' chunks em ' + docRef.path);
   const errors = [];
   let savedCount = 0;
+  const writeTotal = toWrite.length;
   let currentPool = 3;        // começa com 3 gravações em paralelo
   let consecutiveRateLimits = 0;
 
@@ -1423,9 +1472,9 @@ async function atlasSaveBaseToFirestore(id, payload){
         await docRef.collection('chunks').doc(String(i)).set({ rows: chunks[i] });
         savedCount++;
         consecutiveRateLimits = Math.max(0, consecutiveRateLimits - 1);
-        if(savedCount % 5 === 0 || savedCount === chunks.length){
-          console.log('[Atlas Save] ' + savedCount + '/' + chunks.length + ' chunks gravados');
-          dbPct(id, 10 + Math.floor(85 * savedCount / chunks.length));
+        if(savedCount % 5 === 0 || savedCount === writeTotal){
+          console.log('[Atlas Save] ' + savedCount + '/' + writeTotal + ' chunks gravados');
+          dbPct(id, 10 + Math.floor(85 * savedCount / Math.max(1, writeTotal)));
         }
         return true;
       }catch(e){
@@ -1452,21 +1501,22 @@ async function atlasSaveBaseToFirestore(id, payload){
     return false;
   }
 
-  // Processa em ondas. Se uma onda inteira ficar rate-limitada, reduz o pool da próxima.
-  let idx = 0;
-  while(idx < chunks.length){
-    const waveSize = Math.min(currentPool, chunks.length - idx);
+  // Processa em ondas APENAS os chunks que mudaram. Se uma onda inteira ficar
+  // rate-limitada, reduz o pool da próxima.
+  let wi = 0;
+  while(wi < toWrite.length){
+    const waveSize = Math.min(currentPool, toWrite.length - wi);
     const wave = [];
     for(let k=0; k<waveSize; k++){
-      wave.push(saveChunk(idx + k));
+      wave.push(saveChunk(toWrite[wi + k]));
     }
     await Promise.all(wave);
-    idx += waveSize;
+    wi += waveSize;
     // Adapta o pool baseado em quantos rate limits ocorreram nesta onda
     if(consecutiveRateLimits >= 2 && currentPool > 1){
       currentPool = Math.max(1, currentPool - 1);
       console.warn('[Atlas Save] reduzindo paralelismo para ' + currentPool + ' (rate limit detectado)');
-    } else if(consecutiveRateLimits === 0 && currentPool < 3 && idx < chunks.length){
+    } else if(consecutiveRateLimits === 0 && currentPool < 3 && wi < toWrite.length){
       currentPool = Math.min(3, currentPool + 1);
     }
   }
@@ -1475,7 +1525,7 @@ async function atlasSaveBaseToFirestore(id, payload){
     console.error('[Atlas Save] ' + errors.length + ' chunks falharam. Primeiro erro:', errors[0]);
     throw new Error(`Falha em ${errors.length} chunk(s): ${errors[0]}`);
   }
-  console.log('[Atlas Save] todos os ' + chunks.length + ' chunks gravados, agora o meta');
+  console.log('[Atlas Save] ' + toWrite.length + '/' + chunks.length + ' chunks gravados (' + skippedChunks + ' reaproveitados), agora o meta');
   
   // 3) Grava o meta POR ÚLTIMO. É o "commit" lógico: leitores só veem a nova
   //    carga depois que todos os chunks estão no lugar.
@@ -1495,6 +1545,8 @@ async function atlasSaveBaseToFirestore(id, payload){
       uid: curUser.uid || '',
       numChunks: chunks.length,
       fp: fp, // fingerprint do conteúdo → habilita o skip de regravação idêntica
+      chunkHashes: newHashes,        // assinatura por chunk → diff incremental (só grava o que muda)
+      chunkHashV: ATLAS_CHUNK_HASH_V, // versão do algoritmo de assinatura
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     });
 
@@ -1503,8 +1555,8 @@ async function atlasSaveBaseToFirestore(id, payload){
     throw e;
   }
   
-  dbLog(`✓ ${id.toUpperCase()} salvo no Firestore (${chunks.length} chunks, ${totalMB.toFixed(2)}MB) — visível em qualquer navegador`,'ok');
-  return { chunks: chunks.length, mb: totalMB, skipped: false };
+  dbLog(`✓ ${id.toUpperCase()} salvo no Firestore (${toWrite.length}/${chunks.length} chunks gravados${skippedChunks>0?`, ${skippedChunks} reaproveitados`:''}, ${totalMB.toFixed(2)}MB) — visível em qualquer navegador`,'ok');
+  return { chunks: chunks.length, written: toWrite.length, reused: skippedChunks, mb: totalMB, skipped: false };
 }
 
 /* Compat: chamada antiga específica do SZB. */
