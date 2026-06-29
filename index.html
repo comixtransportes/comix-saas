@@ -2138,6 +2138,211 @@ async function dbReadRows(file,id,buf,perf){
   return out;
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   NOTIFICAÇÃO POR E-MAIL — "PD Diário finalizado"
+   ──────────────────────────────────────────────────────────────────────────
+   Gatilho disparado pelo Download Base (somente base SZB). Quando o primeiro
+   carregamento de CTes/SZB do dia atual é concluído com sucesso, o Atlas grava
+   uma fila de e-mails (coleção email_queue) avisando que o PD Diário do dia
+   ANTERIOR foi finalizado. O envio real é feito pela Firebase Extension
+   "Trigger Email" — este HTML NÃO envia e-mail, NÃO usa SMTP/senha/token.
+
+   Segurança / robustez:
+   - Lock diário transacional em notificacoes_disparos/pd_diario_finalizado_<dia>
+     impede envio duplicado no mesmo dia.
+   - Qualquer falha aqui é registrada no console + aviso discreto; o carregamento
+     da base NUNCA é interrompido por causa do e-mail.
+   Config do evento: notificacoes_eventos/pd_diario_finalizado (tela Cadastros).
+   Detalhes: README_NOTIFICACOES_EMAIL.md.
+   ══════════════════════════════════════════════════════════════════════════ */
+const ATLAS_NOTIF_EVT_ID  = 'pd_diario_finalizado';
+const ATLAS_EMAIL_QUEUE   = 'email_queue';            // coleção observada pela Firebase Trigger Email
+const ATLAS_NOTIF_EVENTOS = 'notificacoes_eventos';   // configuração dos eventos
+const ATLAS_NOTIF_DISPAROS= 'notificacoes_disparos';  // lock diário (antiduplicação)
+
+/* Data de HOJE no calendário LOCAL (Brasil), formato YYYY-MM-DD. */
+function atlasHojeISO(){
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+/* Data de ONTEM no calendário LOCAL, formato YYYY-MM-DD. */
+function atlasOntemISO(){
+  const d = new Date(); d.setDate(d.getDate()-1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+/* YYYY-MM-DD → DD/MM/YYYY. */
+function atlasFormatDateBR(iso){
+  const m = String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(iso||'');
+}
+/* Normaliza qualquer formato de data para YYYY-MM-DD. Aceita:
+   Date · YYYY-MM-DD · YYYY-MM-DDTHH:mm:ss · DD/MM/YYYY · serial Excel.
+   Espelha atlasExcelDateToISO do pd.html (Dt. Emissao chega como serial). */
+function atlasNormalizeDateISO(value){
+  if (value === null || value === undefined || value === '') return '';
+  if (value instanceof Date && !isNaN(value.getTime())) return value.toISOString().slice(0,10);
+  if (typeof value === 'number' && isFinite(value)){
+    return new Date(Date.UTC(1899,11,30) + Math.round(value)*86400000).toISOString().slice(0,10);
+  }
+  const s = String(value).trim();
+  if (!s) return '';
+  if (/^\d+(?:\.\d+)?$/.test(s)){
+    const serial = Number(s);
+    if (serial > 20000 && serial < 90000){
+      return new Date(Date.UTC(1899,11,30) + Math.round(serial)*86400000).toISOString().slice(0,10);
+    }
+  }
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[0];
+  const br = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  if (br){
+    const ano = br[3].length === 2 ? '20'+br[3] : br[3];
+    return `${ano}-${String(br[2]).padStart(2,'0')}-${String(br[1]).padStart(2,'0')}`;
+  }
+  return s.slice(0,10);
+}
+/* Substitui {CHAVE} pelos valores em vars. */
+function atlasApplyTemplate(str, vars){
+  return String(str==null?'':str).replace(/\{(\w+)\}/g, (m,k)=> (vars && vars[k]!=null) ? vars[k] : m);
+}
+/* Valida e-mail (mesma regra usada em Cadastros). */
+function atlasIsValidEmail(email){
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email||'').trim());
+}
+
+/* Função principal do gatilho. Recebe a base recém-carregada do Download Base.
+   Só age para SZB; conta CTes com Dt. Emissao = hoje; lê e valida o evento;
+   resolve destinatários; cria o lock diário em transação e enfileira os e-mails. */
+async function atlasMaybeQueuePDEmailNotification({ id, payload, rows, fileName }){
+  try{
+    if (id !== 'szb') return;                       // (1) só a base SZB
+    if (!db || !curUser) return;                    // sem auth → não há como gravar
+    if (!Array.isArray(rows) || !rows.length) return;
+
+    // (2)(3)(4) Conta linhas com Dt. Emissao = hoje. Sem nenhuma → não dispara.
+    const hojeISO = atlasHojeISO();
+    let rowsToday = 0;
+    for (let i=0;i<rows.length;i++){
+      const r = rows[i]; if (!r) continue;
+      if (atlasNormalizeDateISO(r['Dt. Emissao']) === hojeISO) rowsToday++;
+    }
+    if (rowsToday === 0){
+      console.log('[Atlas PD-mail] Sem CT-e com Dt. Emissao = hoje — evento não disparado.');
+      return;
+    }
+
+    // (5)(6) Lê o evento. Inexistente ou inativo → não dispara.
+    const evSnap = await db.collection(ATLAS_NOTIF_EVENTOS).doc(ATLAS_NOTIF_EVT_ID).get();
+    if (!evSnap.exists){ console.log('[Atlas PD-mail] Evento não configurado em Cadastros.'); return; }
+    const ev = evSnap.data() || {};
+    if (ev.ativo === false){ console.log('[Atlas PD-mail] Evento inativo.'); return; }
+
+    const destUids = Array.isArray(ev.destinatarios) ? ev.destinatarios : [];
+    if (!destUids.length){
+      toast('Evento PD Diário finalizado está ativo, mas não há destinatários válidos.','am');
+      return;
+    }
+
+    // (7)(8) Resolve usuários selecionados; filtra ativos/não bloqueados/e-mail válido.
+    const destSet = new Set(destUids.map(String));
+    const usnap = await db.collection('usuarios').get();
+    const recipients = [];
+    usnap.forEach(doc=>{
+      const u = doc.data() || {};
+      const match = destSet.has(String(doc.id)) || (u.uid && destSet.has(String(u.uid)));
+      if (!match) return;
+      if (u.bloqueado === true || u.status === 'bloqueado') return;
+      const email = String(u.email||'').trim();
+      if (!atlasIsValidEmail(email)) return;
+      recipients.push({ uid: doc.id, nome: u.nome || u.email || doc.id, email });
+    });
+    if (!recipients.length){
+      toast('Evento PD Diário finalizado está ativo, mas não há destinatários válidos.','am');
+      return;
+    }
+
+    const ontemISO   = atlasOntemISO();
+    const dataPDBR   = atlasFormatDateBR(ontemISO);
+    const dataAtualBR= atlasFormatDateBR(hojeISO);
+    const vars       = { DATA_ANTERIOR: dataPDBR, DATA_ATUAL: dataAtualBR };
+
+    // (9) Lock diário transacional — impede duplicidade no mesmo dia.
+    const lockId  = `${ATLAS_NOTIF_EVT_ID}_${hojeISO}`;
+    const lockRef = db.collection(ATLAS_NOTIF_DISPAROS).doc(lockId);
+    const created = await db.runTransaction(async tx=>{
+      const snap = await tx.get(lockRef);
+      if (snap.exists) return false;              // já registrado hoje
+      tx.set(lockRef, {
+        eventId:   ATLAS_NOTIF_EVT_ID,
+        canal:     'email',
+        diaDisparo: hojeISO,
+        dataPD:    ontemISO,
+        dataPDBR:  dataPDBR,
+        status:    'queued',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        createdBy: curUser.email || '',
+        source:    'download-base-szb',
+        file:      fileName || (payload && payload.file) || 'SZB.xlsm',
+        rowsToday: rowsToday
+      });
+      return true;
+    });
+
+    if (!created){
+      console.log(`[Atlas PD-mail] Lock ${lockId} já existe — envio duplicado ignorado.`);
+      toast('Notificação PD Diário já registrada hoje — envio duplicado ignorado.','am'); // não é erro
+      return;
+    }
+
+    // Monta assunto/corpo a partir do template do evento (com fallback ao padrão).
+    const subjectTpl = ev.assunto      || 'Atlas | PD Diário finalizado — {DATA_ANTERIOR}';
+    const textTpl    = ev.templateText || 'Olá,\n\nO PD Diário do dia {DATA_ANTERIOR} foi finalizado.\n\nEste aviso foi gerado automaticamente após o primeiro carregamento de CTes/SZB do dia {DATA_ATUAL} no Atlas.\n\nAtlas — Comix Transportes';
+    const htmlTpl    = ev.templateHtml || '<p>Olá,</p><p>O PD Diário do dia <strong>{DATA_ANTERIOR}</strong> foi finalizado.</p><p>Este aviso foi gerado automaticamente após o primeiro carregamento de CTes/SZB do dia <strong>{DATA_ATUAL}</strong> no Atlas.</p><p>Atlas — Comix Transportes</p>';
+    const subject = atlasApplyTemplate(subjectTpl, vars);
+    const text    = atlasApplyTemplate(textTpl,    vars);
+    const html    = atlasApplyTemplate(htmlTpl,    vars);
+
+    // Enfileira 1 documento por destinatário (formato Firebase Trigger Email).
+    try{
+      const batch = db.batch();
+      recipients.forEach(rcp=>{
+        const ref = db.collection(ATLAS_EMAIL_QUEUE).doc();
+        batch.set(ref, {
+          to: [rcp.email],
+          message: { subject, text, html },
+          metadata: {
+            eventId: ATLAS_NOTIF_EVT_ID,
+            eventName: 'PD Diário finalizado',
+            lockId: lockId,
+            recipientUid: rcp.uid,
+            recipientName: rcp.nome,
+            recipientEmail: rcp.email,
+            source: 'download-base-szb',
+            baseFile: fileName || '',
+            baseTs: (payload && payload.ts) || '',
+            createdBy: curUser.email || ''
+          },
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      });
+      await batch.commit();
+      await lockRef.set({ status:'queued', recipients: recipients.length, queuedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge:true });
+      toast(`Notificação de e-mail do PD Diário enfileirada para ${recipients.length} destinatário(s).`,'gn');
+      console.log(`[Atlas PD-mail] ${recipients.length} e-mail(s) em ${ATLAS_EMAIL_QUEUE} · lock ${lockId}.`);
+    }catch(eq){
+      // Falha ao enfileirar APÓS criar o lock: marca o lock como erro para
+      // rastreabilidade (e permitir reprocessamento manual excluindo o doc).
+      console.error('[Atlas PD-mail] Falha ao enfileirar e-mails:', eq && eq.message);
+      try{ await lockRef.set({ status:'error', error:String(eq && eq.message||eq) }, { merge:true }); }catch(_){}
+      toast('Aviso: lock criado, mas houve falha ao enfileirar os e-mails do PD.','am');
+    }
+  }catch(e){
+    // (Parte 5) Nada aqui pode quebrar o carregamento da base.
+    console.warn('[Atlas PD-mail] Notificação não enfileirada (base carregada normalmente):', e && e.message);
+    try{ toast('Aviso: não foi possível enfileirar a notificação de e-mail do PD.','am'); }catch(_){}
+  }
+}
+
 async function dbProc(file,id){
   const t0=Date.now();
   dbSt(id,'busy','Lendo...');dbProg(id,true);dbPct(id,10);
@@ -2213,6 +2418,12 @@ async function dbProc(file,id){
       }
     }
     atlasBroadcast(id, window.ATLAS_DATA[id]);
+    // ── [NOTIFICAÇÃO PD] Gatilho de e-mail (somente SZB). Fire-and-forget:
+    //    roda após a UI já estar concluída e NUNCA bloqueia/quebra o carregamento.
+    try{
+      atlasMaybeQueuePDEmailNotification({ id, payload: window.ATLAS_DATA[id], rows, fileName: file.name })
+        .catch(e=>console.warn('[Atlas PD-mail] erro assíncrono ignorado:', e && e.message));
+    }catch(e){ console.warn('[Atlas PD-mail] erro síncrono ignorado:', e && e.message); }
     dbPct(id,100);
     const sec=((Date.now()-t0)/1000).toFixed(1);
     dbSt(id,'ok',dbFmt(rows.length)+' reg.');
