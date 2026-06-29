@@ -514,6 +514,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       <button class="cfg-tab" id="cfg_tab_motoristas" type="button" onclick="openAdminSection('motoristas')">🪪 Motoristas</button>
       <button class="cfg-tab" id="cfg_tab_filiais" type="button" onclick="openAdminSection('filiais')">🏢 Filiais</button>
       <button class="cfg-tab" id="cfg_tab_centros_custo" type="button" onclick="openAdminSection('centros_custo')">💰 Centro de Custo</button>
+      <button class="cfg-tab" id="cfg_tab_notificacoes" type="button" onclick="openAdminSection('notificacoes')">🔔 Notificações</button>
       <button class="cfg-tab perm-tab" id="cfg_tab_permissoes" type="button" onclick="openAdminSection('permissoes')">🔒 Permissões</button>
     </div>
 
@@ -722,6 +723,78 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       </div>
     </section>
 
+    <!-- ══════════════════════════════════════════════════════════════════
+         NOTIFICAÇÕES POR E-MAIL
+         Configura eventos automáticos de e-mail do Atlas. O envio real NÃO é
+         feito por este HTML: ao disparar um evento, o Atlas apenas grava
+         documentos no Firestore (coleção email_queue) e a Firebase Extension
+         "Trigger Email" envia os e-mails no backend. Nenhuma credencial/SMTP
+         vive no front-end. Ver README_NOTIFICACOES_EMAIL.md.
+         ══════════════════════════════════════════════════════════════════ -->
+    <section class="cfg-section" id="cfg_sec_notificacoes">
+      <div class="cfg-note">
+        🔔 <strong>Notificações por e-mail.</strong> O Atlas grava os e-mails numa fila segura no Firestore
+        (<code>email_queue</code>) e a extensão <em>Firebase Trigger Email</em> faz o envio no backend.
+        Nenhuma senha, SMTP ou token fica neste site. Placeholders disponíveis nos textos:
+        <strong>{DATA_ANTERIOR}</strong> (dia do PD finalizado) e <strong>{DATA_ATUAL}</strong> (dia do carregamento).
+      </div>
+
+      <div class="card">
+        <div class="card-hdr">
+          <div class="card-ico" style="background:var(--blue-l);color:var(--blue)">📨</div>
+          <h2>Evento: PD Diário finalizado</h2>
+        </div>
+        <div class="card-body">
+          <input type="hidden" id="cfg_notif_evt_id" value="pd_diario_finalizado">
+          <div class="fr">
+            <div class="f" style="max-width:200px">
+              <label>Evento ativo</label>
+              <select id="cfg_notif_ativo">
+                <option value="true">Sim — disparar e-mail</option>
+                <option value="false">Não — desativado</option>
+              </select>
+            </div>
+            <div class="f">
+              <label>Canal</label>
+              <input id="cfg_notif_canal" value="email" disabled style="background:var(--gray-bg);color:var(--muted)">
+            </div>
+          </div>
+          <div class="fr">
+            <div class="f">
+              <label>Assunto do e-mail</label>
+              <input id="cfg_notif_assunto" placeholder="Atlas | PD Diário finalizado — {DATA_ANTERIOR}">
+            </div>
+          </div>
+          <div class="fr">
+            <div class="f">
+              <label>Template (texto do e-mail)</label>
+              <textarea id="cfg_notif_template" style="min-height:150px" placeholder="Olá,&#10;&#10;O PD Diário do dia {DATA_ANTERIOR} foi finalizado.&#10;&#10;..."></textarea>
+            </div>
+          </div>
+          <div class="cfg-actions">
+            <button class="cfg-save" type="button" onclick="cfgSaveEventoEmail()">Salvar evento</button>
+            <button class="cfg-clear" type="button" onclick="cfgRefreshNotificacoesEmail()">Recarregar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hdr">
+          <div class="card-ico" style="background:var(--green-l);color:var(--green)">👥</div>
+          <h2>Destinatários do evento</h2>
+        </div>
+        <div class="card-body">
+          <div class="fr" style="align-items:center;gap:10px">
+            <div class="f"><label>Pesquisar destinatário</label><input id="cfg_notif_search" placeholder="Nome, e-mail ou perfil" oninput="cfgRenderNotifDestinatarios()"></div>
+            <button class="cfg-small" type="button" onclick="cfgNotifSelectAll(true)" style="align-self:flex-end">Marcar todos</button>
+            <button class="cfg-small" type="button" onclick="cfgNotifSelectAll(false)" style="align-self:flex-end">Limpar</button>
+          </div>
+          <div class="cfg-item-sub" id="cfg_notif_count" style="margin:2px 0 10px">—</div>
+          <div class="cfg-list" id="cfg_notif_user_list"><div class="loading-state">Carregando destinatários...</div></div>
+        </div>
+      </div>
+    </section>
+
     <section class="cfg-section-perm" id="cfg_sec_permissoes">
       <iframe
         id="iframe_permissoes"
@@ -805,7 +878,9 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     }
   }
   function assertAllowedAdminCollection(collectionName) {
-    const allowed = ["usuarios", "veiculos", "motoristas", "filiais", "centros_custo"];
+    // notificacoes_eventos: configuração de eventos de e-mail do Atlas (somente admin).
+    // Adição aditiva — não altera as permissões das coleções já existentes.
+    const allowed = ["usuarios", "veiculos", "motoristas", "filiais", "centros_custo", "notificacoes_eventos"];
     if (!allowed.includes(collectionName)) {
       throw new Error("Coleção administrativa não permitida");
     }
@@ -1577,7 +1652,7 @@ window._appReady = async function(user, perfil) {
 ════════════════════════════════════════════════════ */
 let cfgCurrentSection = "usuarios";
 let cfgPaisInicializado = false;
-const cfgCache = { usuarios: [], veiculos: [], motoristas: [], filiais: [], centrosCusto: [] };
+const cfgCache = { usuarios: [], veiculos: [], motoristas: [], filiais: [], centrosCusto: [], notifEventoPD: null };
 
 function cfgIsAdmin() {
   return !!(window._FB && typeof window._FB.getCurrentPerfil === "function" && window._FB.getCurrentPerfil() === "admin");
@@ -1621,6 +1696,7 @@ async function cfgLoadSection(section) {
     }
     if (section === "filiais") await cfgRefreshFiliais();
     if (section === "centros_custo") { await cfgSeedCentrosCusto(); await cfgRefreshCentrosCusto(); }
+    if (section === "notificacoes") await cfgRefreshNotificacoesEmail();
     if (section === "permissoes") cfgLoadPermissoes();
   } catch (err) {
     showToast(err.message || "Erro ao carregar configurações.", "error");
@@ -1875,6 +1951,186 @@ async function cfgDeleteUsuario(id) {
     await cfgRefreshUsuarios();
   } catch (err) {
     showToast(err.message || "Erro ao excluir usuário.", "error");
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   NOTIFICAÇÕES POR E-MAIL — Evento "PD Diário finalizado"
+   ──────────────────────────────────────────────────────────────────────────
+   Esta tela apenas CONFIGURA o evento (assunto, template e destinatários) e
+   grava em notificacoes_eventos/pd_diario_finalizado. NÃO envia e-mail e NÃO
+   contém SMTP/senha/token. O disparo acontece no index.html (Download Base /
+   SZB) e o envio real é feito pela Firebase Extension "Trigger Email".
+   Reutiliza os helpers cfgList/cfgSave/cfgRequireAdmin/cfgCache/showToast.
+   ══════════════════════════════════════════════════════════════════════════ */
+const CFG_NOTIF_EVT_ID = "pd_diario_finalizado";
+const CFG_NOTIF_DEFAULTS = {
+  id: CFG_NOTIF_EVT_ID,
+  nome: "PD Diário finalizado",
+  canal: "email",
+  ativo: true,
+  assunto: "Atlas | PD Diário finalizado — {DATA_ANTERIOR}",
+  templateText: "Olá,\n\nO PD Diário do dia {DATA_ANTERIOR} foi finalizado.\n\nEste aviso foi gerado automaticamente após o primeiro carregamento de CTes/SZB do dia {DATA_ATUAL} no Atlas.\n\nAtlas — Comix Transportes"
+};
+
+/* Valida e-mail de forma simples (suficiente para a lista de destinatários). */
+function cfgIsEmailValido(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+}
+
+/* Lê o documento de configuração do evento. Usa o Firestore exposto por _FB. */
+async function cfgLoadEventoPD() {
+  try {
+    const db = (window._FB && typeof window._FB._db === "function") ? window._FB._db() : null;
+    if (!db) return null;
+    const snap = await db.collection("notificacoes_eventos").doc(CFG_NOTIF_EVT_ID).get();
+    return snap.exists ? { id: snap.id, ...snap.data() } : null;
+  } catch (e) {
+    console.warn("[cfg] cfgLoadEventoPD:", e && e.message);
+    return null;
+  }
+}
+
+/* Lista de usuários elegíveis a receber o evento:
+   - e-mail válido
+   - não bloqueados (bloqueado !== true e status !== "bloqueado")
+   - possuem nome ou e-mail para exibição                                    */
+function cfgBuildUsuariosEmailList() {
+  return (cfgCache.usuarios || []).filter(u => {
+    const bloqueado = u.bloqueado === true || u.status === "bloqueado";
+    if (bloqueado) return false;
+    const email = String(u.email || "").trim();
+    if (!cfgIsEmailValido(email)) return false;
+    if (!(u.nome || u.email)) return false;
+    return true;
+  });
+}
+
+/* Carrega usuários + configuração do evento e renderiza a tela. */
+async function cfgRefreshNotificacoesEmail() {
+  if (!cfgRequireAdmin()) return;
+  const list = document.getElementById("cfg_notif_user_list");
+  if (list) list.innerHTML = '<div class="loading-state">Carregando destinatários...</div>';
+  try {
+    cfgCache.usuarios = (await cfgList("usuarios")).map(cfgNormalizeUsuario).sort((a, b) => cfgSortByName(a, b, "email"));
+    cfgCache.notifEventoPD = await cfgLoadEventoPD();
+    cfgRenderNotificacoesEmail();
+  } catch (err) {
+    if (list) list.innerHTML = '<div class="cfg-empty">Erro ao carregar destinatários.</div>';
+    showToast(err.message || "Erro ao carregar notificações.", "error");
+  }
+}
+
+/* Preenche o formulário do evento e renderiza a lista de destinatários. */
+function cfgRenderNotificacoesEmail() {
+  const ev = cfgCache.notifEventoPD || CFG_NOTIF_DEFAULTS;
+  cfgSet("cfg_notif_ativo", (ev.ativo === false) ? "false" : "true");
+  cfgSet("cfg_notif_assunto", ev.assunto || CFG_NOTIF_DEFAULTS.assunto);
+  const ta = document.getElementById("cfg_notif_template");
+  if (ta) ta.value = ev.templateText || CFG_NOTIF_DEFAULTS.templateText;
+  cfgRenderNotifDestinatarios();
+}
+
+/* Renderiza a lista de checkboxes de destinatários (com filtro de pesquisa). */
+function cfgRenderNotifDestinatarios() {
+  const list = document.getElementById("cfg_notif_user_list");
+  if (!list) return;
+  const ev = cfgCache.notifEventoPD || {};
+  const selecionados = new Set((Array.isArray(ev.destinatarios) ? ev.destinatarios : []).map(String));
+  const elegiveis = cfgBuildUsuariosEmailList();
+
+  const countEl = document.getElementById("cfg_notif_count");
+  if (countEl) {
+    const marcados = elegiveis.filter(u => selecionados.has(String(u.id)) || (u.uid && selecionados.has(String(u.uid)))).length;
+    countEl.textContent = `${elegiveis.length} destinatário(s) elegível(is) · ${marcados} selecionado(s)`;
+  }
+
+  if (!elegiveis.length) {
+    list.innerHTML = '<div class="cfg-empty">Nenhum usuário elegível. Cadastre usuários com e-mail válido e não bloqueados na aba Usuários.</div>';
+    return;
+  }
+
+  const search = cfgNormalizeUserSearch(cfgVal("cfg_notif_search"));
+  const filtrados = search ? elegiveis.filter(u => cfgUserSearchText(u).includes(search)) : elegiveis;
+  if (!filtrados.length) {
+    list.innerHTML = '<div class="cfg-empty">Nenhum destinatário encontrado para a pesquisa.</div>';
+    return;
+  }
+
+  list.innerHTML = filtrados.map(u => {
+    const perfil = u.perfil || u.tipo || "motorista";
+    const checked = (selecionados.has(String(u.id)) || (u.uid && selecionados.has(String(u.uid)))) ? "checked" : "";
+    return `<label class="cfg-list-item" style="display:flex;gap:11px;align-items:center;cursor:pointer">
+      <input type="checkbox" class="cfg-notif-dest" value="${cfgEscape(u.id)}" data-uid="${cfgEscape(u.uid || u.id)}" ${checked} onchange="cfgUpdateNotifCount()" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--green)">
+      <div style="flex:1;min-width:0">
+        <div class="cfg-item-title">${cfgEscape(u.nome || u.email || u.id)}</div>
+        <div class="cfg-item-sub">${cfgEscape(u.email || "")}</div>
+        <span class="cfg-pill cfg-pill-admin">${cfgEscape(perfil)}</span>
+        <span class="cfg-pill cfg-pill-ok">Ativo</span>
+      </div>
+    </label>`;
+  }).join("");
+}
+
+/* Atualiza apenas o contador de selecionados (sem re-render da lista). */
+function cfgUpdateNotifCount() {
+  const countEl = document.getElementById("cfg_notif_count");
+  if (!countEl) return;
+  const elegiveis = cfgBuildUsuariosEmailList().length;
+  const marcados = document.querySelectorAll(".cfg-notif-dest:checked").length;
+  countEl.textContent = `${elegiveis} destinatário(s) elegível(is) · ${marcados} selecionado(s)`;
+}
+
+/* Marca/desmarca todos os destinatários visíveis. */
+function cfgNotifSelectAll(value) {
+  document.querySelectorAll(".cfg-notif-dest").forEach(cb => { cb.checked = !!value; });
+  cfgUpdateNotifCount();
+}
+
+/* Converte o template de texto em HTML simples preservando os placeholders.
+   Escapa caracteres especiais, transforma parágrafos/quebras de linha e
+   destaca {DATA_ANTERIOR} e {DATA_ATUAL} em negrito.                        */
+function cfgTextToHtmlTemplate(text) {
+  const esc = s => String(s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const paras = String(text || "").split(/\n{2,}/).map(block => {
+    const html = esc(block).replace(/\n/g, "<br>");
+    return `<p>${html}</p>`;
+  }).join("");
+  return paras.replace(/\{DATA_ANTERIOR\}/g, "<strong>{DATA_ANTERIOR}</strong>")
+              .replace(/\{DATA_ATUAL\}/g, "<strong>{DATA_ATUAL}</strong>");
+}
+
+/* Salva a configuração do evento em notificacoes_eventos/pd_diario_finalizado. */
+async function cfgSaveEventoEmail() {
+  if (!cfgRequireAdmin()) return;
+  const ativo = cfgVal("cfg_notif_ativo") === "true";
+  const assunto = cfgVal("cfg_notif_assunto") || CFG_NOTIF_DEFAULTS.assunto;
+  const templateText = (document.getElementById("cfg_notif_template")?.value ?? CFG_NOTIF_DEFAULTS.templateText).trim() || CFG_NOTIF_DEFAULTS.templateText;
+  const templateHtml = cfgTextToHtmlTemplate(templateText);
+
+  const destinatarios = [];
+  document.querySelectorAll(".cfg-notif-dest:checked").forEach(cb => destinatarios.push(cb.value));
+
+  const payload = {
+    id: CFG_NOTIF_EVT_ID,
+    nome: CFG_NOTIF_DEFAULTS.nome,
+    canal: "email",
+    ativo,
+    assunto,
+    templateText,
+    templateHtml,
+    destinatarios,
+    updatedBy: (window._FB && typeof window._FB.getCurrentUser === "function" && window._FB.getCurrentUser()?.email) || ""
+    /* updatedAt é adicionado automaticamente por adminSalvar */
+  };
+
+  try {
+    await cfgSave("notificacoes_eventos", CFG_NOTIF_EVT_ID, payload);
+    cfgCache.notifEventoPD = { ...payload };
+    showToast(`Evento salvo · ${destinatarios.length} destinatário(s).`, "success");
+    cfgUpdateNotifCount();
+  } catch (err) {
+    showToast(err.message || "Erro ao salvar evento de e-mail.", "error");
   }
 }
 
