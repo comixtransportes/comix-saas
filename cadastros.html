@@ -2050,7 +2050,7 @@ async function cfgDeleteUsuario(id) {
    O envio real continua sendo feito pela Firebase Extension "Trigger Email".
    ══════════════════════════════════════════════════════════════════════════ */
 const CFG_NOTIF_EVT_ID = "pd_diario_finalizado";
-const CFG_NOTIF_FROTA_SEM_CARGA_ID = "frota_sem_carregamento_5_dias";
+const CFG_NOTIF_FROTA_SEM_CARGA_LEGACY_ID = "frota_sem_carregamento_5_dias";
 const CFG_NOTIF_DEFAULTS = {
   id: CFG_NOTIF_EVT_ID,
   nome: "PD Diário finalizado",
@@ -2075,25 +2075,32 @@ Atlas — Comix Transportes`,
     chaveIdempotencia: "pd_diario_finalizado_data_atual"
   }
 };
-const CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS = {
-  id: CFG_NOTIF_FROTA_SEM_CARGA_ID,
-  nome: "Frota sem carregamento acima de 5 dias",
+const CFG_NOTIF_FROTA_SEM_CARGA_UNIDADES = [
+  { sigla: "SC", id: "frota_sem_carregamento_5_dias_sc", nome: "Frota sem carregamento acima de 5 dias — SC" },
+  { sigla: "PR", id: "frota_sem_carregamento_5_dias_pr", nome: "Frota sem carregamento acima de 5 dias — PR" },
+  { sigla: "SP", id: "frota_sem_carregamento_5_dias_sp", nome: "Frota sem carregamento acima de 5 dias — SP" }
+];
+
+const CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS = CFG_NOTIF_FROTA_SEM_CARGA_UNIDADES.map(item => ({
+  id: item.id,
+  nome: item.nome,
   canal: "email",
   ativo: true,
-  assunto: "Atlas | Frota sem carregamento — {UNIDADE}",
+  assunto: `Atlas | Frota sem carregamento — ${item.sigla}`,
   templateText: `Olá,
 
-Segue o acompanhamento das frotas da unidade {UNIDADE} que estão há mais de 5 dias sem carregamento registrado no Atlas.
+Segue o acompanhamento das frotas da unidade ${item.sigla} que estão há mais de 5 dias sem carregamento registrado no Atlas.
 
 {FROTAS_PLACAS}
 
-Este resumo é enviado somente após o primeiro carregamento de CTes/SZB do dia atual, limitado a um e-mail por unidade por dia enquanto houver frotas sem novo carregamento.
+Este resumo é enviado somente após o primeiro carregamento de CTes/SZB do dia atual, limitado a um e-mail por dia para a unidade ${item.sigla} enquanto houver frotas sem novo carregamento.
 
 Assim que uma frota voltar a carregar na SZB/CTe, ela deixa de constar nos próximos avisos automaticamente.
 
 Atlas — Comix Transportes`,
   destinatarios: [],
   tipoEvento: "frota_sem_carregamento",
+  unidade: item.sigla,
   regraDisparo: {
     fonte: "SZB/CTe",
     gatilho: "primeiro_carregamento_ctes_do_dia_atual",
@@ -2104,17 +2111,19 @@ Atlas — Comix Transportes`,
     operadorLimiteDiasSemCarregamento: ">",
     criterio: "dias_sem_carregamento_maior_que_5",
     agrupamento: "unidade",
-    unidades: ["SC", "PR", "SP"],
+    unidade: item.sigla,
+    unidades: [item.sigla],
     umEmailPorUnidade: true,
     consolidarFrotasPorUnidade: true,
     frequenciaMaxima: "1_email_por_dia_por_unidade",
-    chaveIdempotencia: "frota_sem_carregamento_unidade_data_atual",
+    chaveIdempotencia: `frota_sem_carregamento_${item.sigla.toLowerCase()}_data_atual`,
     repetirAteRegularizacao: true,
     regularizacao: "novo_carregamento_registrado",
     camposResumo: ["unidade", "frota", "placa", "diasSemCarregar", "ultimoCarregamento"]
   }
-};
-const CFG_NOTIF_EVENTOS_PADRAO = [CFG_NOTIF_DEFAULTS, CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS];
+}));
+
+const CFG_NOTIF_EVENTOS_PADRAO = [CFG_NOTIF_DEFAULTS, ...CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS];
 const CFG_NOTIF_PD_LEGACY_IDS = [
   "pd_diario_finalizado_pr",
   "pd_diario_finalizado_sc",
@@ -2291,6 +2300,16 @@ function cfgIsEventoPdLegado(ev) {
   return CFG_NOTIF_PD_LEGACY_IDS.includes(id) || CFG_NOTIF_PD_LEGACY_NOMES.includes(nome);
 }
 
+function cfgIsEventoFrotaSemCargaLegado(ev) {
+  const id = cfgNotifDocId(ev?.id || "");
+  const nome = cfgNormalizeNotifLookup(ev?.nome || "");
+  return id === CFG_NOTIF_FROTA_SEM_CARGA_LEGACY_ID || nome === "frota sem carregamento acima de 5 dias";
+}
+
+function cfgGetFrotaSemCargaDefaultById(id) {
+  return CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS.find(item => String(item.id) === String(id || ""));
+}
+
 function cfgMergeDestinatariosEventos(eventos) {
   return [...new Set((eventos || []).flatMap(ev => Array.isArray(ev?.destinatarios) ? ev.destinatarios : []).map(String).filter(Boolean))];
 }
@@ -2328,12 +2347,75 @@ async function cfgMigrarEventosPdLegados(eventos) {
   }
 }
 
+async function cfgMigrarEventoFrotaSemCargaPorUnidade(eventos) {
+  const lista = Array.isArray(eventos) ? eventos : [];
+  const legados = lista.filter(cfgIsEventoFrotaSemCargaLegado);
+  const restantes = lista.filter(ev => !cfgIsEventoFrotaSemCargaLegado(ev));
+  const destinatariosLegado = cfgMergeDestinatariosEventos(legados);
+  let alterou = false;
+
+  for (const padrao of CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS) {
+    const atual = restantes.find(ev => String(ev.id) === String(padrao.id));
+    const destinatariosAtuais = Array.isArray(atual?.destinatarios) ? atual.destinatarios.map(String).filter(Boolean) : [];
+    const payload = cfgNormalizeNotifEvento({
+      ...padrao,
+      ...(atual || {}),
+      id: padrao.id,
+      nome: (atual && atual.nome) || padrao.nome,
+      canal: "email",
+      destinatarios: destinatariosAtuais.length ? destinatariosAtuais : destinatariosLegado,
+      tipoEvento: padrao.tipoEvento,
+      unidade: padrao.unidade,
+      regraDisparo: { ...((atual && atual.regraDisparo) || {}), ...(padrao.regraDisparo || {}) }
+    });
+
+    const precisaCriar = !atual;
+    const precisaRegra = !atual || Object.keys(padrao.regraDisparo || {}).some(k => JSON.stringify(atual?.regraDisparo?.[k]) !== JSON.stringify(padrao.regraDisparo[k]));
+    const precisaTipo = !atual || atual.tipoEvento !== padrao.tipoEvento;
+    const precisaUnidade = !atual || atual.unidade !== padrao.unidade;
+
+    if (precisaCriar || precisaRegra || precisaTipo || precisaUnidade) {
+      try {
+        await cfgSave("notificacoes_eventos", padrao.id, payload);
+        alterou = true;
+      } catch (e) {
+        console.warn("[cfg] cfgMigrarEventoFrotaSemCargaPorUnidade:", e && e.message);
+      }
+    }
+  }
+
+  for (const ev of legados) {
+    if (!ev.id) continue;
+    try {
+      await cfgDelete("notificacoes_eventos", ev.id);
+      alterou = true;
+    } catch (e) {
+      console.warn("[cfg] cfgMigrarEventoFrotaSemCargaPorUnidade delete:", e && e.message);
+    }
+  }
+
+  if (!alterou) return restantes.filter(ev => !cfgIsEventoFrotaSemCargaLegado(ev));
+
+  try {
+    return (await cfgList("notificacoes_eventos"))
+      .map(cfgNormalizeNotifEvento)
+      .filter(ev => ev.excluido !== true && !cfgIsEventoPdLegado(ev) && !cfgIsEventoFrotaSemCargaLegado(ev));
+  } catch (e) {
+    console.warn("[cfg] cfgMigrarEventoFrotaSemCargaPorUnidade reload:", e && e.message);
+    return [
+      ...restantes.filter(ev => !cfgIsEventoFrotaSemCargaLegado(ev)),
+      ...CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS.map(cfgNormalizeNotifEvento)
+    ];
+  }
+}
+
+
 async function cfgSincronizarEventosObrigatorios(eventos, defaultsExcluidos, documentosOriginais = []) {
   let lista = Array.isArray(eventos) ? eventos.slice() : [];
   const originais = Array.isArray(documentosOriginais) ? documentosOriginais : [];
   let alterou = false;
 
-  for (const padrao of [CFG_NOTIF_DEFAULTS, CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS]) {
+  for (const padrao of CFG_NOTIF_EVENTOS_PADRAO) {
     if (defaultsExcluidos && defaultsExcluidos.has(String(padrao.id))) continue;
     const atual = lista.find(ev => ev.id === padrao.id);
     const original = originais.find(ev => String(ev?.id || "") === String(padrao.id));
@@ -2364,7 +2446,7 @@ async function cfgSincronizarEventosObrigatorios(eventos, defaultsExcluidos, doc
   if (!alterou) return lista;
   return (await cfgList("notificacoes_eventos"))
     .map(cfgNormalizeNotifEvento)
-    .filter(ev => ev.excluido !== true && !cfgIsEventoPdLegado(ev));
+    .filter(ev => ev.excluido !== true && !cfgIsEventoPdLegado(ev) && !cfgIsEventoFrotaSemCargaLegado(ev));
 }
 
 async function cfgLoadEventosNotificacoes() {
@@ -2380,6 +2462,7 @@ async function cfgLoadEventosNotificacoes() {
   const defaultsExcluidos = new Set(documentos.filter(ev => ev.excluido === true).map(ev => String(ev.id)));
   let eventos = documentos.filter(ev => ev.excluido !== true);
   eventos = await cfgMigrarEventosPdLegados(eventos);
+  eventos = await cfgMigrarEventoFrotaSemCargaPorUnidade(eventos);
   eventos = await cfgSincronizarEventosObrigatorios(eventos, defaultsExcluidos, documentosOriginais);
 
   CFG_NOTIF_EVENTOS_PADRAO.slice().reverse().forEach(padrao => {
@@ -2486,7 +2569,7 @@ function cfgNotifScrollableChipsForUsers(users) {
 function cfgRenderNotifEventosList() {
   const list = document.getElementById("cfg_notif_event_list");
   if (!list) return;
-  const eventos = (cfgCache.notifEventos || []).filter(ev => ev.excluido !== true && !cfgIsEventoPdLegado(ev));
+  const eventos = (cfgCache.notifEventos || []).filter(ev => ev.excluido !== true && !cfgIsEventoPdLegado(ev) && !cfgIsEventoFrotaSemCargaLegado(ev));
   if (!eventos.length) {
     list.innerHTML = '<div class="cfg-empty">Nenhum evento cadastrado.</div>';
     return;
@@ -2727,9 +2810,11 @@ async function cfgSaveEventoEmail() {
     payload.regraDisparo = { ...CFG_NOTIF_DEFAULTS.regraDisparo };
   }
 
-  if (id === CFG_NOTIF_FROTA_SEM_CARGA_ID) {
-    payload.tipoEvento = CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS.tipoEvento;
-    payload.regraDisparo = { ...CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS.regraDisparo };
+  const frotaSemCargaDefault = cfgGetFrotaSemCargaDefaultById(id);
+  if (frotaSemCargaDefault) {
+    payload.tipoEvento = frotaSemCargaDefault.tipoEvento;
+    payload.unidade = frotaSemCargaDefault.unidade;
+    payload.regraDisparo = { ...frotaSemCargaDefault.regraDisparo };
   }
 
   try {
