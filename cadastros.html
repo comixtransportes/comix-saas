@@ -485,6 +485,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 .cfg-notif-event{width:100%;background:#fff;border:1px solid var(--line);border-radius:16px;padding:12px;box-shadow:0 8px 22px rgba(15,59,104,.06)}
 .cfg-notif-event.active{border-color:var(--blue-b);box-shadow:0 0 0 2px rgba(21,85,143,.10),0 8px 22px rgba(15,59,104,.07)}
 .cfg-notif-event-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.cfg-notif-event-actions{display:flex;gap:6px;align-items:center;flex-shrink:0}
 .cfg-notif-event-name{font-size:13px;font-weight:900;color:var(--text);line-height:1.25}
 .cfg-notif-event-id{font-size:10px;color:var(--muted);font-family:var(--m,monospace);margin-top:2px;word-break:break-all}
 .cfg-notif-event-sub{font-size:11px;color:var(--muted);line-height:1.4;margin-top:7px}
@@ -805,11 +806,11 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
             <div class="fr">
               <div class="f w2">
                 <label>Nome do evento <span class="req">*</span></label>
-                <input id="cfg_notif_nome" placeholder="Ex.: PD Diário finalizado" oninput="cfgNotifMaybeSuggestKey()">
+                <input id="cfg_notif_nome" placeholder="Ex.: PD Diário finalizado — SC" oninput="cfgNotifMaybeSuggestKey()">
               </div>
               <div class="f">
                 <label>Chave do evento</label>
-                <input id="cfg_notif_evt_key" placeholder="pd_diario_finalizado" oninput="cfgNotifSlugInput(this)">
+                <input id="cfg_notif_evt_key" placeholder="pd_diario_finalizado_sc" oninput="cfgNotifSlugInput(this)">
               </div>
             </div>
             <div class="fr">
@@ -828,7 +829,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
             <div class="fr">
               <div class="f">
                 <label>Assunto do e-mail</label>
-                <input id="cfg_notif_assunto" placeholder="Atlas | PD Diário finalizado — {DATA_ANTERIOR}">
+                <input id="cfg_notif_assunto" placeholder="Atlas | PD Diário finalizado — SC — {DATA_ATUAL}">
               </div>
             </div>
             <div class="fr">
@@ -2049,17 +2050,39 @@ async function cfgDeleteUsuario(id) {
    grava em notificacoes_eventos. NÃO envia e-mail e NÃO contém SMTP/senha/token.
    O envio real continua sendo feito pela Firebase Extension "Trigger Email".
    ══════════════════════════════════════════════════════════════════════════ */
-const CFG_NOTIF_EVT_ID = "pd_diario_finalizado";
+const CFG_NOTIF_EVT_ID = "pd_diario_finalizado_sc";
+const CFG_NOTIF_LEGACY_PD_ID = "pd_diario_finalizado";
 const CFG_NOTIF_FROTA_SEM_CARGA_ID = "frota_sem_carregamento_5_dias";
-const CFG_NOTIF_DEFAULTS = {
-  id: CFG_NOTIF_EVT_ID,
-  nome: "PD Diário finalizado",
-  canal: "email",
-  ativo: true,
-  assunto: "Atlas | PD Diário finalizado — {DATA_ANTERIOR}",
-  templateText: "Olá,\n\nO PD Diário do dia {DATA_ANTERIOR} foi finalizado.\n\nEste aviso foi gerado automaticamente após o primeiro carregamento de CTes/SZB do dia {DATA_ATUAL} no Atlas.\n\nAtlas — Comix Transportes",
-  destinatarios: []
-};
+const CFG_NOTIF_PD_UNIDADES = ["SC", "PR", "SP"];
+const CFG_NOTIF_EVT_IDS_PD_UNIDADE = CFG_NOTIF_PD_UNIDADES.map(un => `pd_diario_finalizado_${un.toLowerCase()}`);
+
+function cfgBuildPDUnidadeDefault(unidade) {
+  const un = String(unidade || "").toUpperCase();
+  const id = `pd_diario_finalizado_${un.toLowerCase()}`;
+  return {
+    id,
+    nome: `PD Diário finalizado — ${un}`,
+    canal: "email",
+    ativo: true,
+    unidade: un,
+    assunto: `Atlas | PD Diário finalizado — ${un} — {DATA_ATUAL}`,
+    templateText: `Olá,\n\nO PD Diário do dia {DATA_ANTERIOR} da unidade ${un} foi finalizado.\n\nEste aviso foi gerado automaticamente após o primeiro carregamento de dados/CTes/SZB do dia {DATA_ATUAL} no Atlas para a unidade ${un}.\n\nAtlas — Comix Transportes`,
+    destinatarios: [],
+    tipoEvento: "pd_diario_finalizado_unidade",
+    regraDisparo: {
+      fonte: "SZB/CTe",
+      unidade: un,
+      agrupamento: "unidade",
+      momento: "apos_primeiro_carregamento_dados_dia_atual",
+      frequenciaMaxima: "1_email_por_dia_por_unidade",
+      consideraData: "DATA_ATUAL",
+      descricao: `Enviar após o primeiro carregamento de dados do dia atual para a unidade ${un}.`
+    }
+  };
+}
+
+const CFG_NOTIF_PD_UNIDADES_DEFAULTS = CFG_NOTIF_PD_UNIDADES.map(cfgBuildPDUnidadeDefault);
+const CFG_NOTIF_DEFAULTS = CFG_NOTIF_PD_UNIDADES_DEFAULTS[0];
 const CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS = {
   id: CFG_NOTIF_FROTA_SEM_CARGA_ID,
   nome: "Frota sem carregamento acima de 5 dias",
@@ -2081,7 +2104,7 @@ const CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS = {
     camposResumo: ["unidade", "frota", "placa", "diasSemCarregar", "ultimoCarregamento"]
   }
 };
-const CFG_NOTIF_EVENTOS_PADRAO = [CFG_NOTIF_DEFAULTS, CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS];
+const CFG_NOTIF_EVENTOS_PADRAO = [...CFG_NOTIF_PD_UNIDADES_DEFAULTS, CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS];
 
 /* Valida e-mail de forma simples (suficiente para a lista de destinatários). */
 function cfgIsEmailValido(email) {
@@ -2129,7 +2152,8 @@ function cfgNormalizeNotifEvento(ev) {
     assunto: String(base.assunto || (isNewBlank ? "" : (padrao.assunto || ""))).trim(),
     templateText: String(base.templateText || (isNewBlank ? "" : (padrao.templateText || ""))),
     templateHtml: String(base.templateHtml || ""),
-    destinatarios: Array.isArray(base.destinatarios) ? base.destinatarios.map(String) : []
+    destinatarios: Array.isArray(base.destinatarios) ? base.destinatarios.map(String) : [],
+    deleted: base.deleted === true
   };
 }
 
@@ -2233,16 +2257,31 @@ async function cfgLoadEventosNotificacoes() {
   } catch(e) {
     console.warn("[cfg] cfgLoadEventosNotificacoes:", e && e.message);
   }
+
+  const legadoPD = eventos.find(ev => ev.id === CFG_NOTIF_LEGACY_PD_ID && ev.deleted !== true);
+  const idsRemovidos = new Set(eventos.filter(ev => ev.deleted === true).map(ev => String(ev.id)));
+  eventos = eventos.filter(ev => ev.deleted !== true && ev.id !== CFG_NOTIF_LEGACY_PD_ID);
+
   CFG_NOTIF_EVENTOS_PADRAO.slice().reverse().forEach(padrao => {
-    if (!eventos.some(ev => ev.id === padrao.id)) eventos.unshift(cfgNormalizeNotifEvento(padrao));
+    if (idsRemovidos.has(String(padrao.id))) return;
+    if (!eventos.some(ev => ev.id === padrao.id)) {
+      let basePadrao = padrao;
+      if (legadoPD && CFG_NOTIF_EVT_IDS_PD_UNIDADE.includes(String(padrao.id))) {
+        basePadrao = {
+          ...padrao,
+          ativo: legadoPD.ativo === false ? false : padrao.ativo,
+          destinatarios: Array.isArray(legadoPD.destinatarios) ? legadoPD.destinatarios.map(String) : []
+        };
+      }
+      eventos.unshift(cfgNormalizeNotifEvento(basePadrao));
+    }
   });
   return eventos.sort((a, b) => cfgSortByName(a, b, "nome"));
 }
-
 async function cfgLoadEventoPD() {
   try {
     const eventos = await cfgLoadEventosNotificacoes();
-    return eventos.find(ev => ev.id === CFG_NOTIF_EVT_ID) || cfgNormalizeNotifEvento(CFG_NOTIF_DEFAULTS);
+    return eventos.find(ev => CFG_NOTIF_EVT_IDS_PD_UNIDADE.includes(String(ev.id))) || cfgNormalizeNotifEvento(CFG_NOTIF_DEFAULTS);
   } catch(e) {
     console.warn("[cfg] cfgLoadEventoPD:", e && e.message);
     return cfgNormalizeNotifEvento(CFG_NOTIF_DEFAULTS);
@@ -2259,7 +2298,7 @@ async function cfgRefreshNotificacoesEmail() {
   try {
     cfgCache.usuarios = (await cfgList("usuarios")).map(cfgNormalizeUsuario).sort((a, b) => cfgSortByName(a, b, "email"));
     cfgCache.notifEventos = await cfgLoadEventosNotificacoes();
-    cfgCache.notifEventoPD = cfgCache.notifEventos.find(ev => ev.id === CFG_NOTIF_EVT_ID) || cfgNormalizeNotifEvento(CFG_NOTIF_DEFAULTS);
+    cfgCache.notifEventoPD = cfgCache.notifEventos.find(ev => CFG_NOTIF_EVT_IDS_PD_UNIDADE.includes(String(ev.id))) || cfgNormalizeNotifEvento(CFG_NOTIF_DEFAULTS);
     if (!cfgCache.notifEventoAtual) {
       cfgCache.notifEventoAtual = cfgNormalizeNotifEvento({
         id: "",
@@ -2350,7 +2389,10 @@ function cfgRenderNotifEventosList() {
           <div class="cfg-notif-event-name">${cfgEscape(ev.nome || ev.id)}</div>
           <div class="cfg-notif-event-id">${cfgEscape(ev.id)}</div>
         </div>
-        <button class="cfg-small" type="button" onclick="cfgEditEventoNotificacao(decodeURIComponent('${cfgCode(ev.id)}'))">Editar</button>
+        <div class="cfg-notif-event-actions">
+          <button class="cfg-small" type="button" onclick="cfgEditEventoNotificacao(decodeURIComponent('${cfgCode(ev.id)}'))">Editar</button>
+          <button class="cfg-small cfg-danger" type="button" onclick="cfgDeleteEventoNotificacao(decodeURIComponent('${cfgCode(ev.id)}'))">Excluir</button>
+        </div>
       </div>
       <div class="cfg-notif-event-sub">${status} <span class="cfg-pill cfg-pill-admin">${users.length} usuário(s)</span></div>
       <div class="cfg-notif-event-sub">${cfgEscape(ev.assunto || "Sem assunto")}</div>
@@ -2378,6 +2420,47 @@ function cfgEditEventoNotificacao(id) {
   cfgCache.notifEventoAtual = cfgNormalizeNotifEvento(ev || CFG_NOTIF_DEFAULTS);
   cfgRenderNotificacoesEmail();
   document.getElementById("cfg_sec_notificacoes")?.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function cfgDeleteEventoNotificacao(id) {
+  if (!cfgRequireAdmin()) return;
+  const ev = (cfgCache.notifEventos || []).find(x => String(x.id) === String(id));
+  const nome = ev?.nome || id;
+  if (!id) return;
+  if (!confirm(`Excluir o evento "${nome}"?`)) return;
+  try {
+    const isPadrao = CFG_NOTIF_EVENTOS_PADRAO.some(padrao => String(padrao.id) === String(id));
+    if (isPadrao) {
+      await cfgSave("notificacoes_eventos", id, {
+        id,
+        nome,
+        canal: "email",
+        ativo: false,
+        deleted: true,
+        destinatarios: [],
+        updatedBy: (window._FB && typeof window._FB.getCurrentUser === "function" && window._FB.getCurrentUser()?.email) || ""
+      });
+    } else {
+      await cfgDelete("notificacoes_eventos", id);
+    }
+    cfgCache.notifEventos = await cfgLoadEventosNotificacoes();
+    if (cfgGetEventoAtual().id === id) {
+      cfgCache.notifEventoAtual = {
+        id: "",
+        nome: "",
+        canal: "email",
+        ativo: true,
+        assunto: "",
+        templateText: "",
+        templateHtml: "",
+        destinatarios: []
+      };
+    }
+    cfgRenderNotificacoesEmail();
+    showToast("Evento excluído.", "success");
+  } catch (err) {
+    showToast(err.message || "Erro ao excluir evento.", "error");
+  }
 }
 
 function cfgNovoEventoNotificacao() {
@@ -2518,9 +2601,17 @@ async function cfgSaveEventoEmail() {
     templateText,
     templateHtml,
     destinatarios,
+    deleted: false,
     updatedBy: (window._FB && typeof window._FB.getCurrentUser === "function" && window._FB.getCurrentUser()?.email) || ""
     /* updatedAt é adicionado automaticamente por adminSalvar */
   };
+
+  const pdUnidadePadrao = CFG_NOTIF_EVENTOS_PADRAO.find(item => String(item.id) === String(id) && item.tipoEvento === "pd_diario_finalizado_unidade");
+  if (pdUnidadePadrao) {
+    payload.tipoEvento = "pd_diario_finalizado_unidade";
+    payload.unidade = pdUnidadePadrao.unidade;
+    payload.regraDisparo = { ...pdUnidadePadrao.regraDisparo };
+  }
 
   if (id === CFG_NOTIF_FROTA_SEM_CARGA_ID) {
     payload.tipoEvento = "frota_sem_carregamento";
@@ -2540,7 +2631,7 @@ async function cfgSaveEventoEmail() {
   try {
     await cfgSave("notificacoes_eventos", id, payload);
     cfgCache.notifEventoAtual = cfgNormalizeNotifEvento(payload);
-    cfgCache.notifEventoPD = id === CFG_NOTIF_EVT_ID ? cfgCache.notifEventoAtual : cfgCache.notifEventoPD;
+    cfgCache.notifEventoPD = CFG_NOTIF_EVT_IDS_PD_UNIDADE.includes(id) ? cfgCache.notifEventoAtual : cfgCache.notifEventoPD;
     cfgCache.notifEventos = await cfgLoadEventosNotificacoes();
     cfgRenderNotificacoesEmail();
     showToast(`Evento salvo · ${destinatarios.length} destinatário(s).`, "success");
