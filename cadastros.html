@@ -786,7 +786,9 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         🔔 <strong>Notificações por e-mail.</strong> O Atlas grava os e-mails numa fila segura no Firestore
         (<code>email_queue</code>) e a extensão <em>Firebase Trigger Email</em> faz o envio no backend.
         Nenhuma senha, SMTP ou token fica neste site. Placeholders disponíveis nos textos:
-        <strong>{DATA_ANTERIOR}</strong> (dia do PD finalizado) e <strong>{DATA_ATUAL}</strong> (dia do carregamento).
+        <strong>{DATA_ANTERIOR}</strong>, <strong>{DATA_ATUAL}</strong>, <strong>{UNIDADE}</strong>,
+        <strong>{FROTAS_PLACAS}</strong>, <strong>{FROTA}</strong>, <strong>{PLACA}</strong>,
+        <strong>{DIAS_SEM_CARREGAR}</strong> e <strong>{ULTIMO_CARREGAMENTO}</strong>.
       </div>
 
       <div class="cfg-notif-layout">
@@ -2048,6 +2050,7 @@ async function cfgDeleteUsuario(id) {
    O envio real continua sendo feito pela Firebase Extension "Trigger Email".
    ══════════════════════════════════════════════════════════════════════════ */
 const CFG_NOTIF_EVT_ID = "pd_diario_finalizado";
+const CFG_NOTIF_FROTA_SEM_CARGA_ID = "frota_sem_carregamento_5_dias";
 const CFG_NOTIF_DEFAULTS = {
   id: CFG_NOTIF_EVT_ID,
   nome: "PD Diário finalizado",
@@ -2057,6 +2060,28 @@ const CFG_NOTIF_DEFAULTS = {
   templateText: "Olá,\n\nO PD Diário do dia {DATA_ANTERIOR} foi finalizado.\n\nEste aviso foi gerado automaticamente após o primeiro carregamento de CTes/SZB do dia {DATA_ATUAL} no Atlas.\n\nAtlas — Comix Transportes",
   destinatarios: []
 };
+const CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS = {
+  id: CFG_NOTIF_FROTA_SEM_CARGA_ID,
+  nome: "Frota sem carregamento acima de 5 dias",
+  canal: "email",
+  ativo: true,
+  assunto: "Atlas | Frota sem carregamento — {UNIDADE}",
+  templateText: "Olá,\n\nSegue o acompanhamento das frotas da unidade {UNIDADE} que estão há mais de 5 dias sem carregamento registrado no Atlas.\n\n{FROTAS_PLACAS}\n\nEste resumo é enviado no máximo uma vez por dia para a unidade, enquanto houver veículos pendentes de novo carregamento.\n\nAssim que uma frota voltar a carregar na SZB/CTe, ela deixa de constar nos próximos avisos automaticamente.\n\nAtlas — Comix Transportes",
+  destinatarios: [],
+  tipoEvento: "frota_sem_carregamento",
+  regraDisparo: {
+    fonte: "SZB/CTe",
+    escopoVeiculos: "FROTA",
+    limiteDiasSemCarregamento: 5,
+    agrupamento: "unidade",
+    consolidarFrotasPorUnidade: true,
+    frequenciaMaxima: "1_email_por_dia_por_unidade",
+    repetirAteRegularizacao: true,
+    regularizacao: "novo_carregamento_registrado",
+    camposResumo: ["unidade", "frota", "placa", "diasSemCarregar", "ultimoCarregamento"]
+  }
+};
+const CFG_NOTIF_EVENTOS_PADRAO = [CFG_NOTIF_DEFAULTS, CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS];
 
 /* Valida e-mail de forma simples (suficiente para a lista de destinatários). */
 function cfgIsEmailValido(email) {
@@ -2088,20 +2113,28 @@ function cfgNotifMaybeSuggestKey() {
 }
 
 function cfgNormalizeNotifEvento(ev) {
-  const base = { ...CFG_NOTIF_DEFAULTS, ...(ev || {}) };
-  const hasExplicitId = !!(ev && Object.prototype.hasOwnProperty.call(ev, "id"));
-  const id = String(hasExplicitId ? (ev.id || "") : (base.id || CFG_NOTIF_EVT_ID));
+  const raw = ev || {};
+  const hasExplicitId = Object.prototype.hasOwnProperty.call(raw, "id");
+  const idRaw = hasExplicitId ? raw.id : CFG_NOTIF_EVT_ID;
+  const padrao = CFG_NOTIF_EVENTOS_PADRAO.find(item => String(item.id) === String(idRaw || "")) || CFG_NOTIF_DEFAULTS;
+  const base = { ...padrao, ...raw };
+  const id = String(hasExplicitId ? (raw.id || "") : (base.id || CFG_NOTIF_EVT_ID));
+  const isNewBlank = hasExplicitId && !id;
   return {
     ...base,
     id,
-    nome: String(base.nome || id || CFG_NOTIF_DEFAULTS.nome).trim(),
+    nome: String(base.nome || (isNewBlank ? "" : (id || padrao.nome || ""))).trim(),
     canal: "email",
     ativo: base.ativo === false ? false : true,
-    assunto: String(base.assunto || CFG_NOTIF_DEFAULTS.assunto).trim(),
-    templateText: String(base.templateText || CFG_NOTIF_DEFAULTS.templateText),
+    assunto: String(base.assunto || (isNewBlank ? "" : (padrao.assunto || ""))).trim(),
+    templateText: String(base.templateText || (isNewBlank ? "" : (padrao.templateText || ""))),
     templateHtml: String(base.templateHtml || ""),
     destinatarios: Array.isArray(base.destinatarios) ? base.destinatarios.map(String) : []
   };
+}
+
+function cfgHighlightNotifPlaceholders(html) {
+  return String(html || "").replace(/\{(DATA_ANTERIOR|DATA_ATUAL|UNIDADE|FROTAS_PLACAS|FROTA|PLACA|DIAS_SEM_CARREGAR|ULTIMO_CARREGAMENTO)\}/g, "<strong>{$1}</strong>");
 }
 
 function cfgTextToHtmlTemplate(text) {
@@ -2110,8 +2143,7 @@ function cfgTextToHtmlTemplate(text) {
     const html = esc(block).replace(/\n/g, "<br>");
     return `<p>${html}</p>`;
   }).join("");
-  return paras.replace(/\{DATA_ANTERIOR\}/g, "<strong>{DATA_ANTERIOR}</strong>")
-              .replace(/\{DATA_ATUAL\}/g, "<strong>{DATA_ATUAL}</strong>");
+  return cfgHighlightNotifPlaceholders(paras);
 }
 
 function cfgSanitizeRichHtml(raw) {
@@ -2137,9 +2169,7 @@ function cfgSanitizeRichHtml(raw) {
       if (!/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) el.removeAttribute("href");
     }
   });
-  return box.innerHTML
-    .replace(/\{DATA_ANTERIOR\}/g, "<strong>{DATA_ANTERIOR}</strong>")
-    .replace(/\{DATA_ATUAL\}/g, "<strong>{DATA_ATUAL}</strong>");
+  return cfgHighlightNotifPlaceholders(box.innerHTML);
 }
 
 function cfgNotifGetTemplateText() {
@@ -2157,7 +2187,7 @@ function cfgNotifGetTemplateHtml() {
 function cfgNotifSetEditor(templateText, templateHtml) {
   const editor = document.getElementById("cfg_notif_editor");
   const ta = document.getElementById("cfg_notif_template");
-  const text = templateText || CFG_NOTIF_DEFAULTS.templateText;
+  const text = templateText == null ? CFG_NOTIF_DEFAULTS.templateText : String(templateText);
   if (ta) ta.value = text;
   if (editor) editor.innerHTML = templateHtml ? cfgSanitizeRichHtml(templateHtml) : cfgTextToHtmlTemplate(text);
 }
@@ -2203,7 +2233,9 @@ async function cfgLoadEventosNotificacoes() {
   } catch(e) {
     console.warn("[cfg] cfgLoadEventosNotificacoes:", e && e.message);
   }
-  if (!eventos.some(ev => ev.id === CFG_NOTIF_EVT_ID)) eventos.unshift(cfgNormalizeNotifEvento(CFG_NOTIF_DEFAULTS));
+  CFG_NOTIF_EVENTOS_PADRAO.slice().reverse().forEach(padrao => {
+    if (!eventos.some(ev => ev.id === padrao.id)) eventos.unshift(cfgNormalizeNotifEvento(padrao));
+  });
   return eventos.sort((a, b) => cfgSortByName(a, b, "nome"));
 }
 
@@ -2349,7 +2381,7 @@ function cfgEditEventoNotificacao(id) {
 }
 
 function cfgNovoEventoNotificacao() {
-  cfgCache.notifEventoAtual = cfgNormalizeNotifEvento({
+  cfgCache.notifEventoAtual = {
     id: "",
     nome: "",
     canal: "email",
@@ -2358,8 +2390,14 @@ function cfgNovoEventoNotificacao() {
     templateText: "",
     templateHtml: "",
     destinatarios: []
-  });
+  };
   cfgRenderNotificacoesEmail();
+  ["cfg_notif_evt_id", "cfg_notif_evt_key", "cfg_notif_nome", "cfg_notif_assunto", "cfg_notif_template"].forEach(id => cfgSet(id, ""));
+  const editor = document.getElementById("cfg_notif_editor");
+  if (editor) editor.innerHTML = "";
+  cfgSet("cfg_notif_ativo", "true");
+  cfgRenderNotifDestinatarios();
+  cfgRenderNotifEventosList();
   const nome = document.getElementById("cfg_notif_nome");
   if (nome) nome.focus();
 }
@@ -2483,6 +2521,21 @@ async function cfgSaveEventoEmail() {
     updatedBy: (window._FB && typeof window._FB.getCurrentUser === "function" && window._FB.getCurrentUser()?.email) || ""
     /* updatedAt é adicionado automaticamente por adminSalvar */
   };
+
+  if (id === CFG_NOTIF_FROTA_SEM_CARGA_ID) {
+    payload.tipoEvento = "frota_sem_carregamento";
+    payload.regraDisparo = {
+      fonte: "SZB/CTe",
+      escopoVeiculos: "FROTA",
+      limiteDiasSemCarregamento: 5,
+      agrupamento: "unidade",
+      consolidarFrotasPorUnidade: true,
+      frequenciaMaxima: "1_email_por_dia_por_unidade",
+      repetirAteRegularizacao: true,
+      regularizacao: "novo_carregamento_registrado",
+      camposResumo: ["unidade", "frota", "placa", "diasSemCarregar", "ultimoCarregamento"]
+    };
+  }
 
   try {
     await cfgSave("notificacoes_eventos", id, payload);
