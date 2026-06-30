@@ -203,6 +203,25 @@ select option{color:var(--black)}
 .ent-item{background:var(--bg);border:1px solid var(--gray-l);border-radius:var(--r-sm);padding:11px;margin-bottom:8px;position:relative}
 .ent-num{font-size:10px;font-weight:800;color:var(--gray);text-transform:uppercase;letter-spacing:.6px;margin-bottom:9px}
 .ent-remove{position:absolute;top:9px;right:9px;background:none;border:none;font-size:20px;color:var(--gray);cursor:pointer;padding:2px 5px}
+
+/* Relação SZB de CTRCs para baixa de canhoto */
+.ent-szb-rel{margin-top:10px;background:var(--white);border:1px solid var(--gray-l);border-radius:var(--r);overflow:hidden}
+.ent-szb-rel-hd{padding:10px 12px;border-bottom:1px solid var(--gray-ll);display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ent-szb-rel-title{font-size:11px;font-weight:800;color:var(--black);text-transform:uppercase;letter-spacing:.35px}
+.ent-szb-rel-count{font-size:10px;font-weight:800;color:var(--blue);background:var(--blue-l);border:1px solid var(--blue-b);border-radius:999px;padding:2px 7px;white-space:nowrap}
+.ent-szb-head,.ent-szb-row{display:grid;grid-template-columns:24px 72px 68px minmax(110px,1fr) 76px;gap:6px;align-items:center}
+.ent-szb-head{padding:7px 10px;background:var(--gray-bg);border-bottom:1px solid var(--gray-ll);font-size:8px;font-weight:800;color:var(--gray);text-transform:uppercase;letter-spacing:.3px}
+.ent-szb-list{max-height:270px;overflow:auto}
+.ent-szb-row{padding:8px 10px;border-bottom:1px solid var(--gray-ll);font-size:10px;color:var(--black)}
+.ent-szb-row:last-child{border-bottom:none}
+.ent-szb-row.ok{background:var(--green-l)}
+.ent-szb-check{width:18px;height:18px;border-radius:50%;border:1.6px solid var(--gray-l);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:var(--white);background:var(--white)}
+.ent-szb-row.ok .ent-szb-check{background:var(--green);border-color:var(--green)}
+.ent-szb-ctrc{font-family:'IBM Plex Mono',monospace;font-weight:800;color:var(--blue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ent-szb-client{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--gray);font-weight:650}
+.ent-szb-baixa{font-size:9px;font-weight:800;color:var(--amber-d);white-space:nowrap}
+.ent-szb-row.ok .ent-szb-baixa{color:var(--green)}
+.ent-szb-empty{padding:18px 12px;text-align:center;font-size:11px;font-weight:700;color:var(--gray);line-height:1.4}
 /* ═══ FOTO CANHOTO ═══ */
 .foto-label{font-size:10px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:4px}
 .foto-zone{border:1.5px dashed var(--gray-l);border-radius:var(--r-sm);overflow:hidden;background:var(--white);transition:border-color .15s}
@@ -587,7 +606,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       <div class="card-body">
         <div class="fr"><div class="f w2">
           <label>Nome completo <span class="req">*</span></label>
-          <select id="f_motorista"><option value="">Selecione...</option><option value="ALDEVACIR FABIO LIMA DE FREITAS">ALDEVACIR FABIO LIMA DE FREITAS</option></select>
+          <select id="f_motorista" onchange="renderEntregasSZBRelation()"><option value="">Selecione...</option><option value="ALDEVACIR FABIO LIMA DE FREITAS">ALDEVACIR FABIO LIMA DE FREITAS</option></select>
           <span class="err-msg" id="err_motorista">Nome obrigatório</span>
         </div></div>
         <div class="fr">
@@ -1522,6 +1541,7 @@ function ingestAtlasSZBPayload(payload) {
     destinatarios: atlasUniqueSorted(rows.map(r => atlasGetRowValue(r, ["Destinatário", "Destinatario", "Nome Destina", "Nome Destinatário", "Nome Destinatario"] )))
   };
   populateAtlasSZBDatalists();
+  setTimeout(renderEntregasSZBRelation, 0);
 }
 async function atlasLoadSZBFromFirestore() {
   if (atlasSZBState.loaded || atlasSZBState.loadingCloud) return;
@@ -1920,7 +1940,7 @@ function buildModules() {
     requestAtlasSZBData();
     populateAtlasSZBDatalists();
   });
-  if(selectedMods.includes("entregas"))setTimeout(()=>addEntrega(),60);
+  if(selectedMods.includes("entregas"))setTimeout(()=>{ addEntrega(); renderEntregasSZBRelation(); },60);
 }
 
 function setActiveMod(i) {
@@ -2005,7 +2025,232 @@ function buildDiesel(){return`
     </div>
   </div></div>`;}
 
-function buildEntregas(){return`<datalist id="szb_destinatarios_entregas"></datalist><div id="entregas_body"></div><button class="add-ent-btn" onclick="addEntrega()">+ Adicionar descarga</button>`;}
+function buildEntregas(){return`<datalist id="szb_destinatarios_entregas"></datalist><div id="entregas_body"></div><button class="add-ent-btn" onclick="addEntrega()">+ Adicionar descarga</button><div class="ent-szb-rel" id="ent_szb_rel"><div class="ent-szb-empty">Carregando relação de CTRCs...</div></div>`;}
+
+
+/* ═══ RELAÇÃO SZB — ENTREGAS & CANHOTOS ═══ */
+const ENTREGAS_SIZB_CORTE = "2026-06-25";
+const entregasSZBState = window.entregasSZBState || (window.entregasSZBState = { rows: [], loaded: false, loading: false });
+
+function entNormKey(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .toLowerCase();
+}
+function entText(value) {
+  return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+}
+function entUpperKey(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleUpperCase("pt-BR");
+}
+function entEsc(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+function entGet(row, aliases, fallbackRe) {
+  const wanted = (aliases || []).map(entNormKey);
+  const keys = Object.keys(row || {});
+  for (const key of keys) {
+    if (wanted.includes(entNormKey(key))) return row[key];
+  }
+  if (fallbackRe) {
+    for (const key of keys) {
+      const nk = entNormKey(key);
+      if (fallbackRe.test(nk)) return row[key];
+    }
+  }
+  return "";
+}
+function entParseDate(value) {
+  if (value == null || value === "") return "";
+  if (typeof value === "number" && isFinite(value)) {
+    const dt = new Date(Math.round((value - 25569) * 86400 * 1000));
+    return isNaN(dt) ? "" : dt.toISOString().slice(0, 10);
+  }
+  if (value && typeof value.toDate === "function") {
+    const dt = value.toDate();
+    return isNaN(dt) ? "" : dt.toISOString().slice(0, 10);
+  }
+  const s = entText(value);
+  if (!s) return "";
+  let m = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if (m) return `${m[1]}-${String(m[2]).padStart(2,"0")}-${String(m[3]).padStart(2,"0")}`;
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+  if (m) {
+    const y = m[3].length === 2 ? "20" + m[3] : m[3];
+    return `${y}-${String(m[2]).padStart(2,"0")}-${String(m[1]).padStart(2,"0")}`;
+  }
+  const dt = new Date(s);
+  return isNaN(dt) ? "" : dt.toISOString().slice(0, 10);
+}
+function entFmtDate(iso) {
+  if (!iso) return "—";
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : iso;
+}
+function entTodayISO() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+function entNormCTRC(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toLocaleUpperCase("pt-BR");
+}
+function entPersonMatch(a, b) {
+  const x = entUpperKey(a), y = entUpperKey(b);
+  if (!x || !y) return false;
+  return x === y || x.includes(y) || y.includes(x);
+}
+function entUnitKey(value) {
+  const v = entUpperKey(value);
+  if (!v) return "";
+  if (v === "03" || v.includes("SAO PAULO") || v === "SP") return "SP";
+  if (v === "17" || v.includes("FLORIANOPOLIS") || v === "SC") return "SC";
+  if (v === "18" || v.includes("CURITIBA") || v === "PR") return "PR";
+  return v;
+}
+function entRowToRecord(row) {
+  const dt = entParseDate(entGet(row, ["Dt. Emissao", "Dt Emissao", "Data Emissao", "Data de Emissao", "Emissao"]));
+  if (!dt || dt < ENTREGAS_SIZB_CORTE) return null;
+  const cancel = entParseDate(entGet(row, ["Dt Cancel", "Data Cancel", "Data Cancelamento", "Dt. Cancelamento", "Cancelamento"]));
+  if (cancel) return null;
+  const ctrc = entText(entGet(row, [
+    "Numero CTRC", "Número CTRC", "Num CTRC", "Nº CTRC", "No CTRC", "Nr CTRC", "Nro CTRC", "CTRC", "CTR-C",
+    "Conhecimento", "Nº Conhecimento", "Nr Conhecimento", "Numero Conhecimento", "Número Conhecimento",
+    "Numero CTE", "Número CTE", "Num CTE", "Nº CTE", "CTE", "CT-e", "Chave CTE",
+    "Doc. Fiscal", "Documento", "Nº Documento", "Numero Documento", "Num Docto", "Nro Docto", "Docto", "Nota Fiscal"
+  ], /ctrc|cte|conhec|documento|docto|docfiscal/));
+  const key = entNormCTRC(ctrc);
+  if (!key) return null;
+  return {
+    dtEmissao: dt,
+    ctrc,
+    ctrcKey: key,
+    cliente: entText(entGet(row, ["Cliente", "Nome Destina", "Nome Destinatario", "Nome Destinatário", "Destinatário", "Destinatario", "Nome Cli Dev", "Nome Remeten", "Remetente"])),
+    motorista: entText(entGet(row, ["Nome Motoris", "Nome Motorista", "Motorista", "Condutor"])),
+    placa: entText(entGet(row, ["Placa Veicul", "Placa Veiculo", "Placa Veículo", "Placa", "Veiculo", "Veículo"])),
+    filial: entText(entGet(row, ["Filial", "Operacao", "Operação", "Unidade"])),
+  };
+}
+async function loadEntregasSZBFromFirestore() {
+  if (entregasSZBState.loaded || entregasSZBState.loading) return entregasSZBState.rows;
+  entregasSZBState.loading = true;
+  try {
+    try {
+      const p = window.parent && window.parent !== window ? window.parent : null;
+      const payload = p && p.ATLAS_DATA && p.ATLAS_DATA.szb;
+      if (payload && Array.isArray(payload.rows) && payload.rows.length) {
+        entregasSZBState.rows = payload.rows;
+        entregasSZBState.loaded = true;
+        return entregasSZBState.rows;
+      }
+    } catch (_) {}
+    if (!window._FB || typeof window._FB._db !== "function") return [];
+    const db = window._FB._db();
+    const metaRef = db.collection("bases_szb").doc("meta");
+    const metaSnap = await metaRef.get();
+    if (!metaSnap.exists) return [];
+    const meta = metaSnap.data() || {};
+    const rows = [];
+    const n = Number(meta.numChunks || 0);
+    if (n > 0) {
+      const BATCH = 20;
+      for (let start = 0; start < n; start += BATCH) {
+        const end = Math.min(start + BATCH, n);
+        const snaps = await Promise.all(Array.from({ length: end - start }, (_, j) => metaRef.collection("chunks").doc(String(start + j)).get()));
+        snaps.forEach(s => { const data = s.exists ? (s.data() || {}) : {}; if (Array.isArray(data.rows)) rows.push(...data.rows); });
+      }
+    } else if (Array.isArray(meta.rows)) {
+      rows.push(...meta.rows);
+    }
+    entregasSZBState.rows = rows;
+    entregasSZBState.loaded = true;
+    return rows;
+  } catch (err) {
+    console.warn("Não foi possível carregar a relação SZB de entregas.", err);
+    return [];
+  } finally {
+    entregasSZBState.loading = false;
+  }
+}
+function getEntregasSZBRecords() {
+  const seen = new Set();
+  return (entregasSZBState.rows || [])
+    .map(entRowToRecord)
+    .filter(Boolean)
+    .filter(r => {
+      if (seen.has(r.ctrcKey)) return false;
+      seen.add(r.ctrcKey);
+      return true;
+    })
+    .sort((a,b) => String(b.dtEmissao).localeCompare(String(a.dtEmissao)) || String(a.ctrc).localeCompare(String(b.ctrc)));
+}
+function findEntregasSZBRecordByCTRC(ctrc, motorista) {
+  const key = entNormCTRC(ctrc);
+  if (!key) return null;
+  const rows = getEntregasSZBRecords().filter(r => r.ctrcKey === key);
+  if (!rows.length) return null;
+  const byDriver = rows.find(r => !motorista || entPersonMatch(r.motorista, motorista));
+  return byDriver || rows[0];
+}
+function currentEntregaBaixas() {
+  const baixas = new Map();
+  for (let i = 0; i < entCount; i++) {
+    if (!document.getElementById("ent_" + i)) continue;
+    const key = entNormCTRC(g("e" + i + "_ctrc"));
+    if (!key || !entregaFotos[i]) continue;
+    baixas.set(key, entTodayISO());
+  }
+  return baixas;
+}
+window.renderEntregasSZBRelation = async function() {
+  const box = document.getElementById("ent_szb_rel");
+  if (!box) return;
+  const motorista = (document.getElementById("f_motorista") || {}).value || "";
+  if (!motorista) {
+    box.innerHTML = '<div class="ent-szb-empty">Selecione o motorista para listar os CTRCs emitidos a partir de 25/06/2026.</div>';
+    return;
+  }
+  if (!entregasSZBState.loaded) {
+    box.innerHTML = '<div class="ent-szb-empty">Carregando CTRCs da SZB...</div>';
+    await loadEntregasSZBFromFirestore();
+  }
+  const baixas = currentEntregaBaixas();
+  const rows = getEntregasSZBRecords().filter(r => entPersonMatch(r.motorista, motorista));
+  if (!rows.length) {
+    box.innerHTML = '<div class="ent-szb-empty">Nenhuma CTRC encontrada para este motorista a partir de 25/06/2026.</div>';
+    return;
+  }
+  const okCount = rows.reduce((a,r) => a + (baixas.has(r.ctrcKey) ? 1 : 0), 0);
+  box.innerHTML = `
+    <div class="ent-szb-rel-hd"><div class="ent-szb-rel-title">CTRCs emitidos na SZB</div><div class="ent-szb-rel-count">${okCount}/${rows.length} OK</div></div>
+    <div class="ent-szb-head"><span></span><span>Dt emissão</span><span>CTRC</span><span>Cliente</span><span>Dt baixa</span></div>
+    <div class="ent-szb-list">
+      ${rows.slice(0, 180).map(r => {
+        const baixa = baixas.get(r.ctrcKey) || "";
+        return `<div class="ent-szb-row ${baixa ? "ok" : ""}">
+          <span class="ent-szb-check">${baixa ? "✓" : ""}</span>
+          <span>${entFmtDate(r.dtEmissao)}</span>
+          <span class="ent-szb-ctrc" title="${entEsc(r.ctrc)}">${entEsc(r.ctrc)}</span>
+          <span class="ent-szb-client" title="${entEsc(r.cliente || "—")}">${entEsc(r.cliente || "—")}</span>
+          <span class="ent-szb-baixa">${baixa ? entFmtDate(baixa) : "Pendente"}</span>
+        </div>`;
+      }).join("")}
+    </div>`;
+};
 
 /* ═══ CALCS ═══ */
 window.limitHodometro = function(input) {
@@ -2067,7 +2312,7 @@ window.addEntrega = function() {
         <select id="e${idx}_sigla" onchange="autoFillUnidade(${idx})"><option value="">Selecione...</option></select>
       </div>
       <div class="f w2"><label>CTRC / NF / MANIFESTO CARGA <span class="req">*</span></label>
-        <input type="text" id="e${idx}_ctrc" placeholder="Nº documento">
+        <input type="text" id="e${idx}_ctrc" placeholder="Nº documento" oninput="renderEntregasSZBRelation()">
       </div>
     </div>
     <div class="fr"><div class="f w2"><label>Unidade Recebedora <span class="req">*</span></label>
@@ -2104,6 +2349,7 @@ window.addEntrega = function() {
   populateSiglaUnidadeSelect("e" + idx + "_sigla");
   requestAtlasSZBData();
   populateAtlasSZBDatalists();
+  setTimeout(renderEntregasSZBRelation, 0);
 };
 
 window.removeEntrega = function(idx) {
@@ -2147,6 +2393,7 @@ window.anexarFotoCanhoto = function(idx, input) {
     document.getElementById("foto_obrig_"+idx).style.display = "none";
     document.getElementById("foto_zone_"+idx).classList.remove("error");
     showToast("Foto selecionada — será enviada ao salvar","success");
+    renderEntregasSZBRelation();
   };
   reader.readAsDataURL(file);
 };
@@ -2159,6 +2406,7 @@ window.removerFoto = function(idx) {
   document.getElementById("foto_zone_"+idx).classList.remove("filled");
   const input = document.getElementById("foto_input_"+idx);
   if (input) input.value = "";
+  renderEntregasSZBRelation();
 };
 
 /* ── validarEntregaComFoto: checa se todas entregas ativas têm foto */
@@ -2269,6 +2517,9 @@ function collectAll() {
     ents.push({
       sigla:g("e"+i+"_sigla"),ctrc:g("e"+i+"_ctrc"),
       filial:g("e"+i+"_filial"),data:g("e"+i+"_data"),rec:g("e"+i+"_rec"),
+      dt_emissao:(findEntregasSZBRecordByCTRC(g("e"+i+"_ctrc"), g("f_motorista"))||{}).dtEmissao||"",
+      cliente_szb:(findEntregasSZBRecordByCTRC(g("e"+i+"_ctrc"), g("f_motorista"))||{}).cliente||"",
+      dt_baixa: foto.file ? entTodayISO() : "",
       // canhoto_url e filename são preenchidos em buildAndSave após upload
       canhoto_url:      "",
       canhoto_filename: foto.fileName||"",
@@ -2304,6 +2555,7 @@ async function buildAndSave() {
           ent.canhoto_url      = url;
           ent.canhoto_filename = filename;
           ent.tem_canhoto      = true;
+          ent.dt_baixa       = ent.dt_baixa || entTodayISO();
         }
         // Remove campo auxiliar antes de salvar
         delete ent._localFotoIdx;
