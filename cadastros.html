@@ -2093,19 +2093,31 @@ Segue o acompanhamento das frotas da unidade ${item.sigla} que estão há mais d
 
 {FROTAS_PLACAS}
 
-Este resumo é enviado somente após o primeiro carregamento de CTes/SZB do dia atual, limitado a um e-mail por dia para a unidade ${item.sigla} enquanto houver frotas sem novo carregamento.
+Este resumo é enviado após a primeira emissão/carregamento de CTe do dia atual, pois esse movimento confirma o fechamento operacional do dia anterior. O envio fica limitado a um e-mail por dia para a unidade ${item.sigla}, enquanto houver frotas sem novo carregamento.
 
 Assim que uma frota voltar a carregar na SZB/CTe, ela deixa de constar nos próximos avisos automaticamente.
 
 Atlas — Comix Transportes`,
   destinatarios: [],
-  tipoEvento: "frota_sem_carregamento",
+  /* Usa o mesmo start do PD Diário finalizado. O processamento continua identificado
+     abaixo como frota_sem_carregamento para montar o resumo de veículos por unidade. */
+  tipoEvento: CFG_NOTIF_EVT_ID,
+  subtipoEvento: "frota_sem_carregamento",
+  categoriaEvento: "frota_sem_carregamento",
+  tipoProcessamento: "frota_sem_carregamento",
   unidade: item.sigla,
   regraDisparo: {
     fonte: "SZB/CTe",
     gatilho: "primeiro_carregamento_ctes_do_dia_atual",
+    startEvento: CFG_NOTIF_EVT_ID,
+    eventoStart: CFG_NOTIF_EVT_ID,
+    eventoDisparador: CFG_NOTIF_EVT_ID,
     executarAposPrimeiroCarregamentoDiaAtual: true,
+    enviarAoDetectarCteDiaAtual: true,
     dataReferencia: "dia_atual",
+    dataApuracao: "dia_anterior",
+    processarComo: "frota_sem_carregamento",
+    tipoProcessamento: "frota_sem_carregamento",
     escopoVeiculos: "FROTA",
     limiteDiasSemCarregamento: 5,
     operadorLimiteDiasSemCarregamento: ">",
@@ -2365,6 +2377,9 @@ async function cfgMigrarEventoFrotaSemCargaPorUnidade(eventos) {
       canal: "email",
       destinatarios: destinatariosAtuais.length ? destinatariosAtuais : destinatariosLegado,
       tipoEvento: padrao.tipoEvento,
+      subtipoEvento: padrao.subtipoEvento,
+      categoriaEvento: padrao.categoriaEvento,
+      tipoProcessamento: padrao.tipoProcessamento,
       unidade: padrao.unidade,
       regraDisparo: { ...((atual && atual.regraDisparo) || {}), ...(padrao.regraDisparo || {}) }
     });
@@ -2372,9 +2387,10 @@ async function cfgMigrarEventoFrotaSemCargaPorUnidade(eventos) {
     const precisaCriar = !atual;
     const precisaRegra = !atual || Object.keys(padrao.regraDisparo || {}).some(k => JSON.stringify(atual?.regraDisparo?.[k]) !== JSON.stringify(padrao.regraDisparo[k]));
     const precisaTipo = !atual || atual.tipoEvento !== padrao.tipoEvento;
+    const precisaSubtipo = !atual || atual.subtipoEvento !== padrao.subtipoEvento || atual.tipoProcessamento !== padrao.tipoProcessamento;
     const precisaUnidade = !atual || atual.unidade !== padrao.unidade;
 
-    if (precisaCriar || precisaRegra || precisaTipo || precisaUnidade) {
+    if (precisaCriar || precisaRegra || precisaTipo || precisaSubtipo || precisaUnidade) {
       try {
         await cfgSave("notificacoes_eventos", padrao.id, payload);
         alterou = true;
@@ -2813,6 +2829,9 @@ async function cfgSaveEventoEmail() {
   const frotaSemCargaDefault = cfgGetFrotaSemCargaDefaultById(id);
   if (frotaSemCargaDefault) {
     payload.tipoEvento = frotaSemCargaDefault.tipoEvento;
+    payload.subtipoEvento = frotaSemCargaDefault.subtipoEvento;
+    payload.categoriaEvento = frotaSemCargaDefault.categoriaEvento;
+    payload.tipoProcessamento = frotaSemCargaDefault.tipoProcessamento;
     payload.unidade = frotaSemCargaDefault.unidade;
     payload.regraDisparo = { ...frotaSemCargaDefault.regraDisparo };
   }
