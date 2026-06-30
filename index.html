@@ -2210,6 +2210,328 @@ function atlasIsValidEmail(email){
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email||'').trim());
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   HELPERS FROTA SEM CARREGAMENTO — usar no index.html
+   ══════════════════════════════════════════════════════════════════════════ */
+const ATLAS_NOTIF_FROTA_SEM_CARGA_EVENTOS = [
+  { unidade: 'SP', eventId: 'frota_sem_carregamento_5_dias_sp' },
+  { unidade: 'SC', eventId: 'frota_sem_carregamento_5_dias_sc' },
+  { unidade: 'PR', eventId: 'frota_sem_carregamento_5_dias_pr' }
+];
+
+function atlasEscapeHtml(v){
+  return String(v == null ? '' : v)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function atlasNormUpper(v){
+  return String(v == null ? '' : v)
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+}
+
+function atlasOnlyDigits(v){
+  return String(v == null ? '' : v).replace(/\D+/g, '');
+}
+
+function atlasPickValue(row, keys){
+  if (!row) return '';
+  for (const k of keys){
+    if (Object.prototype.hasOwnProperty.call(row, k)){
+      const val = row[k];
+      if (val !== null && val !== undefined && String(val).trim() !== '') return val;
+    }
+  }
+  const wanted = keys.map(atlasNormUpper);
+  for (const realKey of Object.keys(row || {})){
+    const nk = atlasNormUpper(realKey).replace(/[^A-Z0-9]/g, '');
+    if (wanted.some(w => nk === w.replace(/[^A-Z0-9]/g, ''))){
+      const val = row[realKey];
+      if (val !== null && val !== undefined && String(val).trim() !== '') return val;
+    }
+  }
+  return '';
+}
+
+function atlasResolveUnidadeFromRow(row){
+  const candidates = [
+    atlasPickValue(row, ['Unidade','UNIDADE','Filial','FILIAL','Operacao','Operação','OP','Centro de Custo','Centro Custo','CUSTO','CC']),
+    row && row['0'], row && row['1'], row && row['2']
+  ].map(atlasNormUpper).filter(Boolean);
+
+  for (const s of candidates){
+    if (/(^|\W)(SC|SANTA CATARINA)(\W|$)/.test(s)) return 'SC';
+    if (/(^|\W)(PR|PARANA|PARANÁ)(\W|$)/.test(s)) return 'PR';
+    if (/(^|\W)(SP|SAO PAULO|SÃO PAULO)(\W|$)/.test(s)) return 'SP';
+
+    const dig = atlasOnlyDigits(s);
+    if (dig === '17') return 'SC';
+    if (dig === '18') return 'PR';
+    if (dig === '3' || dig === '03') return 'SP';
+  }
+  return '';
+}
+
+function atlasResolvePlacaFrotaFromRow(row){
+  let placa = atlasPickValue(row, [
+    'Placa','PLACA','Placa Cavalo','Cavalo','CAVALO','Placa Veiculo','Placa Veículo',
+    'Veiculo','Veículo','VEICULO','VEÍCULO','Placa Tracao','Placa Tração','Tracao','Tração'
+  ]);
+  let frota = atlasPickValue(row, [
+    'Frota','FROTA','Nr Frota','Nº Frota','Numero Frota','Número Frota','Codigo Frota','Código Frota',
+    'Cod Frota','Cód Frota','Frota Cavalo','Frota/Código','Frota Codigo','Frota Código'
+  ]);
+
+  placa = atlasNormUpper(placa).replace(/[^A-Z0-9]/g, '');
+  frota = atlasNormUpper(frota).replace(/\s+/g, ' ').trim();
+
+  // Fallback: procura uma placa padrão Mercosul/antiga em qualquer célula da linha.
+  if (!placa){
+    for (const val of Object.values(row || {})){
+      const txt = atlasNormUpper(val).replace(/[^A-Z0-9]/g, '');
+      const m = txt.match(/[A-Z]{3}[0-9][A-Z0-9][0-9]{2}/);
+      if (m){ placa = m[0]; break; }
+    }
+  }
+
+  return { placa, frota };
+}
+
+function atlasDiffDaysISO(inicioISO, fimISO){
+  if (!inicioISO || !fimISO) return 0;
+  const a = new Date(inicioISO + 'T00:00:00');
+  const b = new Date(fimISO + 'T00:00:00');
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
+  return Math.floor((b.getTime() - a.getTime()) / 86400000);
+}
+
+function atlasBuildFrotaSemCarregamento(rows, unidade, hojeISO, limiteDias){
+  const mapa = new Map();
+  const limite = Number.isFinite(Number(limiteDias)) ? Number(limiteDias) : 5;
+
+  (rows || []).forEach(row => {
+    if (!row) return;
+    const dataISO = atlasNormalizeDateISO(
+      atlasPickValue(row, ['Dt. Emissao','Dt Emissao','DT EMISSAO','Data Emissao','Data Emissão','Emissao','Emissão','Data'])
+    );
+    if (!dataISO || dataISO > hojeISO) return;
+
+    const un = atlasResolveUnidadeFromRow(row);
+    if (un && un !== unidade) return;
+
+    const vf = atlasResolvePlacaFrotaFromRow(row);
+    const chave = vf.frota || vf.placa;
+    if (!chave) return;
+
+    const atual = mapa.get(chave);
+    if (!atual || dataISO > atual.ultimoCarregamentoISO){
+      mapa.set(chave, {
+        unidade,
+        frota: vf.frota || '',
+        placa: vf.placa || '',
+        ultimoCarregamentoISO: dataISO
+      });
+    }
+  });
+
+  return Array.from(mapa.values())
+    .map(item => ({
+      ...item,
+      diasSemCarregar: atlasDiffDaysISO(item.ultimoCarregamentoISO, hojeISO),
+      ultimoCarregamentoBR: atlasFormatDateBR(item.ultimoCarregamentoISO)
+    }))
+    .filter(item => item.diasSemCarregar > limite)
+    .sort((a,b) => (b.diasSemCarregar - a.diasSemCarregar) || String(a.frota || a.placa).localeCompare(String(b.frota || b.placa), 'pt-BR'));
+}
+
+function atlasFrotaResumoText(itens){
+  if (!itens || !itens.length) return 'Nenhuma frota acima do limite configurado.';
+  return itens.map(item => {
+    const id = [item.frota, item.placa].filter(Boolean).join(' / ') || '-';
+    return `- ${id} — ${item.diasSemCarregar} dias sem carregamento; último carregamento em ${item.ultimoCarregamentoBR || '-'}.`;
+  }).join('\n');
+}
+
+function atlasFrotaResumoHtml(itens){
+  if (!itens || !itens.length) return '<p>Nenhuma frota acima do limite configurado.</p>';
+  const rows = itens.map(item => `
+    <tr>
+      <td style="padding:6px 8px;border:1px solid #dbe4ef;">${atlasEscapeHtml(item.frota || '-')}</td>
+      <td style="padding:6px 8px;border:1px solid #dbe4ef;">${atlasEscapeHtml(item.placa || '-')}</td>
+      <td style="padding:6px 8px;border:1px solid #dbe4ef;text-align:right;">${atlasEscapeHtml(item.diasSemCarregar)}</td>
+      <td style="padding:6px 8px;border:1px solid #dbe4ef;">${atlasEscapeHtml(item.ultimoCarregamentoBR || '-')}</td>
+    </tr>`).join('');
+  return `
+    <table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:13px;">
+      <thead>
+        <tr>
+          <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:left;">Frota</th>
+          <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:left;">Placa</th>
+          <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:right;">Dias</th>
+          <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:left;">Último carregamento</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function atlasResolveNotifRecipients(destUids){
+  const ids = Array.isArray(destUids) ? destUids.map(String) : [];
+  if (!ids.length) return [];
+
+  const destSet = new Set(ids);
+  const usnap = await db.collection('usuarios').get();
+  const recipients = [];
+  usnap.forEach(doc => {
+    const u = doc.data() || {};
+    const match = destSet.has(String(doc.id)) || (u.uid && destSet.has(String(u.uid)));
+    if (!match) return;
+    if (u.bloqueado === true || u.status === 'bloqueado') return;
+    const email = String(u.email || '').trim();
+    if (!atlasIsValidEmail(email)) return;
+    recipients.push({ uid: doc.id, nome: u.nome || u.email || doc.id, email });
+  });
+  return recipients;
+}
+
+async function atlasQueueFrotaSemCarregamentoEvento({ eventId, unidade, ev, itens, hojeISO, rowsToday, payload, fileName }){
+  const destUids = Array.isArray(ev.destinatarios) ? ev.destinatarios : [];
+  const recipients = await atlasResolveNotifRecipients(destUids);
+  if (!recipients.length){
+    console.log(`[Atlas Frota-mail] ${eventId} sem destinatários válidos.`);
+    return;
+  }
+
+  const ontemISO = atlasOntemISO();
+  const varsText = {
+    UNIDADE: unidade,
+    DATA_ATUAL: atlasFormatDateBR(hojeISO),
+    DATA_ANTERIOR: atlasFormatDateBR(ontemISO),
+    QTDE_FROTAS: String(itens.length),
+    FROTAS_PLACAS: atlasFrotaResumoText(itens)
+  };
+  const varsHtml = {
+    ...varsText,
+    FROTAS_PLACAS: atlasFrotaResumoHtml(itens),
+    FROTAS_PLACAS_HTML: atlasFrotaResumoHtml(itens)
+  };
+
+  const subjectTpl = ev.assunto || `Atlas | Frota sem carregamento — ${unidade}`;
+  const textTpl = ev.templateText || `Olá,\n\nSegue o acompanhamento das frotas da unidade ${unidade} que estão há mais de 5 dias sem carregamento registrado no Atlas.\n\n{FROTAS_PLACAS}\n\nAtlas — Comix Transportes`;
+  const htmlTpl = ev.templateHtml || `<p>Olá,</p><p>Segue o acompanhamento das frotas da unidade <strong>{UNIDADE}</strong> que estão há mais de 5 dias sem carregamento registrado no Atlas.</p>{FROTAS_PLACAS}<p>Atlas — Comix Transportes</p>`;
+
+  const subject = atlasApplyTemplate(subjectTpl, varsText);
+  const text = atlasApplyTemplate(textTpl, varsText);
+  const html = atlasApplyTemplate(htmlTpl, varsHtml);
+
+  const lockId = `${eventId}_${hojeISO}`;
+  const lockRef = db.collection(ATLAS_NOTIF_DISPAROS).doc(lockId);
+  const created = await db.runTransaction(async tx => {
+    const snap = await tx.get(lockRef);
+    if (snap.exists) return false;
+    tx.set(lockRef, {
+      eventId,
+      canal: 'email',
+      tipoEvento: ev.tipoEvento || 'frota_sem_carregamento',
+      unidade,
+      diaDisparo: hojeISO,
+      dataReferencia: hojeISO,
+      dataApuracao: ontemISO,
+      status: 'queued',
+      qtdeFrotas: itens.length,
+      rowsToday,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      createdBy: curUser.email || '',
+      source: 'download-base-szb',
+      file: fileName || (payload && payload.file) || 'SZB.xlsm'
+    });
+    return true;
+  });
+
+  if (!created){
+    console.log(`[Atlas Frota-mail] Lock ${lockId} já existe — duplicado ignorado.`);
+    return;
+  }
+
+  try {
+    const batch = db.batch();
+    recipients.forEach(rcp => {
+      const ref = db.collection(ATLAS_EMAIL_QUEUE).doc();
+      batch.set(ref, {
+        to: [rcp.email],
+        message: { subject, text, html },
+        metadata: {
+          eventId,
+          eventName: ev.nome || `Frota sem carregamento acima de 5 dias — ${unidade}`,
+          tipoProcessamento: 'frota_sem_carregamento',
+          lockId,
+          unidade,
+          qtdeFrotas: itens.length,
+          recipientUid: rcp.uid,
+          recipientName: rcp.nome,
+          recipientEmail: rcp.email,
+          source: 'download-base-szb',
+          baseFile: fileName || '',
+          baseTs: (payload && payload.ts) || '',
+          createdBy: curUser.email || ''
+        },
+        createdAt: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+    await batch.commit();
+    await lockRef.set({ status: 'queued', recipients: recipients.length, queuedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    console.log(`[Atlas Frota-mail] ${eventId}: ${recipients.length} e-mail(s), ${itens.length} frota(s), lock ${lockId}.`);
+  } catch (err) {
+    console.error('[Atlas Frota-mail] Falha ao enfileirar e-mails:', err && err.message);
+    try { await lockRef.set({ status: 'error', error: String(err && err.message || err) }, { merge: true }); } catch(_){ }
+  }
+}
+
+async function atlasMaybeQueueFrotaSemCarregamentoNotifications({ rows, payload, fileName, hojeISO, rowsToday }){
+  if (!db || !curUser) return;
+  if (!Array.isArray(rows) || !rows.length) return;
+
+  for (const cfg of ATLAS_NOTIF_FROTA_SEM_CARGA_EVENTOS){
+    const snap = await db.collection(ATLAS_NOTIF_EVENTOS).doc(cfg.eventId).get();
+    if (!snap.exists){
+      console.log(`[Atlas Frota-mail] Evento ${cfg.eventId} não configurado em Cadastros.`);
+      continue;
+    }
+
+    const ev = snap.data() || {};
+    if (ev.ativo === false){
+      console.log(`[Atlas Frota-mail] Evento ${cfg.eventId} inativo.`);
+      continue;
+    }
+
+    const unidade = atlasNormUpper(ev.unidade || (ev.regraDisparo && ev.regraDisparo.unidade) || cfg.unidade);
+    const limite = Number(ev.regraDisparo && ev.regraDisparo.limiteDiasSemCarregamento) || 5;
+    const itens = atlasBuildFrotaSemCarregamento(rows, unidade, hojeISO, limite);
+
+    if (!itens.length){
+      console.log(`[Atlas Frota-mail] ${cfg.eventId}: nenhuma frota da unidade ${unidade} acima de ${limite} dias.`);
+      continue;
+    }
+
+    await atlasQueueFrotaSemCarregamentoEvento({
+      eventId: cfg.eventId,
+      unidade,
+      ev,
+      itens,
+      hojeISO,
+      rowsToday,
+      payload,
+      fileName
+    });
+  }
+}
+
 /* Função principal do gatilho. Recebe a base recém-carregada do Download Base.
    Só age para SZB; conta CTes com Dt. Emissao = hoje; lê e valida o evento;
    resolve destinatários; cria o lock diário em transação e enfileira os e-mails. */
@@ -2229,6 +2551,14 @@ async function atlasMaybeQueuePDEmailNotification({ id, payload, rows, fileName 
     if (rowsToday === 0){
       console.log('[Atlas PD-mail] Sem CT-e com Dt. Emissao = hoje — evento não disparado.');
       return;
+    }
+
+    // Mesmo start do PD Diário: a primeira emissão/carregamento de CTe do dia atual
+    // também processa os alertas de frota sem carregamento por unidade.
+    try {
+      await atlasMaybeQueueFrotaSemCarregamentoNotifications({ rows, payload, fileName, hojeISO, rowsToday });
+    } catch (frotaErr) {
+      console.warn('[Atlas Frota-mail] erro ignorado:', frotaErr && frotaErr.message);
     }
 
     // (5)(6) Lê o evento. Inexistente ou inativo → não dispara.
@@ -2418,7 +2748,7 @@ async function dbProc(file,id){
       }
     }
     atlasBroadcast(id, window.ATLAS_DATA[id]);
-    // ── [NOTIFICAÇÃO PD] Gatilho de e-mail (somente SZB). Fire-and-forget:
+    // ── [NOTIFICAÇÃO PD/FROTA] Gatilho de e-mail (somente SZB). Fire-and-forget:
     //    roda após a UI já estar concluída e NUNCA bloqueia/quebra o carregamento.
     try{
       atlasMaybeQueuePDEmailNotification({ id, payload: window.ATLAS_DATA[id], rows, fileName: file.name })
