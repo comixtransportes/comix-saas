@@ -1094,7 +1094,7 @@ function restoreScope(b){
   ST.lancManuais = _clone(b.lancManuais||[]);
   ST.lancOS      = _clone(b.lancOS||[]);
   ST.premissa    = _clone(b.premissa);
-  if(b.pedagioMes===ST.mesRef){ ST.pedagio=_clone(b.pedagio); ST.pedagioMes=b.pedagioMes; }
+  if(b.pedagioMes===ST.mesRef){ ST.pedagio=_clone(b.pedagio); ST.pedagioMes=b.pedagioMes; ST._pedagioDoCache=true; }
   ST._byFilial   = b.byFilial? _clone(b.byFilial) : null;
 }
 /* Sequência única de render — usada tanto na pintura do cache quanto na revalidação. */
@@ -2286,7 +2286,7 @@ async function processarPedagios(){
     const resRows=parsePedagioResumo(PED.res);
     const data=await computePedagio(fatRows, resRows);
     data.arquivos={ fatura:PED.fatName, resumo:PED.resName };
-    ST.pedagio=data; ST.pedagioMes=ST.mesRef;
+    ST.pedagio=data; ST.pedagioMes=ST.mesRef; ST._pedagioDoCache=false;
     renderPedagios(); renderDre(); renderLancCards();
     document.getElementById('pedBtnSave').disabled = !pedPodeImportar();
     toast(`Pedágios processados: ${data.placas.length} placas · custo Comix ${moeda(data.totalComix)}.`,'gn');
@@ -2313,11 +2313,15 @@ async function loadPedagios(){
     const c=PED.cache[mesAtual]||{};
     PED.fat=c.fat||null; PED.res=c.res||null; PED.fatName=c.fatName||''; PED.resName=c.resName||''; PED.mesRef=mesAtual;
   }
-  if(ST.pedagioMes===mesAtual && ST.pedagio){ syncPedTabUI(); renderPedagios(); return; }
+  // Dado em memória vale sem releitura APENAS se não veio do cache local (SWR).
+  // Pedágio restaurado do localStorage precisa revalidar na nuvem: sem isso a tela
+  // podia exibir um import processado-e-não-salvo que não existe no Firestore —
+  // e que o CPK (que lê mapinha_pedagios) nunca enxergaria.
+  if(ST.pedagioMes===mesAtual && ST.pedagio && !ST._pedagioDoCache){ syncPedTabUI(); renderPedagios(); return; }
   try{
     const d=await fsGetDoc('mapinha_pedagios', 'PED_'+mesAtual);
-    ST.pedagio = d ? d.data : null; ST.pedagioMes = mesAtual;
-  }catch(e){ ST.pedagio=null; ST.pedagioMes=mesAtual; }
+    ST.pedagio = d ? d.data : null; ST.pedagioMes = mesAtual; ST._pedagioDoCache=false;
+  }catch(e){ ST.pedagio=null; ST.pedagioMes=mesAtual; ST._pedagioDoCache=false; }
   syncPedTabUI(); renderPedagios();
 }
 function syncPedTabUI(){
