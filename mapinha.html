@@ -28,7 +28,7 @@
 <style>
 /* ══ TOKENS — espelho do index.html / manutencao.html ══ */
 :root{
-  --bg:#f0f2f5;--wh:#fff;--bd:#d1d9e6;--bd2:#e4e9f2;--tx:#192135;--mu:#6b7a96;
+  --bg:#f0f2f5;--wh:#fff;--sf:#f7f8fa;--bd:#d1d9e6;--bd2:#e4e9f2;--tx:#192135;--mu:#6b7a96;
   --ac:#1a56db;--ac-h:#1746b8;--ac-bg:#eff4ff;
   --gn:#057a55;--gn-bg:#ecfdf5;--gn-bd:#a7f3d0;
   --am:#b45309;--am-bg:#fffbeb;--am-bd:#fcd34d;
@@ -76,6 +76,26 @@ label.fld{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--
 .tabs-r{margin-left:auto;display:flex;align-items:center;gap:8px}
 .sel{font-family:var(--f);font-size:11px;color:var(--tx);background:var(--wh);border:1px solid var(--bd);border-radius:3px;padding:3px 6px;height:26px;outline:none}
 .sel:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac-bg)}
+/* Seletor de mês/ano — mesmo padrão visual da tela PD */
+.mes-field{position:relative;display:inline-flex;}
+.tb-mes{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--bd);border-radius:3px;padding:3px 8px;font-size:11px;font-family:var(--m);letter-spacing:-.2px;white-space:nowrap;background:var(--wh);color:var(--tx);height:24px;cursor:pointer;outline:none;}
+.tb-mes:hover{border-color:var(--ac);}
+.tb-mes-ic{color:var(--mu);flex-shrink:0;}
+.tb-mes:hover .tb-mes-ic{color:var(--ac);}
+.mes-pop{position:fixed;z-index:9999;width:236px;background:var(--wh);border:1px solid var(--bd);border-radius:8px;box-shadow:var(--shd);padding:10px;display:none;}
+.mes-pop.on{display:block;}
+.mes-pop-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;user-select:none;}
+.mes-pop-yr{font-family:var(--m);font-size:14px;font-weight:600;color:var(--tx);letter-spacing:.5px;min-width:54px;text-align:center;}
+.mes-nav{width:26px;height:26px;border:1px solid var(--bd);background:var(--wh);border-radius:5px;color:var(--mu);font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.12s;}
+.mes-nav:hover:not(:disabled){border-color:var(--ac);color:var(--ac);background:var(--ac-bg);}
+.mes-nav:disabled{opacity:.32;cursor:default;}
+.mes-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;}
+.mes-cell{font-family:var(--f);font-size:11.5px;font-weight:500;padding:7px 0;border:1px solid var(--bd2);border-radius:5px;background:var(--sf);color:var(--tx);cursor:pointer;text-align:center;transition:.12s;text-transform:capitalize;}
+.mes-cell:hover{border-color:var(--ac);color:var(--ac);background:var(--ac-bg);}
+.mes-cell.sel{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600;}
+.mes-cell.sel:hover{background:var(--ac-h);color:#fff;}
+.mes-cell.now{box-shadow:inset 0 0 0 1px var(--ac);}
+.mes-cell.disb{color:var(--mu);opacity:.4;cursor:default;pointer-events:none;}
 
 /* Buttons */
 .btn{font-family:var(--f);font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:var(--r);border:1px solid var(--bd);background:var(--wh);color:var(--tx);cursor:pointer;transition:.12s}
@@ -172,7 +192,21 @@ td>.skel-line{vertical-align:middle}
   <button class="tab" data-v="cons" onclick="tab('cons')">Consolidado</button>
   <button class="tab" data-v="dash" onclick="tab('dash')">Dashboards</button>
   <div class="tabs-r">
-    <select id="selMes" class="sel" onchange="onScopeChange()"></select>
+    <select id="selMes" class="sel" onchange="onScopeChange()" style="display:none"></select>
+    <div class="mes-field" id="map-mes-field">
+      <button type="button" class="tb-mes" id="map-mes-trigger" onclick="mapToggleMesPop(event)" title="Período">
+        <svg class="tb-mes-ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span id="map-mes-lbl">—</span>
+      </button>
+      <div class="mes-pop" id="map-mes-pop" aria-hidden="true" onwheel="mapMesPopWheel(event)" title="Role para mudar o ano">
+        <div class="mes-pop-hd">
+          <button type="button" class="mes-nav" id="map-mes-prev" onclick="mapMesPopYear(-1)" title="Ano anterior">‹</button>
+          <span class="mes-pop-yr" id="map-mes-pop-yr">—</span>
+          <button type="button" class="mes-nav" id="map-mes-next" onclick="mapMesPopYear(1)" title="Próximo ano">›</button>
+        </div>
+        <div class="mes-grid" id="map-mes-grid"></div>
+      </div>
+    </div>
     <select id="selFilial" class="sel" onchange="onScopeChange()"></select>
     <span id="statusPill" class="pill rascunho">—</span>
     <span id="freshPill" class="fresh-pill"><span class="dot"></span><span id="freshTxt">atualizando…</span></span>
@@ -568,6 +602,85 @@ function populateMeses(){
   sel.innerHTML='';
   meses.forEach(m=> sel.appendChild(new Option(mesLabel(m), m)));
   sel.value = (cur && meses.includes(cur)) ? cur : defVal;
+  window._MAP_MESES=meses;
+  window._MAP_MESES_SET=new Set(meses);
+  mapUpdateMesLabel();
+}
+
+/* Seletor de mês/ano no mesmo padrão da tela PD.
+   O select #selMes continua sendo o valor oficial usado pelo Mapinha. */
+const MAP_MESES_ABREV=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+let _mapMesPopYear=null;
+function mapMesYears(){
+  const ys=[...new Set((window._MAP_MESES||[]).map(m=>+String(m).split('-')[0]))].filter(Boolean);
+  if(!ys.length) ys.push(new Date().getFullYear());
+  return {min:Math.min(...ys), max:Math.max(...ys)};
+}
+function mapGetMes(){ const el=document.getElementById('selMes'); return el?el.value:''; }
+function mapUpdateMesLabel(){
+  const lbl=document.getElementById('map-mes-lbl'); if(!lbl) return;
+  const v=mapGetMes(); lbl.textContent = v ? mesLabel(v) : '—';
+}
+function mapToggleMesPop(ev){
+  if(ev)ev.stopPropagation();
+  const pop=document.getElementById('map-mes-pop'); if(!pop)return;
+  if(pop.classList.contains('on')){ mapCloseMesPop(); return; }
+  const cur=(mapGetMes()||'').split('-');
+  const yr=mapMesYears();
+  _mapMesPopYear = cur[0]? +cur[0] : new Date().getFullYear();
+  _mapMesPopYear = Math.min(yr.max, Math.max(yr.min, _mapMesPopYear));
+  mapRenderMesPop();
+  const r=document.getElementById('map-mes-trigger').getBoundingClientRect();
+  pop.style.top=(r.bottom+6)+'px';
+  pop.style.left=Math.max(8, r.right-236)+'px';
+  pop.classList.add('on'); pop.setAttribute('aria-hidden','false');
+  setTimeout(()=>document.addEventListener('click',mapMesPopOutside),0);
+}
+function mapCloseMesPop(){
+  const pop=document.getElementById('map-mes-pop'); if(!pop)return;
+  pop.classList.remove('on'); pop.setAttribute('aria-hidden','true');
+  document.removeEventListener('click',mapMesPopOutside);
+}
+function mapMesPopOutside(e){
+  const fld=document.getElementById('map-mes-field');
+  if(fld&&!fld.contains(e.target)) mapCloseMesPop();
+}
+function mapMesPopYear(delta){
+  const yr=mapMesYears();
+  if(_mapMesPopYear==null)_mapMesPopYear=new Date().getFullYear();
+  const ny=_mapMesPopYear+delta;
+  if(ny<yr.min||ny>yr.max)return;
+  _mapMesPopYear=ny; mapRenderMesPop();
+}
+function mapMesPopWheel(e){ e.preventDefault(); mapMesPopYear(e.deltaY>0?1:-1); }
+function mapRenderMesPop(){
+  const yr=mapMesYears();
+  const yrEl=document.getElementById('map-mes-pop-yr'); if(yrEl)yrEl.textContent=_mapMesPopYear;
+  const prev=document.getElementById('map-mes-prev'), next=document.getElementById('map-mes-next');
+  if(prev)prev.disabled=_mapMesPopYear<=yr.min;
+  if(next)next.disabled=_mapMesPopYear>=yr.max;
+  const cur=(mapGetMes()||'').split('-');
+  const selY=cur[0]?+cur[0]:null, selM=cur[1]?+cur[1]:null;
+  const now=new Date(), nowY=now.getFullYear(), nowM=now.getMonth()+1;
+  const avail=window._MAP_MESES_SET||new Set();
+  const grid=document.getElementById('map-mes-grid'); if(!grid)return;
+  grid.innerHTML=MAP_MESES_ABREV.map((nm,i)=>{
+    const m=i+1, mes=_mapMesPopYear+'-'+String(m).padStart(2,'0');
+    const has=avail.has(mes);
+    const cls=['mes-cell'];
+    if(selY===_mapMesPopYear&&selM===m)cls.push('sel');
+    if(nowY===_mapMesPopYear&&nowM===m)cls.push('now');
+    if(!has)cls.push('disb');
+    const oc=has?(' onclick="mapPickMes('+m+')"'):' disabled title="Sem dados neste mês"';
+    return '<button type="button" class="'+cls.join(' ')+'"'+oc+'>'+nm+'</button>';
+  }).join('');
+}
+function mapPickMes(m){
+  const mes=_mapMesPopYear+'-'+String(m).padStart(2,'0');
+  const sm=document.getElementById('selMes'); if(!sm)return;
+  if(!(window._MAP_MESES_SET&&window._MAP_MESES_SET.has(mes)))return;
+  sm.value=mes;
+  mapUpdateMesLabel(); mapCloseMesPop(); onScopeChange();
 }
 /* Ordem fixa de exibição das filiais (igual ao PD: SC, PR, SP) */
 function _ordFilial(s){ const i=['SC','PR','SP'].indexOf(s); return i<0?99:i; }
@@ -1140,6 +1253,7 @@ function applyPerm(){
 async function onScopeChange(){
   ST.filial = document.getElementById('selFilial').value;
   ST.mesRef = document.getElementById('selMes').value;
+  mapUpdateMesLabel();
   await refreshAll();
 }
 
@@ -2014,7 +2128,7 @@ function renderDashboard(){
    associação placa→filial pelo cadastro 'veiculos', persistência na nuvem
    (coleção mapinha_pedagios, 1 doc por mês: PED_<mesRef>).
    ══════════════════════════════════════════════════════════════════ */
-const PED = { fat:null, res:null, fatName:'', resName:'' };  // arquivos em memória (pré-processo)
+const PED = { fat:null, res:null, fatName:'', resName:'', mesRef:null, cache:{} };  // arquivos em memória (pré-processo)
 ST.pedagio = null;            // import processado/carregado do mês corrente
 ST.pedagioMes = null;         // mesRef do import em memória
 ST._placaFilialCache = null;  // mapa normPlaca -> sigla (cadastro veiculos)
@@ -2148,9 +2262,15 @@ function pedFile(ev,kind){
   const isFat = kind==='fat';
   const reader=new FileReader();
   reader.onload=()=>{
-    if(isFat){ PED.fat=reader.result; PED.fatName=f.name; document.getElementById('pedFatName').textContent=f.name; document.getElementById('pedDropFat').classList.add('ok'); }
-    else     { PED.res=reader.result; PED.resName=f.name; document.getElementById('pedResName').textContent=f.name; document.getElementById('pedDropRes').classList.add('ok'); }
-    document.getElementById('pedBtnProc').disabled = !(PED.fat && PED.res) || !pedPodeImportar();
+    const mesAtual=ST.mesRef;
+    if(PED.mesRef!==mesAtual){
+      const c=PED.cache[mesAtual]||{};
+      PED.fat=c.fat||null; PED.res=c.res||null; PED.fatName=c.fatName||''; PED.resName=c.resName||''; PED.mesRef=mesAtual;
+    }
+    if(isFat){ PED.fat=reader.result; PED.fatName=f.name; }
+    else     { PED.res=reader.result; PED.resName=f.name; }
+    PED.cache[mesAtual]={ fat:PED.fat, res:PED.res, fatName:PED.fatName, resName:PED.resName };
+    syncPedTabUI();
   };
   // Fatura = UTF-8 (BOM); Resumo .xls = HTML latin-1
   if(isFat) reader.readAsText(f,'UTF-8'); else reader.readAsText(f,'ISO-8859-1');
@@ -2188,22 +2308,37 @@ async function salvarPedagios(){
 
 async function loadPedagios(){
   // carrega o doc do mês (se já houver import salvo) — alimenta o DRE de todas as filiais
-  if(ST.pedagioMes===ST.mesRef && ST.pedagio){ syncPedTabUI(); renderPedagios(); return; }
+  const mesAtual=ST.mesRef;
+  if(PED.mesRef!==mesAtual){
+    const c=PED.cache[mesAtual]||{};
+    PED.fat=c.fat||null; PED.res=c.res||null; PED.fatName=c.fatName||''; PED.resName=c.resName||''; PED.mesRef=mesAtual;
+  }
+  if(ST.pedagioMes===mesAtual && ST.pedagio){ syncPedTabUI(); renderPedagios(); return; }
   try{
-    const d=await fsGetDoc('mapinha_pedagios', 'PED_'+ST.mesRef);
-    ST.pedagio = d ? d.data : null; ST.pedagioMes = ST.mesRef;
-  }catch(e){ ST.pedagio=null; ST.pedagioMes=ST.mesRef; }
-  // se o mês mudou, descarta arquivos em memória do mês anterior
-  if(ST.pedagioMes!==ST.mesRef){ PED.fat=PED.res=null; }
+    const d=await fsGetDoc('mapinha_pedagios', 'PED_'+mesAtual);
+    ST.pedagio = d ? d.data : null; ST.pedagioMes = mesAtual;
+  }catch(e){ ST.pedagio=null; ST.pedagioMes=mesAtual; }
   syncPedTabUI(); renderPedagios();
 }
 function syncPedTabUI(){
-  const info=document.getElementById('pedMesInfo'); if(info) info.textContent='· '+ST.mesRef;
+  const info=document.getElementById('pedMesInfo'); if(info) info.textContent='· '+mesLabel(ST.mesRef);
   const lock=document.getElementById('pedLock');
   if(lock) lock.innerHTML = pedPodeImportar() ? '' :
     '<div class="lock-note">🔒 Importação de pedágio disponível apenas para Admin/LR (afeta todas as filiais). Você pode visualizar o resultado.</div>';
-  const bp=document.getElementById('pedBtnProc'); if(bp) bp.disabled = !(PED.fat&&PED.res) || !pedPodeImportar();
-  const bs=document.getElementById('pedBtnSave'); if(bs) bs.disabled = !ST.pedagio || !pedPodeImportar();
+
+  const arqs=(ST.pedagio && ST.pedagioMes===ST.mesRef && ST.pedagio.arquivos) ? ST.pedagio.arquivos : {};
+  const memOK=PED.mesRef===ST.mesRef;
+  const fatNome=(memOK && PED.fatName) || arqs.fatura || '';
+  const resNome=(memOK && PED.resName) || arqs.resumo || '';
+  const fatTxt=document.getElementById('pedFatName'), resTxt=document.getElementById('pedResName');
+  const fatDrop=document.getElementById('pedDropFat'), resDrop=document.getElementById('pedDropRes');
+  if(fatTxt) fatTxt.textContent = fatNome || 'Clique para selecionar — coluna T (valor) e U (vale-pedágio).';
+  if(resTxt) resTxt.textContent = resNome || 'Clique para selecionar — vales pagos pelo cliente.';
+  if(fatDrop) fatDrop.classList.toggle('ok', !!fatNome);
+  if(resDrop) resDrop.classList.toggle('ok', !!resNome);
+
+  const bp=document.getElementById('pedBtnProc'); if(bp) bp.disabled = !(memOK && PED.fat&&PED.res) || !pedPodeImportar();
+  const bs=document.getElementById('pedBtnSave'); if(bs) bs.disabled = !ST.pedagio || ST.pedagioMes!==ST.mesRef || !pedPodeImportar();
 }
 
 function pedFilialTotal(sigla){
