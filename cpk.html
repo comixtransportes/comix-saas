@@ -347,6 +347,33 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 .kpi.kpi-hero .kpi-lbl{color:var(--pu)}
 .kpi.kpi-hero .kpi-val{font-size:19px}
 .kpi.kpi-hero .kpi-val small{font-size:11px}
+/* ── RESUMO DA AUDITORIA: cards mostram todo o conteúdo, sem cortes ── */
+#aud-cards .kpi{align-items:flex-start}
+#aud-cards .kpi-lbl{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.25}
+#aud-cards .kpi-val{white-space:nowrap;overflow:visible;text-overflow:clip}
+#aud-cards .kpi-sub{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.3}
+/* Card de Inconsistências clicável */
+#aud-cards .kpi-incons-btn{cursor:pointer;transition:box-shadow .15s,border-color .15s,transform .12s;position:relative}
+#aud-cards .kpi-incons-btn:hover{border-color:var(--am-bd);box-shadow:0 2px 10px rgba(180,83,9,.16);transform:translateY(-1px)}
+#aud-cards .kpi-incons-btn::after{content:'revisar ✎';position:absolute;top:8px;right:9px;font-size:8.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--am);opacity:.7}
+#aud-cards .kpi-incons-btn .kpi-lbl{padding-right:48px}
+/* Modal de Inconsistências */
+.inc-row{border:1px solid var(--bd2);border-radius:8px;padding:11px 12px;margin-bottom:10px;background:var(--sf)}
+.inc-row.res{opacity:.72;background:var(--gn-bg);border-color:var(--gn-bd)}
+.inc-row-hd{display:flex;align-items:center;gap:8px;margin-bottom:9px;flex-wrap:wrap}
+.inc-row-hd .inc-tipo{font-size:11.5px;font-weight:700;color:var(--tx)}
+.inc-badge{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 7px;border-radius:10px;background:var(--am-bg);color:var(--am);border:1px solid var(--am-bd)}
+.inc-badge.res{background:var(--gn-bg);color:var(--gn);border-color:var(--gn-bd)}
+.inc-badge.rev{background:var(--ac-bg);color:var(--ac);border-color:#bcd0f7}
+.inc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.inc-grid .inc-full{grid-column:1/-1}
+.inc-fld{display:flex;flex-direction:column;gap:3px}
+.inc-fld label{font-size:9.5px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px}
+.inc-fld input,.inc-fld select,.inc-fld textarea{border:1px solid var(--bd);border-radius:var(--rs);padding:5px 7px;font-size:12px;font-family:var(--f);outline:none;color:var(--tx);background:var(--wh)}
+.inc-fld input:focus,.inc-fld select:focus,.inc-fld textarea:focus{border-color:var(--ac)}
+.inc-fld textarea{resize:vertical;min-height:40px;font-size:11.5px}
+.inc-fld input.mono{font-family:var(--m)}
+.inc-empty{padding:26px 12px;text-align:center;color:var(--mu);font-size:12px}
 /* Card de resultado inline (na faixa de KPIs): Receita · Custo · Margem · % Margem */
 .vg-result{grid-column:span 2;display:flex;flex-direction:column;justify-content:center;gap:7px;background:var(--wh);border:1px solid var(--bd2);border-radius:10px;padding:9px 12px;box-shadow:var(--shd);min-width:0}
 @media(max-width:520px){.vg-result{grid-column:span 1}}
@@ -894,7 +921,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
         <span class="aud-scope" id="aud-scope"></span>
       </div>
 
-      <div class="kpi-row" id="aud-cards" style="grid-template-columns:repeat(auto-fill,minmax(190px,1fr))"></div>
+      <div class="kpi-row" id="aud-cards" style="grid-template-columns:repeat(auto-fill,minmax(215px,1fr))"></div>
 
       <div class="cpk-sec-hdr"><h2>Resumo da Auditoria</h2><div class="cpk-sec-line"></div><span class="meta" id="aud-resumo-meta"></span></div>
       <div class="cpk-info aud-resumo" id="aud-resumo"><span>—</span></div>
@@ -973,6 +1000,22 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
     <div class="modal-body" id="mem-modal-body"></div>
     <div class="modal-foot">
       <button class="btn-cancel" onclick="cpkMemModalClose()">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL — INCONSISTÊNCIAS: revisar, corrigir e salvar -->
+<div class="modal-backdrop" id="incons-modal">
+  <div class="modal wide">
+    <div class="modal-hdr">
+      <h3 id="incons-modal-title">Inconsistências — revisar e corrigir</h3>
+      <button class="modal-close" onclick="cpkInconsModalFechar()">✕</button>
+    </div>
+    <div class="modal-body" id="incons-modal-body"></div>
+    <div class="modal-foot">
+      <span id="incons-modal-meta" style="margin-right:auto;font-size:11px;color:var(--mu)"></span>
+      <button class="btn-cancel" onclick="cpkInconsModalFechar()">Fechar</button>
+      <button class="btn-save" id="incons-modal-save" onclick="cpkInconsSalvar()">Salvar correções</button>
     </div>
   </div>
 </div>
@@ -4071,7 +4114,9 @@ function cpkRenderAuditoria(){
     cpkKpi('alert','rd','Excluído por ser agregado', cpkFmt(n.exAgreg), 'Diesel/C.O/pedágio de agregado') +
     cpkKpi('truck','','Placas próprias', n.qtdPlacas, 'consideradas no cálculo') +
     cpkKpi('route','','Rotas', n.qtdRotas, 'consideradas no cálculo') +
-    cpkKpi('alert',inconsN>0?'am':'','Inconsistências', inconsN, 'registros a revisar');
+    cpkKpi('alert',inconsN>0?'am':'','Inconsistências', inconsN, 'registros a revisar', '', 'kpi-incons-btn');
+  const _incBtn=document.querySelector('#aud-cards .kpi-incons-btn');
+  if(_incBtn) _incBtn.onclick=cpkInconsModalAbrir;
 
   // ── RESUMO AUTOMÁTICO ──────────────────────────────────────────────
   const resumo=document.getElementById('aud-resumo');
@@ -4255,6 +4300,119 @@ function cpkAudIncons(){
   const body=inc.map(i=>`<tr><td><span class="aud-tag inc0">alerta</span> ${i.tipo}</td><td>${i.fil||'—'}</td><td>${i.placa||'—'}</td>
     <td style="white-space:normal">${i.descricao||'—'}</td><td class="r">${i.valor!=null?cpkFmt(i.valor):'—'}</td></tr>`).join('');
   return _audSec('Inconsistências Encontradas','corrija a base para o CPK bater com o Mapinha Consolidado')+_audTbl('tbl-aud-inc',heads,body,340);
+}
+
+// ── INCONSISTÊNCIAS · MODAL DE REVISÃO/CORREÇÃO ─────────────────────
+// Card "Inconsistências" (Resumo da Auditoria) → abre a relação completa,
+// com os campos inconsistentes editáveis (filial, placa, valor, descrição,
+// status e observação da correção) e persistência no Firestore por competência.
+const CPK_INCONS_COL='cpk_incons_correcoes';
+const CPK_INCONS_STATUS=[{v:'pendente',l:'Pendente'},{v:'revisao',l:'Em revisão'},{v:'resolvido',l:'Resolvido'}];
+function cpkInconsEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function cpkInconsMesAtual(){return (CPK.audit&&CPK.audit.mes)||(CPK.filtros&&CPK.filtros.mes)||'';}
+function cpkInconsKey(i){return [String(i.tipo||'').trim(),String(i.fil||'').trim(),String(i.placa||'').trim()].join('|').replace(/\s+/g,' ');}
+function cpkInconsParseNum(s){if(s==null)return null;s=String(s).trim();if(!s||s==='—')return null;s=s.replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.');const n=parseFloat(s);return isNaN(n)?null:n;}
+function cpkInconsNumTxt(v){return (v==null||isNaN(v))?'':Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});}
+
+async function cpkInconsCarregarCorr(mes){
+  CPK._inconsCorr=CPK._inconsCorr||{};
+  if(CPK._inconsCorr[mes]) return CPK._inconsCorr[mes];
+  let corr={};
+  try{ const doc=await cpkFsGetDoc(CPK_INCONS_COL,mes); if(doc&&doc.data&&doc.data.itens)corr=doc.data.itens; }
+  catch(e){ cpkLog('Incons corr load erro',e&&e.message); }
+  CPK._inconsCorr[mes]=corr; return corr;
+}
+
+async function cpkInconsModalAbrir(){
+  if(!CPK.audit||!CPK.custoLoaded){ cpkToast('Aguardando o cálculo do CPK.'); return; }
+  const mes=cpkInconsMesAtual();
+  const bd=document.getElementById('incons-modal-body');
+  const meta=document.getElementById('incons-modal-meta');
+  const ttl=document.getElementById('incons-modal-title');
+  if(ttl) ttl.textContent='Inconsistências — '+cpkMesLabel(mes);
+  if(bd) bd.innerHTML='<div class="inc-empty">Carregando correções salvas…</div>';
+  document.getElementById('incons-modal').classList.add('open');
+  const corr=await cpkInconsCarregarCorr(mes);
+  cpkInconsRenderRows(corr);
+  if(meta) meta.textContent='Competência '+cpkMesLabel(mes);
+}
+function cpkInconsModalFechar(){ document.getElementById('incons-modal').classList.remove('open'); }
+
+function cpkInconsRenderRows(corr){
+  const bd=document.getElementById('incons-modal-body');
+  const sv=document.getElementById('incons-modal-save');
+  if(!bd) return;
+  const lista=cpkAudInconsList();
+  if(!lista.length){
+    bd.innerHTML='<div class="inc-empty">Nenhuma inconsistência no período e escopo atuais. 🎉</div>';
+    if(sv) sv.disabled=true; return;
+  }
+  if(sv) sv.disabled=false;
+  const stOpts=(cur)=>CPK_INCONS_STATUS.map(o=>'<option value="'+o.v+'"'+(o.v===cur?' selected':'')+'>'+o.l+'</option>').join('');
+  const rows=lista.map((i,idx)=>{
+    const key=cpkInconsKey(i);
+    const c=corr[key]||{};
+    const fil=c.fil!=null?c.fil:(i.fil||'');
+    const placa=c.placa!=null?c.placa:(i.placa||'');
+    const desc=c.descricao!=null?c.descricao:(i.descricao||'');
+    const valorV=('valor'in c)?c.valor:i.valor;
+    const status=c.status||'pendente';
+    const obs=c.obs||'';
+    const badgeCls=status==='resolvido'?'res':(status==='revisao'?'rev':'');
+    const badgeLbl=status==='resolvido'?'resolvido':(status==='revisao'?'em revisão':'pendente');
+    return '<div class="inc-row'+(status==='resolvido'?' res':'')+'" data-key="'+cpkInconsEsc(key)+'" data-idx="'+idx+'">'+
+      '<div class="inc-row-hd"><span class="inc-tipo">'+cpkInconsEsc(i.tipo||'Inconsistência')+'</span>'+
+        '<span class="inc-badge '+badgeCls+'" data-badge>'+badgeLbl+'</span></div>'+
+      '<div class="inc-grid">'+
+        '<div class="inc-fld"><label>Filial</label><input type="text" class="mono" data-f="fil" value="'+cpkInconsEsc(fil)+'" placeholder="SC · PR · SP"></div>'+
+        '<div class="inc-fld"><label>Placa / Ref.</label><input type="text" class="mono" data-f="placa" value="'+cpkInconsEsc(placa)+'"></div>'+
+        '<div class="inc-fld"><label>Valor (R$)</label><input type="text" class="mono" data-f="valor" value="'+cpkInconsEsc(cpkInconsNumTxt(valorV))+'" placeholder="—"></div>'+
+        '<div class="inc-fld"><label>Status</label><select data-f="status" onchange="cpkInconsStatusChange(this)">'+stOpts(status)+'</select></div>'+
+        '<div class="inc-fld inc-full"><label>Descrição</label><textarea data-f="descricao">'+cpkInconsEsc(desc)+'</textarea></div>'+
+        '<div class="inc-fld inc-full"><label>Observação da correção</label><input type="text" data-f="obs" value="'+cpkInconsEsc(obs)+'" placeholder="o que foi corrigido na base / decisão tomada…"></div>'+
+      '</div></div>';
+  }).join('');
+  bd.innerHTML=rows;
+}
+
+function cpkInconsStatusChange(sel){
+  const row=sel.closest('.inc-row'); if(!row)return;
+  const st=sel.value;
+  row.classList.toggle('res',st==='resolvido');
+  const b=row.querySelector('[data-badge]');
+  if(b){ b.className='inc-badge '+(st==='resolvido'?'res':(st==='revisao'?'rev':'')); b.textContent=st==='resolvido'?'resolvido':(st==='revisao'?'em revisão':'pendente'); }
+}
+
+function cpkInconsColetar(){
+  const itens={};
+  document.querySelectorAll('#incons-modal-body .inc-row').forEach(row=>{
+    const key=row.getAttribute('data-key'); if(!key)return;
+    const g=(f)=>{const el=row.querySelector('[data-f="'+f+'"]');return el?el.value:'';};
+    itens[key]={ fil:g('fil').trim(), placa:g('placa').trim(), descricao:g('descricao').trim(),
+      valor:cpkInconsParseNum(g('valor')), status:g('status')||'pendente', obs:g('obs').trim() };
+  });
+  return itens;
+}
+
+async function cpkInconsSalvar(){
+  const mes=cpkInconsMesAtual();
+  const sv=document.getElementById('incons-modal-save');
+  const meta=document.getElementById('incons-modal-meta');
+  const itens=cpkInconsColetar();
+  if(sv){ sv.disabled=true; sv.textContent='Salvando…'; }
+  try{
+    await cpkFsSet(CPK_INCONS_COL, mes, { itens, atualizadoEm:Date.now(), por:(CPK.user&&CPK.user.email)||'' }, true);
+    CPK._inconsCorr=CPK._inconsCorr||{}; CPK._inconsCorr[mes]=itens;
+    const resolvidas=Object.values(itens).filter(x=>x.status==='resolvido').length;
+    if(meta) meta.textContent='Salvo agora · '+resolvidas+' resolvida(s) de '+Object.keys(itens).length;
+    cpkToast('Correções salvas.');
+  }catch(e){
+    cpkLog('Incons salvar erro',e&&e.message);
+    CPK._inconsCorr=CPK._inconsCorr||{}; CPK._inconsCorr[mes]=itens; // mantém na sessão
+    cpkToast('Não foi possível salvar no Firestore. Correções mantidas nesta sessão.');
+  }finally{
+    if(sv){ sv.disabled=false; sv.textContent='Salvar correções'; }
+  }
 }
 
 // ── DRAG & DROP da importação de depreciação ───────────────────────
