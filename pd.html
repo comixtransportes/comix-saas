@@ -995,7 +995,14 @@ html{ -webkit-text-size-adjust:100%; }
     <div class="modal-body">
 
       <div class="modal-sec">
-        <div class="modal-sec-title">Plano de Ação (PA) — Metas Mensais por Filial</div>
+        <div class="modal-sec-title">Plano de Ação (PA) Semestral — Metas Mensais por Filial</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+          <span style="font-size:11px;font-weight:600;color:var(--tx);white-space:nowrap;">Semestre do PA:</span>
+          <select class="sel" id="pa-semestre" onchange="onPASemestreChange()" style="min-width:180px;">
+            <option value="2026-S1">2026 - 1º Semestre</option>
+            <option value="2026-S2">2026 - 2º Semestre</option>
+          </select>
+        </div>
         <div class="pa-grid">
           <div>
             <div class="pa-label pa-sc">SC</div>
@@ -1118,6 +1125,27 @@ let PARAMS = {
     '18':{ fat:1637500, prod:13877, tm:118, label:'PR' },
     '03':{ fat:1267000, prod:10136, tm:125, label:'SP' },
   },
+  // ── PA Semestral ──
+  // O valor atual (acima, em `pa`) corresponde ao 1º Semestre/2026 e é mantido
+  // como fallback de compatibilidade. Os semestres abaixo são a fonte oficial.
+  paSemestres: {
+    '2026-S1': {
+      label: '2026 - 1º Semestre',
+      pa: {
+        '17':{ fat:4300000, prod:40952, tm:105, label:'SC' },
+        '18':{ fat:1637500, prod:13877, tm:118, label:'PR' },
+        '03':{ fat:1267000, prod:10136, tm:125, label:'SP' },
+      }
+    },
+    '2026-S2': {
+      label: '2026 - 2º Semestre',
+      pa: {
+        '17':{ fat:4300000, prod:40952, tm:105, label:'SC' },
+        '18':{ fat:1637500, prod:13877, tm:118, label:'PR' },
+        '03':{ fat:1267000, prod:10136, tm:125, label:'SP' },
+      }
+    }
+  },
   feriados: [
     '2026-01-01','2026-02-16','2026-02-17',
     '2026-04-03','2026-04-21','2026-05-01',
@@ -1138,6 +1166,64 @@ let PARAMS = {
     }
   }
 };
+
+/* ════════════════════════════════════════════════════════════════════════
+   [PA SEMESTRAL] Funções centrais.
+   O PA passou a ser semestral. `PARAMS.paSemestres['<ano>-S<1|2>']` é a fonte
+   oficial; `PARAMS.pa` permanece apenas como fallback de compatibilidade
+   (espelha o 1º semestre). Nenhuma regra de cálculo muda — apenas a ORIGEM do
+   PA passa a ser o semestre correto conforme o mês selecionado no PD.
+   ════════════════════════════════════════════════════════════════════════ */
+const PA_LABELS = { '17':'SC', '18':'PR', '03':'SP' };
+
+// Semestre-chave a partir do mês 'YYYY-MM' (jan–jun = S1, jul–dez = S2)
+function getPASemestreKey(mes){
+  if(!mes) return '2026-S1';
+  const [ano,mesNum]=mes.split('-').map(Number);
+  return `${ano}-S${mesNum<=6?1:2}`;
+}
+
+// Retorna o objeto `pa` do semestre do mês; se não existir, cai no fallback PARAMS.pa
+function getPAByMes(mes){
+  const key=getPASemestreKey(mes);
+  return (PARAMS.paSemestres && PARAMS.paSemestres[key] && PARAMS.paSemestres[key].pa) || PARAMS.pa;
+}
+
+// Clona um bloco `pa` garantindo as 3 filiais e seus labels
+function clonePA(src){
+  const out={};
+  Object.keys(PA_LABELS).forEach(op=>{
+    const s=(src&&src[op])||{};
+    out[op]={ fat:s.fat||0, prod:s.prod||0, tm:s.tm||0, label:PA_LABELS[op] };
+  });
+  return out;
+}
+
+// Normaliza a estrutura semestral: garante S1/S2, labels de filial e o fallback
+function ensurePASemestres(){
+  if(!PARAMS.paSemestres) PARAMS.paSemestres={};
+  // 1º semestre: se ausente, herda do PARAMS.pa legado
+  if(!PARAMS.paSemestres['2026-S1']){
+    PARAMS.paSemestres['2026-S1']={ label:'2026 - 1º Semestre', pa: clonePA(PARAMS.pa) };
+  }
+  // 2º semestre: se ausente, começa como cópia do 1º (ponto de partida editável)
+  if(!PARAMS.paSemestres['2026-S2']){
+    PARAMS.paSemestres['2026-S2']={ label:'2026 - 2º Semestre', pa: clonePA(PARAMS.paSemestres['2026-S1'].pa) };
+  }
+  // Garante estrutura e labels em cada semestre existente
+  Object.values(PARAMS.paSemestres).forEach(s=>{
+    if(!s.pa) s.pa={};
+    Object.keys(PA_LABELS).forEach(op=>{
+      if(!s.pa[op]) s.pa[op]={ fat:0, prod:0, tm:0 };
+      s.pa[op].label=PA_LABELS[op];
+    });
+  });
+  // Fallback de compatibilidade: PARAMS.pa reflete (por referência) o 1º semestre
+  PARAMS.pa=PARAMS.paSemestres['2026-S1'].pa;
+}
+
+// Normaliza já no boot (default local); a nuvem re-normaliza em loadParamsFromCloud
+ensurePASemestres();
 
 
 let RAW=[], DATA=[];
@@ -1546,13 +1632,19 @@ async function loadSZYFromFirestore() {
 // ── Carregar parâmetros da nuvem ──
 async function loadParamsFromCloud() {
   const data = await apiGet('/api/params');
-  if (data && data.pa) {
+  if (data && (data.pa || data.paSemestres)) {
     PARAMS = { ...PARAMS, ...data };
-    // Garantir labels
-    PARAMS.pa['17'].label='SC';
-    PARAMS.pa['18'].label='PR';
-    PARAMS.pa['03'].label='SP';
+    if (data.paSemestres) {
+      // Nuvem já no formato semestral — usar como veio
+      PARAMS.paSemestres = data.paSemestres;
+    } else if (data.pa) {
+      // Dado legado (apenas PARAMS.pa): migrar para o 1º Semestre/2026
+      PARAMS.paSemestres = {
+        '2026-S1': { label:'2026 - 1º Semestre', pa: clonePA(data.pa) }
+      };
+    }
   }
+  ensurePASemestres();   // garante S1/S2, labels das filiais e o fallback PARAMS.pa
   ensureAnttParams();
   // Última atualização
   await loadLastUpdate();
@@ -2420,7 +2512,7 @@ function recalc(){
     return true;
   }).length;
   window._MES_ATUAL_GLOBAL = mes;
-  const ulbl=uid==='all'?'Todas':(PARAMS.pa[uid]||{}).label||uid;
+  const ulbl=uid==='all'?'Todas':(getPAByMes(mes)[uid]||{}).label||uid;
   const meses=[...new Set(DATA.map(r=>r.mes))].filter(Boolean).sort();
   document.getElementById('h-uni').textContent='Unidade: '+ulbl;
   document.getElementById('h-per').textContent=mesLabel(mes);
@@ -2467,12 +2559,13 @@ function buildVG(uid, mes){
 
   // PA: por unidade ou soma
   const unids=uid==='all'?pdOpsForAll():[uid];
-  const paFat =unids.reduce((a,u)=>a+(PARAMS.pa[u]||{fat:0}).fat, 0);
-  const paProd=unids.reduce((a,u)=>a+(PARAMS.pa[u]||{prod:0}).prod,0);
+  const paMes=getPAByMes(mes);                       // PA do semestre do mês selecionado
+  const paFat =unids.reduce((a,u)=>a+(paMes[u]||{fat:0}).fat, 0);
+  const paProd=unids.reduce((a,u)=>a+(paMes[u]||{prod:0}).prod,0);
   // TM da PA: se filial única usa o valor da PA; se todas usa média ponderada
   const paTM = uid==='all'
-    ? unids.reduce((a,u)=>a+(PARAMS.pa[u]||{tm:0}).tm,0)/unids.length
-    : (PARAMS.pa[uid]||{tm:0}).tm;
+    ? unids.reduce((a,u)=>a+(paMes[u]||{tm:0}).tm,0)/unids.length
+    : (paMes[uid]||{tm:0}).tm;
 
   // Dias operacionais
   const [ano,mesN]=mes.split('-').map(Number);
@@ -3695,7 +3788,8 @@ document.addEventListener('click', e=>{
 // ═══════════════════════════════════════════════════════
 function buildHi(meses,uid){
   const unids=uid==='all'?pdOpsForAll():[uid];
-  const paFatM=unids.reduce((a,u)=>a+(PARAMS.pa[u]||{fat:0}).fat,0);
+  // PA de faturamento por mês — origem = semestre de cada mês (jan–jun S1, jul–dez S2)
+  const paFatMes=m=>{ const p=getPAByMes(m); return unids.reduce((a,u)=>a+(p[u]||{fat:0}).fat,0); };
   const bm=grp(filterByOp(uid),r=>r.mes);
   const fats=meses.map(m=>(bm[m]||[]).reduce((a,r)=>a+r.fat,0));
   const prds=meses.map(m=>(bm[m]||[]).reduce((a,r)=>a+r.peso_t,0));
@@ -3704,7 +3798,7 @@ function buildHi(meses,uid){
   const lb  =meses.map(m=>{ const[ano,mo]=m.split('-'); return `${mo}/${ano.slice(2)}`; });
   mkC('c-hf','line',lb,[
     {label:'Faturamento',data:fats,borderColor:'#1a56db',backgroundColor:'rgba(26,86,219,.07)',tension:.3,fill:true},
-    {label:'PA',data:meses.map(()=>paFatM),borderColor:'#d97706',borderDash:[5,4],tension:0,pointRadius:0,fill:false}
+    {label:'PA',data:meses.map(m=>paFatMes(m)),borderColor:'#d97706',borderDash:[5,4],tension:0,pointRadius:0,fill:false}
   ],{leg:true});
   mkC('c-hp','bar',lb,[{data:prds,backgroundColor:'rgba(26,86,219,.5)',borderRadius:2}]);
   mkC('c-ht','line',lb,[{data:tms,borderColor:'#0891b2',backgroundColor:'rgba(8,145,178,.07)',tension:.3,fill:true}]);
@@ -3783,15 +3877,55 @@ function calcFdu(){
   });
 }
 
+// ── PA Semestral: ponte entre o objeto PARAMS.paSemestres e os campos do modal ──
+// Semestre atualmente carregado nos inputs (para preservar edições ao trocar no seletor)
+let __pdPASemAtual = '2026-S1';
+
+// Carrega os valores do semestre `key` nos inputs de SC/PR/SP e recalcula o Fat/Dia Útil
+function loadPAIntoInputs(key){
+  ensurePASemestres();
+  const map={'17':'sc','18':'pr','03':'sp'};
+  const src=(PARAMS.paSemestres[key] && PARAMS.paSemestres[key].pa) || PARAMS.pa;
+  Object.entries(map).forEach(([op,u])=>{
+    const pa=src[op]||{};
+    document.getElementById('pa-'+u+'-fat').value =pa.fat ?pa.fat.toLocaleString('pt-BR'):'';
+    document.getElementById('pa-'+u+'-prod').value=pa.prod?pa.prod.toLocaleString('pt-BR'):'';
+    document.getElementById('pa-'+u+'-tm').value  =pa.tm  ?pa.tm.toLocaleString('pt-BR',{minimumFractionDigits:2}):'';
+  });
+  calcFdu();
+}
+
+// Grava os valores atuais dos inputs no semestre `key` (apenas em memória)
+function collectPAFromInputs(key){
+  ensurePASemestres();
+  const map={'17':'sc','18':'pr','03':'sp'};
+  const dest=PARAMS.paSemestres[key].pa;
+  Object.entries(map).forEach(([op,u])=>{
+    dest[op].fat =parseBR(document.getElementById('pa-'+u+'-fat').value);
+    dest[op].prod=parseBR(document.getElementById('pa-'+u+'-prod').value);
+    dest[op].tm  =parseBR(document.getElementById('pa-'+u+'-tm').value);
+    dest[op].label=PA_LABELS[op];
+  });
+}
+
+// Troca de semestre no seletor: preserva o semestre anterior em memória e carrega o novo
+function onPASemestreChange(){
+  collectPAFromInputs(__pdPASemAtual);            // não perde o que foi editado
+  const key=document.getElementById('pa-semestre').value || '2026-S1';
+  __pdPASemAtual=key;
+  loadPAIntoInputs(key);
+}
+
 function openParams(){
   if (!pdCanUseParams()) return;
-  const map={'17':'sc','18':'pr','03':'sp'};
-  Object.entries(map).forEach(([op,u])=>{
-    const pa=PARAMS.pa[op]||{};
-    document.getElementById('pa-'+u+'-fat').value=pa.fat?pa.fat.toLocaleString('pt-BR'):'';
-    document.getElementById('pa-'+u+'-prod').value=pa.prod?pa.prod.toLocaleString('pt-BR'):'';
-    document.getElementById('pa-'+u+'-tm').value=pa.tm?pa.tm.toLocaleString('pt-BR',{minimumFractionDigits:2}):'';
-  });
+  ensurePASemestres();
+  // Abre no semestre correspondente ao mês atualmente selecionado no PD
+  const mesSel=document.getElementById('sm').value;
+  const key=getPASemestreKey(mesSel);
+  const selEl=document.getElementById('pa-semestre');
+  selEl.value = [...selEl.options].some(o=>o.value===key) ? key : '2026-S1';
+  __pdPASemAtual = selEl.value;
+  loadPAIntoInputs(selEl.value);
   document.getElementById('p-diesel').value=PARAMS.diesel;
   document.getElementById('p-rend').value=PARAMS.rend;
   // Alerta Frota
@@ -3812,12 +3946,12 @@ function openParams(){
 function closeParams(){ document.getElementById('modal-bg').classList.remove('open'); }
 
 async function saveParams(){
-  const map={'17':'sc','18':'pr','03':'sp'};
-  Object.entries(map).forEach(([op,u])=>{
-    PARAMS.pa[op].fat =parseBR(document.getElementById('pa-'+u+'-fat').value);
-    PARAMS.pa[op].prod=parseBR(document.getElementById('pa-'+u+'-prod').value);
-    PARAMS.pa[op].tm  =parseBR(document.getElementById('pa-'+u+'-tm').value);
-  });
+  // Grava o semestre exibido; os demais já estão preservados em memória (onPASemestreChange)
+  const key=document.getElementById('pa-semestre').value || '2026-S1';
+  collectPAFromInputs(key);
+  __pdPASemAtual=key;
+  // Fallback de compatibilidade: PARAMS.pa reflete o 1º Semestre
+  PARAMS.pa = PARAMS.paSemestres['2026-S1'].pa;
   PARAMS.diesel=parseFloat(document.getElementById('p-diesel').value)||6.47;
   PARAMS.rend  =parseFloat(document.getElementById('p-rend').value)||2.3;
   PARAMS.feriados=[...document.querySelectorAll('.fer-cb:checked')].map(cb=>cb.value);
@@ -4021,9 +4155,10 @@ function buildDataSummary(uid, mes) {
 
   // ── PA ──
   const unids  = uid==='all'?pdOpsForAll():[uid];
-  const paFat  = unids.reduce((a,u)=>a+(PARAMS.pa[u]||{fat:0}).fat,0);
-  const paProd = unids.reduce((a,u)=>a+(PARAMS.pa[u]||{prod:0}).prod,0);
-  const paTM   = uid==='all' ? unids.reduce((a,u)=>a+(PARAMS.pa[u]||{tm:0}).tm,0)/unids.length : (PARAMS.pa[uid]||{tm:0}).tm;
+  const paMes  = getPAByMes(mes);                    // PA do semestre do mês
+  const paFat  = unids.reduce((a,u)=>a+(paMes[u]||{fat:0}).fat,0);
+  const paProd = unids.reduce((a,u)=>a+(paMes[u]||{prod:0}).prod,0);
+  const paTM   = uid==='all' ? unids.reduce((a,u)=>a+(paMes[u]||{tm:0}).tm,0)/unids.length : (paMes[uid]||{tm:0}).tm;
   const paFatDia = diasOp>0?paFat/diasOp:0;
 
   // ── Placas ──
