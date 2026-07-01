@@ -1170,23 +1170,49 @@ function cpkPremissaVigente(premissas, fil, mes){
 //   porFil[fil]  → total do balde (linha do DRE)        — exclui agregados/sem cadastro
 //   apont[fil]   → { placa: comix } por placa própria    — vira custo direto da placa
 function cpkPedPropriaPorFil(pedDoc){
-  const porFil={SC:0,PR:0,SP:0}, apont={SC:{},PR:{},SP:{}}, excluidos=[];
-  const placas=(pedDoc&&pedDoc.data&&pedDoc.data.placas)||(pedDoc&&pedDoc.placas)||[];
+  const porFil={SC:0,PR:0,SP:0}, apont={SC:{},PR:{},SP:{}}, excluidos=[], incons=[];
+  const dd=(pedDoc&&pedDoc.data)||pedDoc||{};
+  const placas=dd.placas||[];
   placas.forEach(pl=>{
     const val=+pl.comix||0;
-    const v=cpkVeic(pl.placa);
-    if(!v||v.vinculo!=='proprio'){                                      // só frota própria
-      if(val) excluidos.push({ fonte:'Mapinha Pedágios', fil:pl.filial||'', placa:cpkNormPlaca(pl.placa), nome:'Pedágio (Valor Cobrado + Vale Comix)',
-        valorOrig:val, motivo: v? 'Pedágio de placa agregada' : 'Pedágio de placa sem cadastro',
-        regra: v? 'Pedágio de placa agregada fica FORA do CPK.' : 'Placa sem cadastro na frota — pedágio não entra no CPK.' });
-      return;
-    }
-    const fil=v.unidade||pl.filial; if(porFil[fil]==null)return;
     if(!val)return;
     const pn=cpkNormPlaca(pl.placa);
+    const v=cpkVeic(pl.placa);
+    if(!v){                                                             // sem cadastro na frota
+      excluidos.push({ fonte:'Mapinha Pedágios', fil:pl.filial||'', placa:pn, nome:'Pedágio (Valor Cobrado + Vale Comix)',
+        valorOrig:val, motivo:'Pedágio de placa sem cadastro',
+        regra:'Placa sem cadastro na frota — pedágio não entra no CPK.' });
+      incons.push({ tipo:'Pedágio de placa sem cadastro', fil:pl.filial||'—', placa:pn,
+        descricao:'Pedágio importado para placa fora do cadastro da frota.', valor:val });
+      return;
+    }
+    if(v.vinculo!=='proprio'){                                          // só frota própria
+      const indef = v.vinculo!=='agregado';                             // '' = vínculo não classificado no cadastro
+      excluidos.push({ fonte:'Mapinha Pedágios', fil:pl.filial||v.unidade||'', placa:pn, nome:'Pedágio (Valor Cobrado + Vale Comix)',
+        valorOrig:val, motivo: indef? 'Pedágio de placa com vínculo indefinido' : 'Pedágio de placa agregada',
+        regra: indef? 'Cadastro sem tipo de vínculo (FROTA/AGREGADO) — pedágio fica fora do CPK até a classificação.' : 'Pedágio de placa agregada fica FORA do CPK.' });
+      if(indef) incons.push({ tipo:'Pedágio de placa com vínculo indefinido', fil:pl.filial||v.unidade||'—', placa:pn,
+        descricao:'Cadastro sem tipo_vinculo (FROTA/AGREGADO) — pedágio excluído do CPK.', valor:val });
+      return;
+    }
+    // Filial: cadastro → filial gravada no doc do Mapinha → SC (mesmo fallback do
+    // Mapinha p/ placa sem filial). Nunca descarta silenciosamente pedágio próprio.
+    let fil=v.unidade||cpkUnidadeVeic({unidade:pl.filial});
+    if(porFil[fil]==null){
+      fil='SC';
+      incons.push({ tipo:'Pedágio sem filial identificada', fil:'—', placa:pn,
+        descricao:'Placa própria sem unidade no cadastro e sem filial válida no doc de pedágios — alocada em SC.', valor:val });
+    }
     porFil[fil]+=val; apont[fil][pn]=(apont[fil][pn]||0)+val;
   });
-  return { porFil, apont, excluidos };
+  // Pedágio da fatura SEM placa (taxas/linhas sem veículo): o DRE do Mapinha o inclui
+  // na linha de Pedágio da filial SC (computePedagio → porFilial.SC). Espelha aqui:
+  // entra no balde de SC SEM apontamento → vira resíduo rateado igualmente entre as
+  // placas próprias de SC (mesmo tratamento do Pessoal). Sem isso, o CPK divergia do
+  // Mapinha exatamente nesse valor.
+  const semPlaca=+dd.semPlacaCobrado||0;
+  if(semPlaca) porFil.SC+=semPlaca;
+  return { porFil, apont, excluidos, incons, semPlaca };
 }
 // Núcleo: custo da frota própria de UMA filial (espelho DRE − agregados).
 // lancList/osList: lançamentos {centroCusto,centroCustoNome,valor,placa}.
@@ -1649,6 +1675,19 @@ function cpkUnidadePlaca(placa, opSZB, frotaSZB){
 // ════════════════════════════════════════════════════════════════════
 async function cpkLoadCusto(mes){
   if(CPK.custoLoaded && CPK.custoMes===mes) return;
+  // SINGLE-FLIGHT: troca de mês durante a carga inicial disparava duas execuções
+  // concorrentes (cpkApplyFilters + cpkLoadAll) sobre os mesmos objetos globais,
+  // duplicando ledger/excluídos e deixando o resultado da última a terminar.
+  if(CPK._custoPromise){
+    if(CPK._custoPromiseMes===mes) return CPK._custoPromise;
+    try{ await CPK._custoPromise; }catch(_){}
+    if(CPK.custoLoaded && CPK.custoMes===mes) return;
+  }
+  CPK._custoPromiseMes=mes;
+  CPK._custoPromise=_cpkLoadCustoRun(mes).finally(()=>{ if(CPK._custoPromiseMes===mes) CPK._custoPromise=null; });
+  return CPK._custoPromise;
+}
+async function _cpkLoadCustoRun(mes){
   CPK.custoMes=mes; CPK.custoFilial={}; CPK.custoLoaded=false;
   CPK.apontaCustos={diesel:{},co:{},cp:{},ce:{},ped:{}};
   CPK.custoLedger=[];            // memória de cálculo (todas as linhas, por filial)
@@ -1690,8 +1729,19 @@ async function cpkLoadCusto(mes){
     (osByFil[filR]=osByFil[filR]||[]).push({centroCusto:cod,centroCustoNome:o.centroCustoNome||'',valor,placa:cpkPlacaLancamento(o)});
   });
 
-  // pedágio da frota própria, por placa (real, sem rateio) e total por filial
+  // pedágio da frota própria, por placa (real, sem rateio) e total por filial.
+  // CAUSA RAIZ (pedágio zerado no mês): o corte "frota própria" depende do cadastro
+  // de veículos. Se a troca de mês acontecia antes de cpkLoadFrota terminar (ou a 1ª
+  // leitura da ponte vinha vazia), TODAS as placas do doc PED_<mes> eram descartadas
+  // como "sem cadastro", o pedágio ficava 0 e o zero era cacheado para o mês.
+  // Garante o cadastro AQUI antes de classificar.
+  if(!CPK.frota || !CPK.frota.length){ try{ await cpkLoadFrota(); }catch(_){} }
   const pedInfo = cpkPedPropriaPorFil(ped);
+  if((!CPK.frota || !CPK.frota.length)){
+    const totDoc=+((((ped&&ped.data)||ped||{}).totalComix))||0;
+    if(totDoc) CPK.custoIncons.push({ tipo:'Cadastro de frota indisponível', fil:'—', placa:'',
+      descricao:'Pedágio do mês não pôde ser classificado (frota própria × agregado). Recarregue a página.', valor:totDoc });
+  }
 
   for(const fil of FILIAIS_PADRAO){
     const premissa = cpkPremissaVigente(prem, fil, mes);
@@ -1716,9 +1766,14 @@ async function cpkLoadCusto(mes){
       flags:{ receita:receita>0, possuiCusto:tot.total!==0, premissa:!!premissa, pedagio:(pedInfo.porFil[fil]||0)>0 } };
   }
 
-  // AUDITORIA: pedágios excluídos (placa agregada / sem cadastro) entram na lista de excluídos.
-  (pedInfo.excluidos||[]).forEach(e=>{ CPK.custoExcluidos.push(e);
-    if(!e.placa) CPK.custoIncons.push({ tipo:'Pedágio sem placa cadastrada', fil:e.fil||'', placa:'', descricao:e.nome, valor:e.valorOrig }); });
+  // AUDITORIA: pedágios excluídos (placa agregada / sem cadastro / vínculo indefinido)
+  // e inconsistências detectadas na classificação entram nas listas visíveis.
+  (pedInfo.excluidos||[]).forEach(e=> CPK.custoExcluidos.push(e));
+  (pedInfo.incons||[]).forEach(i=> CPK.custoIncons.push(i));
+  // Pedágio sem placa (fatura) — incluído em SC como resíduo do balde (regra do DRE).
+  if(pedInfo.semPlaca>0) CPK.custoLedger.push({ fonte:'Mapinha Pedágios', fil:'SC', cod:'', nome:'Pedágio da fatura sem placa', placa:'',
+    valorOrig:pedInfo.semPlaca, valorConsiderado:pedInfo.semPlaca, incluido:true, balde:'ped', garantia:false,
+    motivo:'Pedágio sem placa na fatura', regra:'Mesma regra do DRE do Mapinha: entra na filial SC e é rateado igualmente entre as placas próprias (resíduo do balde Pedágio).' });
 
   // AUDITORIA: lançamentos SEM filial confiável — não são rateados silenciosamente.
   (lanc||[]).forEach(d=>{
