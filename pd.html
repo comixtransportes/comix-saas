@@ -706,7 +706,7 @@ html{ -webkit-text-size-adjust:100%; }
         <option value="17">SC</option>
         <option value="18">PR</option>
         <option value="03">SP</option>
-        <option value="all">Todas</option>
+        <option value="all" selected>Todas</option>
       </select>
 
     </div>
@@ -1391,19 +1391,25 @@ function atlasFilterRowsForScope(rows, table) {
 function pdBranchLabel(op) {
   return op === '17' ? 'SC' : op === '18' ? 'PR' : op === '03' ? 'SP' : op;
 }
+let __pdUnitSelectInitDone = false;
 function configureUnitSelectForScope() {
   const sel = document.getElementById('su');
   if (!sel) return;
   const ops = pdAllowedOps();
-  if (!Array.isArray(ops)) return; // mantém seleção completa para admin/sem escopo
+  if (!Array.isArray(ops)) {
+    // admin / sem escopo: no primeiro carregamento força "Todas"
+    if (!__pdUnitSelectInitDone) { sel.value = 'all'; __pdUnitSelectInitDone = true; }
+    return;
+  }
   const allowed = pdUnique(ops).filter(op => ATLAS_PD_ALL_OPS.includes(op));
-  const previous = sel.value;
+  const previous = __pdUnitSelectInitDone ? sel.value : 'all';
   sel.innerHTML = '';
   if (!allowed.length) {
     const opt = document.createElement('option');
     opt.value = 'all'; opt.textContent = 'Sem filial ativa';
     sel.appendChild(opt);
     sel.value = 'all';
+    __pdUnitSelectInitDone = true;
     return;
   }
   allowed.forEach(op => {
@@ -1419,6 +1425,7 @@ function configureUnitSelectForScope() {
     sel.appendChild(opt);
   }
   sel.value = allowed.includes(previous) || (allowed.length > 1 && previous === 'all') ? previous : (allowed.length === 1 ? allowed[0] : 'all');
+  __pdUnitSelectInitDone = true;
 }
 window.addEventListener('message', function(event) {
   const d = event.data || {};
