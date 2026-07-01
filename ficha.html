@@ -216,7 +216,8 @@ select option{color:var(--black)}
 .ent-szb-row:last-child{border-bottom:none}
 .ent-szb-row.ok{background:var(--green-l)}
 .ent-szb-check{width:18px;height:18px;border-radius:50%;border:1.6px solid var(--gray-l);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:var(--white);background:var(--white)}
-.ent-szb-row.ok .ent-szb-check{background:var(--green);border-color:var(--green)}
+.ent-szb-row.ok .ent-szb-check,.ent-szb-row.sel .ent-szb-check{background:var(--green);border-color:var(--green)}
+.ent-szb-row.sel:not(.ok) .ent-szb-check{box-shadow:0 0 0 2px var(--green-l)}
 .ent-szb-ctrc{font-family:'IBM Plex Mono',monospace;font-weight:800;color:var(--blue);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ent-szb-client{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--gray);font-weight:650}
 .ent-szb-baixa{font-size:9px;font-weight:800;color:var(--amber-d);white-space:nowrap}
@@ -243,6 +244,11 @@ select option{color:var(--black)}
 .ent-szb-modal-file.filled{border-color:var(--green-m);border-style:solid;background:var(--green-l)}
 .ent-szb-modal-file strong{display:block;font-size:12px;color:var(--black)}
 .ent-szb-modal-file span{display:block;font-size:10px;color:var(--gray);font-weight:700;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ent-szb-modal-file small{display:block;font-size:9.5px;color:var(--blue);font-weight:800;margin-top:5px;line-height:1.35;white-space:normal}
+.ent-szb-modal-file-actions{display:flex;justify-content:center;gap:7px;margin-top:10px;flex-wrap:wrap}
+.ent-szb-modal-file-btn{border:none;border-radius:var(--r-xs);padding:8px 12px;font-size:11px;font-weight:900;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.ent-szb-modal-file-btn.cam{background:var(--blue);color:var(--white)}
+.ent-szb-modal-file-btn.gal{background:var(--black);color:var(--white)}
 /* ═══ FOTO CANHOTO ═══ */
 .foto-label{font-size:10px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:4px}
 .foto-zone{border:1.5px dashed var(--gray-l);border-radius:var(--r-sm);overflow:hidden;background:var(--white);transition:border-color .15s}
@@ -2309,14 +2315,16 @@ window.renderEntregasSZBRelation = async function() {
     return;
   }
   const okCount = rows.reduce((a,r) => a + (baixas.has(r.ctrcKey) ? 1 : 0), 0);
+  const selectedKey = (window.entregaSZBModalState && window.entregaSZBModalState.selectedKey) || "";
   box.innerHTML = `
     <div class="ent-szb-rel-hd"><div><div class="ent-szb-rel-title">CTRCs emitidos</div><div class="ent-szb-hint">Toque em uma linha para informar a entrega e anexar o canhoto.</div></div><div class="ent-szb-rel-count">${okCount}/${rows.length} OK</div></div>
     <div class="ent-szb-head"><span></span><span>Dt emissão</span><span>CTRC</span><span>Cliente</span><span>Dt baixa</span></div>
     <div class="ent-szb-list">
       ${rows.slice(0, 180).map(r => {
         const baixa = baixas.get(r.ctrcKey) || "";
-        return `<div class="ent-szb-row ${baixa ? "ok" : ""}" onclick="abrirEntregaSZB('${r.ctrcKey}')">
-          <span class="ent-szb-check">${baixa ? "✓" : ""}</span>
+        const selecionado = selectedKey === r.ctrcKey;
+        return `<div class="ent-szb-row ${baixa ? "ok" : ""} ${selecionado ? "sel" : ""}" onclick="abrirEntregaSZB('${r.ctrcKey}')">
+          <span class="ent-szb-check">${(baixa || selecionado) ? "✓" : ""}</span>
           <span>${entFmtDate(r.dtEmissao)}</span>
           <span class="ent-szb-ctrc" title="${entEsc(r.ctrc)}">${entEsc(r.ctrc)}</span>
           <span class="ent-szb-client" title="${entEsc(r.cliente || "—")}">${entEsc(r.cliente || "—")}</span>
@@ -2328,7 +2336,7 @@ window.renderEntregasSZBRelation = async function() {
 
 
 /* ═══ MODAL DE BAIXA — CTRC SELECIONADA ═══ */
-const entregaSZBModalState = window.entregaSZBModalState || (window.entregaSZBModalState = { record: null, foto: null, targetIdx: -1 });
+const entregaSZBModalState = window.entregaSZBModalState || (window.entregaSZBModalState = { record: null, foto: null, targetIdx: -1, selectedKey: "" });
 function findEntregaIndexByCTRC(ctrc) {
   const key = entNormCTRC(ctrc);
   if (!key) return -1;
@@ -2364,6 +2372,7 @@ window.abrirEntregaSZB = function(ctrcKey) {
   entregaSZBModalState.record = record;
   entregaSZBModalState.targetIdx = idx;
   entregaSZBModalState.foto = idx >= 0 ? (entregaFotos[idx] || null) : null;
+  entregaSZBModalState.selectedKey = record.ctrcKey || ctrcKey || "";
   const modal = document.getElementById("ent_szb_modal");
   if (!modal) return;
   const title = document.getElementById("ent_szb_modal_title");
@@ -2388,20 +2397,25 @@ window.abrirEntregaSZB = function(ctrcKey) {
   }
   if (data) data.value = idx >= 0 ? (g("e" + idx + "_data") || entTodayISO()) : entTodayISO();
   if (rec) rec.value = idx >= 0 ? g("e" + idx + "_rec") : "";
-  if (fileName) fileName.textContent = entregaSZBModalState.foto ? (entregaSZBModalState.foto.fileName || "Canhoto selecionado") : "JPG ou PNG, até 8 MB";
+  if (fileName) fileName.textContent = entregaSZBModalState.foto ? (entregaSZBModalState.foto.fileName || "Canhoto selecionado") : "Imagem até 8 MB";
   if (fileBox) fileBox.classList.toggle("filled", !!entregaSZBModalState.foto);
   const fileInput = document.getElementById("ent_szb_modal_file");
   if (fileInput) fileInput.value = "";
+  const fileInputGal = document.getElementById("ent_szb_modal_file_gal");
+  if (fileInputGal) fileInputGal.value = "";
   modal.classList.add("show");
+  setTimeout(() => renderEntregasSZBRelation(), 0);
 };
 window.fecharEntregaSZBModal = function() {
   document.getElementById("ent_szb_modal")?.classList.remove("show");
+  entregaSZBModalState.selectedKey = "";
+  setTimeout(() => renderEntregasSZBRelation(), 0);
 };
 window.anexarEntregaSZBModalFile = function(input) {
   const file = input.files && input.files[0];
   if (!file) return;
-  const allowed = ["image/jpeg", "image/jpg", "image/png"];
-  if (!allowed.includes(file.type)) { showToast("Use JPG ou PNG", "error"); return; }
+  const isImage = (file.type && file.type.startsWith("image/")) || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name || "");
+  if (!isImage) { showToast("Use uma imagem válida", "error"); return; }
   if (file.size > 8 * 1024 * 1024) { showToast("Imagem muito grande (máx 8MB)", "error"); return; }
   const reader = new FileReader();
   reader.onload = function(e) {
@@ -3922,11 +3936,17 @@ window.openPanel = function() {
       </div>
       <div style="margin-top:4px">
         <span class="foto-label">Foto do canhoto <span class="req">*</span></span>
-        <div class="ent-szb-modal-file" id="ent_szb_modal_file_box" onclick="document.getElementById('ent_szb_modal_file').click()">
+        <div class="ent-szb-modal-file" id="ent_szb_modal_file_box">
           <strong>Selecionar canhoto</strong>
-          <span id="ent_szb_modal_file_name">JPG ou PNG, até 8 MB</span>
+          <span id="ent_szb_modal_file_name">Imagem até 8 MB</span>
+          <small>Você pode tirar a foto direto pela câmera do celular ou escolher uma imagem da galeria.</small>
+          <div class="ent-szb-modal-file-actions">
+            <button type="button" class="ent-szb-modal-file-btn cam" onclick="document.getElementById('ent_szb_modal_file').click()">📷 Câmera</button>
+            <button type="button" class="ent-szb-modal-file-btn gal" onclick="document.getElementById('ent_szb_modal_file_gal').click()">🖼️ Galeria</button>
+          </div>
         </div>
-        <input type="file" id="ent_szb_modal_file" accept="image/jpeg,image/jpg,image/png" capture="environment" style="display:none" onchange="anexarEntregaSZBModalFile(this)">
+        <input type="file" id="ent_szb_modal_file" accept="image/jpeg,image/jpg,image/png,image/*" capture="environment" style="display:none" onchange="anexarEntregaSZBModalFile(this)">
+        <input type="file" id="ent_szb_modal_file_gal" accept="image/jpeg,image/jpg,image/png,image/*" style="display:none" onchange="anexarEntregaSZBModalFile(this)">
       </div>
     </div>
     <div class="ent-szb-modal-actions">
