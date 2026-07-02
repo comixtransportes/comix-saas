@@ -147,6 +147,19 @@ tr.grp:hover td,tr.res:hover td{background:inherit}
 .toast.gn{background:var(--gn)}.toast.rd{background:var(--rd)}.toast.am{background:var(--am)}.toast.ac{background:var(--ac)}
 .empty{text-align:center;color:var(--mu);padding:26px;font-size:12.5px}
 .lock-note{font-size:11px;color:var(--am);background:var(--am-bg);border:1px solid var(--am-bd);border-radius:var(--rs);padding:6px 10px;margin-bottom:10px}
+/* Premissas — painel de conferência (read-back do que alimenta o DRE) */
+.pr-src{font-size:11px;color:var(--mu);margin-bottom:10px}
+.pr-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.pr-grp{border:1px solid var(--bd2);border-radius:var(--r);background:var(--sf);padding:10px 12px}
+.pr-h{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mu);font-weight:600;margin-bottom:6px}
+.pr-row{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:3px 0;font-size:12px;border-bottom:1px dotted var(--bd2)}
+.pr-row:last-child{border-bottom:none}
+.pr-k{color:var(--tx)}
+.pr-v{color:var(--tx);white-space:nowrap}
+.pr-row.strong{font-weight:600;margin-top:2px;border-top:1px solid var(--bd);border-bottom:none;padding-top:5px}
+.pr-row.strong .pr-k,.pr-row.strong .pr-v{color:var(--ac)}
+.pr-row.zero .pr-k,.pr-row.zero .pr-v{color:var(--mu)}
+.pr-warn{display:inline-block;font-size:10px;font-weight:600;color:var(--am);background:var(--am-bg);border:1px solid var(--am-bd);border-radius:3px;padding:0 5px;margin-left:6px;text-transform:none;letter-spacing:0}
 canvas{max-width:100%}
 /* Pedágios — dropzones (mesmo padrão visual) */
 .ped-drop{display:flex;align-items:center;gap:12px;background:var(--wh);border:1.5px dashed var(--bd);border-radius:var(--r);padding:14px 16px;cursor:pointer;transition:.15s;font-size:12.5px}
@@ -314,6 +327,12 @@ td>.skel-line{vertical-align:middle}
 <!-- ══ PREMISSAS ══ -->
 <section class="view" id="v-prem">
   <div class="lock-note" id="premVigInfo"></div>
+
+  <div class="panel">
+    <div class="panel-h"><h3>Premissas em vigor — conferência</h3>
+      <span class="muted" style="font-size:11px">Espelha exatamente o que alimenta o DRE deste escopo</span></div>
+    <div class="panel-b"><div id="premReadback"></div></div>
+  </div>
 
   <div class="panel">
     <div class="panel-h"><h3>Metas (Pactuado / PA)</h3></div>
@@ -1845,7 +1864,82 @@ function fillPremissaForm(){
   document.getElementById('prCPEpiReal').value=(p.cpEpiReal!==undefined&&p.cpEpiReal!==null)?p.cpEpiReal:'';
   document.getElementById('prCPLegalReal').value=(p.cpLegalReal!==undefined&&p.cpLegalReal!==null)?p.cpLegalReal:'';
   document.getElementById('prCPOutrosReal').value=(p.cpOutrosReal!==undefined&&p.cpOutrosReal!==null)?p.cpOutrosReal:'';
-  renderFolha(); renderFrota();
+  renderFolha(); renderFrota(); renderPremReadback();
+}
+/* Conferência (read-back): lista cada premissa imputada individualmente, a partir da
+   MESMA origem que o DRE consome (ST.premissa / calcCP/calcCE), para lembrar item a item
+   o que está em vigor — inclusive quando o formulário está em branco por herança de vigência. */
+function renderPremReadback(){
+  const box=document.getElementById('premReadback'); if(!box) return;
+  const cons=isConsolidado();
+  let cp, ce, m;
+  if(cons){
+    // Reaproveita o que o renderDre acabou de calcular; recomputa só se ausente.
+    if(ST._cpInfo && ST._ceInfo){ cp=ST._cpInfo; ce=ST._ceInfo; }
+    else { const V=dreView(); cp=V.cp||{}; ce=V.ce||{}; }
+    m=(ST.premissa&&ST.premissa.metas)||{};
+  } else {
+    cp=calcCPDetalhado(); ce=calcCEDetalhado(); m=(ST.premissa&&ST.premissa.metas)||{};
+  }
+  const p=ST.premissa||{};
+
+  let origem;
+  if(cons) origem='Consolidado (soma das filiais) — somente leitura. Edite premissas por filial.';
+  else if(p.vigencia===ST.mesRef) origem='Premissa própria de '+mesLabel(ST.mesRef)+'.';
+  else if(p.vigencia) origem='Herdada da vigência '+p.vigencia+' — ainda não há premissa salva em '+mesLabel(ST.mesRef)+'.';
+  else origem='Nenhuma premissa cadastrada para este escopo.';
+
+  const money=v=>moeda(+v||0);
+  const row=(k,v,opt)=>{ opt=opt||{}; const z=(!opt.strong && !(+String(v).replace(/[^\d,-]/g,'').replace(',','.'))) ? ' zero':''; 
+    return `<div class="pr-row${opt.strong?' strong':''}${z}"><span class="pr-k">${k}</span><span class="pr-v mono">${v}</span></div>`; };
+
+  // Herança do realizado (é específico do mês): sinaliza quando vem de vigência anterior.
+  const realHerdado = (!cons && p.vigencia && p.vigencia!==ST.mesRef && (+cp.realTotal>0))
+    ? `<span class="pr-warn">herdado de ${p.vigencia}</span>` : '';
+
+  const grpRealizado =
+    `<div class="pr-grp"><div class="pr-h">Custo de Pessoal — Realizado (alimenta o DRE)${realHerdado}</div>`
+    + row('Folha / Enc.', money(cp.folhaReal))
+    + row('EPI e uniformes', money(cp.epiReal))
+    + row('Legal', money(cp.legalReal))
+    + row('Outros — Alim./VT', money(cp.outrosReal))
+    + row('= Total realizado', money(cp.realTotal), {strong:true})
+    + `</div>`;
+
+  const grpMeta =
+    `<div class="pr-grp"><div class="pr-h">Custo de Pessoal — Meta / PA</div>`
+    + row('Folha por função (Σ + adic.)', money(cp.folhaMeta))
+    + row('EPI / Uniformes PA', money(cp.epiMeta))
+    + row('Legal PA', money(cp.legalMeta))
+    + row('Outros PA', money(cp.outrosMeta))
+    + row('= Total meta', money(cp.metaTotal), {strong:true})
+    + `</div>`;
+
+  const frp=(p.folhaRealPct===undefined||p.folhaRealPct===null||p.folhaRealPct==='')?4.9:p.folhaRealPct;
+  const encTxt=(p.encargosPct!==undefined&&p.encargosPct!==null&&p.encargosPct!=='')?num(p.encargosPct)+'%':'—';
+  const grpParam =
+    `<div class="pr-grp"><div class="pr-h">Parâmetros</div>`
+    + row('Encargos', cons?'—':encTxt)
+    + row('Folha real (% Fat.)', cons?'—':num(frp)+'%')
+    + row('Funções cadastradas', cons?'—':num((p.folha||[]).length))
+    + `</div>`;
+
+  const grpCE =
+    `<div class="pr-grp"><div class="pr-h">Frota (C.E)</div>`
+    + row('Cavalos', money(ce.cavalos))
+    + row('Carretas', money(ce.carretas))
+    + row('VA', money(ce.va))
+    + (ce.outros?row('Outros', money(ce.outros)):'')
+    + row('= Total C.E', money(ce.realTotal), {strong:true})
+    + `</div>`;
+
+  const metaDefs=[['Fat. Bruto',m.fatBruto,1],['Produção (t)',m.producaoT,0],['Diesel',m.diesel,1],
+    ['Agregados',m.agreg,1],['C.O',m.co,1],['C.P',m.cp,1],['C.E',m.ce,1],['Result. Fin.',m.resultadoFinanceiro,1]];
+  const metaRows=metaDefs.filter(([,v])=>+v).map(([k,v,isMoney])=>row(k, isMoney?money(v):num(v))).join('');
+  const grpMetas = metaRows ? `<div class="pr-grp"><div class="pr-h">Metas do mês</div>${metaRows}</div>` : '';
+
+  box.innerHTML = `<div class="pr-src">${origem}</div>`
+    + `<div class="pr-cols">${grpRealizado}${grpMeta}${grpParam}${grpCE}${grpMetas}</div>`;
 }
 function renderFolha(){
   const tb=document.getElementById('folhaTbody'); const arr=ST.premissa.folha||[];
