@@ -643,6 +643,20 @@ body.checklist-only .view-area{height:100%;}
 .os-aprovadores.muted{color:var(--mu)}
 #sp-btn-imprimir{background:#fff;border-color:var(--bd);color:var(--tx)}
 #sp-btn-imprimir:hover{border-color:var(--ac);color:var(--ac);background:var(--ac-bg)}
+/* Cabeçalhos ordenáveis — Painel Geral */
+#view-gestao th.gestao-th{cursor:pointer;user-select:none;white-space:nowrap;transition:color .12s}
+#view-gestao th.gestao-th:hover{color:var(--ac)}
+#view-gestao th.gestao-th .sort-arrow{font-size:9px;margin-left:3px;color:var(--ac);font-weight:800}
+/* Notas fiscais somente leitura — OS concluída */
+#sp-nf-readonly .nf-ro-item{border:1px solid var(--bd2);border-radius:var(--rs);padding:9px 11px;margin-bottom:8px;background:#fafbfc}
+#sp-nf-readonly .nf-ro-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+#sp-nf-readonly .nf-ro-name{font-size:11.5px;font-weight:700;color:var(--tx);display:flex;align-items:center;gap:6px;min-width:0}
+#sp-nf-readonly .nf-ro-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#sp-nf-readonly .nf-ro-view{font-size:11px;font-weight:700;color:var(--ac);text-decoration:none;white-space:nowrap}
+#sp-nf-readonly .nf-ro-view:hover{text-decoration:underline}
+#sp-nf-readonly .nf-ro-obs{font-size:10.5px;color:var(--mu);margin-top:5px}
+#sp-nf-readonly .nf-ro-img{margin-top:7px}
+#sp-nf-readonly .nf-ro-img img{max-width:100%;max-height:110px;border-radius:var(--rs);border:1px solid var(--bd2)}
 
 
 /* Ajustes pontuais solicitados — impressão, Painel Geral, Kanban e Abrir O.S */
@@ -1058,7 +1072,21 @@ body.checklist-only .view-area{height:100%;}
             </div>
             <div style="padding:0;overflow:hidden;border:1px solid var(--bd2);border-radius:var(--rs)">
               <table>
-                <thead><tr><th>OS</th><th>Frota</th><th>Abertura</th><th>Tipo</th><th>Serviço</th><th>Local</th><th>Prazo</th><th>Atraso</th><th>Custo</th><th>Aprovação</th><th>Aprovador</th><th>Status</th><th style="width:82px"></th></tr></thead>
+                <thead><tr>
+                  <th class="gestao-th" onclick="sortGestao('os')">OS<span class="sort-arrow" data-k="os"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('frota')">Frota<span class="sort-arrow" data-k="frota"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('abertura')">Abertura<span class="sort-arrow" data-k="abertura"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('tipo')">Tipo<span class="sort-arrow" data-k="tipo"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('servico')">Serviço<span class="sort-arrow" data-k="servico"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('local')">Local<span class="sort-arrow" data-k="local"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('prazo')">Prazo<span class="sort-arrow" data-k="prazo"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('atraso')">Atraso<span class="sort-arrow" data-k="atraso"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('custo')">Custo<span class="sort-arrow" data-k="custo"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('aprovacao')">Aprovação<span class="sort-arrow" data-k="aprovacao"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('aprovador')">Aprovador<span class="sort-arrow" data-k="aprovador"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('status')">Status<span class="sort-arrow" data-k="status"></span></th>
+                  <th style="width:82px"></th>
+                </tr></thead>
                 <tbody id="gestao-tbody">
                   <tr><td colspan="13" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Carregando O.S reais...</td></tr>
                 </tbody>
@@ -1338,6 +1366,8 @@ body.checklist-only .view-area{height:100%;}
       <div id="sp-nf-locked" style="display:none;background:var(--am-bg);border:1px solid var(--am-bd);border-radius:var(--rs);padding:9px 11px;font-size:11px;color:var(--am);margin-bottom:10px">
         🔒 Aguardando aprovação para liberar anexo de notas fiscais.
       </div>
+      <!-- Visualização somente leitura das NFs anexadas (OS concluída) -->
+      <div id="sp-nf-readonly" style="display:none"></div>
       <div id="sp-nf-fields">
         <!-- NF 1 -->
         <div style="border:1px solid var(--bd2);border-radius:var(--rs);padding:10px;margin-bottom:8px;background:#fafbfc">
@@ -2503,6 +2533,11 @@ function dataCurta(v) {
   const d = dtFrom(v);
   return d ? d.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit'}) : '—';
 }
+// Data completa dd/mm/aaaa — usada nas colunas Abertura e Prazo do Painel Geral
+function dataCompleta(v) {
+  const d = dtFrom(v);
+  return d ? d.toLocaleDateString('pt-BR', {day:'2-digit', month:'2-digit', year:'numeric'}) : '—';
+}
 function dataHora(v) {
   const d = dtFrom(v);
   return d ? d.toLocaleString('pt-BR', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '—';
@@ -2826,14 +2861,55 @@ document.addEventListener('click', function(e) {
   if (!e.target.closest?.('#os-floating-menu') && !e.target.closest?.('.os-options-btn')) closeOSOptionsMenu();
 });
 
+// ══ Ordenação do Painel Geral ══
+// Clicar no nome da coluna ordena crescente; clicar de novo inverte (decrescente).
+let _gestaoSort = { key: null, dir: 1 }; // dir: 1 = crescente, -1 = decrescente
+const GESTAO_SORT_KEYS = {
+  os:        { type: 'str', get: o => o.id || '' },
+  frota:     { type: 'str', get: o => o.veiculo || '' },
+  abertura:  { type: 'num', get: o => { const d = dtFrom(o.criadoEm); return d ? d.getTime() : 0; } },
+  tipo:      { type: 'str', get: o => o.tipo || o.tipoEquipamento || '' },
+  servico:   { type: 'str', get: o => servicoResumo(o) || '' },
+  local:     { type: 'str', get: o => o.local || '' },
+  prazo:     { type: 'num', get: o => { const d = dtFrom(o.prazo); return d ? d.getTime() : 0; } },
+  atraso:    { type: 'num', get: o => { const a = atrasoOS(o.prazo, o.status); return a ? parseInt(a, 10) || 0 : 0; } },
+  custo:     { type: 'num', get: o => Number(o.valorTotal || 0) },
+  aprovacao: { type: 'num', get: o => Number(o.valorTotal || 0) },
+  aprovador: { type: 'str', get: o => aprovadoresLabelOS(o) || '' },
+  status:    { type: 'str', get: o => o.status || '' },
+};
+function sortGestao(key) {
+  if (!GESTAO_SORT_KEYS[key]) return;
+  if (_gestaoSort.key === key) _gestaoSort.dir = -_gestaoSort.dir;
+  else { _gestaoSort.key = key; _gestaoSort.dir = 1; }
+  renderPainelGeral();
+}
+function aplicarOrdenacaoGestao(lista) {
+  const cfg = GESTAO_SORT_KEYS[_gestaoSort.key];
+  if (!cfg) return lista;
+  const dir = _gestaoSort.dir;
+  return lista.slice().sort((a, b) => {
+    const va = cfg.get(a), vb = cfg.get(b);
+    if (cfg.type === 'num') return ((va || 0) - (vb || 0)) * dir;
+    return String(va).localeCompare(String(vb), 'pt-BR', { numeric: true, sensitivity: 'base' }) * dir;
+  });
+}
+function atualizarSetasGestao() {
+  document.querySelectorAll('#view-gestao .sort-arrow').forEach(el => {
+    const k = el.getAttribute('data-k');
+    el.textContent = (k === _gestaoSort.key) ? (_gestaoSort.dir === 1 ? '▲' : '▼') : '';
+  });
+}
 function renderPainelGeral() {
   const tbody = document.getElementById('gestao-tbody');
   if (!tbody) return;
-  const ordens = filtrarOrdensGestao();
+  atualizarSetasGestao();
+  let ordens = filtrarOrdensGestao();
   if (!ordens.length) {
     tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhuma O.S real encontrada.</td></tr>';
     return;
   }
+  ordens = aplicarOrdenacaoGestao(ordens);
   tbody.innerHTML = ordens.map(os => {
     const atraso = atrasoOS(os.prazo, os.status);
     const serv = servicoResumo(os);
@@ -2841,11 +2917,11 @@ function renderPainelGeral() {
     return `<tr onclick="openPanel('${escapeHtml(os.id)}')">
       <td><span class="os-n">${escapeHtml(os.id)}</span></td>
       <td>${escapeHtml(os.veiculo || '—')}</td>
-      <td>${os.criadoEm ? escapeHtml(dataCurta(os.criadoEm)) : '—'}</td>
+      <td>${os.criadoEm ? escapeHtml(dataCompleta(os.criadoEm)) : '—'}</td>
       <td>${escapeHtml(os.tipo || os.tipoEquipamento || '—')}</td>
       <td>${escapeHtml(serv)}</td>
       <td>${escapeHtml(os.local || '—')}</td>
-      <td>${os.prazo ? escapeHtml(dataCurta(os.prazo)) : '—'}</td>
+      <td>${os.prazo ? escapeHtml(dataCompleta(os.prazo)) : '—'}</td>
       <td>${atraso ? `<span class="bdg bdg-rd">${atraso} ⚠</span>` : '—'}</td>
       <td style="font-family:var(--m)">${moeda(os.valorTotal || 0)}</td>
       <td><span class="bdg ${Number(os.valorTotal||0)>1000?'bdg-pu':Number(os.valorTotal||0)>=300?'bdg-am':'bdg-gn'}">${escapeHtml(nivelAprovacao(os.valorTotal || 0))}</span></td>
@@ -5366,21 +5442,34 @@ function openPanel(osId) {
   // Fotos reais
   renderFotosOS(os);
 
-  // Seção NF — visível se OS aprovada ou "Aguardando finalizar", e o usuário é o criador
-  const nfSection = document.getElementById('sp-nf-section');
-  const nfFields  = document.getElementById('sp-nf-fields');
-  const nfLocked  = document.getElementById('sp-nf-locked');
-  const isAprovada = ['Aguardando finalizar','Concluída'].includes(os.status);
-  const isCriador  = !ATLAS_CURRENT_USER.email || (os.criadoPor === ATLAS_CURRENT_USER.email) || isAprovador();
+  // Seção NF:
+  //  • OS Concluída  → sempre mostra as NFs anexadas em modo somente leitura (visível a todos)
+  //  • Aguardando finalizar + criador → campos editáveis para anexar/finalizar
+  //  • Demais casos → aviso de bloqueio
+  const nfSection  = document.getElementById('sp-nf-section');
+  const nfFields   = document.getElementById('sp-nf-fields');
+  const nfLocked   = document.getElementById('sp-nf-locked');
+  const nfReadonly = document.getElementById('sp-nf-readonly');
+  const isConcluida  = String(os.status || '').toLowerCase().includes('conclu');
+  const isAguardando = os.status === 'Aguardando finalizar';
+  const isCriador    = !ATLAS_CURRENT_USER.email || (os.criadoPor === ATLAS_CURRENT_USER.email) || isAprovador();
 
   if (nfSection) {
     nfSection.style.display = 'block';
-    if (isAprovada && isCriador) {
-      if (nfLocked) nfLocked.style.display = 'none';
-      if (nfFields) { nfFields.style.display = 'block'; preencherNFsExistentes(os); }
+    if (isConcluida) {
+      // OS já finalizada: exibe as NFs anexadas para qualquer usuário
+      if (nfLocked)   nfLocked.style.display = 'none';
+      if (nfFields)   nfFields.style.display = 'none';
+      if (nfReadonly) { nfReadonly.style.display = 'block'; renderNFsReadOnly(os); }
+    } else if (isAguardando && isCriador) {
+      // Aguardando finalização: permite anexar e concluir
+      if (nfLocked)   nfLocked.style.display = 'none';
+      if (nfReadonly) nfReadonly.style.display = 'none';
+      if (nfFields)   { nfFields.style.display = 'block'; preencherNFsExistentes(os); }
     } else {
-      if (nfLocked) nfLocked.style.display = 'block';
-      if (nfFields) nfFields.style.display = 'none';
+      if (nfReadonly) nfReadonly.style.display = 'none';
+      if (nfFields)   nfFields.style.display = 'none';
+      if (nfLocked)   nfLocked.style.display = 'block';
     }
   }
 
@@ -5396,6 +5485,32 @@ function openPanel(osId) {
 
   document.getElementById('overlay').classList.add('on');
   document.getElementById('side-panel').classList.add('on');
+}
+
+// Exibe as notas fiscais anexadas em modo somente leitura (OS concluída).
+function renderNFsReadOnly(os) {
+  const el = document.getElementById('sp-nf-readonly');
+  if (!el) return;
+  const blocos = [];
+  for (const num of [1,2,3]) {
+    const url  = os['nf' + num + '_url'] || '';
+    const nome = os['nf' + num + '_nome'] || '';
+    const obs  = os['nf' + num + '_obs'] || '';
+    if (!url && !obs) continue; // NF não preenchida
+    const isImg = /\.(jpg|jpeg|png)$/i.test(nome);
+    blocos.push(`
+      <div class="nf-ro-item">
+        <div class="nf-ro-head">
+          <div class="nf-ro-name">📄 <span>${escapeHtml(nome || 'Nota Fiscal ' + num)}</span></div>
+          ${url ? `<a class="nf-ro-view" href="${escapeHtml(url)}" target="_blank" rel="noopener">Visualizar ↗</a>` : ''}
+        </div>
+        ${(url && isImg) ? `<div class="nf-ro-img"><img src="${escapeHtml(url)}" onerror="this.parentNode.style.display='none'"></div>` : ''}
+        ${obs ? `<div class="nf-ro-obs">${escapeHtml(obs)}</div>` : ''}
+      </div>`);
+  }
+  el.innerHTML = blocos.length
+    ? blocos.join('')
+    : '<div style="font-size:11.5px;color:var(--mu);padding:8px 2px">Nenhuma nota fiscal anexada a esta O.S.</div>';
 }
 
 function preencherNFsExistentes(os) {
