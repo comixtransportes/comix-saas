@@ -913,12 +913,12 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
           <div class="card-ico" style="background:var(--red-l);color:var(--red)">⚠️</div>
           <div class="cfg-notif-card-title">
             <h2>Auditoria de e-mails enviados</h2>
-            <span class="cfg-notif-mini" id="cfg_email_retry_status">Retry automático ativo · 1 por minuto</span>
+            <span class="cfg-notif-mini" id="cfg_email_retry_status">Retry automático ativo · 1 a cada 40 segundos</span>
           </div>
         </div>
         <div class="card-body">
           <div class="cfg-note" style="margin-bottom:10px">
-            Esta auditoria lê a fila <code>email_queue</code>. E-mails com <strong>ERROR</strong> podem ser reenviados alterando o estado para <strong>RETRY</strong>. O retry automático processa no máximo 1 e-mail por minuto para evitar novo bloqueio por excesso de requisições.
+            Esta auditoria lê a fila <code>email_queue</code>. E-mails com <strong>ERROR</strong> podem ser reenviados alterando o estado para <strong>RETRY</strong>. O retry automático processa no máximo 1 e-mail a cada 40 segundos para evitar novo bloqueio por excesso de requisições.
           </div>
           <div class="cfg-email-audit-tools">
             <div class="f"><label>Pesquisar na auditoria</label><input id="cfg_email_audit_search" placeholder="Assunto, destinatário, erro ou ID" oninput="cfgRenderEmailAudit()"></div>
@@ -2109,10 +2109,10 @@ const CFG_NOTIF_FROTA_SEM_CARGA_LEGACY_ID = "frota_sem_carregamento_5_dias";
 const CFG_NOTIF_ENVIO_PADRAO = {
   modoFila: "sequencial",
   envioSequencial: true,
-  intervaloEntreEmailsMs: 60000,
-  espacamentoEntreEmailsMs: 60000,
+  intervaloEntreEmailsMs: 20000,
+  espacamentoEntreEmailsMs: 20000,
   retryAutomatico: true,
-  retryIntervaloMs: 60000,
+  retryIntervaloMs: 40000,
   retryMaxTentativas: 5,
   retrySomenteErrosTemporarios: true
 };
@@ -2927,11 +2927,11 @@ async function cfgSaveEventoEmail() {
    ──────────────────────────────────────────────────────────────────────────
    A extensão Firebase Trigger Email entende delivery.state = "RETRY" como
    solicitação de nova tentativa. Esta tela faz a auditoria e evita rajadas:
-   o retry automático processa no máximo 1 documento por minuto.
+   o retry automático processa no máximo 1 documento a cada 40 segundos.
    ══════════════════════════════════════════════════════════════════════════ */
 const CFG_EMAIL_QUEUE_COLLECTION = "email_queue";
-const CFG_EMAIL_RETRY_INTERVAL_MS = 60000;
-const CFG_EMAIL_AUTO_RETRY_SCAN_MS = 60000;
+const CFG_EMAIL_RETRY_INTERVAL_MS = 40000;
+const CFG_EMAIL_AUTO_RETRY_SCAN_MS = 40000;
 const CFG_EMAIL_RETRY_MAX_TENTATIVAS = 5;
 let cfgEmailRetryTimer = null;
 let cfgEmailRetryRunning = false;
@@ -3144,14 +3144,14 @@ async function cfgProcessEmailRetryQueue(mode = "manual") {
     }
     for (let i = 0; i < candidatos.length; i++) {
       const d = candidatos[i];
-      if (statusEl) statusEl.textContent = `Retry ${mode} · ${i + 1}/${candidatos.length} · intervalo de 1 minuto`;
+      if (statusEl) statusEl.textContent = `Retry ${mode} · ${i + 1}/${candidatos.length} · intervalo de 40 segundos`;
       await cfgRetrySingleEmail(d.id, mode);
       if (i < candidatos.length - 1) await cfgSleep(CFG_EMAIL_RETRY_INTERVAL_MS);
     }
   } finally {
     cfgEmailRetryRunning = false;
     if (btn) btn.disabled = false;
-    if (statusEl) statusEl.textContent = "Retry automático ativo · 1 por minuto";
+    if (statusEl) statusEl.textContent = "Retry automático ativo · 1 a cada 40 segundos";
     await cfgRefreshEmailAudit(true);
   }
 }
@@ -3170,14 +3170,14 @@ function cfgStartEmailAutoRetry() {
       if (!candidato) return;
       cfgEmailRetryRunning = true;
       const statusEl = document.getElementById("cfg_email_retry_status");
-      if (statusEl) statusEl.textContent = "Retry automático em execução · 1 por minuto";
+      if (statusEl) statusEl.textContent = "Retry automático em execução · 1 a cada 40 segundos";
       await cfgRetrySingleEmail(candidato.id, "automatico");
     } catch (e) {
       console.warn("[cfg] cfgStartEmailAutoRetry:", e && e.message);
     } finally {
       cfgEmailRetryRunning = false;
       const statusEl = document.getElementById("cfg_email_retry_status");
-      if (statusEl) statusEl.textContent = "Retry automático ativo · 1 por minuto";
+      if (statusEl) statusEl.textContent = "Retry automático ativo · 1 a cada 40 segundos";
     }
   }, CFG_EMAIL_AUTO_RETRY_SCAN_MS);
 }
