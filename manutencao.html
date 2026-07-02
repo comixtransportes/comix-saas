@@ -121,6 +121,10 @@ tbody tr:last-child{border-bottom:none}
 .filter-bar{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
 .filter-bar select,.filter-bar input{padding:5px 8px;font-size:11.5px;font-family:var(--f);border:1.5px solid var(--bd);border-radius:var(--rs);outline:none;color:var(--tx);background:var(--wh)}
 .filter-bar select:focus,.filter-bar input:focus{border-color:var(--ac)}
+.filial-filter{display:inline-flex;align-items:center;gap:3px;background:var(--bg);padding:3px;border-radius:var(--rs);border:1px solid var(--bd)}
+.filial-chip{padding:6px 10px;font-size:11px;font-weight:700;color:var(--mu);border:0;background:none;border-radius:4px;cursor:pointer;white-space:nowrap;font-family:inherit;transition:.12s}
+.filial-chip:hover{color:var(--tx)}
+.filial-chip.on{background:var(--wh);color:var(--ac);box-shadow:0 1px 2px rgba(0,0,0,.06)}
 
 /* OS número */
 .os-n{font-family:var(--m);font-weight:600;font-size:11.5px;color:var(--ac)}
@@ -1029,6 +1033,7 @@ body.checklist-only .view-area{height:100%;}
           <div class="card">
             <div class="card-hdr gestao-hdr"><div><div class="card-title">Geral</div><div class="card-sub">Todas as O.S cadastradas no Firebase</div></div><button class="btn btn-ac btn-nova-os" onclick="goTo('nova-os',null)">+ Nova OS</button></div>
             <div class="filter-bar">
+              <div class="filial-filter" id="gestaoFilialFilter" title="Filtrar por filial"><button class="filial-chip on" data-uf="all" onclick="setGestaoFilial('all',this)">Todas</button><button class="filial-chip" data-uf="SC" onclick="setGestaoFilial('SC',this)">SC</button><button class="filial-chip" data-uf="PR" onclick="setGestaoFilial('PR',this)">PR</button><button class="filial-chip" data-uf="SP" onclick="setGestaoFilial('SP',this)">SP</button></div>
               <select id="gestao-filter-status"><option value="">Todos status</option><option>Aberta</option><option>Em execução</option><option>Aprovada</option><option>Aguardando finalizar</option><option>Reprovada</option><option>Concluída</option><option>Manutenção</option></select>
               <select id="gestao-filter-tipo"><option value="">Todos tipos</option><option>Cavalo</option><option>Carreta</option><option>Compressor</option><option>Corretiva</option><option>Preventiva</option><option>Preditiva</option><option>Acidente</option></select>
               <select id="gestao-filter-local"><option value="">Todas locais</option><option>Interna</option><option>Externa</option></select>
@@ -2709,12 +2714,19 @@ function setupOSFilters() {
     }
   });
 }
+let MNT_GESTAO_FILIAL = 'all';
+function setGestaoFilial(uf, el) {
+  MNT_GESTAO_FILIAL = uf || 'all';
+  document.querySelectorAll('#gestaoFilialFilter .filial-chip').forEach(c => c.classList.toggle('on', c === el || (!el && c.dataset.uf === MNT_GESTAO_FILIAL)));
+  renderPainelGeral();
+}
 function filtrarOrdensGestao() {
   const st = document.getElementById('gestao-filter-status')?.value || '';
   const tp = document.getElementById('gestao-filter-tipo')?.value || '';
   const loc = document.getElementById('gestao-filter-local')?.value || '';
   const fr = mntUpper(document.getElementById('gestao-filter-frota')?.value || '');
   const q = mntUpper(document.getElementById('gestao-filter-busca')?.value || '');
+  const fil = mntUpper(MNT_GESTAO_FILIAL || 'all');
   const per = MNT_GESTAO_PERIOD || {};
   const fromT = per.from ? new Date(per.from + 'T00:00:00').getTime() : -Infinity;
   const toT   = per.to   ? new Date(per.to   + 'T23:59:59.999').getTime() : Infinity;
@@ -2727,6 +2739,7 @@ function filtrarOrdensGestao() {
       && (!tp || os.tipo === tp || os.tipoEquipamento === tp)
       && (!loc || os.local === loc)
       && (!fr || mntUpper(os.veiculo) === fr || mntUpper(os.frota).includes(fr))
+      && (fil === 'ALL' || mntUpper(osFilialLabel(os)) === fil)
       && (!q || hay.includes(q))
       && dentroPeriodo;
   });
