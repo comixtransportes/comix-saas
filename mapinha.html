@@ -76,6 +76,8 @@ label.fld{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--
 .tabs-r{margin-left:auto;display:flex;align-items:center;gap:8px}
 .sel{font-family:var(--f);font-size:11px;color:var(--tx);background:var(--wh);border:1px solid var(--bd);border-radius:3px;padding:3px 6px;height:26px;outline:none}
 .sel:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac-bg)}
+.lanc-filter{min-width:260px;height:32px}
+@media(max-width:900px){.lanc-filter{min-width:180px;width:100%}}
 /* Seletor de mês/ano — mesmo padrão visual da tela PD */
 .mes-field{position:relative;display:inline-flex;}
 .tb-mes{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--bd);border-radius:3px;padding:3px 8px;font-size:11px;font-family:var(--m);letter-spacing:-.2px;white-space:nowrap;background:var(--wh);color:var(--tx);height:24px;cursor:pointer;outline:none;}
@@ -270,6 +272,7 @@ td>.skel-line{vertical-align:middle}
           <option value="manual">Manual</option>
           <option value="manutencao">Manutenção (OS)</option>
         </select>
+        <input type="text" id="filtroLancTexto" class="lanc-filter" placeholder="Filtrar lançamentos..." title="Filtra por data, fornecedor, N.F., placa, centro de custo, valor ou origem" oninput="renderLancamentos()">
       </div>
     </div>
     <div class="panel-b" style="overflow:auto;max-height:440px">
@@ -1505,12 +1508,31 @@ async function loadLancOS(){
 
 function lancVisiveis(){ return [...ST.lancManuais, ...ST.lancOS]; }
 
+function normalizaFiltroLanc(v){
+  return String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+}
+function textoLancamentoBusca(l){
+  const dt=dtFrom(l.data);
+  const ds=dt?dt.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}):'';
+  const origemTxt = l.origem==='manutencao' ? `manutencao os ${l.osId||''}` : 'manual';
+  return normalizaFiltroLanc([
+    ds, l.data, l.fornecedor, l.nf, l.placa, l.centroCusto, l.centroCustoNome,
+    moeda(l.valor), String(l.valor||''), l.origem, origemTxt
+  ].join(' '));
+}
 function renderLancamentos(){
   const f=document.getElementById('filtroOrigem').value;
-  const rows = lancVisiveis().filter(l=>!f||l.origem===f)
+  const buscaEl=document.getElementById('filtroLancTexto');
+  const termos=normalizaFiltroLanc(buscaEl?buscaEl.value:'').split(/\s+/).filter(Boolean);
+  const rows = lancVisiveis().filter(l=>{
+      if(f&&l.origem!==f) return false;
+      if(!termos.length) return true;
+      const txt=textoLancamentoBusca(l);
+      return termos.every(t=>txt.includes(t));
+    })
     .sort((a,b)=> String(a.data).localeCompare(String(b.data)));
   const tb=document.getElementById('lancTbody');
-  if(!rows.length){ tb.innerHTML='<tr><td colspan="8" class="empty">Nenhum lançamento neste mês.</td></tr>'; return; }
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="8" class="empty">Nenhum lançamento encontrado para os filtros aplicados.</td></tr>'; return; }
   tb.innerHTML = rows.map(l=>{
     const dt=dtFrom(l.data); const ds=dt?dt.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}):'—';
     const origem = l.origem==='manutencao'
