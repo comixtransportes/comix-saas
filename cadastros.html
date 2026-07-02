@@ -913,23 +913,23 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
           <div class="card-ico" style="background:var(--red-l);color:var(--red)">⚠️</div>
           <div class="cfg-notif-card-title">
             <h2>Auditoria de e-mails enviados</h2>
-            <span class="cfg-notif-mini" id="cfg_email_retry_status">Retry automático ativo · 1 a cada 40 segundos</span>
+            <span class="cfg-notif-mini" id="cfg_email_retry_status">Auditoria manual · erro/retry carregados 1 vez</span>
           </div>
         </div>
         <div class="card-body">
           <div class="cfg-note" style="margin-bottom:10px">
-            Esta auditoria lê a fila <code>email_queue</code>. E-mails com <strong>ERROR</strong> podem ser reenviados alterando o estado para <strong>RETRY</strong>. O retry automático processa no máximo 1 e-mail a cada 40 segundos para evitar novo bloqueio por excesso de requisições.
+            Esta auditoria lê somente e-mails com <strong>ERROR</strong> ou <strong>RETRY</strong> na fila <code>email_queue</code>, com limite de registros. A carga automática acontece apenas uma vez ao abrir a tela; depois disso, a atualização ocorre somente pelo botão <strong>Recarregar auditoria</strong>.
           </div>
           <div class="cfg-email-audit-tools">
             <div class="f"><label>Pesquisar na auditoria</label><input id="cfg_email_audit_search" placeholder="Assunto, destinatário, erro ou ID" oninput="cfgRenderEmailAudit()"></div>
-            <div class="f"><label>Status</label><select id="cfg_email_audit_filter" onchange="cfgRenderEmailAudit()"><option value="ERROR" selected>Somente erros</option><option value="ALL">Todos</option><option value="SUCCESS">Enviados</option><option value="RETRY">Retry</option><option value="PENDING">Pendente</option><option value="PROCESSING">Processando</option></select></div>
+            <div class="f"><label>Status</label><select id="cfg_email_audit_filter" onchange="cfgRenderEmailAudit()"><option value="ERROR" selected>Somente erros</option><option value="RETRY">Retry</option><option value="ALL">Erros + Retry</option></select></div>
             <button class="cfg-small" type="button" onclick="cfgRefreshEmailAudit()">Recarregar auditoria</button>
             <button class="cfg-save" type="button" id="cfg_email_retry_all_btn" onclick="cfgRetryEmailErrorsManual()">Reenviar erros</button>
           </div>
           <div class="cfg-email-audit-stats" id="cfg_email_audit_stats">
             <div class="cfg-email-stat"><strong>0</strong><span>Erros</span></div>
             <div class="cfg-email-stat"><strong>0</strong><span>Retry</span></div>
-            <div class="cfg-email-stat"><strong>0</strong><span>Enviados</span></div>
+            <div class="cfg-email-stat"><strong>0</strong><span>Monitorados</span></div>
             <div class="cfg-email-stat"><strong>0</strong><span>Total</span></div>
           </div>
           <div class="cfg-email-audit-list" id="cfg_email_audit_list"><div class="loading-state">Carregando auditoria...</div></div>
@@ -2597,8 +2597,8 @@ async function cfgRefreshNotificacoesEmail() {
       cfgCache.notifEventoAtual = cfgCache.notifEventos.find(ev => ev.id === atualId) || cfgCache.notifEventoAtual;
     }
     cfgRenderNotificacoesEmail();
+    /* Auditoria: 1 carga inicial filtrada. Depois, somente pelo botão "Recarregar auditoria". */
     await cfgRefreshEmailAudit(true);
-    cfgStartEmailAutoRetry();
   } catch (err) {
     if (list) list.innerHTML = '<div class="cfg-empty">Erro ao carregar destinatários.</div>';
     if (evList) evList.innerHTML = '<div class="cfg-empty">Erro ao carregar eventos.</div>';
@@ -2926,12 +2926,12 @@ async function cfgSaveEventoEmail() {
    AUDITORIA E RETRY DE E-MAILS — email_queue
    ──────────────────────────────────────────────────────────────────────────
    A extensão Firebase Trigger Email entende delivery.state = "RETRY" como
-   solicitação de nova tentativa. Esta tela faz a auditoria e evita rajadas:
-   o retry automático processa no máximo 1 documento a cada 40 segundos.
+   solicitação de nova tentativa. Esta tela lê somente ERROR/RETRY, com limite,
+   e não mantém auto-refresh/auto-retry em loop para reduzir leituras Firestore.
    ══════════════════════════════════════════════════════════════════════════ */
 const CFG_EMAIL_QUEUE_COLLECTION = "email_queue";
 const CFG_EMAIL_RETRY_INTERVAL_MS = 40000;
-const CFG_EMAIL_AUTO_RETRY_SCAN_MS = 40000;
+const CFG_EMAIL_AUDIT_LIMIT = 100;
 const CFG_EMAIL_RETRY_MAX_TENTATIVAS = 5;
 let cfgEmailRetryTimer = null;
 let cfgEmailRetryRunning = false;
@@ -2992,17 +2992,43 @@ function cfgNormalizeEmailAuditDoc(doc) {
   };
 }
 
+async function cfgListEmailAuditErrorRetry() {
+  if (!cfgRequireAdmin()) return [];
+  const limit = Number(CFG_EMAIL_AUDIT_LIMIT || 100);
+  const byId = new Map();
+
+  /* Consulta direta e filtrada: evita carregar a coleção email_queue inteira. */
+  const queries = [
+    db.collection(CFG_EMAIL_QUEUE_COLLECTION).where("delivery.state", "in", ["ERROR", "RETRY", "error", "retry"]).limit(limit),
+    db.collection(CFG_EMAIL_QUEUE_COLLECTION).where("state", "in", ["ERROR", "RETRY", "error", "retry"]).limit(limit)
+  ];
+
+  for (const q of queries) {
+    try {
+      const snap = await q.get();
+      snap.docs.forEach(d => byId.set(d.id, { id: d.id, ...d.data() }));
+    } catch (e) {
+      console.warn("[cfg] auditoria filtrada email_queue:", e && e.message);
+    }
+    if (byId.size >= limit) break;
+  }
+
+  return Array.from(byId.values()).slice(0, limit);
+}
+
 async function cfgRefreshEmailAudit(silent) {
   if (!cfgRequireAdmin()) return;
   const list = document.getElementById("cfg_email_audit_list");
   if (list && !silent) list.innerHTML = '<div class="loading-state">Carregando auditoria...</div>';
   try {
-    const docs = (await cfgList(CFG_EMAIL_QUEUE_COLLECTION)).map(cfgNormalizeEmailAuditDoc);
+    const docs = (await cfgListEmailAuditErrorRetry()).map(cfgNormalizeEmailAuditDoc);
     docs.sort((a, b) => cfgEmailTimestampToMs(b.createdAt) - cfgEmailTimestampToMs(a.createdAt));
     cfgCache.emailAudit = docs;
     cfgRenderEmailAudit();
+    const statusEl = document.getElementById("cfg_email_retry_status");
+    if (statusEl) statusEl.textContent = `Auditoria manual · ${docs.length} erro/retry carregados`;
   } catch (err) {
-    if (list) list.innerHTML = '<div class="cfg-empty">Não foi possível carregar a auditoria da coleção email_queue. Verifique as regras do Firestore para o perfil admin.</div>';
+    if (list) list.innerHTML = '<div class="cfg-empty">Não foi possível carregar a auditoria filtrada da coleção email_queue. Verifique as regras do Firestore para o perfil admin.</div>';
     if (!silent) showToast(err.message || "Erro ao carregar auditoria de e-mails.", "error");
   }
 }
@@ -3021,13 +3047,12 @@ function cfgRenderEmailAudit() {
   const total = docs.length;
   const errors = docs.filter(d => d.status === "ERROR").length;
   const retries = docs.filter(d => d.status === "RETRY").length;
-  const success = docs.filter(d => d.status === "SUCCESS").length;
   if (stats) {
     stats.innerHTML = `
       <div class="cfg-email-stat"><strong>${errors}</strong><span>Erros</span></div>
       <div class="cfg-email-stat"><strong>${retries}</strong><span>Retry</span></div>
-      <div class="cfg-email-stat"><strong>${success}</strong><span>Enviados</span></div>
-      <div class="cfg-email-stat"><strong>${total}</strong><span>Total</span></div>`;
+      <div class="cfg-email-stat"><strong>${total}</strong><span>Monitorados</span></div>
+      <div class="cfg-email-stat"><strong>${CFG_EMAIL_AUDIT_LIMIT}</strong><span>Limite</span></div>`;
   }
 
   const filter = String(cfgVal("cfg_email_audit_filter") || "ERROR").toUpperCase();
@@ -3091,7 +3116,7 @@ function cfgSleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function cfgRetrySingleEmail(id, mode = "manual") {
+async function cfgRetrySingleEmail(id, mode = "manual", skipRefresh = false) {
   if (!cfgRequireAdmin()) return;
   const doc = (cfgCache.emailAudit || []).find(d => String(d.id) === String(id));
   if (!doc) {
@@ -3118,7 +3143,7 @@ async function cfgRetrySingleEmail(id, mode = "manual") {
     };
     await cfgSave(CFG_EMAIL_QUEUE_COLLECTION, id, { delivery, atlasRetry });
     if (mode === "manual") showToast("E-mail marcado para RETRY.", "success");
-    await cfgRefreshEmailAudit(true);
+    if (!skipRefresh) await cfgRefreshEmailAudit(true);
   } catch (err) {
     if (mode === "manual") showToast(err.message || "Erro ao marcar e-mail para retry.", "error");
     else console.warn("[cfg] retry automático de e-mail:", err && err.message);
@@ -3145,13 +3170,13 @@ async function cfgProcessEmailRetryQueue(mode = "manual") {
     for (let i = 0; i < candidatos.length; i++) {
       const d = candidatos[i];
       if (statusEl) statusEl.textContent = `Retry ${mode} · ${i + 1}/${candidatos.length} · intervalo de 40 segundos`;
-      await cfgRetrySingleEmail(d.id, mode);
+      await cfgRetrySingleEmail(d.id, mode, true);
       if (i < candidatos.length - 1) await cfgSleep(CFG_EMAIL_RETRY_INTERVAL_MS);
     }
   } finally {
     cfgEmailRetryRunning = false;
     if (btn) btn.disabled = false;
-    if (statusEl) statusEl.textContent = "Retry automático ativo · 1 a cada 40 segundos";
+    if (statusEl) statusEl.textContent = "Auditoria manual · use o botão para recarregar";
     await cfgRefreshEmailAudit(true);
   }
 }
@@ -3161,25 +3186,15 @@ function cfgRetryEmailErrorsManual() {
 }
 
 function cfgStartEmailAutoRetry() {
-  if (cfgEmailRetryTimer) return;
-  cfgEmailRetryTimer = setInterval(async () => {
-    if (cfgEmailRetryRunning) return;
-    try {
-      await cfgRefreshEmailAudit(true);
-      const candidato = cfgEmailRetryCandidates()[0];
-      if (!candidato) return;
-      cfgEmailRetryRunning = true;
-      const statusEl = document.getElementById("cfg_email_retry_status");
-      if (statusEl) statusEl.textContent = "Retry automático em execução · 1 a cada 40 segundos";
-      await cfgRetrySingleEmail(candidato.id, "automatico");
-    } catch (e) {
-      console.warn("[cfg] cfgStartEmailAutoRetry:", e && e.message);
-    } finally {
-      cfgEmailRetryRunning = false;
-      const statusEl = document.getElementById("cfg_email_retry_status");
-      if (statusEl) statusEl.textContent = "Retry automático ativo · 1 a cada 40 segundos";
-    }
-  }, CFG_EMAIL_AUTO_RETRY_SCAN_MS);
+  /* Mantido apenas por compatibilidade. O auto-retry/auto-refresh foi desativado
+     para evitar leituras contínuas no Firestore. A auditoria agora atualiza
+     somente na abertura da tela e pelo botão "Recarregar auditoria". */
+  if (cfgEmailRetryTimer) {
+    clearInterval(cfgEmailRetryTimer);
+    cfgEmailRetryTimer = null;
+  }
+  const statusEl = document.getElementById("cfg_email_retry_status");
+  if (statusEl) statusEl.textContent = "Auditoria manual · use o botão para recarregar";
 }
 
 const CFG_IMPORT_VEICULOS_ANEXO = [
