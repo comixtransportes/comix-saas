@@ -298,8 +298,13 @@ table.dt td.nm{max-width:140px;overflow:hidden;text-overflow:ellipsis;}
 .feriado-item{display:flex;align-items:center;gap:6px;padding:4px 6px;border:1px solid var(--bd2);border-radius:3px;}
 .feriado-item input[type=checkbox]{accent-color:var(--ac);flex-shrink:0;}
 .feriado-item label{font-size:10.5px;color:var(--tx);cursor:pointer;}
-.add-feriado{display:flex;gap:6px;}
-.add-feriado input{flex:1;border:1px solid var(--bd);border-radius:3px;padding:4px 8px;font-size:11.5px;font-family:var(--m);}
+.add-feriado{display:flex;gap:6px;flex-wrap:wrap;}
+.add-feriado input{flex:1;min-width:110px;border:1px solid var(--bd);border-radius:3px;padding:4px 8px;font-size:11.5px;font-family:var(--m);}
+.add-feriado input#add-f-nome{flex:1.4;min-width:140px;}
+.add-feriado select{flex:1;min-width:150px;border:1px solid var(--bd);border-radius:3px;padding:4px 8px;font-size:11.5px;font-family:var(--m);background:var(--bg);color:var(--tx);}
+.fer-tag{font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;font-weight:600;}
+.fer-tag.nac{background:rgba(59,130,246,.15);color:#3b82f6;}
+.fer-tag.loc{background:rgba(245,158,11,.15);color:#f59e0b;}
 .modal-footer{padding:12px 20px;border-top:1px solid var(--bd2);display:flex;justify-content:space-between;align-items:center;gap:8px;position:sticky;bottom:0;background:var(--wh);}
 .modal-footer-left{font-size:10px;color:var(--mu);}
 .modal-footer-right{display:flex;gap:8px;}
@@ -1034,6 +1039,13 @@ html{ -webkit-text-size-adjust:100%; }
         <div class="feriados-grid" id="feriados-grid"></div>
         <div class="add-feriado">
           <input type="date" id="add-f-date">
+          <input type="text" id="add-f-nome" placeholder="Nome do feriado">
+          <select id="add-f-abrangencia">
+            <option value="nacional">Nacional (SC+PR+SP)</option>
+            <option value="17">Estadual/Municipal — SC</option>
+            <option value="18">Estadual/Municipal — PR</option>
+            <option value="03">Estadual/Municipal — SP</option>
+          </select>
           <button class="btn-sec" onclick="addFeriado()">+ Adicionar feriado</button>
         </div>
       </div>
@@ -1152,6 +1164,9 @@ let PARAMS = {
     '2026-06-04','2026-09-07','2026-10-12',
     '2026-11-02','2026-11-15','2026-12-25'
   ],
+  // Metadados dos feriados adicionados manualmente: { 'YYYY-MM-DD': { nome, abrangencia } }
+  // abrangencia: 'nacional' (SC+PR+SP) ou o código da filial ('17'=SC,'18'=PR,'03'=SP)
+  feriadosMeta: {},
   frMeta: 60000,
   frAtencao: 15,
   frBase: 'ritmo',
@@ -3977,23 +3992,36 @@ async function saveParams(){
   if(DATA.length) recalc();
 }
 
+const FER_ABR_LABELS={'17':'SC','18':'PR','03':'SP'};
+
 function renderFeriados(){
+  if(!PARAMS.feriadosMeta) PARAMS.feriadosMeta={};
   const grid=document.getElementById('feriados-grid');
   const allDates=new Set([...Object.keys(FERIADOS_LABELS),...PARAMS.feriados]);
   const sorted=[...allDates].sort();
   grid.innerHTML=sorted.map(dt=>{
     const checked=PARAMS.feriados.includes(dt)?'checked':'';
-    const lbl=FERIADOS_LABELS[dt]||dt;
+    const meta=PARAMS.feriadosMeta[dt];
+    const lbl=(meta&&meta.nome)?meta.nome:(FERIADOS_LABELS[dt]||dt);
+    const abr=meta&&meta.abrangencia&&meta.abrangencia!=='nacional'?meta.abrangencia:null;
+    const tag=abr?`<span class="fer-tag loc">${FER_ABR_LABELS[abr]||abr}</span>`:`<span class="fer-tag nac">Nacional</span>`;
     const[,fm,fd]=dt.split('-');
-    return`<div class="feriado-item"><input type="checkbox" class="fer-cb" id="fer-${dt}" value="${dt}" ${checked}><label for="fer-${dt}">${fd}/${fm} — ${lbl}</label></div>`;
+    return`<div class="feriado-item"><input type="checkbox" class="fer-cb" id="fer-${dt}" value="${dt}" ${checked}><label for="fer-${dt}">${fd}/${fm} — ${lbl}${tag}</label></div>`;
   }).join('');
 }
 
 function addFeriado(){
   const v=document.getElementById('add-f-date').value;
   if(!v) return;
+  if(!PARAMS.feriadosMeta) PARAMS.feriadosMeta={};
+  const nome=(document.getElementById('add-f-nome').value||'').trim();
+  const abrangencia=document.getElementById('add-f-abrangencia').value||'nacional';
+  PARAMS.feriadosMeta[v]={nome:nome||FERIADOS_LABELS[v]||v, abrangencia};
   if(!PARAMS.feriados.includes(v)) PARAMS.feriados.push(v);
-  renderFeriados(); document.getElementById('add-f-date').value='';
+  renderFeriados();
+  document.getElementById('add-f-date').value='';
+  document.getElementById('add-f-nome').value='';
+  document.getElementById('add-f-abrangencia').value='nacional';
 }
 
 ['pa-sc-fat','pa-pr-fat','pa-sp-fat'].forEach(id=>{
