@@ -2109,10 +2109,10 @@ const CFG_NOTIF_FROTA_SEM_CARGA_LEGACY_ID = "frota_sem_carregamento_5_dias";
 const CFG_NOTIF_ENVIO_PADRAO = {
   modoFila: "sequencial",
   envioSequencial: true,
-  intervaloEntreEmailsMs: 20000,
-  espacamentoEntreEmailsMs: 20000,
+  intervaloEntreEmailsMs: 30000,
+  espacamentoEntreEmailsMs: 30000,
   retryAutomatico: true,
-  retryIntervaloMs: 40000,
+  retryIntervaloMs: 50000,
   retryMaxTentativas: 5,
   retrySomenteErrosTemporarios: true
 };
@@ -2930,7 +2930,7 @@ async function cfgSaveEventoEmail() {
    e não mantém auto-refresh/auto-retry em loop para reduzir leituras Firestore.
    ══════════════════════════════════════════════════════════════════════════ */
 const CFG_EMAIL_QUEUE_COLLECTION = "email_queue";
-const CFG_EMAIL_RETRY_INTERVAL_MS = 40000;
+const CFG_EMAIL_RETRY_INTERVAL_MS = 50000;
 const CFG_EMAIL_AUDIT_LIMIT = 100;
 const CFG_EMAIL_RETRY_MAX_TENTATIVAS = 5;
 let cfgEmailRetryTimer = null;
@@ -2997,10 +2997,14 @@ async function cfgListEmailAuditErrorRetry() {
   const limit = Number(CFG_EMAIL_AUDIT_LIMIT || 100);
   const byId = new Map();
 
+  const firestore = (window._FB && typeof window._FB._db === "function")
+    ? window._FB._db()
+    : (typeof db !== "undefined" ? db : firebase.firestore());
+
   /* Consulta direta e filtrada: evita carregar a coleção email_queue inteira. */
   const queries = [
-    db.collection(CFG_EMAIL_QUEUE_COLLECTION).where("delivery.state", "in", ["ERROR", "RETRY", "error", "retry"]).limit(limit),
-    db.collection(CFG_EMAIL_QUEUE_COLLECTION).where("state", "in", ["ERROR", "RETRY", "error", "retry"]).limit(limit)
+    firestore.collection(CFG_EMAIL_QUEUE_COLLECTION).where("delivery.state", "in", ["ERROR", "RETRY", "error", "retry"]).limit(limit),
+    firestore.collection(CFG_EMAIL_QUEUE_COLLECTION).where("state", "in", ["ERROR", "RETRY", "error", "retry"]).limit(limit)
   ];
 
   for (const q of queries) {
@@ -3169,7 +3173,7 @@ async function cfgProcessEmailRetryQueue(mode = "manual") {
     }
     for (let i = 0; i < candidatos.length; i++) {
       const d = candidatos[i];
-      if (statusEl) statusEl.textContent = `Retry ${mode} · ${i + 1}/${candidatos.length} · intervalo de 40 segundos`;
+      if (statusEl) statusEl.textContent = `Retry ${mode} · ${i + 1}/${candidatos.length} · intervalo de ${Math.round(CFG_EMAIL_RETRY_INTERVAL_MS / 1000)} segundos`;
       await cfgRetrySingleEmail(d.id, mode, true);
       if (i < candidatos.length - 1) await cfgSleep(CFG_EMAIL_RETRY_INTERVAL_MS);
     }
