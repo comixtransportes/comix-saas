@@ -569,6 +569,64 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
   #scr_form input,#scr_form select{font-size:12px;padding:8px 9px;min-height:36px}
 }
 </style>
+
+
+<style id="atlas-mobile-module-buttons-fix">
+/* Ajuste pontual: mantém Voltar/Próximo/Concluir visíveis no navegador do celular. */
+#scr_modules{
+  --atlas-vh:1vh;
+  --atlas-module-bottom-guard:0px;
+}
+#scr_modules.active{
+  display:flex!important;
+  flex-direction:column!important;
+  height:calc(var(--atlas-vh,1vh) * 100)!important;
+  min-height:0!important;
+  overflow:hidden!important;
+}
+#scr_modules>.app-hdr,
+#scr_modules>.module-tabs,
+#scr_modules>.bbar{
+  flex:0 0 auto!important;
+}
+#scr_modules>.scroll-body{
+  flex:1 1 auto!important;
+  min-height:0!important;
+  overflow-y:auto!important;
+  -webkit-overflow-scrolling:touch!important;
+  overscroll-behavior:contain!important;
+  touch-action:pan-y!important;
+  padding-bottom:calc(150px + var(--atlas-module-bottom-guard,0px))!important;
+}
+#scr_modules>.bbar{
+  z-index:120!important;
+}
+@media (hover:none) and (pointer:coarse), (max-width:760px){
+  #scr_modules.active>.bbar{
+    position:fixed!important;
+    left:50%!important;
+    right:auto!important;
+    bottom:var(--atlas-module-bottom-guard,128px)!important;
+    transform:translateX(-50%)!important;
+    width:min(100%,540px)!important;
+    max-width:540px!important;
+    margin:0!important;
+    padding:10px 14px max(14px,env(safe-area-inset-bottom,14px))!important;
+    background:rgba(255,255,255,.97)!important;
+    border-top:1px solid var(--line)!important;
+    box-shadow:0 -8px 28px rgba(15,59,104,.16)!important;
+  }
+  #scr_modules.active>.scroll-body{
+    padding-bottom:calc(190px + var(--atlas-module-bottom-guard,128px))!important;
+  }
+}
+@supports (height:100svh){
+  #scr_modules.active{
+    height:calc(var(--atlas-vh,1svh) * 100)!important;
+  }
+}
+</style>
+
 </head>
 <body>
 
@@ -3955,5 +4013,105 @@ window.openPanel = function() {
     </div>
   </div>
 </div>
+
+
+
+<script id="atlas-mobile-module-buttons-script">
+(function(){
+  if(window.__atlasMobileModuleButtonsFixInstalled) return;
+  window.__atlasMobileModuleButtonsFixInstalled = true;
+
+  function viewportHeight(){
+    var h = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
+    return h || document.documentElement.clientHeight || 0;
+  }
+  function viewportWidth(){
+    var w = (window.visualViewport && window.visualViewport.width) ? window.visualViewport.width : window.innerWidth;
+    return w || document.documentElement.clientWidth || 0;
+  }
+  function isMobileLike(){
+    try{
+      if(window.matchMedia && window.matchMedia('(hover:none) and (pointer:coarse)').matches) return true;
+    }catch(e){}
+    return viewportWidth() <= 760;
+  }
+  function moduleBottomGuard(vh, vw){
+    if(!isMobileLike()) return 0;
+    var standalone = false;
+    try{
+      standalone = (window.navigator && window.navigator.standalone) || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+    }catch(e){}
+    if(standalone) return 18;
+
+    var diff = 0;
+    try{ diff = Math.max(0, (window.innerHeight || 0) - vh); }catch(e){}
+
+    /* Reserva para barras inferiores de navegadores móveis, que podem sobrepor o iframe. */
+    var estimated = Math.round(vh * 0.14);
+    return Math.min(190, Math.max(112, diff + 24, estimated));
+  }
+  function applyFix(){
+    var screen = document.getElementById('scr_modules');
+    if(!screen) return;
+    var vh = viewportHeight();
+    var vw = viewportWidth();
+    if(!vh || !vw) return;
+
+    var guard = moduleBottomGuard(vh, vw);
+    screen.style.setProperty('--atlas-vh', (vh * 0.01) + 'px');
+    screen.style.setProperty('--atlas-module-bottom-guard', guard + 'px');
+
+    var pages = document.getElementById('module_pages');
+    if(pages){
+      pages.style.webkitOverflowScrolling = 'touch';
+    }
+  }
+
+  var raf = 0;
+  function queueApply(){
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(function(){
+      applyFix();
+      setTimeout(applyFix, 80);
+      setTimeout(applyFix, 260);
+      setTimeout(applyFix, 700);
+    });
+  }
+
+  window.atlasApplyMobileModuleButtonsFix = queueApply;
+  window.addEventListener('resize', queueApply, {passive:true});
+  window.addEventListener('orientationchange', queueApply, {passive:true});
+  window.addEventListener('pageshow', queueApply, {passive:true});
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize', queueApply, {passive:true});
+    window.visualViewport.addEventListener('scroll', queueApply, {passive:true});
+  }
+  document.addEventListener('DOMContentLoaded', function(){
+    var modules = document.getElementById('scr_modules');
+    if(modules && window.MutationObserver){
+      new MutationObserver(queueApply).observe(modules, {childList:true, subtree:true, attributes:true});
+    }
+    queueApply();
+  });
+
+  var patchAttempts = 0;
+  function patchShowScreen(){
+    patchAttempts++;
+    if(window.showScreen && !window.__atlasShowScreenModuleButtonsPatched){
+      var originalShowScreen = window.showScreen;
+      window.showScreen = function(id){
+        originalShowScreen(id);
+        queueApply();
+      };
+      window.__atlasShowScreenModuleButtonsPatched = true;
+      queueApply();
+      return;
+    }
+    if(patchAttempts < 30) setTimeout(patchShowScreen, 100);
+  }
+  patchShowScreen();
+  queueApply();
+})();
+</script>
 
 </body></html>
