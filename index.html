@@ -1607,6 +1607,20 @@ async function atlasLoadSZBFromFirestore(){
   return atlasLoadBaseFromFirestore('szb');
 }
 
+/* ── [LEITURAS] Download compartilhado por base (dedup in-flight) ──
+   Antes, se vários iframes pediam a MESMA base ao mesmo tempo (corrida do boot:
+   Início + PD + Frota pedem SZB antes do preload terminar), cada pedido baixava
+   TODOS os chunks do Firestore em paralelo — leituras multiplicadas por N.
+   Agora todos os pedidos simultâneos compartilham UM único download. */
+const __atlasBaseInflight = {};
+function atlasLoadBaseFromFirestoreShared(id){
+  if(__atlasBaseInflight[id]) return __atlasBaseInflight[id];
+  const job = atlasLoadBaseFromFirestore(id);
+  __atlasBaseInflight[id] = job;
+  job.then(()=>{}, ()=>{}).then(()=>{ if(__atlasBaseInflight[id]===job) delete __atlasBaseInflight[id]; });
+  return job;
+}
+
 /* ── Worker antigo: mantido apenas por compat de código legado, NÃO usado na leitura ── */
 async function atlasPDGet(path){
   const r = await fetch(ATLAS_PD_WORKER_URL + path);
@@ -1681,7 +1695,7 @@ function atlasWatchBase(id){
       if(id === 'szb') window.__atlasSZBLastTs = meta.ts;
       dbLog(`☁ Nova versão de ${id.toUpperCase()} na nuvem (carga de ${meta.user||'—'})`,'info');
       try{
-        const cloudPayload = await atlasLoadBaseFromFirestore(id);
+        const cloudPayload = await atlasLoadBaseFromFirestoreShared(id);
         if(cloudPayload && Array.isArray(cloudPayload.rows) && cloudPayload.rows.length){
           window.ATLAS_DATA[id] = cloudPayload;
           atlasSaveBase(id, cloudPayload).catch(()=>{});
@@ -1756,7 +1770,9 @@ async function __atlasPreloadOne(id){
   }catch(_){}
 
   // (2) Versão nova ou cache ausente: baixa os chunks da nuvem (fonte da verdade).
-  const p = await atlasLoadBaseFromFirestore(id);
+  //     [LEITURAS] Compartilhado com o bridge: se um iframe já iniciou o download
+  //     desta base, o preload reaproveita o mesmo download (sem leituras em dobro).
+  const p = await atlasLoadBaseFromFirestoreShared(id);
   if(p && Array.isArray(p.rows) && p.rows.length){
     window.ATLAS_DATA[id] = p;
     atlasSaveBase(id, p).catch(()=>{});
@@ -1878,11 +1894,32 @@ window.addEventListener('message',async ev=>{
     if(memLocal){
       payload=mem;
     }
+    /* [LEITURAS] Memória vinda DA NUVEM também pode ser servida sem re-download:
+       (a) se o watcher onSnapshot desta base está ativo, a memória é mantida
+           sincronizada em tempo real — se mem.ts é o último ts conhecido da
+           nuvem, é garantidamente a mesma versão (zero leituras);
+       (b) sem watcher (ex.: mobile em bases sob demanda), valida a versão com
+           UMA leitura do doc meta (sem chunks). Só baixa os chunks se o ts
+           divergir. Antes, TODO pedido de iframe re-baixava TODOS os chunks. */
+    if(!payload && mem && Array.isArray(mem.rows) && mem.rows.length){
+      if(__atlasWatchUnsubs[id] && __atlasWatchLastTs[id] && mem.ts === __atlasWatchLastTs[id]){
+        payload = mem;
+      } else {
+        try{
+          const metaSnap = await atlasCloudDocRef(id).get();
+          const meta = metaSnap.exists ? metaSnap.data() : null;
+          if(meta && meta.ts && mem.ts === meta.ts){
+            payload = mem;
+            __atlasWatchLastTs[id] = meta.ts;
+            if(id==='szb') window.__atlasSZBLastTs = meta.ts;
+          }
+        }catch(_){}
+      }
+    }
     if(!payload){
       try{
-        let cloudPayload;
-        if(id==='szb') cloudPayload=await atlasLoadSZBFromPDCloud(); // Firestore exclusivo (Worker removido)
-        else cloudPayload=await atlasLoadBaseFromFirestore(id);
+        // Download compartilhado: pedidos simultâneos da mesma base usam 1 só download.
+        let cloudPayload = await atlasLoadBaseFromFirestoreShared(id);
         if(cloudPayload && Array.isArray(cloudPayload.rows) && cloudPayload.rows.length){
           payload=cloudPayload;
           window.ATLAS_DATA[id]=payload;
@@ -3296,6 +3333,36 @@ function atlasCleanForFrame(v) {
   return v;
 }
 
+/* ── [LEITURAS] Cache da ponte Firestore (getCollection) ──
+   Vários módulos (Manutenção, CPK, Mapinha, CIOT...) pedem as MESMAS coleções
+   repetidamente pela ponte — a cada troca de aba interna, cada render, cada
+   iframe recarregado. Cada pedido virava uma query completa no Firestore
+   (centenas/milhares de leituras por chamada em coleções grandes).
+   Agora, a resposta fica em cache no parent por um TTL curto:
+   - Coleções de cadastro/parâmetros (mudam raramente): 5 min.
+   - Coleções transacionais (OS, checklists, lançamentos...): 30 s — suficiente
+     para matar rajadas duplicadas sem atrasar o trabalho de ninguém.
+   Toda ESCRITA feita pela ponte (setDoc/addDoc/deleteDoc) invalida o cache da
+   coleção na hora, então quem grava sempre relê dados frescos. */
+const __atlasBridgeCache = {};      // key → { ts, docs }
+const __atlasBridgeInflight = {};   // key → Promise (dedup de pedidos simultâneos)
+const ATLAS_BRIDGE_TTL_STATIC  = 5 * 60 * 1000;
+const ATLAS_BRIDGE_TTL_DEFAULT = 30 * 1000;
+const ATLAS_BRIDGE_STATIC_COLS = new Set([
+  'veiculos','motoristas','filiais','centros_custo','compressores',
+  'parametros_sistema','cpk_parametros','cpk_metas','cpk_km_rotas',
+  'cpk_categorias_regras','mapinha_premissas','ciot_parametros','ciot_cadastros_apoio'
+]);
+function atlasBridgeKey(msg){
+  return [msg.collection, msg.orderBy||'', msg.orderDir||'', msg.limit||''].join('|');
+}
+function atlasBridgeTTL(col){
+  return ATLAS_BRIDGE_STATIC_COLS.has(col) ? ATLAS_BRIDGE_TTL_STATIC : ATLAS_BRIDGE_TTL_DEFAULT;
+}
+function atlasBridgeInvalidate(col){
+  Object.keys(__atlasBridgeCache).forEach(k => { if(k.split('|')[0] === col) delete __atlasBridgeCache[k]; });
+}
+
 window.addEventListener('message', async function(ev) {
   const msg = ev.data || {};
   if (msg.type !== 'ATLAS_FIRESTORE_REQUEST') return;
@@ -3313,11 +3380,40 @@ window.addEventListener('message', async function(ev) {
     if (!curUser) throw new Error('Usuário não autenticado no portal.');
     if (!allowed.has(msg.collection)) throw new Error('Coleção não permitida pela ponte.');
     if (msg.action === 'getCollection') {
-      let ref = db.collection(msg.collection);
-      if (msg.orderBy) ref = ref.orderBy(msg.orderBy, msg.orderDir || 'asc');
-      if (msg.limit) ref = ref.limit(Number(msg.limit));
-      const snap = await ref.get();
-      reply(true, { docs: snap.docs.map(d => ({ id:d.id, data: atlasCleanForFrame(d.data()) })) });
+      const key = atlasBridgeKey(msg);
+      // (1) Cache fresco → responde sem tocar no Firestore.
+      const hit = __atlasBridgeCache[key];
+      if (hit && (Date.now() - hit.ts) < atlasBridgeTTL(msg.collection)) {
+        reply(true, { docs: hit.docs });
+        return;
+      }
+      // (2) Pedido idêntico já em andamento → compartilha a mesma query.
+      if (__atlasBridgeInflight[key]) {
+        try {
+          const docs = await __atlasBridgeInflight[key];
+          reply(true, { docs });
+        } catch(e) { reply(false, null, e.message || String(e)); }
+        return;
+      }
+      // (3) Query real no Firestore (uma só, mesmo com N pedidos simultâneos).
+      const job = (async () => {
+        let ref = db.collection(msg.collection);
+        if (msg.orderBy) ref = ref.orderBy(msg.orderBy, msg.orderDir || 'asc');
+        if (msg.limit) ref = ref.limit(Number(msg.limit));
+        const snap = await ref.get();
+        const docs = snap.docs.map(d => ({ id:d.id, data: atlasCleanForFrame(d.data()) }));
+        __atlasBridgeCache[key] = { ts: Date.now(), docs };
+        return docs;
+      })();
+      __atlasBridgeInflight[key] = job;
+      try {
+        const docs = await job;
+        reply(true, { docs });
+      } catch(e) {
+        reply(false, null, e.message || String(e));
+      } finally {
+        if (__atlasBridgeInflight[key] === job) delete __atlasBridgeInflight[key];
+      }
       return;
     }
     if (msg.action === 'getDoc') {
@@ -3327,16 +3423,19 @@ window.addEventListener('message', async function(ev) {
     }
     if (msg.action === 'setDoc') {
       await db.collection(msg.collection).doc(msg.docId).set(msg.data || {}, { merge: !!msg.merge });
+      atlasBridgeInvalidate(msg.collection); // [LEITURAS] escrita → cache da coleção expira na hora
       reply(true, { id: msg.docId });
       return;
     }
     if (msg.action === 'addDoc') {
       const ref = await db.collection(msg.collection).add(msg.data || {});
+      atlasBridgeInvalidate(msg.collection);
       reply(true, { id: ref.id });
       return;
     }
     if (msg.action === 'deleteDoc') {
       await db.collection(msg.collection).doc(msg.docId).delete();
+      atlasBridgeInvalidate(msg.collection);
       reply(true, { id: msg.docId });
       return;
     }
