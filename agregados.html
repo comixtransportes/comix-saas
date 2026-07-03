@@ -336,7 +336,7 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
       </div>
       <div class="panel-b">
         <div class="xm-help">
-          <span><b>Regra de associação:</b> primeiro tenta Prestador + NF + Valor; depois Prestador + NF; depois NF + Valor; por último mantém o pareamento por valor/data da placa. Clique no cabeçalho do agregado para abrir ou recolher as linhas.</span>
+          <span><b>Regra de associação:</b> primeiro tenta Prestador + NF + Valor; depois Prestador + NF; depois NF + Valor; depois valor exato; e só usa valor aproximado quando o fornecedor for compatível. Se o Mapinha estiver maior que o fechamento, confere também indício de parcela no fechamento, como 1/2, 1/4 ou Parc: 1.</span>
           <span class="pill info">NF exibida nos dois lados</span>
         </div>
         <div class="xm-table-wrap">
@@ -1280,6 +1280,24 @@ function xmFornecedorCompat(a,b){
   return hit/Math.min(ta.length,tb.length) >= 0.6;
 }
 function xmNfCompat(a,b){ const A=xmNormNf(a), B=xmNormNf(b); return !!(A&&B&&A===B); }
+function xmParcelaInfo(desc){
+  const s=String(desc||'');
+  let m=s.match(/\b(?:PARC(?:ELA)?\.?\s*:?\s*)?(\d{1,2})\s*\/\s*(\d{1,2})\b/i);
+  if(m){
+    const px=+m[1], py=+m[2];
+    const pareceData=(m[1].length>1&&m[1][0]==='0') || (m[2].length>1&&m[2][0]==='0');
+    if(!pareceData && px>=1 && py>=2 && px<=py && py<=24) return {parcela:px, total:py, label:m[1]+'/'+m[2]};
+  }
+  m=s.match(/\bPARC(?:ELA)?\.?\s*:?\s*(\d{1,2})\b/i);
+  if(m) return {parcela:+m[1], total:null, label:'Parc: '+m[1]};
+  return null;
+}
+function xmFechTemParcela(f){ return !!(f && (f.parcela || xmParcelaInfo(f.desc))); }
+function xmParcelaScore(f,c){
+  const info=(f&&f.parcela)||xmParcelaInfo(f&&f.desc);
+  if(info && info.total && info.total>1) return Math.abs(xmValMap(f,c.l)-(f.valor*info.total));
+  return c.dv;
+}
 function xmFornecedorLinhaCompat(f,l){
   const fc=xmNormNf(f&&f.prestadorCod), lc=xmNormNf(l&&l.fornecedorCod);
   if(fc&&lc&&fc===lc) return true;
@@ -1291,7 +1309,8 @@ function xmMatchLabel(mode){
     nfFornecedor:'Prestador + NF',
     nfValor:'NF + Valor',
     valor:'Valor',
-    aproximado:'Valor aproximado',
+    parcelaFornecedor:'Fornecedor + parcela',
+    aproximado:'Valor aproximado + fornecedor',
     manual:'Sem vínculo'
   }[mode||''] || 'Valor/Data';
 }
@@ -1362,8 +1381,10 @@ function buildMapinhaPorPlaca(){
 }
 
 /* ── matching linha a linha: débito do fechamento ↔ lançamento do Mapinha ──
-   Passada 1: mesmo valor (tolerância de centavos), desempate pela data mais próxima.
-   Passada 2: sobras pareadas pelo menor Δ de valor (limite 30%) → "Divergência de valor".
+   Passadas fortes: Prestador + NF + Valor; Prestador + NF; NF + Valor; Valor exato.
+   Passada de parcela: se o Mapinha estiver maior que o fechamento, só pareia quando
+   o fornecedor for compatível e o lançamento do fechamento indicar parcela (1/2, 1/4, Parc: 1).
+   Valor aproximado comum também exige fornecedor compatível.
    Débitos internos (Via Fácil, Aguiasat, depreciação, ajuste de %) não vão ao Mapinha
    por natureza — ficam fora do pareamento e ocultos por padrão. */
 function xmValMap(f,l){ return f.tipo==='C' ? Math.abs(+l.valor||0) : (+l.valor||0); }
@@ -1393,7 +1414,8 @@ function xmParear(fechItens, lancs){
   function setBest(fi, cs, md){
     if(!cs.length) return false;
     cs.sort(function(a,b){
-      return a.dv-b.dv || a.dd-b.dd || String(a.l.fornecedor||'').localeCompare(String(b.l.fornecedor||''));
+      const sa=(a.score!=null?a.score:a.dv), sb=(b.score!=null?b.score:b.dv);
+      return sa-sb || a.dv-b.dv || a.dd-b.dd || String(a.l.fornecedor||'').localeCompare(String(b.l.fornecedor||''));
     });
     used[cs[0].i]=true; par[fi]=cs[0].i; mode[fi]=md; return true;
   }
@@ -1417,10 +1439,18 @@ function xmParear(fechItens, lancs){
     if(f.interno || par[fi]>=0) return;
     setBest(fi, candidatos(f).filter(function(c){ return c.dv<=XMAP_TOL; }), 'valor');
   });
-  /* passada 5 — aproximado (mesma placa, menor Δ, até 30% do valor) */
+  /* passada 5 — Mapinha maior que fechamento + fornecedor igual + indício de parcela no fechamento */
+  fechItens.forEach(function(f,fi){
+    if(f.interno || par[fi]>=0 || !xmFechTemParcela(f)) return;
+    const cs=candidatos(f).filter(function(c){
+      return c.forn && xmValMap(f,c.l) > f.valor+XMAP_TOL;
+    }).map(function(c){ c.score=xmParcelaScore(f,c); return c; });
+    setBest(fi, cs, 'parcelaFornecedor');
+  });
+  /* passada 6 — aproximado somente com fornecedor compatível (mesma placa, menor Δ, até 30% do valor) */
   fechItens.forEach(function(f,fi){
     if(f.interno || par[fi]>=0) return;
-    setBest(fi, candidatos(f).filter(function(c){ return c.dv<=0.3*Math.max(f.valor, xmValMap(f,c.l), 1); }), 'aproximado');
+    setBest(fi, candidatos(f).filter(function(c){ return c.forn && c.dv<=0.3*Math.max(f.valor, xmValMap(f,c.l), 1); }), 'aproximado');
   });
   return {par:par, used:used, mode:mode};
 }
@@ -1503,6 +1533,7 @@ function buildFechamentoXMapinha(){
         const interno=!!(l.isViaFacil||l.isAguiasat||l.isDeprec||l.isAjuste);
         return { fonte:l.fonte, data:l.data, desc:l.desc, tipo:tipo,
           valor: tipo==='C'?l.cred:l.deb, interno:interno, nf:l.nf||'', prestador:l.prestador||'', prestadorCod:l.prestadorCod||'',
+          parcela:xmParcelaInfo(l.desc),
           grupoInt: l.isViaFacil?'Via Fácil':(l.isAguiasat?'Aguiasat':(l.isDeprec?'depreciação':'ajuste de %')),
           esperado:xmCentroEsperadoItem(l) };
       }).filter(function(f){ return f.valor>XMAP_TOL; })
@@ -1589,6 +1620,21 @@ function xmStatusStyle(r){
   return 'background:#EAF1FA;color:#2B5DA8;';
 }
 function xmExcelEsc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r?\n/g,' '); }
+function xmExcelEqClass(ok, extra){ const cls=[]; if(ok) cls.push('eq'); if(extra) cls.push(extra); return cls.length ? ' class="'+cls.join(' ')+'"' : ''; }
+function xmExcelValorFech(f){ return f ? (f.tipo==='C' ? -f.valor : f.valor) : ''; }
+function xmExcelFornecedorFech(f){ return f ? ((f.prestador||'')+(f.prestadorCod?' | Cód. '+f.prestadorCod:'')) : ''; }
+function xmExcelFornecedorMap(m){ return m ? ((m.fornecedor||'')+(m.fornecedorCod?' | Cód. '+m.fornecedorCod:'')) : ''; }
+function xmExcelIguais(r){
+  const f=r&&r.f, m=r&&r.m, iguais=[];
+  if(!f||!m) return '';
+  const vf=xmExcelValorFech(f), vm=+m.valor||0;
+  if(Math.abs(vf-vm)<=XMAP_TOL) iguais.push('Valor');
+  if(xmNfCompat(f.nf,m.nf)) iguais.push('NF');
+  if(xmFornecedorLinhaCompat(f,m)) iguais.push('Prestador/Fornecedor');
+  if(f.data&&m.data&&String(f.data).slice(0,10)===String(m.data).slice(0,10)) iguais.push('Data');
+  if(f.esperado&&m.centroCusto&&String(f.esperado)===String(m.centroCusto)) iguais.push('Centro de custo');
+  return iguais.join(', ');
+}
 function xmExportarExcel(){
   if(!(BASES.szb.loaded&&BASES.szc.loaded&&BASES.szi.loaded)){ toast('Aguardando SZB/SZC/SZI para exportar.','am'); return; }
   if(!MAPREF.loaded){ toast('Atualize/carregue o Mapinha antes de exportar.','am'); ensureMapinhaRefs(); return; }
@@ -1598,41 +1644,47 @@ function xmExportarExcel(){
   const title='Fechamento x Mapinha — '+(ST.filial==='all'?'Todas':ST.filial)+' — '+mesLabel(ST.mesRef);
   let html='<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'
     +'body{font-family:Segoe UI,Arial,sans-serif;font-size:11px;color:#1A2433}'
-    +'table{border-collapse:collapse;width:100%}th,td{border:1px solid #D8DFE8;padding:5px 7px;vertical-align:top}th{background:#13243B;color:#fff;font-weight:700}.grp{background:#EEF3FA;font-weight:700;color:#13243B}.num{text-align:right;mso-number-format:"0.00"}.muted{color:#69788C}.delta{font-weight:700;color:#B3322E}'
+    +'h3{margin:0 0 6px 0;font-size:15px}.note{margin:0 0 10px 0;font-size:10.5px;color:#555}'
+    +'table{border-collapse:collapse;width:100%}th,td{border:1px solid #C8CED8;padding:4px 6px;vertical-align:top}th{font-weight:700;text-align:left}.grp td{font-weight:700;border-top:2px solid #7F8794}.num{text-align:right;mso-number-format:"0.00"}.muted{color:#555}.eq{font-weight:700;text-decoration:underline}.small{font-size:10px}.wrap{white-space:normal}'
     +'</style></head><body>'
     +'<h3>'+xmExcelEsc(title)+'</h3>'
-    +'<p>Exportado com todas as linhas por agregado. Cores: verde = OK; vermelho = diferença crítica; amarelo = alerta/centro; azul = revisar; cinza = débito interno.</p>'
+    +'<p class="note">Planilha limpa para conferência: sem cores. Campos em <b>negrito e sublinhado</b> indicam informações iguais entre Fechamento e Mapinha.</p>'
     +'<table><thead><tr>'
-    +['Agregado','Código','Placa','Fonte Fech.','Data Fech.','NF Fech.','Prestador Fech.','Descrição Fech.','Valor Fech.','Data Mapinha','NF Mapinha','Fornecedor Mapinha','Valor Mapinha','Delta','Associação','CC aplicado','CC esperado','Status','Observação'].map(function(c){return '<th>'+c+'</th>';}).join('')
+    +['Agregado','Código','Placa','Fonte','Data Fech.','NF Fech.','Prestador Fech.','Valor Fech.','Data Mapinha','NF Mapinha','Fornecedor Mapinha','Valor Mapinha','Delta','Iguais encontrados','Associação','CC aplicado','CC esperado','Status','Observação'].map(function(c){return '<th>'+c+'</th>';}).join('')
     +'</tr></thead><tbody>';
   grupos.forEach(function(g){
     const R=xmResumoGrupo(g.rows);
-    html+='<tr class="grp"><td colspan="19">'+xmExcelEsc(g.agregado)+' — '+xmExcelEsc(g.cod)+' | '+g.rows.length+' linha(s) | Fechamento '+num(R.fech)+' | Mapinha '+num(R.map)+' | Δ '+num(R.delta)+' | OK '+R.ok+' | Alertas '+R.warn+' | Críticos '+R.err+' | Revisar '+R.info+'</td></tr>';
+    html+='<tr class="grp"><td colspan="19">'+xmExcelEsc(g.agregado)+' — '+xmExcelEsc(g.cod)+' | '+g.rows.length+' linha(s) | Fechamento '+num(R.fech)+' | Mapinha '+num(R.map)+' | Delta '+num(R.delta)+'</td></tr>';
     g.rows.forEach(function(r){
-      const f=r.f, m=r.m, style=xmStatusStyle(r);
-      const valFech=f?(f.tipo==='C'?-f.valor:f.valor):'';
+      const f=r.f, m=r.m;
+      const valFech=xmExcelValorFech(f);
       const valMap=m?(+m.valor||0):'';
-      const delta=(Math.abs(r.delta)>XMAP_TOL||f||m)?r.delta:'';
-      html+='<tr style="'+style+'">'
+      const delta=(f||m)?r.delta:'';
+      const eqValor=!!(f&&m&&Math.abs(valFech-(+m.valor||0))<=XMAP_TOL);
+      const eqNF=!!(f&&m&&xmNfCompat(f.nf,m.nf));
+      const eqForn=!!(f&&m&&xmFornecedorLinhaCompat(f,m));
+      const eqData=!!(f&&m&&f.data&&m.data&&String(f.data).slice(0,10)===String(m.data).slice(0,10));
+      const eqCC=!!(f&&m&&f.esperado&&m.centroCusto&&String(f.esperado)===String(m.centroCusto));
+      html+='<tr>'
         +'<td>'+xmExcelEsc(r.agregado)+'</td>'
         +'<td>'+xmExcelEsc(r.cod)+'</td>'
         +'<td>'+xmExcelEsc(r.placa)+'</td>'
         +'<td>'+xmExcelEsc(f?f.fonte:'')+'</td>'
-        +'<td>'+xmExcelEsc(f?diaBR(f.data):'')+'</td>'
-        +'<td>'+xmExcelEsc(f?f.nf:'')+'</td>'
-        +'<td>'+xmExcelEsc(f?((f.prestador||'')+(f.prestadorCod?' | Cód. '+f.prestadorCod:'')):'')+'</td>'
-        +'<td>'+xmExcelEsc(f?f.desc:'')+'</td>'
-        +'<td class="num">'+(valFech===''?'':num(valFech))+'</td>'
-        +'<td>'+xmExcelEsc(m?diaBR(m.data):'')+'</td>'
-        +'<td>'+xmExcelEsc(m?m.nf:'')+'</td>'
-        +'<td>'+xmExcelEsc(m?((m.fornecedor||'')+(m.fornecedorCod?' | Cód. '+m.fornecedorCod:'')):'')+'</td>'
-        +'<td class="num">'+(valMap===''?'':num(valMap))+'</td>'
-        +'<td class="num '+(Math.abs(+delta||0)>XMAP_TOL?'delta':'')+'">'+(delta===''?'':num(delta))+'</td>'
+        +'<td'+xmExcelEqClass(eqData)+'>'+xmExcelEsc(f?diaBR(f.data):'')+'</td>'
+        +'<td'+xmExcelEqClass(eqNF)+'>'+xmExcelEsc(f?f.nf:'')+'</td>'
+        +'<td'+xmExcelEqClass(eqForn)+'>'+xmExcelEsc(xmExcelFornecedorFech(f))+'</td>'
+        +'<td'+xmExcelEqClass(eqValor,'num')+'>'+(valFech===''?'':num(valFech))+'</td>'
+        +'<td'+xmExcelEqClass(eqData)+'>'+xmExcelEsc(m?diaBR(m.data):'')+'</td>'
+        +'<td'+xmExcelEqClass(eqNF)+'>'+xmExcelEsc(m?m.nf:'')+'</td>'
+        +'<td'+xmExcelEqClass(eqForn)+'>'+xmExcelEsc(xmExcelFornecedorMap(m))+'</td>'
+        +'<td'+xmExcelEqClass(eqValor,'num')+'>'+(valMap===''?'':num(valMap))+'</td>'
+        +'<td class="num">'+(delta===''?'':num(delta))+'</td>'
+        +'<td class="small">'+xmExcelEsc(xmExcelIguais(r))+'</td>'
         +'<td>'+xmExcelEsc(xmMatchLabel(r.matchMode||'manual'))+'</td>'
-        +'<td>'+xmExcelEsc(m?xmCC(m.centroCusto):'')+'</td>'
-        +'<td>'+xmExcelEsc(f&&f.esperado?xmCC(f.esperado):(f&&f.interno?'n/a':'a revisar'))+'</td>'
+        +'<td'+xmExcelEqClass(eqCC)+'>'+xmExcelEsc(m?xmCC(m.centroCusto):'')+'</td>'
+        +'<td'+xmExcelEqClass(eqCC)+'>'+xmExcelEsc(f&&f.esperado?xmCC(f.esperado):(f&&f.interno?'n/a':'a revisar'))+'</td>'
         +'<td>'+xmExcelEsc(r.status)+'</td>'
-        +'<td>'+xmExcelEsc(r.obs)+'</td>'
+        +'<td class="wrap">'+xmExcelEsc(r.obs)+'</td>'
         +'</tr>';
     });
   });
@@ -1672,8 +1724,9 @@ function xmMatchHTML(r){
   if(!(r.f&&r.m)) return '<td><div class="xm-match"><b>'+esc(xmMatchLabel('manual'))+'</b><span>sem par</span></div></td>';
   const nfOk=xmNfCompat(r.f.nf,r.m.nf), fornOk=xmFornecedorLinhaCompat(r.f,r.m);
   const valorOk=Math.abs(r.delta)<=XMAP_TOL;
+  const parc=(r.matchMode==='parcelaFornecedor' && r.f && r.f.parcela) ? ' · parcela '+esc(r.f.parcela.label) : '';
   return '<td><div class="xm-match"><b>'+esc(xmMatchLabel(r.matchMode))+'</b>'
-    +'<span>'+(nfOk?'NF ok':'NF conferir')+' · '+(fornOk?'prestador ok':'prestador conferir')+' · '+(valorOk?'valor ok':'valor divergente')+'</span></div></td>';
+    +'<span>'+(nfOk?'NF ok':'NF conferir')+' · '+(fornOk?'prestador ok':'prestador conferir')+' · '+(valorOk?'valor ok':'valor divergente')+parc+'</span></div></td>';
 }
 function renderXMapinha(){
   const view=document.getElementById('v-xmap');
