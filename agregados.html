@@ -186,6 +186,17 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 .toast.gn{background:var(--gn)}.toast.rd{background:var(--rd)}.toast.am{background:var(--am)}
 
+/* ── Fechamento x Mapinha (aba de conferência) ── */
+#v-xmap{max-width:1840px}
+.xm-row{cursor:pointer}
+.xm-row:hover td{background:var(--ht)}
+.xm-row.on td{background:var(--ac-bg)}
+.xm-grid{display:grid;grid-template-columns:1fr;gap:14px;align-items:start}
+.xm-det-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+@media(max-width:1180px){.xm-det-cols{grid-template-columns:1fr}}
+.xm-analise{font-size:12.5px;line-height:1.55}
+.xm-analise .aud-it{margin-bottom:5px}
+
 /* impressão: apenas o relatório */
 @media print{
   body{background:#fff}
@@ -211,6 +222,7 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
 <div class="tabs">
   <button class="tab on" data-v="fech" onclick="tab('fech')">Fechamento Agregados</button>
   <button class="tab" data-v="cons" onclick="tab('cons')">Consolidado</button>
+  <button class="tab" data-v="xmap" onclick="tab('xmap')">Fechamento x Mapinha</button>
   <div class="tabs-r">
     <select id="selMes" class="sel" onchange="onScopeChange()"></select>
     <select id="selFilial" class="sel" onchange="onScopeChange()">
@@ -256,6 +268,34 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
         <tbody id="consTbody"></tbody>
       </table>
     </div>
+  </div>
+</section>
+
+<!-- ══ FECHAMENTO x MAPINHA ══ -->
+<section class="view" id="v-xmap">
+  <div id="xmBanner"></div>
+  <div class="cards" id="xmCards"></div>
+  <div class="xm-grid">
+    <div class="panel">
+      <div class="panel-h"><h3 id="xmTitle">Fechamento x Mapinha — conferência por placa</h3>
+        <span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="text" id="xmBusca" class="sel" placeholder="buscar agregado / código / placa" style="width:220px" oninput="renderXMapinha()">
+          <button class="btn sm" onclick="xmRecarregarMapinha()">↻ Atualizar Mapinha</button>
+        </span>
+      </div>
+      <div class="panel-b" style="overflow:auto">
+        <table>
+          <thead><tr>
+            <th>Agregado</th><th>Código</th><th>Placa</th>
+            <th class="num">Débitos Fech.</th><th class="num">Créditos Fech.</th><th class="num">Líquido Fech.</th>
+            <th class="num">Lançado Mapinha</th><th class="num">Diferença</th>
+            <th>Centro(s) Mapinha</th><th>Centro esperado</th><th>Status</th><th>Observação</th>
+          </tr></thead>
+          <tbody id="xmTbody"><tr><td colspan="12" class="empty">Carregando…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="xmDetalhe"></div>
   </div>
 </section>
 
@@ -1041,6 +1081,360 @@ function renderConsolidado(){
 }
 function irFech(cod){ ST.sel=cod; tab('fech'); }
 
+/* ══════════════════════════════════════════════════════════════════
+   FECHAMENTO x MAPINHA — aba de análise e conferência (somente leitura)
+   Cruza os débitos/créditos cobrados no fechamento dos agregados
+   (SZC + SZI, já tratados por buildMes) com os lançamentos do Mapinha
+   (mapinha_lancamentos + ordens_servico concluídas), validando valor e
+   centro de custo por placa. Não grava nada no Firestore.
+   Leitura via ponte do portal (ATLAS_FIRESTORE_REQUEST), mesmo padrão
+   do mapinha.html.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── ponte Firestore (réplica mínima do padrão do Mapinha) ── */
+const _xmPending={}; let _xmSeq=0;
+window.addEventListener('message', function(ev){
+  const m=ev.data||{};
+  if(m.type==='ATLAS_FIRESTORE_RESPONSE' && m.requestId && _xmPending[m.requestId]){
+    const p=_xmPending[m.requestId];
+    clearTimeout(p.timer); delete _xmPending[m.requestId];
+    m.ok ? p.resolve(m.result||{}) : p.reject(new Error(m.error||'Falha na ponte'));
+  }
+});
+function xmParent(action, payload, timeout){
+  payload=payload||{}; timeout=timeout||12000;
+  if(!(window.parent && window.parent!==window)) return Promise.reject(new Error('Ponte indisponível'));
+  const requestId='agxm-'+Date.now()+'-'+(_xmSeq++);
+  return new Promise(function(resolve,reject){
+    const timer=setTimeout(function(){ delete _xmPending[requestId]; reject(new Error('Timeout na ponte')); },timeout);
+    _xmPending[requestId]={resolve:resolve,reject:reject,timer:timer};
+    window.parent.postMessage(Object.assign({type:'ATLAS_FIRESTORE_REQUEST',requestId:requestId,action:action},payload),'*');
+  });
+}
+const _xmSleep=function(ms){ return new Promise(function(r){ setTimeout(r,ms); }); };
+async function xmBridgeRead(action, payload, tries){
+  tries=tries||4; let lastErr;
+  for(let i=1;i<=tries;i++){
+    try{ return await xmParent(action, payload, 12000); }
+    catch(e){ lastErr=e; if(i<tries) await _xmSleep(350*i); }
+  }
+  throw lastErr||new Error('Falha na ponte');
+}
+async function xmGetCollection(collection, opts){
+  opts=opts||{};
+  if(window.parent && window.parent!==window){
+    try{ const r=await xmBridgeRead('getCollection', Object.assign({collection:collection},opts)); return r.docs||[]; }
+    catch(e){ console.warn('[Atlas/Agregados] getCollection '+collection+':', e.message); return []; }
+  }
+  /* fallback direto: somente se já existir Firebase disponível neste iframe */
+  try{ const db=window._mapDB || (window.firebase && window.firebase.firestore && window.firebase.firestore());
+    if(db){ const s=await db.collection(collection).get(); return s.docs.map(function(d){ return {id:d.id,data:d.data()}; }); } }catch(e){ console.warn('[Atlas/Agregados] getCollection direto '+collection+':', e.message); }
+  return [];
+}
+
+/* ── referências do Mapinha (coleções cruas, carregadas uma vez) ── */
+const MAPREF={ loading:false, loaded:false, erro:false, ts:0,
+  lanc:[], oss:[], ccs:[], mensal:[], grupoMap:{}, ccNome:{} };
+async function ensureMapinhaRefs(force){
+  if(MAPREF.loading) return;
+  if(MAPREF.loaded && !force) return;
+  MAPREF.loading=true; MAPREF.erro=false;
+  try{
+    const res=await Promise.all([
+      xmGetCollection('mapinha_lancamentos'),
+      xmGetCollection('ordens_servico'),
+      xmGetCollection('centros_custo'),
+      xmGetCollection('mapinha_mensal')
+    ]);
+    MAPREF.lanc=res[0]||[]; MAPREF.oss=res[1]||[]; MAPREF.ccs=res[2]||[]; MAPREF.mensal=res[3]||[];
+    MAPREF.ccNome={}; MAPREF.grupoMap={};
+    MAPREF.ccs.forEach(function(d){
+      const cod=(d.data&&d.data.codigo)||d.id; if(!/^\d{2}\.\d{2}$/.test(cod)) return;
+      MAPREF.ccNome[cod]=(d.data&&d.data.nome)||'';
+      MAPREF.grupoMap[cod]=(d.data&&d.data.grupoDre)||XM_GRUPO_FALLBACK[cod]||'CONTROLE';
+    });
+    MAPREF.loaded = MAPREF.lanc.length>0 || MAPREF.oss.length>0 || MAPREF.ccs.length>0;
+    MAPREF.erro = !MAPREF.loaded;
+    MAPREF.ts=Date.now();
+  }catch(e){ console.warn('[Atlas/Agregados] ensureMapinhaRefs:', e.message); MAPREF.erro=true; }
+  MAPREF.loading=false;
+  renderXMapinha();
+}
+function xmRecarregarMapinha(){ MAPREF.loaded=false; toast('Recarregando lançamentos do Mapinha…'); ensureMapinhaRefs(true); }
+
+/* ── regras de centro de custo (espelho do mapinha.html — somente leitura) ── */
+const XM_GRUPO_FALLBACK={
+  '01.01':'DIESEL','02.01':'DIESEL','02.02':'DIESEL','04.01':'DIESEL','04.02':'DIESEL','22.01':'DIESEL','21.01':'CONTROLE',
+  '03.01':'CO','05.01':'CO','06.01':'CO','07.01':'CO','08.01':'CO','09.01':'CO','10.01':'CO','11.01':'CO','12.01':'CO','23.01':'CO',
+  '13.01':'CP','14.01':'CP','15.01':'CP','16.01':'PEDAGIO','17.01':'AGREGADOS','18.01':'CAPEX','19.01':'CONTROLE','20.01':'CONTROLE','24.01':'CONTROLE'
+};
+/* centros típicos de AGREGADO (diesel externo/arla agregado, C.O. agregado, reembolso) */
+const XM_CC_AGREGADO=new Set(['01.02','02.02','04.02','10.01','11.01','12.01','22.01']);
+/* centros típicos de FROTA PRÓPRIA / folha — errados para custo de placa de agregado */
+const XM_CC_FROTA=new Set(['01.01','02.01','04.01','03.01','05.01','06.01','07.01','08.01','09.01','23.01','13.01','14.01','15.01']);
+const XMAP_TOL=0.05;   /* tolerância (R$) para considerar valores compatíveis */
+
+function xmPlacaKey(p){ return upper(p).replace(/[^A-Z0-9]/g,''); }
+function xmDtFrom(v){ if(!v) return null; if(v&&v.toDate) try{ return v.toDate(); }catch(_){} const d=new Date(v); return isNaN(d)?null:d; }
+function xmMesRef(v){ const d=xmDtFrom(v); if(!d) return null; return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+function xmCC(cod){ return cod ? cod+(MAPREF.ccNome[cod]?' '+MAPREF.ccNome[cod]:'') : '—'; }
+
+/* centro esperado para um item do FECHAMENTO (SZC/SZI). null = indeterminado → "A revisar" */
+function xmCentroEsperadoItem(l){
+  if(l.fonte==='SZC') return /ARLA/i.test(l.desc||'') ? '04.02' : '02.02';
+  const d=_normDesc(l.desc);
+  if(l.cred>0){ if(/DIESEL|ABASTEC|COMBUST|REEMBOLSO/.test(d)) return '22.01'; return null; }
+  if(/PNEU/.test(d)) return '12.01';
+  if(/LUBRIF|GRAXA|\bOLEO\b/.test(d)) return '10.01';
+  if(/PECA|SERVIC|MANUTEN|MECANIC|BORRACH|ELETRIC|FUNILAR|RETIFIC|SOLDA|TORNO/.test(d)) return '11.01';
+  return null;   /* Via Fácil, Aguiasat, depreciação, ajustes etc.: sem centro esperado seguro */
+}
+
+/* ── lançamentos do Mapinha por placa (manual + O.S., mesmos filtros do mapinha.html) ── */
+function loadMapinhaLancamentos(){
+  const fils=scopeSet(), mes=ST.mesRef, out=[];
+  /* manuais: ativos, não estornados, não derivados de manutenção (esses vêm das O.S. ao vivo) */
+  MAPREF.lanc.forEach(function(d){
+    const l=Object.assign({id:d.id},d.data||{});
+    if(l.status==='estornado' || l.origem==='manutencao') return;
+    if(l.mesRef!==mes || !fils.has(upper(l.filial))) return;
+    out.push({ id:l.id, filial:upper(l.filial), data:String(l.data||'').slice(0,10), placa:upper(l.placa||''),
+      fornecedor:l.fornecedor||'', nf:l.nf||'', centroCusto:l.centroCusto||'', centroCustoNome:l.centroCustoNome||MAPREF.ccNome[l.centroCusto]||'',
+      valor:+l.valor||0, origem:'manual', osId:'' });
+  });
+  /* O.S. concluídas → lançamento (mesma regra do mapinha.html: notas[] gera 1 por NF) */
+  MAPREF.oss.forEach(function(d){
+    const o=Object.assign({id:d.id},d.data||{});
+    if(!/conclu/i.test(o.status||'')) return;
+    const fil=upper(o.unidade||o.filial||'');
+    const mr=xmMesRef(o.finalizadoEm||o.atualizadoEm||o.criadoEm);
+    if(!fils.has(fil) || mr!==mes) return;
+    const cc=o.centroCusto||'06.01';
+    const base={ filial:fil, data:(xmDtFrom(o.finalizadoEm)||new Date()).toISOString().slice(0,10),
+      placa:upper(o.veiculo||o.placa||''), centroCusto:cc, centroCustoNome:MAPREF.ccNome[cc]||'', origem:'manutencao', osId:o.id };
+    const notas=Array.isArray(o.notas)&&o.notas.length ? o.notas : null;
+    if(notas) notas.forEach(function(n,ix){ out.push(Object.assign({ id:'LCM_OS_'+o.id+'_'+(n.nf||ix),
+      fornecedor:upper(n.fornecedor||o.prestador||''), nf:String(n.nf||''), valor:+n.valor||0 }, base)); });
+    else out.push(Object.assign({ id:'LCM_OS_'+o.id, fornecedor:upper(o.prestador||''), nf:String(o.nfNumero||''), valor:+o.valorTotal||0 }, base));
+  });
+  return out;
+}
+function buildMapinhaPorPlaca(){
+  const map={}; const vistos=new Set();
+  loadMapinhaLancamentos().forEach(function(l){
+    /* evita duplicidade (mesmo doc/OS contado 2x) */
+    const dk=l.id+'|'+l.nf+'|'+l.valor; if(vistos.has(dk)) return; vistos.add(dk);
+    const pk=xmPlacaKey(l.placa);
+    if(!map[pk]) map[pk]={placa:l.placa||'', lancs:[], total:0, ccs:new Set()};
+    map[pk].lancs.push(l); map[pk].total+=l.valor;
+    if(l.centroCusto) map[pk].ccs.add(l.centroCusto);
+  });
+  Object.keys(map).forEach(function(pk){ map[pk].lancs.sort(function(a,b){ return String(a.data).localeCompare(String(b.data)); }); });
+  return map;
+}
+
+/* ── classificação de cada placa ── */
+function classificarXMapinha(row){
+  const temFech=row.deb>XMAP_TOL || row.cred>XMAP_TOL;
+  const temMap=!!(row.map && row.map.lancs.length);
+  const ccErr=temMap ? row.map.lancs.filter(function(l){ return XM_CC_FROTA.has(l.centroCusto); }) : [];
+  const ccInd=temMap ? row.map.lancs.filter(function(l){ return l.centroCusto && !XM_CC_FROTA.has(l.centroCusto) && !XM_CC_AGREGADO.has(l.centroCusto); }) : [];
+  if(!temFech && temMap){
+    row.status='Sem cobrança no fechamento'; row.sev='warn';
+    row.obs='Há '+row.map.lancs.length+' lançamento(s) no Mapinha ('+moeda(row.mapTotal)+') sem débito correspondente no fechamento do agregado.';
+    return row;
+  }
+  if(temFech && !temMap){
+    if(Math.abs(row.liq)<=XMAP_TOL){ row.status='OK'; row.sev='ok'; row.obs='Débitos e créditos do fechamento se anulam; nada a conferir no Mapinha.'; return row; }
+    row.status='Sem lançamento no Mapinha'; row.sev='err';
+    row.obs='Cobrado '+moeda(row.liq)+' do agregado sem lançamento correspondente no Mapinha (placa/mês/filial).';
+    return row;
+  }
+  if(!temFech && !temMap){ row.status='OK'; row.sev='ok'; row.obs='Sem débitos e sem lançamentos no período.'; return row; }
+  const divg=Math.abs(row.dif)>XMAP_TOL;
+  if(divg){
+    row.status='Divergência de valor'; row.sev='err';
+    row.obs='Fechamento líquido '+moeda(row.liq)+' × Mapinha '+moeda(row.mapTotal)+' (Δ '+moeda(row.dif)+').'
+      +(ccErr.length?' Há ainda '+ccErr.length+' lançamento(s) em centro típico de frota própria.':'');
+    return row;
+  }
+  if(ccErr.length){
+    row.status='Centro incorreto'; row.sev='warn';
+    row.obs='Valores compatíveis, mas '+ccErr.length+' lançamento(s) do Mapinha usa(m) centro típico de frota própria ('+ccErr.map(function(l){return l.centroCusto;}).filter(function(v,i,a){return a.indexOf(v)===i;}).join(', ')+') para placa de agregado.';
+    return row;
+  }
+  if(ccInd.length){
+    row.status='A revisar'; row.sev='info';
+    row.obs='Valores compatíveis; centro(s) '+ccInd.map(function(l){return l.centroCusto;}).filter(function(v,i,a){return a.indexOf(v)===i;}).join(', ')+' sem regra clara para agregado — confirmar manualmente.';
+    return row;
+  }
+  row.status='OK'; row.sev='ok'; row.obs='Valores compatíveis e centro(s) de custo coerente(s) com custo de agregado.';
+  return row;
+}
+
+/* ── monta a análise completa (fechamento × mapinha, por placa) ── */
+let _xmResult=null, _xmSel=null;
+function buildFechamentoXMapinha(){
+  const cur=buildMes(ST.mesRef);
+  const mapPl=buildMapinhaPorPlaca();
+  const rows=[]; const usadas=new Set();
+  cur.lista.forEach(function(o){
+    /* consolida os veículos do agregado por placa normalizada (SZC pode vir sem
+       hífen enquanto SZB/SZI vêm com — mesma placa física, sem duplicidade) */
+    const porPk={};
+    Object.keys(o.veiculos).forEach(function(p){
+      const v=o.veiculos[p]; const pk=xmPlacaKey(p);
+      if(!porPk[pk]) porPk[pk]={placa:p, deb:0, cred:0, itens:[]};
+      const g=porPk[pk];
+      if(p.length>g.placa.length) g.placa=p;                 /* prefere a grafia com separador */
+      g.deb+=v.abast+v.deb; g.cred+=v.cred; g.itens=g.itens.concat(v.lanc);
+    });
+    Object.keys(porPk).sort().forEach(function(pk){
+      const g=porPk[pk];
+      const m=mapPl[pk]||null; if(m) usadas.add(pk);
+      const deb=g.deb, cred=g.cred, liq=deb-cred;
+      if(deb<=XMAP_TOL && cred<=XMAP_TOL && !m) return;      /* nada a conferir nesta placa */
+      const espSet=new Set();
+      g.itens.forEach(function(l){ const e=xmCentroEsperadoItem(l); if(e) espSet.add(e); });
+      const mapTotal=m?m.total:0;
+      const row={ key:o.cod+'|'+pk, agregado:o.nome||'—', cod:Array.from(o.codes).sort().join('+'),
+        placa:g.placa, placaKey:pk, deb:deb, cred:cred, liq:liq, mapTotal:mapTotal, dif:liq-mapTotal,
+        ccMap:m?Array.from(m.ccs).sort():[], ccEsp:Array.from(espSet).sort(),
+        itensFech:g.itens, map:m };
+      rows.push(classificarXMapinha(row));
+    });
+  });
+  /* lançamentos do Mapinha em placas fora do fechamento — só interessa se o centro é típico de agregado */
+  Object.keys(mapPl).forEach(function(pk){
+    if(usadas.has(pk)) return;
+    const m=mapPl[pk];
+    if(!m.lancs.some(function(l){ return XM_CC_AGREGADO.has(l.centroCusto); })) return;
+    const row={ key:'|'+pk, agregado:'—', cod:'—', placa:m.placa||'(sem placa)', placaKey:pk,
+      deb:0, cred:0, liq:0, mapTotal:m.total, dif:-m.total,
+      ccMap:Array.from(m.ccs).sort(), ccEsp:[], itensFech:[], map:m };
+    rows.push(classificarXMapinha(row));
+  });
+  rows.sort(function(a,b){ return a.agregado.localeCompare(b.agregado)||a.placa.localeCompare(b.placa); });
+  return rows;
+}
+
+/* ── status do fechamento do Mapinha (mapinha_mensal — somente exibição) ── */
+function xmMapinhaStatusHTML(){
+  if(!MAPREF.mensal.length) return '';
+  const fils=Array.from(scopeSet()).sort();
+  const parts=fils.map(function(f){
+    const d=MAPREF.mensal.find(function(x){ return x.id==='MAP_'+f+'_'+ST.mesRef; });
+    const s=d&&d.data&&d.data.status ? d.data.status : 'sem doc';
+    return f+': <b>'+esc(s)+'</b>';
+  });
+  return '<div class="lock-note">📒 Mapinha '+mesLabel(ST.mesRef)+' — '+parts.join(' · ')+' <span class="muted">(análise somente leitura; nada é gravado)</span></div>';
+}
+
+/* ── render principal da aba ── */
+const XM_PILL={ok:'ok',warn:'warn',err:'err',info:'info'};
+function renderXMapinha(){
+  const view=document.getElementById('v-xmap');
+  if(!view || !view.classList.contains('on')) return;
+  const tb=document.getElementById('xmTbody'), cards=document.getElementById('xmCards'),
+        banner=document.getElementById('xmBanner'), det=document.getElementById('xmDetalhe');
+  if(!tb) return;
+  document.getElementById('xmTitle').textContent='Fechamento x Mapinha — '+(ST.filial==='all'?'Todas':ST.filial)+' · '+mesLabel(ST.mesRef);
+  if(!(BASES.szb.loaded&&BASES.szc.loaded&&BASES.szi.loaded)){
+    banner.innerHTML=''; cards.innerHTML=''; det.innerHTML='';
+    tb.innerHTML='<tr><td colspan="12" class="empty">Aguardando SZB/SZC/SZI…</td></tr>'; return;
+  }
+  if(!MAPREF.loaded){
+    banner.innerHTML=MAPREF.erro?'<div class="lock-note warn">⚠ Não foi possível carregar os lançamentos do Mapinha pela ponte. Use "Atualizar Mapinha" para tentar de novo.</div>':'';
+    cards.innerHTML=''; det.innerHTML='';
+    tb.innerHTML='<tr><td colspan="12" class="empty">Aguardando lançamentos do Mapinha…</td></tr>';
+    ensureMapinhaRefs(); return;
+  }
+  _xmResult=buildFechamentoXMapinha();
+  banner.innerHTML=xmMapinhaStatusHTML();
+
+  /* cards de resumo */
+  const T={ags:new Set(),placas:0,liq:0,map:0,ccAlert:0,crit:0};
+  _xmResult.forEach(function(r){ if(r.agregado!=='—') T.ags.add(r.agregado); T.placas++;
+    T.liq+=r.liq; T.map+=r.mapTotal;
+    if(r.status==='Centro incorreto'||r.status==='A revisar') T.ccAlert++;
+    if(r.sev==='err'||r.status==='Sem cobrança no fechamento') T.crit++; });
+  cards.innerHTML=
+    '<div class="card"><div class="k">Agregados analisados</div><div class="v">'+T.ags.size+'</div><div class="s">'+mesLabel(ST.mesRef)+'</div></div>'
+   +'<div class="card"><div class="k">Placas analisadas</div><div class="v">'+T.placas+'</div><div class="s">com débito ou lançamento</div></div>'
+   +'<div class="card"><div class="k">Total cobrado (fechamento)</div><div class="v">'+moeda(T.liq)+'</div><div class="s">débitos − créditos (SZC+SZI)</div></div>'
+   +'<div class="card"><div class="k">Total lançado (Mapinha)</div><div class="v">'+moeda(T.map)+'</div><div class="s">manuais + O.S. concluídas</div></div>'
+   +'<div class="card acc"><div class="k">Diferença total</div><div class="v'+(Math.abs(T.liq-T.map)>XMAP_TOL?' deb':'')+'">'+moeda(T.liq-T.map)+'</div><div class="s">fechamento − Mapinha</div></div>'
+   +'<div class="card"><div class="k">Alertas de centro de custo</div><div class="v'+(T.ccAlert?' deb':'')+'">'+T.ccAlert+'</div><div class="s">centro incorreto / a revisar</div></div>'
+   +'<div class="card"><div class="k">Pendências críticas</div><div class="v'+(T.crit?' deb':'')+'">'+T.crit+'</div><div class="s">divergências e ausências</div></div>';
+
+  /* tabela principal (com busca) */
+  const busca=upper(document.getElementById('xmBusca').value||'');
+  let rows=_xmResult;
+  if(busca) rows=rows.filter(function(r){ return upper(r.agregado).includes(busca)
+    || r.cod.includes(busca.replace(/\D/g,'')||'§') || r.placaKey.includes(xmPlacaKey(busca)); });
+  if(!rows.length){
+    tb.innerHTML='<tr><td colspan="12" class="empty">'+(busca?'Nenhum lançamento encontrado para o filtro.':'Nenhuma divergência encontrada — nada a conferir no escopo.')+'</td></tr>';
+    det.innerHTML=''; return;
+  }
+  if(_xmSel && !rows.some(function(r){ return r.key===_xmSel; })) _xmSel=null;
+  tb.innerHTML=rows.map(function(r){
+    return '<tr class="xm-row'+(r.key===_xmSel?' on':'')+'" onclick="xmSelecionar(\''+esc(r.key).replace(/'/g,"\\'")+'\')">'
+      +'<td><b>'+esc(r.agregado)+'</b></td><td class="mono">'+esc(r.cod)+'</td><td class="mono">'+esc(r.placa)+'</td>'
+      +'<td class="num">'+num(r.deb)+'</td><td class="num">'+num(r.cred)+'</td><td class="num">'+num(r.liq)+'</td>'
+      +'<td class="num">'+num(r.mapTotal)+'</td>'
+      +'<td class="num'+(Math.abs(r.dif)>XMAP_TOL?' deb':'')+'">'+num(r.dif)+'</td>'
+      +'<td class="mono" style="font-size:11px">'+(r.ccMap.length?r.ccMap.map(esc).join(', '):'—')+'</td>'
+      +'<td class="mono" style="font-size:11px">'+(r.ccEsp.length?r.ccEsp.map(esc).join(', '):'—')+'</td>'
+      +'<td><span class="pill '+XM_PILL[r.sev]+'">'+esc(r.status)+'</span></td>'
+      +'<td style="font-size:11px">'+esc(r.obs)+'</td></tr>';
+  }).join('');
+  renderXMapinhaDetalhe();
+}
+function xmSelecionar(key){ _xmSel=(_xmSel===key?null:key); renderXMapinha(); }
+
+/* ── detalhe da placa selecionada ── */
+function renderXMapinhaDetalhe(){
+  const el=document.getElementById('xmDetalhe'); if(!el) return;
+  const r=_xmResult && _xmSel ? _xmResult.find(function(x){ return x.key===_xmSel; }) : null;
+  if(!r){ el.innerHTML=''; return; }
+  let h='<div class="panel"><div class="panel-h"><h3>Detalhe — '+esc(r.agregado)+' · placa '+esc(r.placa)+'</h3>'
+    +'<span class="pill '+XM_PILL[r.sev]+'">'+esc(r.status)+'</span></div><div class="panel-b">';
+  /* análise textual */
+  h+='<div class="xm-analise"><div class="aud-it '+r.sev+'"><span class="ic">'+({ok:'✓',warn:'⚠',err:'✕',info:'ℹ'}[r.sev])+'</span><span><b>'+esc(r.status)+'</b> — '+esc(r.obs)
+    +' Cobrado do agregado: <b>'+moeda(r.liq)+'</b> (débitos '+moeda(r.deb)+' − créditos '+moeda(r.cred)+'). Lançado no Mapinha: <b>'+moeda(r.mapTotal)+'</b>.'
+    +(r.ccEsp.length?' Centro(s) esperado(s) pelo tipo de custo: <b>'+r.ccEsp.map(function(c){return esc(xmCC(c));}).join(' · ')+'</b>.':'')
+    +'</span></div></div>';
+  h+='<div class="xm-det-cols" style="margin-top:10px">';
+  /* itens do fechamento */
+  h+='<div><h3 style="margin-bottom:6px">Itens do fechamento (SZC/SZI)</h3>';
+  if(r.itensFech.length){
+    h+='<div style="overflow:auto"><table><thead><tr><th>Fonte</th><th>Data</th><th>Descrição</th><th class="num">Débito</th><th class="num">Crédito</th><th>Centro esperado</th></tr></thead><tbody>';
+    r.itensFech.forEach(function(l){
+      const e=xmCentroEsperadoItem(l);
+      h+='<tr><td class="mono">'+esc(l.fonte)+'</td><td>'+diaBR(l.data)+'</td><td style="font-size:11px">'+esc(l.desc)+'</td>'
+        +'<td class="num">'+(l.deb?num(l.deb):'')+'</td><td class="num">'+(l.cred?num(l.cred):'')+'</td>'
+        +'<td class="mono" style="font-size:11px">'+(e?esc(xmCC(e)):'<span class="muted">a revisar</span>')+'</td></tr>';
+    });
+    h+='<tr class="tot"><td colspan="3">Totais</td><td class="num">'+num(r.deb)+'</td><td class="num">'+num(r.cred)+'</td><td></td></tr></tbody></table></div>';
+  } else h+='<div class="empty">Sem débitos ou créditos no fechamento para esta placa.</div>';
+  h+='</div>';
+  /* lançamentos do mapinha */
+  h+='<div><h3 style="margin-bottom:6px">Lançamentos no Mapinha</h3>';
+  if(r.map && r.map.lancs.length){
+    h+='<div style="overflow:auto"><table><thead><tr><th>Data</th><th>Fornecedor</th><th>NF</th><th>Centro de custo</th><th>Origem</th><th class="num">Valor</th></tr></thead><tbody>';
+    r.map.lancs.forEach(function(l){
+      const ccBad=XM_CC_FROTA.has(l.centroCusto);
+      h+='<tr><td>'+diaBR(l.data)+'</td><td>'+esc(l.fornecedor||'—')+'</td><td class="mono">'+esc(l.nf||'—')+'</td>'
+        +'<td style="font-size:11px">'+esc(xmCC(l.centroCusto))+(ccBad?' <span class="pill warn">frota?</span>':'')+'</td>'
+        +'<td>'+(l.origem==='manutencao'?'<span class="pill info">O.S. '+esc(l.osId)+'</span>':'<span class="pill ok">manual</span>')+'</td>'
+        +'<td class="num'+(l.valor<0?' cred':'')+'">'+num(l.valor)+'</td></tr>';
+    });
+    h+='<tr class="tot"><td colspan="5">Total</td><td class="num">'+num(r.mapTotal)+'</td></tr></tbody></table></div>';
+  } else h+='<div class="empty">⚠ Sem lançamento correspondente no Mapinha neste mês/filial.</div>';
+  h+='</div></div></div></div>';
+  el.innerHTML=h;
+}
+
 /* ══ navegação / boot ══ */
 function tab(v){
   document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.v===v));
@@ -1055,6 +1449,7 @@ function onScopeChange(){
 function renderAll(){
   if(document.getElementById('v-fech').classList.contains('on')) renderLista();
   if(document.getElementById('v-cons').classList.contains('on')) renderConsolidado();
+  if(document.getElementById('v-xmap').classList.contains('on')) renderXMapinha();
 }
 ensureBases();
 setInterval(ensureBases, 4000);
