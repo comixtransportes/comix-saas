@@ -190,6 +190,14 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
 #v-xmap{max-width:none;width:100%;padding:12px}
 #v-xmap .panel{overflow:hidden}
 #v-xmap .xm-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#v-xmap .xm-toggle{width:22px;height:22px;border:1px solid var(--bd);border-radius:var(--rs);background:var(--wh);color:var(--tx);font-weight:700;line-height:1;cursor:pointer}
+#v-xmap .xm-toggle:hover{background:var(--ht)}
+#v-xmap tr.xm-grp-row td{background:#EEF3FA!important;border-top:1px solid var(--bd);border-bottom:1px solid var(--bd);padding:7px 9px}
+#v-xmap .xm-grp-line{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+#v-xmap .xm-grp-main{display:flex;align-items:center;gap:8px;min-width:260px}
+#v-xmap .xm-grp-name{font-weight:700;color:var(--hd)}
+#v-xmap .xm-gstats{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:10.5px}
+#v-xmap .xm-gstats .pill{padding:1px 7px}
 #v-xmap .xm-help{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;padding:8px 10px;background:#FAFBFD;border:1px solid var(--bd2);border-radius:var(--rs);font-size:11.2px;color:var(--mu)}
 #v-xmap .xm-help b{color:var(--tx)}
 #v-xmap .xm-help .pill{white-space:nowrap}
@@ -322,12 +330,13 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
           <label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--mu);cursor:pointer">
             <input type="checkbox" id="xmInternos" onchange="renderXMapinha()"> mostrar débitos internos
           </label>
+          <button class="btn sm" onclick="xmExportarExcel()">⇩ Exportar Excel</button>
           <button class="btn sm" onclick="xmRecarregarMapinha()">↻ Atualizar Mapinha</button>
         </span>
       </div>
       <div class="panel-b">
         <div class="xm-help">
-          <span><b>Regra de associação:</b> primeiro tenta Prestador + NF + Valor; depois Prestador + NF; depois NF + Valor; por último mantém o pareamento por valor/data da placa. A tabela foi compactada para leitura sem arrastar lateralmente.</span>
+          <span><b>Regra de associação:</b> primeiro tenta Prestador + NF + Valor; depois Prestador + NF; depois NF + Valor; por último mantém o pareamento por valor/data da placa. Clique no cabeçalho do agregado para abrir ou recolher as linhas.</span>
           <span class="pill info">NF exibida nos dois lados</span>
         </div>
         <div class="xm-table-wrap">
@@ -1543,6 +1552,100 @@ function xmMapinhaStatusHTML(){
   return '<div class="lock-note">📒 Mapinha '+mesLabel(ST.mesRef)+' — '+parts.join(' · ')+' <span class="muted">(análise somente leitura; nada é gravado)</span></div>';
 }
 
+/* ── agrupamento/recolhimento por agregado + exportação Excel ── */
+const XM_OPEN_AGREGADOS=new Set();
+let XM_OPEN_SCOPE='', XM_GROUP_KEYS=[];
+function xmAgregadoKey(r){ return (r.agregado||'—')+'|'+(r.cod||'—'); }
+function xmToggleAgregado(idx){
+  const key=XM_GROUP_KEYS[idx]; if(!key) return;
+  if(XM_OPEN_AGREGADOS.has(key)) XM_OPEN_AGREGADOS.delete(key); else XM_OPEN_AGREGADOS.add(key);
+  renderXMapinha();
+}
+function xmAgruparLinhas(rows){
+  const out=[], map={};
+  (rows||[]).forEach(function(r){
+    const key=xmAgregadoKey(r);
+    if(!map[key]){ map[key]={key:key, agregado:r.agregado||'—', cod:r.cod||'—', rows:[]}; out.push(map[key]); }
+    map[key].rows.push(r);
+  });
+  return out;
+}
+function xmResumoGrupo(rows){
+  const R={lin:0,ok:0,err:0,warn:0,info:0,fech:0,map:0,delta:0};
+  (rows||[]).forEach(function(r){
+    if(r.status!=='Interno') R.lin++;
+    if(r.sev==='ok') R.ok++; else if(r.sev==='err') R.err++; else if(r.sev==='warn') R.warn++; else R.info++;
+    if(r.f) R.fech += r.f.tipo==='C' ? -r.f.valor : r.f.valor;
+    if(r.m) R.map += +r.m.valor||0;
+  });
+  R.delta=R.fech-R.map;
+  return R;
+}
+function xmStatusStyle(r){
+  if(r.status==='OK') return 'background:#E8F5EC;color:#1E7D44;';
+  if(r.status==='Divergência de valor'||r.status==='Sem lançamento no Mapinha') return 'background:#FBEAEA;color:#B3322E;';
+  if(r.status==='Centro incorreto'||r.status==='Sem cobrança no fechamento') return 'background:#FCF3DF;color:#9A6A0B;';
+  if(r.status==='Interno') return 'background:#F4F6FA;color:#69788C;';
+  return 'background:#EAF1FA;color:#2B5DA8;';
+}
+function xmExcelEsc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r?\n/g,' '); }
+function xmExportarExcel(){
+  if(!(BASES.szb.loaded&&BASES.szc.loaded&&BASES.szi.loaded)){ toast('Aguardando SZB/SZC/SZI para exportar.','am'); return; }
+  if(!MAPREF.loaded){ toast('Atualize/carregue o Mapinha antes de exportar.','am'); ensureMapinhaRefs(); return; }
+  const rows=buildFechamentoXMapinha();
+  if(!rows.length){ toast('Nenhuma linha para exportar no escopo atual.','am'); return; }
+  const grupos=xmAgruparLinhas(rows);
+  const title='Fechamento x Mapinha — '+(ST.filial==='all'?'Todas':ST.filial)+' — '+mesLabel(ST.mesRef);
+  let html='<!DOCTYPE html><html><head><meta charset="UTF-8"><style>'
+    +'body{font-family:Segoe UI,Arial,sans-serif;font-size:11px;color:#1A2433}'
+    +'table{border-collapse:collapse;width:100%}th,td{border:1px solid #D8DFE8;padding:5px 7px;vertical-align:top}th{background:#13243B;color:#fff;font-weight:700}.grp{background:#EEF3FA;font-weight:700;color:#13243B}.num{text-align:right;mso-number-format:"0.00"}.muted{color:#69788C}.delta{font-weight:700;color:#B3322E}'
+    +'</style></head><body>'
+    +'<h3>'+xmExcelEsc(title)+'</h3>'
+    +'<p>Exportado com todas as linhas por agregado. Cores: verde = OK; vermelho = diferença crítica; amarelo = alerta/centro; azul = revisar; cinza = débito interno.</p>'
+    +'<table><thead><tr>'
+    +['Agregado','Código','Placa','Fonte Fech.','Data Fech.','NF Fech.','Prestador Fech.','Descrição Fech.','Valor Fech.','Data Mapinha','NF Mapinha','Fornecedor Mapinha','Valor Mapinha','Delta','Associação','CC aplicado','CC esperado','Status','Observação'].map(function(c){return '<th>'+c+'</th>';}).join('')
+    +'</tr></thead><tbody>';
+  grupos.forEach(function(g){
+    const R=xmResumoGrupo(g.rows);
+    html+='<tr class="grp"><td colspan="19">'+xmExcelEsc(g.agregado)+' — '+xmExcelEsc(g.cod)+' | '+g.rows.length+' linha(s) | Fechamento '+num(R.fech)+' | Mapinha '+num(R.map)+' | Δ '+num(R.delta)+' | OK '+R.ok+' | Alertas '+R.warn+' | Críticos '+R.err+' | Revisar '+R.info+'</td></tr>';
+    g.rows.forEach(function(r){
+      const f=r.f, m=r.m, style=xmStatusStyle(r);
+      const valFech=f?(f.tipo==='C'?-f.valor:f.valor):'';
+      const valMap=m?(+m.valor||0):'';
+      const delta=(Math.abs(r.delta)>XMAP_TOL||f||m)?r.delta:'';
+      html+='<tr style="'+style+'">'
+        +'<td>'+xmExcelEsc(r.agregado)+'</td>'
+        +'<td>'+xmExcelEsc(r.cod)+'</td>'
+        +'<td>'+xmExcelEsc(r.placa)+'</td>'
+        +'<td>'+xmExcelEsc(f?f.fonte:'')+'</td>'
+        +'<td>'+xmExcelEsc(f?diaBR(f.data):'')+'</td>'
+        +'<td>'+xmExcelEsc(f?f.nf:'')+'</td>'
+        +'<td>'+xmExcelEsc(f?((f.prestador||'')+(f.prestadorCod?' | Cód. '+f.prestadorCod:'')):'')+'</td>'
+        +'<td>'+xmExcelEsc(f?f.desc:'')+'</td>'
+        +'<td class="num">'+(valFech===''?'':num(valFech))+'</td>'
+        +'<td>'+xmExcelEsc(m?diaBR(m.data):'')+'</td>'
+        +'<td>'+xmExcelEsc(m?m.nf:'')+'</td>'
+        +'<td>'+xmExcelEsc(m?((m.fornecedor||'')+(m.fornecedorCod?' | Cód. '+m.fornecedorCod:'')):'')+'</td>'
+        +'<td class="num">'+(valMap===''?'':num(valMap))+'</td>'
+        +'<td class="num '+(Math.abs(+delta||0)>XMAP_TOL?'delta':'')+'">'+(delta===''?'':num(delta))+'</td>'
+        +'<td>'+xmExcelEsc(xmMatchLabel(r.matchMode||'manual'))+'</td>'
+        +'<td>'+xmExcelEsc(m?xmCC(m.centroCusto):'')+'</td>'
+        +'<td>'+xmExcelEsc(f&&f.esperado?xmCC(f.esperado):(f&&f.interno?'n/a':'a revisar'))+'</td>'
+        +'<td>'+xmExcelEsc(r.status)+'</td>'
+        +'<td>'+xmExcelEsc(r.obs)+'</td>'
+        +'</tr>';
+    });
+  });
+  html+='</tbody></table></body></html>';
+  const blob=new Blob(['\ufeff'+html],{type:'application/vnd.ms-excel;charset=utf-8;'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='fechamento_x_mapinha_'+(ST.filial==='all'?'todas':ST.filial)+'_'+ST.mesRef+'.xls';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); },800);
+  toast('Excel exportado com '+rows.length+' linha(s).','gn');
+}
+
 /* ── render principal da aba ── */
 const XM_PILL={ok:'ok',warn:'warn',err:'err',info:'info'};
 function xmLadoFechHTML(f){
@@ -1633,25 +1736,48 @@ function renderXMapinha(){
     tb.innerHTML='<tr><td colspan="12" class="empty">'+((busca||fStatus)?'Nenhum lançamento encontrado para o filtro.':'Nenhuma divergência encontrada — nada a conferir no escopo.')+'</td></tr>';
     return;
   }
-  let h='', last='';
+  let h='';
   const T={fech:0,map:0};
-  rows.forEach(function(r){
-    const grpKey=r.agregado+'|'+r.placa;
-    const first=grpKey!==last; last=grpKey;
-    if(r.f) T.fech += r.f.tipo==='C' ? -r.f.valor : r.f.valor;
-    if(r.m) T.map += +r.m.valor||0;
-    const rowCls=(r.status==='Interno'?' xm-int':'')+' xm-'+(r.sev||'info');
-    h+='<tr class="'+rowCls.trim()+'">'
-      +'<td class="xm-sticky-1">'+(first?'<b>'+esc(r.agregado)+'</b><br><span class="xm-sub">'+esc(r.cod)+'</span>':'')+'</td>'
-      +'<td class="mono xm-sticky-2">'+(first?esc(r.placa):'')+'</td>'
-      +xmLadoFechHTML(r.f)
-      +xmLadoMapHTML(r.m)
-      +'<td class="num'+(Math.abs(r.delta)>XMAP_TOL?' deb':'')+'">'+((r.f&&r.m)||Math.abs(r.delta)>XMAP_TOL?num(r.delta):'')+'</td>'
-      +xmMatchHTML(r)
-      +'<td class="xm-sep mono" style="font-size:10.5px">'+(r.m?esc(xmCC(r.m.centroCusto)):'—')+'</td>'
-      +'<td class="mono" style="font-size:10.5px">'+(r.f&&r.f.esperado?esc(xmCC(r.f.esperado)):(r.f&&r.f.interno?'<span class="muted">n/a</span>':'<span class="muted">a revisar</span>'))+'</td>'
-      +'<td><span class="pill '+XM_PILL[r.sev]+'">'+esc(r.status)+'</span></td>'
-      +'<td style="font-size:10.5px">'+esc(r.obs)+'</td></tr>';
+  rows.forEach(function(r){ if(r.f) T.fech += r.f.tipo==='C' ? -r.f.valor : r.f.valor; if(r.m) T.map += +r.m.valor||0; });
+
+  const grupos=xmAgruparLinhas(rows);
+  const scopeKey=ST.mesRef+'|'+ST.filial;
+  if(XM_OPEN_SCOPE!==scopeKey){ XM_OPEN_AGREGADOS.clear(); XM_OPEN_SCOPE=scopeKey; }
+  XM_GROUP_KEYS=grupos.map(function(g){ return g.key; });
+  if(!XM_OPEN_AGREGADOS.size && grupos.length) XM_OPEN_AGREGADOS.add(grupos[0].key);
+  const forceOpen=!!(busca||fStatus);
+
+  grupos.forEach(function(g,gi){
+    const R=xmResumoGrupo(g.rows);
+    const open=forceOpen || XM_OPEN_AGREGADOS.has(g.key);
+    h+='<tr class="xm-grp-row"><td colspan="12"><div class="xm-grp-line">'
+      +'<div class="xm-grp-main"><button class="xm-toggle" onclick="xmToggleAgregado('+gi+')" title="'+(open?'Recolher agregado':'Abrir agregado')+'">'+(open?'−':'+')+'</button>'
+      +'<span class="xm-grp-name">'+esc(g.agregado)+'</span><span class="xm-sub">'+esc(g.cod)+' · '+g.rows.length+' linha(s)</span></div>'
+      +'<div class="xm-gstats"><span class="pill info">Fech. '+moeda(R.fech)+'</span><span class="pill info">Mapinha '+moeda(R.map)+'</span>'
+      +'<span class="pill '+(Math.abs(R.delta)>XMAP_TOL?'err':'ok')+'">Δ '+moeda(R.delta)+'</span>'
+      +(R.ok?'<span class="pill ok">OK '+R.ok+'</span>':'')
+      +(R.warn?'<span class="pill warn">Alertas '+R.warn+'</span>':'')
+      +(R.err?'<span class="pill err">Críticos '+R.err+'</span>':'')
+      +(R.info?'<span class="pill info">Revisar '+R.info+'</span>':'')
+      +'</div></div></td></tr>';
+    if(!open) return;
+    let last='';
+    g.rows.forEach(function(r){
+      const grpKey=r.agregado+'|'+r.placa;
+      const first=grpKey!==last; last=grpKey;
+      const rowCls=(r.status==='Interno'?' xm-int':'')+' xm-'+(r.sev||'info');
+      h+='<tr class="'+rowCls.trim()+'">'
+        +'<td class="xm-sticky-1">'+(first?'<b>'+esc(r.agregado)+'</b><br><span class="xm-sub">'+esc(r.cod)+'</span>':'')+'</td>'
+        +'<td class="mono xm-sticky-2">'+(first?esc(r.placa):'')+'</td>'
+        +xmLadoFechHTML(r.f)
+        +xmLadoMapHTML(r.m)
+        +'<td class="num'+(Math.abs(r.delta)>XMAP_TOL?' deb':'')+'">'+((r.f&&r.m)||Math.abs(r.delta)>XMAP_TOL?num(r.delta):'')+'</td>'
+        +xmMatchHTML(r)
+        +'<td class="xm-sep mono" style="font-size:10.5px">'+(r.m?esc(xmCC(r.m.centroCusto)):'—')+'</td>'
+        +'<td class="mono" style="font-size:10.5px">'+(r.f&&r.f.esperado?esc(xmCC(r.f.esperado)):(r.f&&r.f.interno?'<span class="muted">n/a</span>':'<span class="muted">a revisar</span>'))+'</td>'
+        +'<td><span class="pill '+XM_PILL[r.sev]+'">'+esc(r.status)+'</span></td>'
+        +'<td style="font-size:10.5px">'+esc(r.obs)+'</td></tr>';
+    });
   });
   h+='<tr class="res"><td colspan="3">TOTAIS — '+rows.length+' linha(s)</td><td class="num">'+num(T.fech)+'</td><td></td><td class="num">'+num(T.map)+'</td>'
     +'<td class="num">'+num(T.fech-T.map)+'</td><td colspan="5"></td></tr>';
