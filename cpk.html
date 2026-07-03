@@ -2163,6 +2163,7 @@ function cpkCalculate(){
   CPK.aggPlaca=[]; CPK.aggRota=[]; CPK.aggCliente=[];
   CPK.diag={semCadastro:[], indefinidas:[], semKm:[], semCusto:false};
   CPK.receitaComplementar=0; // Cartas Frete Complementar (FSC0000): receita real, fora da análise por placa
+  CPK.receitaComplementarFil={}; // idem, quebrada por filial (uniC) p/ reconciliar o card por filial
 
   // ── CUSTO DE CAPITAL = DEPRECIAÇÃO (regra 07/2026) ──────────────────
   //  O C.E da premissa foi DESATIVADO no CPK (número não verdadeiro que puxava
@@ -2203,6 +2204,7 @@ function cpkCalculate(){
       if(f.placa) continue;
       if(scope.size&&d.uniC&&!scope.has(d.uniC)) continue;
       CPK.receitaComplementar += d.fat;
+      const _uc=d.uniC||''; CPK.receitaComplementarFil[_uc]=(CPK.receitaComplementarFil[_uc]||0)+d.fat;
       continue;
     }
     const placa=d.placa;
@@ -2668,6 +2670,12 @@ function cpkAggFilial(scopeOnly){
     c += ((_plsFil[f]||[]).reduce((s,p)=>s+(+_depBy[p]||0),0));
     map[f].custo = c;
   });
+  // RECEITA — soma a Carta Frete Complementar (FSC0000) na filial do CT-e (uniC),
+  // receita real sem placa/KM. Sem filial no CT-e, cai na 1ª do escopo (mesma
+  // regra da placa órfã). Sem isso, a receita/margem do card por filial ficava
+  // abaixo do headline pelo valor do complementar (custo já é o DRE cheio).
+  const _complFil=CPK.receitaComplementarFil||{};
+  Object.keys(_complFil).forEach(uc=>{ let f=uc; if(!f||!map[f])f=scopeFils[0]; if(map[f])map[f].rec+=(+_complFil[uc]||0); });
   Object.values(map).forEach(m=>{ m.cpk=m.km>0?m.custo/m.km:null; m.margem=m.rec-m.custo;
     m.margem_km=m.km>0?m.margem/m.km:null; m.margem_pct=m.rec>0?m.margem/m.rec*100:null; });
   const fils=scopeOnly?scopeFils:['SC','PR','SP'];
