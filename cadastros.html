@@ -1085,7 +1085,10 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
   function comprasAssinarEstadoUsuario(callback) {
     if (!currentUser) return function(){};
     try {
-      return db.collection("relatorios").doc(comprasUserDocId()).onSnapshot({ includeMetadataChanges: true }, function(snap) {
+      /* [LEITURAS] includeMetadataChanges removido: o callback disparava também
+         a cada mudança de metadado (escrita local pendente, transição de cache),
+         dobrando execuções sem nenhum uso dos metadados — apenas data.state é lido. */
+      return db.collection("relatorios").doc(comprasUserDocId()).onSnapshot(function(snap) {
         const data = snap.exists ? (snap.data() || {}) : {};
         if (data.state) callback(data.state || null);
       }, function(error) {
@@ -1469,6 +1472,25 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       }, { merge: true });
     },
     gerarNumeroSequencial: async function() {
+      /* [LEITURAS] Antes: baixava a coleção "relatorios" INTEIRA só para contar
+         documentos (N leituras por ficha criada). Agora: usa contagem agregada
+         do Firestore (count()), que custa 1 leitura por lote de até 1000 docs.
+         O número gerado é o MESMO: total − docs de estado do Compras − doc
+         legado "__compras_estado__" (se existir sem a flag). Em caso de erro
+         (regras/versão), cai no método antigo. */
+      try {
+        const [totalAgg, comprasAgg, legacySnap] = await Promise.all([
+          db.collection("relatorios").count().get(),
+          db.collection("relatorios").where("__comprasEstado", "==", true).count().get(),
+          db.collection("relatorios").doc("__compras_estado__").get()
+        ]);
+        let validos = totalAgg.data().count - comprasAgg.data().count;
+        // O doc legado só é subtraído se existir E ainda não tiver sido contado como __comprasEstado.
+        if (legacySnap.exists && !((legacySnap.data() || {}).__comprasEstado)) validos -= 1;
+        if (validos >= 0) return String(validos + 1).padStart(6, "0");
+      } catch (e) {
+        console.warn("COMIX: contagem agregada indisponível, usando método completo.", e && e.message);
+      }
       const snap = await db.collection("relatorios").get();
       const docsValidos = snap.docs.filter(d => d.id !== "__compras_estado__" && !((d.data() || {}).__comprasEstado));
       return String(docsValidos.length + 1).padStart(6, "0");
@@ -1954,17 +1976,38 @@ function syncOperationalFromCfg(collectionName) {
     populateEntregasUnidadeSelects();
   }
 }
-async function cfgList(collectionName) {
+/* [LEITURAS] Cache das listagens administrativas: cada clique numa aba de
+   Cadastros (Usuários, Veículos, Motoristas, Filiais, Centro de Custo,
+   Notificações) relia a coleção INTEIRA no Firestore, mesmo alternando entre
+   abas em segundos. Agora a lista fica em memória por 60s; qualquer gravação
+   ou exclusão (cfgSave/cfgDelete/bloqueio/seed/importação) invalida o cache da
+   coleção na hora — o usuário sempre vê o dado que acabou de salvar. */
+const __cfgListCache = {}; // collection → { ts, docs }
+const CFG_LIST_TTL = 60000;
+function cfgListInvalidate(collectionName) {
+  if (collectionName) delete __cfgListCache[collectionName];
+  else Object.keys(__cfgListCache).forEach(k => delete __cfgListCache[k]);
+}
+async function cfgList(collectionName, force) {
   if (!cfgRequireAdmin()) return [];
-  return await window._FB.adminListar(collectionName);
+  const hit = __cfgListCache[collectionName];
+  if (!force && hit && (Date.now() - hit.ts) < CFG_LIST_TTL) {
+    return hit.docs.map(d => ({ ...d })); // cópia rasa: render pode mutar sem sujar o cache
+  }
+  const docs = await window._FB.adminListar(collectionName);
+  __cfgListCache[collectionName] = { ts: Date.now(), docs: docs.map(d => ({ ...d })) };
+  return docs;
 }
 async function cfgSave(collectionName, id, payload) {
   if (!cfgRequireAdmin()) return null;
-  return await window._FB.adminSalvar(collectionName, id, payload);
+  const res = await window._FB.adminSalvar(collectionName, id, payload);
+  cfgListInvalidate(collectionName);
+  return res;
 }
 async function cfgDelete(collectionName, id) {
   if (!cfgRequireAdmin()) return;
   await window._FB.adminExcluir(collectionName, id);
+  cfgListInvalidate(collectionName);
 }
 function cfgSortByName(a, b, field) {
   return String(a[field] || "").localeCompare(String(b[field] || ""), "pt-BR", { sensitivity: "base" });
@@ -2079,6 +2122,7 @@ async function cfgToggleUsuario(id, bloqueado) {
   if (!cfgRequireAdmin()) return;
   try {
     await window._FB.adminBloquearUsuario(id, bloqueado);
+    cfgListInvalidate("usuarios"); // [LEITURAS] escrita direta → invalida cache
     showToast(bloqueado ? "Usuário bloqueado." : "Usuário desbloqueado.", "success");
     await cfgRefreshUsuarios();
   } catch (err) {
@@ -6293,12 +6337,26 @@ const CC_SEED_LISTA = [
 async function cfgSeedCentrosCusto() {
   try {
     const existentes = await cfgList('centros_custo');
+    /* [LEITURAS] Antes, TODA abertura da aba Centro de Custo apagava e regravava
+       a coleção inteira (N exclusões + N gravações + releitura), mesmo quando
+       nada havia mudado. Agora, se a coleção já está EXATAMENTE igual ao seed,
+       nada é tocado — o estado final é idêntico ao comportamento anterior. */
+    const seedIguais = existentes.length === CC_SEED_LISTA.length &&
+      CC_SEED_LISTA.every(cc => {
+        const ex = existentes.find(e => e.id === cc.id);
+        return ex && ex.codigo === cc.codigo && ex.nome === cc.nome && ex.ativo === true;
+      });
+    if (seedIguais) {
+      console.log('[Atlas] Seed centros_custo já aplicado — nenhuma regravação necessária.');
+      return;
+    }
     for (const cc of existentes) {
       try { await window._FB.adminExcluir('centros_custo', cc.id); } catch(_) {}
     }
     for (const cc of CC_SEED_LISTA) {
       await window._FB.adminSalvar('centros_custo', cc.id, { codigo: cc.codigo, nome: cc.nome, descricao: '', ativo: true });
     }
+    cfgListInvalidate('centros_custo'); // escreveu direto no _FB → invalida cache
     console.log('[Atlas] Seed centros_custo concluído — ' + CC_SEED_LISTA.length + ' registros.');
   } catch(e) {
     console.warn('[Atlas] Seed centros_custo ignorado:', e.message);
