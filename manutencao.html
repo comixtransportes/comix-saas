@@ -1761,9 +1761,18 @@ function registrarNumOS(num) {
 async function gerarNumOS() {
   let maior = parseInt(localStorage.getItem('atlas_manutencao_os_seq') || '0', 10) || 0;
   try {
-    const docs = await atlasFsGetCollection('ordens_servico', { limit:500 });
-    docs.forEach(doc => {
-      const n = extrairNumeroOS({ id: doc.id, ...(doc.data || {}) });
+    /* [LEITURAS] Se as O.S já estão em memória (loadOrdensServico recente e sem
+       escrita pendente), calcula o próximo número a partir do cache — antes,
+       cada chamada refazia uma query de até 500 documentos. */
+    let lista = null;
+    if (Array.isArray(MNT_CACHE.ordens) && MNT_CACHE.ordens.length && !_osDirty && (Date.now() - _osTs) < 300000) {
+      lista = MNT_CACHE.ordens;
+    } else {
+      const docs = await atlasFsGetCollection('ordens_servico', { limit:500 });
+      lista = docs.map(doc => ({ id: doc.id, ...(doc.data || {}) }));
+    }
+    lista.forEach(o => {
+      const n = extrairNumeroOS(o);
       if (n > maior) maior = n;
     });
   } catch(e) {
@@ -2379,6 +2388,7 @@ async function atlasFsGetDoc(collection, docId) {
 
 async function atlasFsSetDoc(collection, docId, data, opts = {}) {
   if (collection === 'ordens_servico') _osDirty = true;
+  if (collection === 'checklists_diarios') _ckTs = 0; // [LEITURAS] escrita → cache local de checklists expira
   let parentErr = null;
   let directErr = null;
   if (atlasHasParentBridge()) {
@@ -2403,6 +2413,7 @@ async function atlasFsSetDoc(collection, docId, data, opts = {}) {
 
 async function atlasFsAddDoc(collection, data) {
   if (collection === 'ordens_servico') _osDirty = true;
+  if (collection === 'checklists_diarios') _ckTs = 0; // [LEITURAS] escrita → cache local de checklists expira
   let parentErr = null;
   let directErr = null;
   if (atlasHasParentBridge()) {
@@ -2427,6 +2438,7 @@ async function atlasFsAddDoc(collection, data) {
 
 async function atlasFsDeleteDoc(collection, docId) {
   if (collection === 'ordens_servico') _osDirty = true;
+  if (collection === 'checklists_diarios') _ckTs = 0; // [LEITURAS] escrita → cache local de checklists expira
   let parentErr = null;
   let directErr = null;
   if (atlasHasParentBridge()) {
@@ -2605,7 +2617,11 @@ function normalizarOS(id, d) {
    escrita de OS marca _osDirty (nos helpers de escrita), forçando refetch; o
    auto-refresh também força para captar mudanças de outros usuários. */
 let _osTs = 0, _osDirty = false;
-const OS_TTL = 20000;
+/* [LEITURAS] TTL 20s → 60s: cada expiração custa até 300 leituras por clique de
+   aba. Escritas locais continuam marcando _osDirty (refetch imediato) e o
+   auto-refresh de 15 min continua forçando — a única mudança é que a navegação
+   entre dashboard/gestão/kanban reaproveita a memória por 60s em vez de 20s. */
+const OS_TTL = 60000;
 function _osRenderFromCache(){
   renderPainelGeral();
   renderPainelFrota();
@@ -3079,7 +3095,33 @@ function resetFormularioOS() {
 /* ══ LOAD CHECKLISTS DO FIREBASE ══
    Busca na coleção "checklists_diarios" do Firestore.
    Fallback: mostra mensagem se vazio. */
-async function loadChecklists() {
+/* [LEITURAS] Cache curto dos checklists: o boot do módulo chama loadChecklists
+   várias vezes em sequência (loadCadastrosFirebase → ATLAS_USER →
+   resolveAlocacaoUsuario), e cada chamada refazia a query de 100 documentos.
+   Agora os documentos ficam em memória por 15s e chamadas simultâneas
+   compartilham a mesma query; a RENDERIZAÇÃO continua acontecendo em toda
+   chamada (filtros por usuário/placa são aplicados normalmente). Ações que
+   alteram checklists chamam loadChecklists(true) para forçar releitura. */
+let _ckRawDocs = null, _ckTs = 0, _ckFetchInflight = null;
+const CK_TTL = 15000;
+async function _ckFetchRawDocs(force) {
+  if (!force && _ckRawDocs && (Date.now() - _ckTs) < CK_TTL) return _ckRawDocs;
+  if (_ckFetchInflight) return _ckFetchInflight;
+  _ckFetchInflight = (async () => {
+    let rawDocs;
+    try {
+      rawDocs = await atlasFsGetCollection('checklists_diarios', { orderBy:'dataAbertura', orderDir:'desc', limit:100 });
+    } catch(eOrder) {
+      rawDocs = await atlasFsGetCollection('checklists_diarios', { limit:100 });
+    }
+    _ckRawDocs = rawDocs;
+    _ckTs = Date.now();
+    return rawDocs;
+  })();
+  try { return await _ckFetchInflight; }
+  finally { _ckFetchInflight = null; }
+}
+async function loadChecklists(force) {
   const tbody = document.getElementById('checklist-tbody');
   if (!tbody) return;
 
@@ -3087,12 +3129,7 @@ async function loadChecklists() {
 
   try {
     const isAdmin = ['admin','lr','lm'].includes(ATLAS_CURRENT_USER.perfil);
-    let rawDocs;
-    try {
-      rawDocs = await atlasFsGetCollection('checklists_diarios', { orderBy:'dataAbertura', orderDir:'desc', limit:100 });
-    } catch(eOrder) {
-      rawDocs = await atlasFsGetCollection('checklists_diarios', { limit:100 });
-    }
+    const rawDocs = await _ckFetchRawDocs(force === true);
     let docs = rawDocs.map(d => ({ id: d.id, ...(d.data || {}) }));
 
     docs.sort((a, b) => {
@@ -4161,7 +4198,7 @@ async function salvarChecklistFirebase() {
     }
 
     // Recarrega listas reais
-    await loadChecklists();
+    await loadChecklists(true);
     await loadOrdensServico();
     return true;
 
@@ -5795,14 +5832,36 @@ async function salvarEdicaoOS() {
 
 // ══════════════════════════════════════════════════════════
 // ALTERAÇÃO 4 — AUTO-REFRESH: recarrega dados a cada 15 minutos
+// [LEITURAS] Só quando a tela está realmente visível. Máquina com o portal
+// aberto à noite / módulo em segundo plano NÃO fica relendo a coleção
+// ordens_servico a cada ciclo. Ao voltar para a tela, se um ciclo foi pulado,
+// o refresh pendente roda uma única vez — mesmo resultado, sem polling cego.
 // ══════════════════════════════════════════════════════════
 let _mntAutoRefreshTimer = null;
+let _mntAutoRefreshPendente = false;
+function mntTelaVisivel() {
+  // document.hidden: aba do navegador em segundo plano.
+  // getClientRects vazio: iframe do módulo com display:none no portal (outro menu aberto).
+  try {
+    if (document.hidden) return false;
+    if (document.body && !document.body.getClientRects().length) return false;
+  } catch(_) {}
+  return true;
+}
 function iniciarAutoRefresh() {
   if (_mntAutoRefreshTimer) clearInterval(_mntAutoRefreshTimer);
   _mntAutoRefreshTimer = setInterval(async () => {
+    if (!mntTelaVisivel()) { _mntAutoRefreshPendente = true; return; }
     try { await loadOrdensServico(true); } catch(e) { console.warn('[AutoRefresh] Erro:', e.message); }
   }, 900000); // 15 minutos
 }
+function mntRodarRefreshPendente() {
+  if (!_mntAutoRefreshPendente || !mntTelaVisivel()) return;
+  _mntAutoRefreshPendente = false;
+  loadOrdensServico(true).catch(e => console.warn('[AutoRefresh] Erro:', e.message));
+}
+document.addEventListener('visibilitychange', mntRodarRefreshPendente);
+window.addEventListener('focus', mntRodarRefreshPendente);
 
 // ══ INIT ══
 renderParadas();
