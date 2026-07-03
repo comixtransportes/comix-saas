@@ -221,7 +221,7 @@ select option{color:var(--black)}
 .ent-szb-row:not(.ok):hover{background:var(--blue-l)}
 .ent-szb-row.ok:hover{background:#d7f1e7}
 .ent-szb-hint{font-size:9px;font-weight:700;color:var(--gray);margin-top:2px}
-.ent-szb-modal{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:none;align-items:center;justify-content:center;padding:12px 12px calc(16px + env(safe-area-inset-bottom,0px))}
+.ent-szb-modal{position:fixed;top:0;left:0;right:0;height:calc(var(--atlas-vh,1vh) * 100);background:rgba(0,0,0,.55);z-index:9999;display:none;align-items:center;justify-content:center;padding:12px 12px calc(16px + env(safe-area-inset-bottom,0px))}
 .ent-szb-modal.show{display:flex}
 .ent-szb-modal-box{width:100%;max-width:420px;background:var(--white);border-radius:16px;box-shadow:0 -12px 42px rgba(0,0,0,.32);overflow:hidden;display:flex;flex-direction:column;max-height:calc(var(--atlas-vh,1vh) * 100 - 48px)}
 .ent-szb-modal-hd{flex:0 0 auto}
@@ -229,7 +229,7 @@ select option{color:var(--black)}
 .ent-szb-modal-actions{flex:0 0 auto}
 /* No celular, reserva folga extra para a barra inferior do navegador que pode invadir o iframe */
 @media (hover:none) and (pointer:coarse){
-  .ent-szb-modal-box{max-height:calc(var(--atlas-vh,1vh) * 100 - 130px)}
+  .ent-szb-modal-box{max-height:calc(var(--atlas-vh,1vh) * 100 - 56px)}
 }
 .ent-szb-modal-hd{background:var(--black);color:var(--white);padding:13px 15px;display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .ent-szb-modal-title{font-size:13px;font-weight:900;line-height:1.2}
@@ -271,13 +271,13 @@ select option{color:var(--black)}
 .foto-remove-btn{position:absolute;top:5px;left:5px;background:rgba(0,0,0,.65);color:var(--white);border:none;border-radius:4px;font-size:9px;font-weight:700;padding:2px 7px;cursor:pointer}
 .foto-obrig{font-size:10px;color:var(--red);font-weight:600;margin-top:3px}
 /* ═══ MODAL CANHOTO ═══ */
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9990;align-items:center;justify-content:center;padding:20px}
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;height:calc(var(--atlas-vh,1vh) * 100);background:rgba(0,0,0,.85);z-index:9990;align-items:center;justify-content:center;padding:20px}
 .modal-overlay.show{display:flex}
 .modal-box{background:var(--white);border-radius:14px;overflow:hidden;width:100%;max-width:440px;box-shadow:0 24px 64px rgba(0,0,0,.5);display:flex;flex-direction:column;max-height:calc(var(--atlas-vh,1vh) * 100 - 48px)}
 .modal-hdr,.modal-footer{flex:0 0 auto}
 .modal-img-wrap{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 @media (hover:none) and (pointer:coarse){
-  .modal-box{max-height:calc(var(--atlas-vh,1vh) * 100 - 130px)}
+  .modal-box{max-height:calc(var(--atlas-vh,1vh) * 100 - 56px)}
 }
 .modal-hdr{background:var(--black);padding:14px 16px;display:flex;align-items:center;justify-content:space-between}
 .modal-hdr span{font-size:13px;font-weight:800;color:var(--white)}
@@ -369,7 +369,7 @@ select option{color:var(--black)}
 .toast.error{background:var(--red)}
 .toast.success{background:var(--green)}
 @media (hover:none) and (pointer:coarse){
-  .toast{bottom:calc(110px + env(safe-area-inset-bottom,0px))}
+  .toast{bottom:auto;top:calc(var(--atlas-vh,1vh) * 100 - 88px)}
 }
 
 
@@ -3865,22 +3865,65 @@ window.openPanel = function() {
 
 
 <script id="atlas-fit-form-script">
-/* Sincroniza --atlas-vh (altura visível real, via visualViewport) com as telas de
-   formulário e módulos. Substitui o antigo mecanismo de transform:scale, que
-   impedia a rolagem e escondia os botões no navegador do celular. */
+/* ── SINCRONIZAÇÃO DE ALTURA VISÍVEL (--atlas-vh) ──
+   Problema: dentro de um iframe, window.innerHeight/visualViewport reportam a altura
+   TOTAL do iframe — incluindo a faixa escondida atrás da barra inferior do navegador
+   (Safari/Chrome/Firefox/Samsung). Por isso os botões ficavam cortados.
+   Solução: como o shell Atlas e a ficha estão no MESMO domínio, lemos o visualViewport
+   da janela PAI e a posição do iframe (frameElement.getBoundingClientRect) para calcular
+   exatamente quantos pixels do iframe estão de fato visíveis. Funciona em qualquer
+   navegador moderno. Fallback (cross-origin/erro): guarda fixa de 96px no mobile. */
 (function(){
   if(window.__atlasVhSyncInstalled) return;
   window.__atlasVhSyncInstalled = true;
 
-  function vvHeight(){
+  var isEmbedded = false;
+  try { isEmbedded = (window.self !== window.top); } catch(e){ isEmbedded = true; }
+
+  function isMobileLike(){
+    try{
+      if(window.matchMedia && window.matchMedia('(hover:none) and (pointer:coarse)').matches) return true;
+    }catch(e){}
+    return (window.innerWidth || 0) <= 760;
+  }
+
+  function ownHeight(){
     var h = (window.visualViewport && window.visualViewport.height) ? window.visualViewport.height : window.innerHeight;
     return h || document.documentElement.clientHeight || 0;
   }
 
+  /* Altura realmente visível do iframe, medida a partir da janela pai (mesmo domínio). */
+  function embeddedVisibleHeight(){
+    try{
+      if(!isEmbedded || !window.frameElement) return null;
+      var top = window.top;
+      var vv = top.visualViewport;
+      var vpTop = vv ? vv.offsetTop : 0;
+      var vpH = (vv && vv.height) ? vv.height : (top.innerHeight || 0);
+      if(!vpH) return null;
+      var rect = window.frameElement.getBoundingClientRect(); /* coords da janela pai */
+      var visTop = Math.max(rect.top, vpTop);
+      var visBottom = Math.min(rect.bottom, vpTop + vpH);
+      var h = visBottom - visTop;
+      return (h > 120) ? h : null; /* medidas absurdas → deixa o fallback assumir */
+    }catch(e){
+      return null; /* cross-origin ou API indisponível */
+    }
+  }
+
   function syncVh(){
-    var vh = vvHeight();
-    if(!vh) return;
-    var unit = (vh * 0.01) + 'px';
+    var h = null;
+    if(isEmbedded){
+      h = embeddedVisibleHeight();
+      if(h === null){
+        /* Fallback cego: reserva espaço para a barra inferior do navegador */
+        h = ownHeight() - (isMobileLike() ? 96 : 0);
+      }
+    } else {
+      h = ownHeight();
+    }
+    if(!h || h < 120) return;
+    var unit = (h * 0.01) + 'px';
     var form = document.getElementById('scr_form');
     var modules = document.getElementById('scr_modules');
     if(form) form.style.setProperty('--atlas-vh', unit);
@@ -3895,6 +3938,7 @@ window.openPanel = function() {
       syncVh();
       setTimeout(syncVh, 120);
       setTimeout(syncVh, 400);
+      setTimeout(syncVh, 1000);
     });
   }
 
@@ -3902,12 +3946,28 @@ window.openPanel = function() {
   window.atlasFitFormScreen = queueSync;
   window.atlasApplyMobileModuleButtonsFix = queueSync;
 
+  function listen(target){
+    if(!target) return;
+    try{
+      target.addEventListener('resize', queueSync, {passive:true});
+      target.addEventListener('scroll', queueSync, {passive:true});
+    }catch(e){}
+  }
   window.addEventListener('resize', queueSync, {passive:true});
   window.addEventListener('orientationchange', queueSync, {passive:true});
   window.addEventListener('pageshow', queueSync, {passive:true});
-  if(window.visualViewport){
-    window.visualViewport.addEventListener('resize', queueSync, {passive:true});
-    window.visualViewport.addEventListener('scroll', queueSync, {passive:true});
+  listen(window.visualViewport);
+  /* Mesmo domínio: acompanha também o viewport da janela pai (barra do navegador
+     aparecendo/sumindo, rotação, teclado virtual etc.) */
+  if(isEmbedded){
+    try{
+      listen(window.top.visualViewport);
+      window.top.addEventListener('resize', queueSync, {passive:true});
+      window.top.addEventListener('scroll', queueSync, {passive:true});
+    }catch(e){}
+    /* Reforço periódico leve: cobre navegadores que não disparam eventos ao
+       recolher/expandir a barra (custo desprezível). */
+    setInterval(syncVh, 1500);
   }
   document.addEventListener('DOMContentLoaded', queueSync);
 
