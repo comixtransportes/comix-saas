@@ -107,6 +107,20 @@ label.fld{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--
 .btn.warn{background:var(--am);border-color:var(--am);color:#fff}
 .btn.sm{padding:5px 9px;font-size:11px;font-weight:500}
 .btn:disabled{opacity:.5;cursor:not-allowed}
+.lanc-acoes-th{width:74px;text-align:center!important}
+.lanc-actions{display:flex;align-items:center;justify-content:center;gap:5px;white-space:nowrap}
+.icon-btn{width:24px;height:24px;border:1px solid var(--bd2);border-radius:6px;background:var(--wh);color:var(--mu);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;transition:.12s;padding:0}
+.icon-btn:hover:not(:disabled){border-color:var(--ac);background:var(--ac-bg);color:var(--ac);transform:translateY(-1px);box-shadow:0 2px 8px rgba(26,86,219,.12)}
+.icon-btn.danger:hover:not(:disabled){border-color:var(--rd-bd);background:var(--rd-bg);color:var(--rd);box-shadow:0 2px 8px rgba(200,30,30,.10)}
+.icon-btn:disabled{opacity:.35;cursor:not-allowed;transform:none;box-shadow:none}
+.icon-btn svg{width:13px;height:13px;stroke:currentColor;flex-shrink:0}
+.edit-lanc-backdrop{position:fixed;inset:0;background:rgba(25,33,53,.38);display:none;align-items:center;justify-content:center;z-index:9998;padding:16px}
+.edit-lanc-backdrop.on{display:flex}
+.edit-lanc-modal{width:min(760px,100%);background:var(--wh);border:1px solid var(--bd);border-radius:10px;box-shadow:var(--shd-l);overflow:hidden}
+.edit-lanc-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-bottom:1px solid var(--bd2);background:#fafbfc}
+.edit-lanc-h h3{font-size:13px}
+.edit-lanc-b{padding:14px}
+.edit-lanc-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
 
 /* Cards */
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px;margin-bottom:16px}
@@ -292,7 +306,7 @@ td>.skel-line{vertical-align:middle}
       <table>
         <thead><tr>
           <th>Data</th><th>Fornecedor</th><th>N.F.</th><th>Placa</th><th>Centro de custo</th>
-          <th class="num">Valor</th><th>Origem</th><th></th>
+          <th class="num">Valor</th><th>Origem</th><th class="lanc-acoes-th">Ações</th>
         </tr></thead>
         <tbody id="lancTbody"></tbody>
       </table>
@@ -513,6 +527,30 @@ td>.skel-line{vertical-align:middle}
   </div>
 </section>
 
+<div id="editLancBackdrop" class="edit-lanc-backdrop" aria-hidden="true" onclick="if(event.target===this)fecharEditarLanc()">
+  <div class="edit-lanc-modal" role="dialog" aria-modal="true" aria-labelledby="editLancTitle">
+    <div class="edit-lanc-h">
+      <h3 id="editLancTitle">Editar lançamento</h3>
+      <button type="button" class="icon-btn" onclick="fecharEditarLanc()" title="Fechar" aria-label="Fechar edição">×</button>
+    </div>
+    <div class="edit-lanc-b">
+      <input type="hidden" id="edLancId">
+      <div class="frm">
+        <label class="fld">Data<input type="date" id="edData"></label>
+        <label class="fld">Fornecedor<input type="text" id="edForn"></label>
+        <label class="fld">N.F.<input type="text" id="edNF"></label>
+        <label class="fld">Placa<input type="text" id="edPlaca" placeholder="(opcional)"></label>
+        <label class="fld">Centro de custo<select id="edCC"></select></label>
+        <label class="fld">Valor (R$)<input type="number" id="edValor" step="0.01"></label>
+      </div>
+      <div class="edit-lanc-foot">
+        <button type="button" class="btn" onclick="fecharEditarLanc()">Cancelar</button>
+        <button type="button" class="btn pri" onclick="salvarEditarLanc()">Salvar alterações</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="toast-el" class="toast"></div>
 
 <script>
@@ -725,7 +763,7 @@ function isConsolidado(){ return ST.filial==='all'; }
 const MONEY_IDS = ['recFat','impICMS','impPIS','impIR','impISS','lcValor',
   'mtFat','mtDiesel','mtAgreg','mtCO','mtCP','mtCE','mtRF',
   'prFolhaAdic','prCPEpi','prCPLegal','prCPOutrosTotal',
-  'prCPFolhaReal','prCPEpiReal','prCPLegalReal','prCPOutrosReal'];
+  'prCPFolhaReal','prCPEpiReal','prCPLegalReal','prCPOutrosReal','edValor'];
 function _moneyFmt(cents){ const v=Math.abs(cents)/100; const s=v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); return cents<0?('-'+s):s; }
 function bindMoneyInputs(){
   const desc=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');
@@ -1229,9 +1267,16 @@ function applyCadastros(fil, cc){
                       .sort((a,b)=>a.codigo.localeCompare(b.codigo));
   ST.grupoMap = {}; ST.centrosCusto.forEach(c=>ST.grupoMap[c.codigo]=c.grupo);
   populateMeses();
-  const cc2=document.getElementById('lcCC'); cc2.innerHTML='<option value="">Selecione…</option>';
-  ST.centrosCusto.forEach(c=> cc2.appendChild(new Option(c.codigo+' '+c.nome, c.codigo)) );
+  preencherSelectCC('lcCC');
+  preencherSelectCC('edCC');
   _cadSig = _sigCad(fil, cc);
+}
+function preencherSelectCC(id, selecionado){
+  const el=document.getElementById(id); if(!el) return;
+  const atual = selecionado || el.value || '';
+  el.innerHTML='<option value="">Selecione…</option>';
+  ST.centrosCusto.forEach(c=> el.appendChild(new Option(c.codigo+' '+c.nome, c.codigo)) );
+  if(atual) el.value=atual;
 }
 
 /* Revalidação de cadastros em segundo plano: só refaz selects/refresh se mudou. */
@@ -1490,12 +1535,74 @@ async function addLancamento(){
   ['lcForn','lcNF','lcPlaca','lcValor'].forEach(id=>document.getElementById(id).value='');
   await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre(); cacheCurrentScope();
 }
+function lancManualPorId(id){ return ST.lancManuais.find(l=>String(l.id)===String(id)); }
+function lancPodeAcao(l){ return !!l && l.origem==='manual' && podeEditar(); }
+function lancAcaoTitle(l){
+  if(!podeEditar()) return 'Mapinha fechado: reabra para alterar este lançamento.';
+  if(!l || l.origem!=='manual') return 'Lançamento de manutenção: ajuste pela O.S. de origem.';
+  return '';
+}
+function lancActionBtns(l){
+  const ok=lancPodeAcao(l), dis=ok?'':' disabled';
+  const tip=lancAcaoTitle(l);
+  const tEdit=tip||'Editar lançamento';
+  const tDel=tip||'Excluir lançamento';
+  return `<div class="lanc-actions">
+    <button type="button" class="icon-btn"${dis} title="${tEdit}" aria-label="Editar lançamento" onclick="abrirEditarLanc('${l.id}')">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+    </button>
+    <button type="button" class="icon-btn danger"${dis} title="${tDel}" aria-label="Excluir lançamento" onclick="excluirLanc('${l.id}')">×</button>
+  </div>`;
+}
 async function estornarLanc(id){
   if(!podeEditar()) return toast('Mapinha bloqueado.','am');
-  if(!confirm('Estornar este lançamento? (mantém histórico, não exclui)')) return;
+  const l=lancManualPorId(id);
+  if(!l || l.origem!=='manual') return toast('Somente lançamentos manuais podem ser excluídos por aqui.','am');
+  if(!confirm('Excluir este lançamento do mês? Ele será retirado da lista e preservado no histórico.')) return;
   await fsSetDoc('mapinha_lancamentos', id, { status:'estornado', estornadoEm:new Date().toISOString(), estornadoPor:userMin() }, {merge:true});
-  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre(); cacheCurrentScope(); toast('Lançamento estornado.','am');
+  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre(); cacheCurrentScope(); toast('Lançamento excluído.','am');
 }
+function excluirLanc(id){ return estornarLanc(id); }
+function abrirEditarLanc(id){
+  const l=lancManualPorId(id);
+  if(!lancPodeAcao(l)) return toast(lancAcaoTitle(l)||'Lançamento indisponível para edição.','am');
+  preencherSelectCC('edCC', l.centroCusto||'');
+  document.getElementById('edLancId').value=l.id;
+  document.getElementById('edData').value=l.data||ST.mesRef+'-01';
+  document.getElementById('edForn').value=l.fornecedor||'';
+  document.getElementById('edNF').value=l.nf||'';
+  document.getElementById('edPlaca').value=l.placa||'';
+  document.getElementById('edValor').value=+l.valor||'';
+  const back=document.getElementById('editLancBackdrop');
+  if(back){ back.classList.add('on'); back.setAttribute('aria-hidden','false'); }
+}
+function fecharEditarLanc(){
+  const back=document.getElementById('editLancBackdrop');
+  if(back){ back.classList.remove('on'); back.setAttribute('aria-hidden','true'); }
+  ['edLancId','edData','edForn','edNF','edPlaca','edValor'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
+}
+async function salvarEditarLanc(){
+  const id=document.getElementById('edLancId').value;
+  const l=lancManualPorId(id);
+  if(!lancPodeAcao(l)) return toast(lancAcaoTitle(l)||'Lançamento indisponível para edição.','am');
+  const cc=document.getElementById('edCC').value;
+  const valor=+document.getElementById('edValor').value||0;
+  if(!cc) return toast('Selecione o centro de custo.','am');
+  if(!valor) return toast('Informe o valor.','am');
+  const cci=ST.centrosCusto.find(c=>c.codigo===cc)||{};
+  const payload={
+    data:document.getElementById('edData').value||ST.mesRef+'-01',
+    fornecedor:upper(document.getElementById('edForn').value),
+    nf:document.getElementById('edNF').value.trim(),
+    placa:upper(document.getElementById('edPlaca').value),
+    centroCusto:cc, centroCustoNome:cci.nome||'', grupoDre:cci.grupo||GRUPO_FALLBACK[cc]||'CONTROLE',
+    valor, atualizadoPor:userMin(), atualizadoEm:new Date().toISOString()
+  };
+  await fsSetDoc('mapinha_lancamentos', id, payload, {merge:true});
+  fecharEditarLanc();
+  await loadLancManuais(); renderLancamentos(); renderLancCards(); renderDre(); cacheCurrentScope(); toast('Lançamento atualizado.','gn');
+}
+
 
 /* ── Derivar custos de OS concluídas (ao vivo) ──
    Lê ordens_servico do período; se a OS tiver notas[] (NF por linha), gera 1 lançamento por NF;
@@ -1557,7 +1664,7 @@ function renderLancamentos(){
     const origem = l.origem==='manutencao'
       ? `<span class="tag os" onclick="abrirOS('${l.osId}')">OS ${l.osId||''}</span>`
       : `<span class="tag man">manual</span>`;
-    const acao = (l.origem==='manual'&&podeEditar()) ? `<button class="btn sm" onclick="estornarLanc('${l.id}')">estornar</button>` : '';
+    const acao = lancActionBtns(l);
     const neg = l.valor<0?'neg':'';
     return `<tr><td>${ds}</td><td>${l.fornecedor||'—'}</td><td>${l.nf||'—'}</td><td>${l.placa||'—'}</td>
       <td>${l.centroCusto} ${l.centroCustoNome||''}</td>
@@ -2036,7 +2143,7 @@ async function fechar(){
   ST.cabecalho.historico=[...(ST.cabecalho.historico||[]),{acao:'fechado',por:userMin(),em:new Date().toISOString()}];
   await fsSetDoc('mapinha_mensal', mapId(), ST.cabecalho, {merge:true});
   toast('Mapinha fechado e resultado congelado.','gn');
-  renderStatus();
+  renderStatus(); renderLancamentos();
 }
 async function reabrir(){
   if(!isAdminOuLR()) return toast('Apenas Admin/LR podem reabrir.','am');
@@ -2046,7 +2153,7 @@ async function reabrir(){
   ST.cabecalho.reabertoPor=userMin(); ST.cabecalho.reabertoEm=new Date().toISOString();
   ST.cabecalho.historico=[...(ST.cabecalho.historico||[]),{acao:'reaberto',por:userMin(),em:new Date().toISOString(),motivo}];
   await fsSetDoc('mapinha_mensal', mapId(), ST.cabecalho, {merge:true});
-  toast('Mapinha reaberto para ajuste.','cy'); renderStatus();
+  toast('Mapinha reaberto para ajuste.','cy'); renderStatus(); renderLancamentos();
 }
 
 /* ══ CONSOLIDADO ══ */
@@ -2505,6 +2612,8 @@ function renderPedagios(){
       <td class="num ${p.comix<0?'neg':''}"><b>${moeda(p.comix)}</b></td></tr>`;
   }).join('') : '<tr><td colspan="6" class="empty">Sem placas para o filtro.</td></tr>';
 }
+
+document.addEventListener('keydown', ev=>{ if(ev.key==='Escape') fecharEditarLanc(); });
 
 /* ══ START ══ */
 window.addEventListener('DOMContentLoaded', ()=>{ try{ window.parent.postMessage({type:'ATLAS_REQUEST_USER'},'*'); }catch(_){} boot(); });
