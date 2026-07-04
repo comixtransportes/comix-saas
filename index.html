@@ -3354,7 +3354,8 @@ const ATLAS_BRIDGE_STATIC_COLS = new Set([
   'cpk_categorias_regras','mapinha_premissas','ciot_parametros','ciot_cadastros_apoio'
 ]);
 function atlasBridgeKey(msg){
-  return [msg.collection, msg.orderBy||'', msg.orderDir||'', msg.limit||''].join('|');
+  let w=''; try{ w=msg.where?JSON.stringify(msg.where):''; }catch(_){}
+  return [msg.collection, msg.orderBy||'', msg.orderDir||'', msg.limit||'', w].join('|');
 }
 function atlasBridgeTTL(col){
   return ATLAS_BRIDGE_STATIC_COLS.has(col) ? ATLAS_BRIDGE_TTL_STATIC : ATLAS_BRIDGE_TTL_DEFAULT;
@@ -3370,7 +3371,7 @@ window.addEventListener('message', async function(ev) {
   const reply = (ok, result, error) => {
     try { ev.source && ev.source.postMessage({ type:'ATLAS_FIRESTORE_RESPONSE', requestId, ok, result, error }, '*'); } catch(_) {}
   };
-  const allowed = new Set(['ordens_servico','checklists_diarios','parametros_sistema','alocacao_frota_status','alocacao_frota','cpk_parametros','cpk_km_rotas','cpk_lancamentos','cpk_metas','cpk_diagnostico','cpk_categorias_regras','cpk_incons_correcoes','compressores','veiculos','motoristas','filiais','centros_custo','mapinha_lancamentos','mapinha_mensal','mapinha_premissas','mapinha_consolidado','mapinha_pedagios','ciot_operacoes','ciot_parametros','ciot_logs','ciot_tarefas','ciot_historico','ciot_cadastros_apoio']);
+  const allowed = new Set(['ordens_servico','checklists_diarios','parametros_sistema','alocacao_frota_status','alocacao_frota','cpk_parametros','cpk_km_rotas','cpk_lancamentos','cpk_metas','cpk_diagnostico','cpk_categorias_regras','cpk_incons_correcoes','compressores','veiculos','motoristas','filiais','centros_custo','mapinha_lancamentos','mapinha_mensal','mapinha_premissas','mapinha_consolidado','mapinha_pedagios','ciot_operacoes','ciot_parametros','ciot_logs','ciot_tarefas','ciot_historico','ciot_cadastros_apoio','ciot_pdfs','ciot_copy_marks']);
   try {
     if (!curUser) {
       // Em vez de falhar na hora (corrida com o onAuthStateChanged), espera o
@@ -3398,11 +3399,30 @@ window.addEventListener('message', async function(ev) {
       // (3) Query real no Firestore (uma só, mesmo com N pedidos simultâneos).
       const job = (async () => {
         let ref = db.collection(msg.collection);
+        /* [LEITURAS] Suporte a filtros no servidor: os módulos podem enviar
+           where:[[campo,op,valor],...] para trazer só o mês/filial necessários
+           em vez da coleção inteira. As regras de segurança continuam valendo. */
+        if (Array.isArray(msg.where)) {
+          msg.where.forEach(w => {
+            if (Array.isArray(w) && w.length >= 3) ref = ref.where(String(w[0]), String(w[1] || '=='), w[2]);
+          });
+        }
         if (msg.orderBy) ref = ref.orderBy(msg.orderBy, msg.orderDir || 'asc');
         if (msg.limit) ref = ref.limit(Number(msg.limit));
         const snap = await ref.get();
         const docs = snap.docs.map(d => ({ id:d.id, data: atlasCleanForFrame(d.data()) }));
-        __atlasBridgeCache[key] = { ts: Date.now(), docs };
+        /* [LEITURAS] Guarda de memória: payloads gigantes (ex.: coleções com
+           PDFs em base64) não entram no cache do parent — evita reter dezenas
+           de MB em RAM. Estimativa por amostra dos 3 primeiros docs. */
+        let cachear = true;
+        if (docs.length) {
+          try {
+            let amostra = 0; const n = Math.min(3, docs.length);
+            for (let i = 0; i < n; i++) amostra += JSON.stringify(docs[i]).length;
+            if ((amostra / n) * docs.length > 3000000) cachear = false;
+          } catch(_) {}
+        }
+        if (cachear) __atlasBridgeCache[key] = { ts: Date.now(), docs };
         return docs;
       })();
       __atlasBridgeInflight[key] = job;
