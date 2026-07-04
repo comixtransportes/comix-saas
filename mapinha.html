@@ -615,7 +615,9 @@ async function _bridgeRead(action, payload, tries = 4){
 async function fsGetCollection(collection,opts={}){
   if(atlasHasParentBridge()){ try{ const r=await _bridgeRead('getCollection',{collection,...opts}); return r.docs||[]; }catch(e){ console.warn('[Mapinha] getCollection '+collection+':', e.message); return []; } }
   try{ const db=window._mapDB;
-    if(db){ let ref=db.collection(collection); if(opts.orderBy)ref=ref.orderBy(opts.orderBy,opts.orderDir||'asc'); if(opts.limit)ref=ref.limit(+opts.limit);
+    if(db){ let ref=db.collection(collection);
+      if(Array.isArray(opts.where)) opts.where.forEach(w=>{ if(Array.isArray(w)&&w.length>=3) ref=ref.where(String(w[0]),String(w[1]||'=='),w[2]); });
+      if(opts.orderBy)ref=ref.orderBy(opts.orderBy,opts.orderDir||'asc'); if(opts.limit)ref=ref.limit(+opts.limit);
       const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); } }catch(e){ console.warn('[Mapinha] getCollection direto '+collection+':', e.message); }
   return [];
 }
@@ -1374,12 +1376,19 @@ async function refreshAll(){
    premissas/percentuais), garantindo que o consolidado = soma das partes. */
 async function loadConsolidadoScope(){
   const fils = scopeFiliais();
-  const [mensalAll, lancAll, premAll, ossAll] = await Promise.all([
-    fsGetCollection('mapinha_mensal'),
-    fsGetCollection('mapinha_lancamentos'),
+  /* [LEITURAS] mapinha_mensal: o consumo abaixo usa APENAS os docs de ID
+     'MAP_<fil>_<mesRef>' — busca direta por documento (1 leitura por filial)
+     em vez da coleção inteira. mapinha_lancamentos: pré-filtrado no servidor
+     pelo mesRef (o filtro do cliente logo abaixo continua idêntico; se a ponte
+     em produção ainda não suportar where, vem a coleção completa e o filtro do
+     cliente resolve — mesmo resultado de antes). */
+  const [mensalDocs, lancAll, premAll, ossAll] = await Promise.all([
+    Promise.all(fils.map(f=> fsGetDoc('mapinha_mensal','MAP_'+f+'_'+ST.mesRef).catch(()=>null) )),
+    fsGetCollection('mapinha_lancamentos',{where:[['mesRef','==',ST.mesRef]]}),
     fsGetCollection('mapinha_premissas'),
     fsGetCollection('ordens_servico')
   ]);
+  const mensalAll = mensalDocs.filter(Boolean);
   await loadPedagios();   // doc mensal único (porFilial) — compartilhado por todas
   ensureSZB();            // receita por filial é derivada da SZB quando não houver doc salvo
   ST._byFilial = {};
@@ -1506,7 +1515,10 @@ function userMin(){ return { uid:ATLAS_CURRENT_USER.uid||'', email:ATLAS_CURRENT
 
 /* ── Lançamentos manuais (mapinha_lancamentos) ── */
 async function loadLancManuais(){
-  const all = await fsGetCollection('mapinha_lancamentos');
+  /* [LEITURAS] Pré-filtro no servidor (filial + mesRef): só os lançamentos da
+     tela atual são baixados. O filtro do cliente abaixo permanece — com ponte
+     antiga (sem where), o resultado continua exatamente o mesmo. */
+  const all = await fsGetCollection('mapinha_lancamentos',{where:[['filial','==',ST.filial],['mesRef','==',ST.mesRef]]});
   ST.lancManuais = all.map(d=>({id:d.id,...d.data}))
     .filter(l=> l.filial===ST.filial && l.mesRef===ST.mesRef && l.origem!=='manutencao' && l.status!=='estornado');
 }
