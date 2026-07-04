@@ -844,6 +844,66 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
   const SUPABASE_BUCKET = "canhotos";
   const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+  /* ── Comprime a imagem do canhoto antes do upload (máx 1600px, JPEG q0.82).
+     Fotos de câmera de celular chegam a 6-8MB; em rede fraca isso gera "Failed to fetch".
+     Comprimir reduz o payload para ~200-400KB sem perder legibilidade do canhoto.
+     Em caso de qualquer falha, devolve o arquivo original (nunca bloqueia o fluxo). */
+  async function compressCanhotoImage(file) {
+    try {
+      if (!file || !file.type || !file.type.startsWith("image/")) return file;
+      // PNG pequeno ou JPEG já leve: não mexe
+      if (file.size <= 400 * 1024) return file;
+      const dataUrl = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = e => res(e.target.result);
+        r.onerror = () => rej(new Error("read fail"));
+        r.readAsDataURL(file);
+      });
+      const img = await new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error("decode fail"));
+        i.src = dataUrl;
+      });
+      const MAX = 1600;
+      let { width: w, height: h } = img;
+      if (Math.max(w, h) > MAX) {
+        const k = MAX / Math.max(w, h);
+        w = Math.round(w * k); h = Math.round(h * k);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", 0.82));
+      if (!blob || blob.size >= file.size) return file; // compressão não valeu a pena
+      const name = (file.name || "canhoto").replace(/\.[^.]+$/, "") + ".jpg";
+      return new File([blob], name, { type: "image/jpeg" });
+    } catch (_) {
+      return file;
+    }
+  }
+
+  /* ── Fallback: upload direto via REST na API de Storage (sem supabase-js).
+     Usado quando o client oficial falha com erro de rede — isola problemas do SDK. */
+  async function uploadCanhotoREST(path, file) {
+    const resp = await fetch(`${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${path}`, {
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+        "apikey": SUPABASE_ANON_KEY,
+        "x-upsert": "true",
+        "Content-Type": file.type || "image/jpeg",
+        "Cache-Control": "3600"
+      },
+      body: file
+    });
+    if (!resp.ok) {
+      let msg = "HTTP " + resp.status;
+      try { const j = await resp.json(); msg = j.message || j.error || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+  }
+
   let currentUser   = null;
   let currentPerfil = "usuario";
 
@@ -1116,21 +1176,57 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         throw new Error("Cliente Supabase não inicializado — verifique a conexão");
       }
 
+      // Comprime antes de subir — evita "Failed to fetch" por payload pesado em rede fraca
+      file = await compressCanhotoImage(file);
+
       const ext = (file.name.split('.').pop() || 'jpg').toLowerCase();
       const path = `${currentUser.uid}/${reportNumero}_e${entregaIdx}_${Date.now()}.${ext}`;
 
-      const { error } = await supabaseClient.storage
-        .from(SUPABASE_BUCKET)
-        .upload(path, file, {
-          contentType: file.type || 'image/jpeg',
-          cacheControl: '3600',
-          upsert: true  // evita erro de conflito se arquivo já existe
-        });
+      /* Estratégia de resiliência:
+         1) até 3 tentativas via supabase-js com backoff (800ms, 1600ms)
+         2) se todas falharem por erro de rede, fallback via REST direto
+         3) se ainda assim falhar, erro com diagnóstico útil */
+      let lastErr = null;
+      for (let tent = 1; tent <= 3; tent++) {
+        try {
+          const { error } = await supabaseClient.storage
+            .from(SUPABASE_BUCKET)
+            .upload(path, file, {
+              contentType: file.type || 'image/jpeg',
+              cacheControl: '3600',
+              upsert: true  // evita erro de conflito se arquivo já existe
+            });
+          if (error) throw new Error(error.message || JSON.stringify(error));
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err;
+          const isNetwork = /failed to fetch|network|load failed|timeout/i.test(err.message || "");
+          // Erro de permissão/bucket não melhora com retry — aborta o loop
+          if (!isNetwork) break;
+          if (tent < 3) await new Promise(r => setTimeout(r, 800 * tent));
+        }
+      }
 
-      if (error) {
-        // Mensagem de erro detalhada para facilitar diagnóstico
-        const msg = error.message || JSON.stringify(error);
-        throw new Error("Falha no upload para Storage: " + msg);
+      if (lastErr) {
+        const isNetwork = /failed to fetch|network|load failed|timeout/i.test(lastErr.message || "");
+        if (isNetwork) {
+          // Fallback: REST direto na API de Storage
+          try {
+            await uploadCanhotoREST(path, file);
+            lastErr = null;
+          } catch (err2) {
+            const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+            throw new Error(
+              "Falha no upload para Storage: " + (err2.message || lastErr.message) +
+              (offline
+                ? " — Sem conexão com a internet. Verifique a rede e tente novamente."
+                : " — Verifique a conexão, desative bloqueadores (adblock) e confirme se o domínio supabase.co não está bloqueado (CSP/firewall).")
+            );
+          }
+        } else {
+          throw new Error("Falha no upload para Storage: " + (lastErr.message || JSON.stringify(lastErr)));
+        }
       }
 
       const { data } = supabaseClient.storage
@@ -2391,6 +2487,18 @@ window.renderEntregasSZBRelation = async function() {
 
 /* ═══ MODAL DE BAIXA — CTRC SELECIONADA ═══ */
 const entregaSZBModalState = window.entregaSZBModalState || (window.entregaSZBModalState = { record: null, foto: null, targetIdx: -1, selectedKey: "" });
+/* ── Retorna o índice do primeiro bloco de entrega "vazio" (sem CTRC, sem recebedor e sem foto).
+   Usado pela baixa via SZB para reaproveitar a Entrega criada automaticamente ao abrir a aba. */
+function findEmptyEntregaIndex() {
+  for (let i = 0; i < entCount; i++) {
+    if (!document.getElementById("ent_" + i)) continue;
+    const semCtrc = !String(g("e" + i + "_ctrc") || "").trim();
+    const semRec  = !String(g("e" + i + "_rec")  || "").trim();
+    const semFoto = !entregaFotos[i];
+    if (semCtrc && semRec && semFoto) return i;
+  }
+  return -1;
+}
 function findEntregaIndexByCTRC(ctrc) {
   const key = entNormCTRC(ctrc);
   if (!key) return -1;
@@ -2447,7 +2555,14 @@ window.abrirEntregaSZB = function(ctrcKey) {
     if (sigla.options.length <= 1) {
       [["SP","São Paulo"],["SC","Florianópolis"],["PR","Curitiba"]].forEach(([v,l]) => sigla.appendChild(new Option(`${v} — ${l}`, v)));
     }
-    sigla.value = idx >= 0 ? g("e" + idx + "_sigla") : "";
+    // Aproveita o que já veio da SZB: se a entrega ainda não existe na ficha,
+    // pré-seleciona a unidade a partir da filial do registro SZB (SP/SC/PR)
+    let siglaVal = idx >= 0 ? g("e" + idx + "_sigla") : "";
+    if (!siglaVal && record.filial) {
+      const guess = entUnitKey(record.filial);
+      if (guess && Array.from(sigla.options).some(o => o.value === guess)) siglaVal = guess;
+    }
+    sigla.value = siglaVal;
   }
   if (data) data.value = idx >= 0 ? (g("e" + idx + "_data") || entTodayISO()) : entTodayISO();
   if (rec) rec.value = idx >= 0 ? g("e" + idx + "_rec") : "";
@@ -2493,8 +2608,13 @@ window.salvarEntregaSZBModal = function() {
   if (!entregaSZBModalState.foto) { showToast("Anexe o canhoto para dar baixa", "error"); return; }
   let idx = entregaSZBModalState.targetIdx;
   if (idx < 0 || !document.getElementById("ent_" + idx)) {
-    addEntrega();
-    idx = entCount - 1;
+    // Reaproveita um bloco de entrega vazio (ex.: a "Entrega 1" criada automaticamente)
+    // em vez de criar um novo e deixar campos obrigatórios vazios bloqueando o Concluir
+    idx = findEmptyEntregaIndex();
+    if (idx < 0) {
+      addEntrega();
+      idx = entCount - 1;
+    }
   }
   const ctrcEl = document.getElementById("e" + idx + "_ctrc");
   const siglaEl = document.getElementById("e" + idx + "_sigla");
