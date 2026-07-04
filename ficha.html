@@ -904,6 +904,40 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     }
   }
 
+  /* ── Keep-alive: o plano Free do Supabase pausa projetos sem atividade de BANCO por ~7 dias.
+     Este projeto só usa Storage (que não conta como atividade), então cada abertura da ficha
+     faz um SELECT mínimo na tabela public.keepalive para resetar o timer de inatividade.
+     Falha silenciosa: se a tabela não existir ainda, não afeta nada. */
+  function supabaseKeepAlive() {
+    try {
+      supabaseClient.from("keepalive").select("id").limit(1)
+        .then(() => {})
+        .catch(() => {});
+    } catch (_) {}
+  }
+  setTimeout(supabaseKeepAlive, 3000);
+
+  /* ── Health-check do Storage: avisa CEDO se o projeto Supabase está fora do ar/pausado,
+     antes do motorista preencher a ficha inteira e perder o salvamento. */
+  let _storageHealthWarned = false;
+  async function checkSupabaseStorageHealth() {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      const resp = await fetch(SUPABASE_URL + "/auth/v1/health", { signal: ctrl.signal });
+      clearTimeout(t);
+      if (resp.ok) { _storageHealthWarned = false; return true; }
+      throw new Error("HTTP " + resp.status);
+    } catch (_) {
+      if (!_storageHealthWarned && typeof showToast === "function") {
+        _storageHealthWarned = true;
+        showToast("⚠ Storage de canhotos indisponível — o projeto Supabase pode estar pausado. Avise o administrador antes de concluir a ficha.", "error");
+      }
+      return false;
+    }
+  }
+  window._checkSupabaseStorageHealth = checkSupabaseStorageHealth;
+
   let currentUser   = null;
   let currentPerfil = "usuario";
 
@@ -1221,7 +1255,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
               "Falha no upload para Storage: " + (err2.message || lastErr.message) +
               (offline
                 ? " — Sem conexão com a internet. Verifique a rede e tente novamente."
-                : " — Verifique a conexão, desative bloqueadores (adblock) e confirme se o domínio supabase.co não está bloqueado (CSP/firewall).")
+                : " — Causa provável: projeto Supabase PAUSADO por inatividade (plano free). Verifique em supabase.com/dashboard e clique em Restore. Se estiver ativo, verifique adblock/CSP/firewall bloqueando supabase.co.")
             );
           }
         } else {
@@ -2117,7 +2151,7 @@ function buildModules() {
     requestAtlasSZBData();
     populateAtlasSZBDatalists();
   });
-  if(selectedMods.includes("entregas"))setTimeout(()=>{ addEntrega(); renderEntregasSZBRelation(); },60);
+  if(selectedMods.includes("entregas"))setTimeout(()=>{ addEntrega(); renderEntregasSZBRelation(); if(window._checkSupabaseStorageHealth)window._checkSupabaseStorageHealth(); },60);
 }
 
 function setActiveMod(i) {
