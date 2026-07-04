@@ -1670,13 +1670,22 @@ function cpkFsBridge(col,action,extra){
 async function cpkFsGet(col,query){
   if(window.self!==window.top){const r=await cpkFsBridge(col,'getCollection',query||{});return (r&&r.docs)||[];}
   if(!_db)cpkGetFb(); if(!_db)return[];
-  try{ let ref=_db.collection(col); if(query&&query.orderBy)ref=ref.orderBy(query.orderBy,query.orderDir||'asc'); if(query&&query.limit)ref=ref.limit(+query.limit); const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); }
+  try{ let ref=_db.collection(col); if(query&&Array.isArray(query.where))query.where.forEach(w=>{if(Array.isArray(w)&&w.length>=3)ref=ref.where(String(w[0]),String(w[1]||'=='),w[2]);}); if(query&&query.orderBy)ref=ref.orderBy(query.orderBy,query.orderDir||'asc'); if(query&&query.limit)ref=ref.limit(+query.limit); const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); }
   catch(e){cpkLog('FsGet erro',col,e.message);return[];}
 }
 async function cpkFsGetDireto(col,query){
   if(!_db)cpkGetFb(); if(!_db)return[];
-  try{ let ref=_db.collection(col); if(query&&query.orderBy)ref=ref.orderBy(query.orderBy,query.orderDir||'asc'); if(query&&query.limit)ref=ref.limit(+query.limit); const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); }
+  try{ let ref=_db.collection(col); if(query&&Array.isArray(query.where))query.where.forEach(w=>{if(Array.isArray(w)&&w.length>=3)ref=ref.where(String(w[0]),String(w[1]||'=='),w[2]);}); if(query&&query.orderBy)ref=ref.orderBy(query.orderBy,query.orderDir||'asc'); if(query&&query.limit)ref=ref.limit(+query.limit); const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); }
   catch(e){cpkLog('FsGet direto erro',col,e.message);return[];}
+}
+/* [LEITURAS] Busca por mês com pré-filtro no servidor (where mesRef==mes).
+   Compatível com ponte antiga: se o retorno contiver docs de OUTROS meses, é
+   sinal de que o where foi ignorado (index sem suporte) — o chamador recebe a
+   coleção completa e os filtros de cliente existentes resolvem, como hoje. */
+async function cpkFsGetMes(col,mes){
+  const docs=await cpkFsGet(col,{where:[['mesRef','==',mes]]});
+  const whereOk=!docs.some(d=>d&&d.data&&d.data.mesRef&&d.data.mesRef!==mes);
+  return {docs,whereOk};
 }
 async function cpkFsGetDoc(col,id){
   if(window.self!==window.top){const r=await cpkFsBridge(col,'getDoc',{docId:id});return r&&r.exists?{id:r.id,data:r.data}:null;}
@@ -1906,14 +1915,18 @@ async function _cpkLoadCustoRun(mes){
 
   // Leituras únicas (paralelas). O custo da frota própria espelha o DRE do Mapinha:
   // diesel/CO dos lançamentos, Pessoal da premissa, Pedágio (por placa) da aba Pedágios.
-  const [mensal, lanc, oss, prem, ped, cc] = await Promise.all([
+  const [mensal, lancRes, oss, prem, ped, cc] = await Promise.all([
     cpkFsGet('mapinha_mensal'),
-    cpkFsGet('mapinha_lancamentos'),
+    /* [LEITURAS] mapinha_lancamentos é a maior coleção do módulo: pré-filtro
+       no servidor pelo mês selecionado. O filtro de cliente (l.mesRef===mes)
+       logo abaixo permanece intacto — com ponte antiga o resultado é idêntico. */
+    cpkFsGetMes('mapinha_lancamentos',mes),
     cpkFsGet('ordens_servico'),
     cpkFsGet('mapinha_premissas'),
     cpkFsGetDoc('mapinha_pedagios','PED_'+mes).catch(()=>null),
     (CPK.centrosCusto.length?Promise.resolve(null):cpkFsGet('centros_custo'))
   ]);
+  const lanc = lancRes.docs;
 
   // mapa centro de custo → grupo DRE (mantido para compatibilidade com o cadastro)
   if(cc){ CPK.centrosCusto=cc.map(d=>({codigo:d.data.codigo||d.id,nome:d.data.nome||'',grupo:(d.data.grupoDre||GRUPO_FALLBACK[d.data.codigo]||'CONTROLE')})); CPK.grupoMap={}; CPK.centrosCusto.forEach(c=>CPK.grupoMap[c.codigo]=c.grupo); }
@@ -2983,7 +2996,23 @@ async function cpkLoadHistorico(){
   CPK._histPromiseMes=CPK.filtros.mes;
   CPK._histPromise=(async()=>{
     const meses=cpkUlt12Meses(CPK.filtros.mes);
-    const [mensal,lanc,oss,prem]=await Promise.all([cpkFsGet('mapinha_mensal'),cpkFsGet('mapinha_lancamentos'),cpkFsGet('ordens_servico'),cpkFsGet('mapinha_premissas')]);
+    /* [LEITURAS] Antes: mapinha_lancamentos INTEIRA (todos os meses de todas as
+       filiais) para montar 12 meses de histórico. Agora: 1 query filtrada por
+       mês. A primeira serve de sonda — se a ponte em produção ignorar o where
+       (index antigo), ela devolve a coleção completa e usamos esse retorno
+       único para todos os meses, exatamente como era antes. */
+    const [mensal,oss,prem]=await Promise.all([cpkFsGet('mapinha_mensal'),cpkFsGet('ordens_servico'),cpkFsGet('mapinha_premissas')]);
+    let lanc;
+    const sonda=await cpkFsGetMes('mapinha_lancamentos',meses[0]);
+    if(sonda.whereOk){
+      const resto=await Promise.all(meses.slice(1).map(m=>cpkFsGetMes('mapinha_lancamentos',m)));
+      // dedup por ID: garante que nenhum doc entre duas vezes no bundle,
+      // qualquer que seja a versão da ponte em produção.
+      const vistos=new Set(); lanc=[];
+      [sonda.docs].concat(resto.map(r=>r.docs)).forEach(arr=>arr.forEach(d=>{ if(d&&!vistos.has(d.id)){vistos.add(d.id);lanc.push(d);} }));
+    }else{
+      lanc=sonda.docs; // ponte sem where → veio a coleção completa (comportamento antigo)
+    }
     const bundle={mensal,lanc,oss,prem};
     const [kmDocs,pedDocs]=await Promise.all([
       Promise.all(meses.map(m=>cpkFsGetDoc(CPK_KM_COL,CPK_KM_DOC(m)).catch(()=>null))),
