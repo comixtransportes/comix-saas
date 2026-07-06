@@ -2247,6 +2247,15 @@ function atlasIsValidEmail(email){
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email||'').trim());
 }
 
+/* [NOTIF] Log VISÍVEL do fluxo de e-mails: antes, quase todos os motivos de
+   não-disparo iam só ao console (invisível para quem opera). Agora todo
+   desfecho — disparado, retomado, ignorado ou falho — aparece também no log
+   do Download Base, com o motivo exato. Não altera nenhuma regra de disparo. */
+function atlasNotifLog(msg, tp){
+  try{ dbLog(`✉ ${msg}`, tp || 'info'); }catch(_){}
+  try{ console.log('[Atlas Notif] ' + msg); }catch(_){}
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    HELPERS FROTA SEM CARREGAMENTO — eventos por unidade no mesmo start do PD
    ══════════════════════════════════════════════════════════════════════════ */
@@ -2613,7 +2622,7 @@ async function atlasQueueFrotaSemCarregamentoEvento({ eventId, unidade, ev, iten
     const destUids = Array.isArray(ev.destinatarios) ? ev.destinatarios : [];
     const recipients = await atlasResolveNotifRecipients(destUids);
     if (!recipients.length){
-      console.log(`[Atlas Frota-mail] ${eventId} sem destinatários válidos.`);
+      atlasNotifLog(`Frota sem carregamento ${unidade}: evento ativo, mas sem destinatários válidos — nada enviado.`);
       return;
     }
 
@@ -2639,9 +2648,27 @@ async function atlasQueueFrotaSemCarregamentoEvento({ eventId, unidade, ev, iten
     const text = atlasApplyTemplate(textTpl, varsText);
     const html = atlasApplyTemplate(htmlTpl, varsHtml);
 
-    const created = await db.runTransaction(async tx => {
+    /* [NOTIF] Lock resiliente. Antes: se a fila falhasse DEPOIS de criar o
+       lock (regras/rede), o dia inteiro ficava queimado — toda carga seguinte
+       via "lock já existe" e nenhum e-mail saía. Agora o lock distingue
+       "concluído" (tem queuedAt) de "tentativa que morreu no meio": tentativas
+       incompletas com mais de 3 min são RETOMADAS automaticamente na próxima
+       carga da SZB. A garantia de 1 envio/dia por unidade continua a mesma. */
+    const lockState = await db.runTransaction(async tx => {
       const snap = await tx.get(lockRef);
-      if (snap.exists) return false;
+      if (snap.exists){
+        const d = snap.data() || {};
+        if (d.queuedAt) return 'done'; // enfileirado com sucesso hoje
+        const createdMs = (d.createdAt && d.createdAt.toMillis) ? d.createdAt.toMillis() : 0;
+        const stale = !createdMs || (Date.now() - createdMs) > 3*60*1000;
+        if (!stale) return 'inprogress'; // outra sessão está enfileirando agora
+        tx.set(lockRef, {
+          status: 'retrying',
+          resumedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          resumedBy: curUser.email || ''
+        }, { merge: true });
+        return 'resume';
+      }
       tx.set(lockRef, {
         eventId,
         canal: 'email',
@@ -2651,7 +2678,7 @@ async function atlasQueueFrotaSemCarregamentoEvento({ eventId, unidade, ev, iten
         diaDisparo: hojeISO,
         dataReferencia: hojeISO,
         dataApuracao: ontemISO,
-        status: 'queued',
+        status: 'processing',
         qtdeFrotas: itens.length,
         rowsToday,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -2659,12 +2686,19 @@ async function atlasQueueFrotaSemCarregamentoEvento({ eventId, unidade, ev, iten
         source: 'download-base-szb',
         file: fileName || (payload && payload.file) || 'SZB.xlsm'
       });
-      return true;
+      return 'created';
     });
 
-    if (!created){
-      console.log(`[Atlas Frota-mail] Lock ${lockId} já existe — duplicado ignorado.`);
+    if (lockState === 'done'){
+      atlasNotifLog(`Frota sem carregamento ${unidade}: já enviado hoje (lock ${lockId}) — duplicado ignorado.`);
       return;
+    }
+    if (lockState === 'inprogress'){
+      atlasNotifLog(`Frota sem carregamento ${unidade}: disparo em andamento em outra sessão — ignorado.`);
+      return;
+    }
+    if (lockState === 'resume'){
+      atlasNotifLog(`Frota sem carregamento ${unidade}: tentativa anterior falhou antes de enfileirar — retomando agora.`,'info');
     }
 
     const batch = db.batch();
@@ -2694,9 +2728,9 @@ async function atlasQueueFrotaSemCarregamentoEvento({ eventId, unidade, ev, iten
     });
     await batch.commit();
     await lockRef.set({ status: 'queued', recipients: recipients.length, queuedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
-    console.log(`[Atlas Frota-mail] ${eventId}: ${recipients.length} e-mail(s), ${itens.length} frota(s), lock ${lockId}.`);
+    atlasNotifLog(`Frota sem carregamento ${unidade}: ${recipients.length} e-mail(s) enfileirado(s) · ${itens.length} frota(s).`,'ok');
   } catch (err) {
-    console.error('[Atlas Frota-mail] Falha ao enfileirar e-mails:', err && err.message);
+    atlasNotifLog(`FALHA ao enfileirar frota sem carregamento ${unidade}: ${err && err.message || err} — será retomado na próxima carga da SZB.`,'err');
     try { await lockRef.set({ status: 'error', error: String(err && err.message || err) }, { merge: true }); } catch(_){ }
   }
 }
@@ -2707,7 +2741,7 @@ async function atlasMaybeQueueFrotaSemCarregamentoNotifications({ rows, payload,
 
   const eventos = await atlasLoadFrotaSemCarregamentoEventos();
   if (!eventos.length){
-    console.log('[Atlas Frota-mail] Nenhum evento de frota sem carregamento ativo/localizado.');
+    atlasNotifLog('Frota sem carregamento: nenhum evento ativo/localizado em Cadastros → Notificações.');
     return;
   }
 
@@ -2757,7 +2791,7 @@ async function atlasMaybeQueuePDEmailNotification({ id, payload, rows, fileName 
       if (atlasNormalizeDateISO(r['Dt. Emissao']) === hojeISO) rowsToday++;
     }
     if (rowsToday === 0){
-      console.log('[Atlas PD-mail] Sem CT-e com Dt. Emissao = hoje — evento não disparado.');
+      atlasNotifLog(`PD Diário: nenhum CT-e com Dt. Emissao = hoje (${atlasFormatDateBR(hojeISO)}) na SZB carregada — e-mails não disparados. Verifique se a planilha inclui as emissões de hoje.`);
       return;
     }
 
@@ -2771,9 +2805,9 @@ async function atlasMaybeQueuePDEmailNotification({ id, payload, rows, fileName 
 
     // (5)(6) Lê o evento. Inexistente ou inativo → não dispara.
     const evSnap = await db.collection(ATLAS_NOTIF_EVENTOS).doc(ATLAS_NOTIF_EVT_ID).get();
-    if (!evSnap.exists){ console.log('[Atlas PD-mail] Evento não configurado em Cadastros.'); return; }
+    if (!evSnap.exists){ atlasNotifLog('PD Diário: evento não configurado em Cadastros → Notificações — e-mails não disparados.'); return; }
     const ev = evSnap.data() || {};
-    if (ev.ativo === false){ console.log('[Atlas PD-mail] Evento inativo.'); return; }
+    if (ev.ativo === false){ atlasNotifLog('PD Diário: evento está INATIVO em Cadastros → Notificações — e-mails não disparados.'); return; }
 
     const destUids = Array.isArray(ev.destinatarios) ? ev.destinatarios : [];
     if (!destUids.length){
@@ -2805,31 +2839,58 @@ async function atlasMaybeQueuePDEmailNotification({ id, payload, rows, fileName 
     const vars       = { DATA_ANTERIOR: dataPDBR, DATA_ATUAL: dataAtualBR };
 
     // (9) Lock diário transacional — impede duplicidade no mesmo dia.
+    /* [NOTIF] Lock resiliente. Antes: se a fila falhasse DEPOIS de criar o
+       lock (ex.: regra do Firestore bloqueando email_queue, queda de rede),
+       o dia inteiro ficava queimado — toda carga seguinte via "já registrada
+       hoje" e NENHUM e-mail saía, silenciosamente. Agora o lock distingue
+       "concluído" (tem queuedAt) de "tentativa que morreu no meio": tentativas
+       incompletas com mais de 3 min são RETOMADAS automaticamente na próxima
+       carga da SZB. A garantia de 1 envio por dia continua a mesma. */
     const lockId  = `${ATLAS_NOTIF_EVT_ID}_${hojeISO}`;
     const lockRef = db.collection(ATLAS_NOTIF_DISPAROS).doc(lockId);
-    const created = await db.runTransaction(async tx=>{
+    const lockState = await db.runTransaction(async tx=>{
       const snap = await tx.get(lockRef);
-      if (snap.exists) return false;              // já registrado hoje
+      if (snap.exists){
+        const d = snap.data() || {};
+        if (d.queuedAt) return 'done'; // enfileirado com sucesso hoje
+        const createdMs = (d.createdAt && d.createdAt.toMillis) ? d.createdAt.toMillis() : 0;
+        const stale = !createdMs || (Date.now() - createdMs) > 3*60*1000;
+        if (!stale) return 'inprogress'; // outra sessão está enfileirando agora
+        tx.set(lockRef, {
+          status:    'retrying',
+          resumedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          resumedBy: curUser.email || '',
+          rowsToday: rowsToday
+        }, { merge: true });
+        return 'resume';
+      }
       tx.set(lockRef, {
         eventId:   ATLAS_NOTIF_EVT_ID,
         canal:     'email',
         diaDisparo: hojeISO,
         dataPD:    ontemISO,
         dataPDBR:  dataPDBR,
-        status:    'queued',
+        status:    'processing',
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
         createdBy: curUser.email || '',
         source:    'download-base-szb',
         file:      fileName || (payload && payload.file) || 'SZB.xlsm',
         rowsToday: rowsToday
       });
-      return true;
+      return 'created';
     });
 
-    if (!created){
-      console.log(`[Atlas PD-mail] Lock ${lockId} já existe — envio duplicado ignorado.`);
+    if (lockState === 'done'){
+      atlasNotifLog(`PD Diário: e-mails já enfileirados hoje (lock ${lockId}) — envio duplicado ignorado.`);
       toast('Notificação PD Diário já registrada hoje — envio duplicado ignorado.','am'); // não é erro
       return;
+    }
+    if (lockState === 'inprogress'){
+      atlasNotifLog('PD Diário: disparo em andamento em outra sessão — ignorado.');
+      return;
+    }
+    if (lockState === 'resume'){
+      atlasNotifLog('PD Diário: tentativa anterior de hoje falhou antes de enfileirar — retomando o disparo agora.');
     }
 
     // Monta assunto/corpo a partir do template do evento (com fallback ao padrão).
@@ -2866,17 +2927,17 @@ async function atlasMaybeQueuePDEmailNotification({ id, payload, rows, fileName 
       await batch.commit();
       await lockRef.set({ status:'queued', recipients: recipients.length, queuedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge:true });
       toast(`Notificação de e-mail do PD Diário enfileirada para ${recipients.length} destinatário(s).`,'gn');
-      console.log(`[Atlas PD-mail] ${recipients.length} e-mail(s) em ${ATLAS_EMAIL_QUEUE} · lock ${lockId}.`);
+      atlasNotifLog(`PD Diário: ${recipients.length} e-mail(s) enfileirado(s) em ${ATLAS_EMAIL_QUEUE} · lock ${lockId}.`,'ok');
     }catch(eq){
-      // Falha ao enfileirar APÓS criar o lock: marca o lock como erro para
-      // rastreabilidade (e permitir reprocessamento manual excluindo o doc).
-      console.error('[Atlas PD-mail] Falha ao enfileirar e-mails:', eq && eq.message);
+      // Falha ao enfileirar APÓS criar o lock: marca o lock como erro. Com o
+      // lock resiliente, a PRÓXIMA carga da SZB retoma o disparo sozinha.
+      atlasNotifLog(`FALHA ao enfileirar e-mails do PD: ${eq && eq.message || eq} — será retomado automaticamente na próxima carga da SZB.`,'err');
       try{ await lockRef.set({ status:'error', error:String(eq && eq.message||eq) }, { merge:true }); }catch(_){}
       toast('Aviso: lock criado, mas houve falha ao enfileirar os e-mails do PD.','am');
     }
   }catch(e){
     // (Parte 5) Nada aqui pode quebrar o carregamento da base.
-    console.warn('[Atlas PD-mail] Notificação não enfileirada (base carregada normalmente):', e && e.message);
+    atlasNotifLog(`Notificação do PD não enfileirada (base carregada normalmente): ${e && e.message || e}`,'err');
     try{ toast('Aviso: não foi possível enfileirar a notificação de e-mail do PD.','am'); }catch(_){}
   }
 }
