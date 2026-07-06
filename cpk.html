@@ -818,7 +818,10 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
       <div class="cpk-tw pd-match">
         <div class="cpk-th3">
           <span class="cpk-tt" id="dep-table-title">Cavalos Mecânicos</span>
-          <span class="cpk-tc" id="dep-tbl-meta"></span>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="cpk-tc" id="dep-tbl-meta"></span>
+            <input type="text" id="dep-f-busca" class="cpk-ts" placeholder="Buscar..." title="Buscar em qualquer informação da área de depreciação" oninput="cpkRenderDep()">
+          </div>
         </div>
         <div class="cpk-to" style="max-height:520px"><table class="dt" id="tbl-dep">
           <thead><tr>
@@ -3790,6 +3793,8 @@ function cpkDepListaFiltrada(){
   const fu=CPK.filtros.unidade, ft=gv('dep-f-tipo'), fm=gv('dep-f-marca'), fs=gv('dep-f-status');
   const aba=CPK_DEP_ABAS.includes(CPK.depAba)?CPK.depAba:'cavalo';
   const fq=cpkNormStr(gv('dep-f-placa'));
+  const fb=cpkDepBuscaNorm(gv('dep-f-busca'));
+  const termosBusca=fb?fb.split(' ').filter(Boolean):[];
   return idx.list.filter(r=>{
     if(fu && (r.unidade||'')!==fu) return false;
     if(aba && (r.tipo||'')!==aba) return false;
@@ -3797,8 +3802,35 @@ function cpkDepListaFiltrada(){
     if(fm && (r.marca||'')!==fm) return false;
     if(fs && (r.status||'')!==fs) return false;
     if(fq && !cpkNormStr((r.placa||'')+' '+(r.codigo||'')+' '+(r.frota||'')+' '+(r.tipoCarreta||'')+' '+(r.marca||'')+' '+(r.modelo||'')).includes(fq)) return false;
+    if(termosBusca.length){
+      const hay=cpkDepBuscaNorm(cpkDepBuscaTexto(r));
+      if(!termosBusca.every(t=>hay.includes(t))) return false;
+    }
     return true;
   });
+}
+
+function cpkDepBuscaNorm(s){
+  return String(s||'')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toUpperCase().replace(/[^A-Z0-9]+/g,' ')
+    .trim();
+}
+function cpkDepBuscaTexto(r){
+  if(!r) return '';
+  const flags=[];
+  if(r.encerrada) flags.push('encerrada');
+  if(!r.cadastrado) flags.push('manual sem cadastro');
+  if(r.semDep) flags.push('sem parametro sem parâmetros sem depreciação');
+  return [
+    r.placa,r.codigo,r.frota,r.tipo,r.tipoCarreta,r.marca,r.modelo,
+    r.ano,r.anoFab,r.anoMod,cpkDepAnoDisplay(r),r.unidade,r.status,r.vinc,
+    cpkDepAbaLabel(r.tipo),
+    r.valorCompra,r.valorResidual,r.valorDepreciavel,r.depMensalNoMes,r.acumulado,r.valorContabil,
+    cpkFmt(r.valorCompra),cpkFmt(r.valorResidual),cpkFmt(r.valorDepreciavel),
+    cpkFmt(r.depMensalNoMes),cpkFmt(r.acumulado),cpkFmt(r.valorContabil),
+    flags.join(' ')
+  ].filter(v=>v!==undefined&&v!==null).join(' ');
 }
 
 // ── ORDENAÇÃO ──────────────────────────────────────────────────────
