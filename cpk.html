@@ -763,6 +763,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
         <span class="fl-sep"></span>
         <button class="btn-apply" onclick="cpkDepNovo()">＋ Novo veículo</button>
         <button class="btn-sec" onclick="cpkDepToggle('dep-import-panel')">⬆ Importar</button>
+        <button class="btn-sec" id="dep-comp-import-btn" style="display:none" onclick="cpkDepToggle('dep-comp-import-panel')">⬆ Importar Compressores</button>
         <button class="btn-sec" onclick="cpkDepExport()">⬇ Exportar CSV</button>
       </div>
 
@@ -810,6 +811,33 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
           </div>
           <div>
             <div class="cpk-nd" style="align-items:flex-start"><span><b>Como funciona.</b> Para cada placa da planilha o sistema grava um registro completo — Marca, Modelo, Ano de fabricação/modelo, Valor de compra, Data de compra e Valor residual — com <b>Período = 72</b>, <b>Método = linear</b>, <b>Status = ativo</b> e <b>Tipo</b> inferido do cadastro (padrão <b>cavalo</b>). Placas que não estão na planilha permanecem intactas. Agregados e placas-controle são ignorados e listados na prévia.</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Importação dedicada de compressores (oculto por padrão; exibido na subaba Compressores) -->
+      <div id="dep-comp-import-panel" style="display:none">
+        <div class="two-col">
+          <div class="cpk-form">
+            <h3>Importar base de compressores <span style="font-weight:400;color:var(--mu)">· código do compressor / particularidades</span></h3>
+            <div style="font-size:11px;color:var(--mu);margin:-4px 0 10px">
+              Importador separado para a subaba <b>Compressores</b>. O campo <b>Placa</b> da planilha é tratado como <b>código/identificação do compressor</b> (ex.: HD11N0100), força <b>Tipo = compressor</b> e abastece Marca, Modelo, Ano, Valor de compra, Data de compra, Valor residual, Método, % anual e Período em meses.
+              Cavalos, carretas e demais registros de depreciação não são alterados.
+            </div>
+            <div class="upload-area" id="dep-comp-drop">
+              <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-comp-file" onchange="cpkDepImportCompFile(event)">
+              <div class="ua-ico">🧰</div>
+              <div class="ua-txt">Arraste a base de compressores ou <b>clique para selecionar</b></div>
+              <div class="ua-fn">Layout aceito: <b>Placa/Código · Tipo · Marca · Modelo · Ano fab. · Ano modelo · Valor compra · Data compra · Valor residual · Método · % anual · Período meses</b></div>
+            </div>
+            <div id="dep-comp-info" style="margin-top:10px"></div>
+            <div class="form-actions">
+              <button class="btn-save" id="dep-comp-save" onclick="cpkDepImportCompSalvar()" disabled>Salvar compressores no Firestore</button>
+              <button class="btn-cancel" onclick="cpkDepImportCompLimpar()">Limpar prévia</button>
+            </div>
+          </div>
+          <div>
+            <div class="cpk-nd" style="align-items:flex-start"><span><b>Regra aplicada.</b> A importação usa o código do compressor como chave da depreciação, mantém intactos os demais ativos e atualiza somente os compressores presentes na planilha. Quando o código existir no cadastro de Compressores, a unidade/status do cadastro continuam sendo usados no cálculo. Quando não existir, o registro entra como compressor manual para não travar o abastecimento da base.</span></div>
           </div>
         </div>
       </div>
@@ -3572,6 +3600,10 @@ function cpkDepRefreshTabs(){
   CPK.depAba=tipo;
   document.querySelectorAll('#dep-subtabs .dep-subtab').forEach(b=>b.classList.toggle('on',b.dataset.depTab===tipo));
   const tit=document.getElementById('dep-table-title'); if(tit)tit.textContent=cpkDepAbaLabel(tipo);
+  const compBtn=document.getElementById('dep-comp-import-btn');
+  if(compBtn) compBtn.style.display=(tipo==='compressor')?'':'none';
+  const compPanel=document.getElementById('dep-comp-import-panel');
+  if(compPanel && tipo!=='compressor') compPanel.style.display='none';
 }
 
 function cpkDepParamsDefault(){
@@ -4498,6 +4530,202 @@ async function cpkDepImportVCSalvar(){
   finally{ if(btn){btn.textContent='Salvar no Firestore';btn.disabled=false;} }
 }
 
+
+// ── IMPORTADOR DEDICADO: COMPRESSORES (código/identificação como chave) ─
+//  Usa planilha própria de compressores e força tipo='compressor'. Não toca
+//  em cavalos, carretas ou registros que não estejam na base importada.
+function cpkDepCompNormHdr(s){
+  return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toUpperCase().replace(/[^A-Z0-9% ]/g,'').replace(/\s+/g,' ').trim();
+}
+function cpkDepCompDetecta(headers){
+  const H=headers.map(cpkDepCompNormHdr);
+  const map={};
+  const aliases={
+    placa:['PLACA','CODIGO','CÓDIGO','CODIGO COMPRESSOR','IDENTIFICACAO','IDENTIFICACAO COMPRESSOR','EQUIPAMENTO'],
+    tipo:['TIPO','TIPO ATIVO','TIPO DE ATIVO'],
+    marca:['MARCA','FABRICANTE'],
+    modelo:['MODELO','MODELO COMPRESSOR','DESCRICAO','DESCRIÇÃO'],
+    anoFab:['ANO FAB','ANO FABRICACAO','ANO FABRICACAO','ANO FABR','ANO FABRIC'],
+    anoMod:['ANO MODELO','ANO MOD','ANO MOD.','ANO MODELO FABRICACAO'],
+    valorCompra:['VALOR COMPRA','VALOR DE COMPRA','VLR COMPRA','VALOR AQUISICAO','VALOR AQUISICAO'],
+    dataCompra:['DATA COMPRA','DATA DE COMPRA','DT COMPRA','DATA AQUISICAO','DATA AQUISICAO'],
+    valorResidual:['VALOR RESIDUAL','RESIDUAL','VLR RESIDUAL'],
+    metodo:['METODO','METODO DEPRECIACAO','METODO DE DEPRECIACAO'],
+    percentualAnual:['% ANUAL','ANUAL','PERCENTUAL ANUAL','PERC ANUAL','PERCENTUAL'],
+    periodoMeses:['PERIODO MESES','PERIODO EM MESES','PRAZO','MESES','VIDA UTIL','VIDA UTIL MESES'],
+    status:['STATUS','SITUACAO','SITUACAO ATIVO']
+  };
+  const bate=(h,a)=>h===a || (a.length>4 && h.includes(a));
+  Object.keys(aliases).forEach(k=>{
+    map[k]=-1;
+    for(let i=0;i<H.length;i++){
+      if(aliases[k].some(a=>bate(H[i],cpkDepCompNormHdr(a)))){ map[k]=i; break; }
+    }
+  });
+  // Fallback para o layout enviado: Placa;Tipo;Marca;Modelo;Ano fab.;Ano modelo;Valor compra;Data compra;Valor residual;Metodo;% anual;Periodo meses
+  if(map.placa<0 && H.length>=1) map.placa=0;
+  if(map.tipo<0 && H.length>=2) map.tipo=1;
+  if(map.marca<0 && H.length>=3) map.marca=2;
+  if(map.modelo<0 && H.length>=4) map.modelo=3;
+  if(map.anoFab<0 && H.length>=5) map.anoFab=4;
+  if(map.anoMod<0 && H.length>=6) map.anoMod=5;
+  if(map.valorCompra<0 && H.length>=7) map.valorCompra=6;
+  if(map.dataCompra<0 && H.length>=8) map.dataCompra=7;
+  if(map.valorResidual<0 && H.length>=9) map.valorResidual=8;
+  if(map.metodo<0 && H.length>=10) map.metodo=9;
+  if(map.percentualAnual<0 && H.length>=11) map.percentualAnual=10;
+  if(map.periodoMeses<0 && H.length>=12) map.periodoMeses=11;
+  return map;
+}
+function cpkDepCompParseCsv(text){
+  text=String(text||'').replace(/^\ufeff/,'');
+  const first=(text.split(/\r?\n/)[0]||'');
+  const sep=((first.match(/;/g)||[]).length>=(first.match(/,/g)||[]).length)?';':',';
+  const rows=[]; let row=[], cur='', q=false;
+  for(let i=0;i<text.length;i++){
+    const ch=text[i], nx=text[i+1];
+    if(ch==='"'){
+      if(q && nx==='"'){ cur+='"'; i++; }
+      else q=!q;
+    }else if(ch===sep && !q){ row.push(cur); cur=''; }
+    else if((ch==='\n'||ch==='\r') && !q){
+      if(ch==='\r' && nx==='\n') i++;
+      row.push(cur); cur='';
+      if(row.some(c=>String(c).trim()!=='')) rows.push(row);
+      row=[];
+    }else cur+=ch;
+  }
+  row.push(cur);
+  if(row.some(c=>String(c).trim()!=='')) rows.push(row);
+  return rows;
+}
+async function cpkDepCompRowsFromFile(file){
+  const name=String(file&&file.name||'').toLowerCase();
+  if(/\.csv$/.test(name) || /text\/csv/.test(String(file&&file.type||''))){
+    return cpkDepCompParseCsv(await file.text());
+  }
+  const buf=await file.arrayBuffer();
+  const wb=XLSX.read(buf,{type:'array'});
+  const ws=wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+}
+function cpkDepCompCodigo(v){ return cpkNormPlaca(v); }
+async function cpkDepImportCompFile(ev){
+  const file=ev.target.files&&ev.target.files[0]; if(!file)return;
+  const info=document.getElementById('dep-comp-info');
+  if(info) info.innerHTML='<div class="cpk-info">⏳ <span>Lendo base de compressores…</span></div>';
+  if(!CPK.frotaLoaded){ try{ await cpkLoadFrota(); }catch(_){} }
+  try{ if(!CPK.depLoaded) await cpkLoadDep(); }catch(_){}
+  try{
+    const rows=await cpkDepCompRowsFromFile(file);
+    if(!rows.length){ if(info)info.innerHTML='<div class="cpk-err">⛔ <span>Planilha vazia.</span></div>'; return; }
+    let hIdx=-1, cols=null;
+    for(let i=0;i<Math.min(rows.length,10);i++){
+      const c=cpkDepCompDetecta(rows[i].map(String));
+      if(c.placa>-1 && c.valorCompra>-1){ hIdx=i; cols=c; break; }
+    }
+    if(!cols){ if(info)info.innerHTML='<div class="cpk-err">⛔ <span>Não encontrei as colunas <b>Placa/Código</b> e <b>Valor compra</b>.</span></div>'; return; }
+
+    const base=(CPK.depData&&CPK.depData.veiculos)||{};
+    const recs={}, novos=[], atualiza=[], inconsist=[];
+    const vistos=new Set();
+    const getFactory=r=>k=>cols[k]>-1?r[cols[k]]:'';
+    rows.slice(hIdx+1).forEach(r=>{
+      const get=getFactory(r);
+      const codigo=cpkDepCompCodigo(get('placa')); if(!codigo)return;
+      if(vistos.has(codigo)){ inconsist.push({codigo,problema:'Código duplicado na planilha — prevaleceu a última ocorrência'}); }
+      vistos.add(codigo);
+      if(cpkPlacaIgnorada(codigo)||cpkPlacaReceitaCompl(codigo)){ inconsist.push({codigo,problema:'Código de controle — ignorado'}); return; }
+      const comp=cpkComp(codigo);
+      if(comp && !cpkDepVeicEhFrotaPropria(comp,'compressor')){ inconsist.push({codigo,problema:'Compressor agregado — fora do escopo Frota'}); return; }
+      const valorCompra=cpkNum(get('valorCompra'));
+      if(!(valorCompra>0)){ inconsist.push({codigo,problema:'Valor de compra ausente/zero'}); return; }
+      const p=cpkDepParam('compressor');
+      const marca=cpkStr(get('marca')) || (comp&&comp.marca) || '';
+      const modelo=cpkStr(get('modelo')) || (comp&&(comp.modelo||comp.serie)) || '';
+      const anoFab=cpkDepAnoParts(get('anoFab')).fab || (comp&&comp.anoFab) || '';
+      const anoMod=cpkDepAnoParts(get('anoMod')).mod || cpkDepAnoParts(get('anoMod')).fab || (comp&&comp.anoMod) || '';
+      const dataCompra=cpkNormDate(get('dataCompra'));
+      const valorResidual=cpkNum(get('valorResidual'));
+      const metodo=cpkDepNormMetodo(get('metodo')||p.metodo||'linear');
+      const periodoMeses=Math.round(cpkNum(get('periodoMeses')))||Math.round(cpkNum(p.prazo||120));
+      const percentualAnual=cpkNum(get('percentualAnual'))||cpkNum(p.percAnual||0);
+      const status=cpkDepNormStatus(get('status') || (comp&&comp.status) || (comp&&comp.disponibilidade) || 'ativo');
+      const existe=!!base[codigo];
+      recs[codigo]={
+        placa:codigo, codigo:(comp&&comp.codigoDisplay)||codigo,
+        tipo:'compressor', frota:'', marca, modelo, anoFab, anoMod,
+        valorCompra, dataCompra, valorResidual,
+        periodoMeses, metodo, percentualAnual, valorManualMensal:0,
+        status, unidade:(comp&&comp.unidade)||''
+      };
+      const item={codigo, existe, cadastrado:!!comp, marca, modelo, anoFab, anoMod, valorCompra, dataCompra, valorResidual, metodo, periodoMeses, percentualAnual, status};
+      (existe?atualiza:novos).push(item);
+      if(!comp) inconsist.push({codigo,problema:'Não encontrado no cadastro de Compressores — será salvo como compressor manual'});
+    });
+
+    const nTot=Object.keys(recs).length;
+    CPK._depImportComp={ fileName:file.name, recs, count:nTot, novos, atualiza, inconsist };
+    let html=`<div class="cpk-${nTot?'ok':'nd'}">${nTot?'✓':'⚠'} <span>
+      <b>${cpkAbrev(file.name,28)}</b>: <b>${nTot}</b> compressor(es) pronto(s) ·
+      <b>${atualiza.length}</b> atualizados · <b>${novos.length}</b> novos ·
+      <b>${inconsist.length}</b> aviso(s)/ignorado(s). Tipo forçado: <b>compressor</b>.</span></div>`;
+    if(nTot){
+      const anoTxt=x=>x.anoFab?(x.anoFab+(x.anoMod&&x.anoMod!==x.anoFab?'/'+x.anoMod:'')):(x.anoMod||'—');
+      const linha=x=>`<tr><td><b>${x.codigo}</b></td><td>${x.existe?'<span style="color:var(--gn)">atualiza</span>':'<span style="color:var(--am)">novo</span>'}</td>`+
+        `<td>${x.cadastrado?'<span style="color:var(--gn)">sim</span>':'<span style="color:var(--am)">manual</span>'}</td>`+
+        `<td>${cpkAbrev(x.marca||'—',12)}</td><td>${cpkAbrev(x.modelo||'—',16)}</td><td>${anoTxt(x)}</td>`+
+        `<td class="r">${cpkFmt(x.valorCompra)}</td><td>${x.dataCompra||'—'}</td><td class="r">${cpkFmt(x.valorResidual)}</td>`+
+        `<td>${cpkDepMetodoLabel(x.metodo)}</td><td class="r">${x.periodoMeses||'—'}</td><td class="r">${x.percentualAnual?cpkFmtPct(x.percentualAnual,1):'—'}</td></tr>`;
+      html+='<div style="margin-top:8px;max-height:300px;overflow:auto;border:1px solid var(--bd2);border-radius:6px">'+
+        '<table class="dt"><thead><tr><th>Código</th><th>Ação</th><th>Cadastro</th><th>Marca</th><th>Modelo</th><th>Ano</th><th class="r">Vlr compra</th><th>Data</th><th class="r">Residual</th><th>Método</th><th class="r">Meses</th><th class="r">% anual</th></tr></thead><tbody>'+
+        atualiza.concat(novos).map(linha).join('')+'</tbody></table></div>';
+    }
+    if(inconsist.length){
+      html+='<div style="margin-top:8px;max-height:140px;overflow:auto;border:1px solid var(--bd2);border-radius:6px"><table class="dt"><thead><tr><th>Código</th><th>Motivo</th></tr></thead><tbody>'+
+        inconsist.slice(0,250).map(i=>`<tr><td><b>${i.codigo}</b></td><td style="color:var(--am)">${i.problema}</td></tr>`).join('')+'</tbody></table></div>';
+    }
+    if(info) info.innerHTML=html;
+    const btn=document.getElementById('dep-comp-save'); if(btn)btn.disabled=!(nTot>0 && cpkPodeEditarDep());
+  }catch(e){ if(info)info.innerHTML='<div class="cpk-err">⛔ <span>Erro ao ler: '+(e.message||e)+'</span></div>'; }
+}
+function cpkDepImportCompLimpar(){
+  CPK._depImportComp=null;
+  const fi=document.getElementById('dep-comp-file'); if(fi)fi.value='';
+  const info=document.getElementById('dep-comp-info'); if(info)info.innerHTML='';
+  const btn=document.getElementById('dep-comp-save'); if(btn)btn.disabled=true;
+}
+async function cpkDepImportCompSalvar(){
+  const imp=CPK._depImportComp;
+  if(!imp||!imp.count){ cpkToast('Nada válido para importar.'); return; }
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão.'); return; }
+  CPK.depData=CPK.depData||{veiculos:{},params:cpkDepParamsDefault()};
+  const veics=Object.assign({}, CPK.depData.veiculos||{});
+  const now=new Date().toISOString(), by=(CPK.user&&CPK.user.email)||'';
+  Object.keys(imp.recs).forEach(cod=>{
+    veics[cod]=Object.assign({}, veics[cod]||{}, imp.recs[cod], {tipo:'compressor', _editadoEm:now, _editadoPor:by});
+  });
+  CPK.depData.veiculos=veics;
+  const btn=document.getElementById('dep-comp-save'); if(btn){btn.disabled=true;btn.textContent='Salvando…';}
+  try{
+    await cpkDepPersist();
+    cpkToast('Base de compressores importada: '+imp.count+' item(ns).');
+    cpkDepImportCompLimpar();
+    cpkDepToggle('dep-comp-import-panel');
+    CPK.depAba='compressor';
+    cpkCalculate(); cpkRenderActive();
+  }catch(e){ cpkToast('Erro ao salvar compressores: '+(e.message||e)); }
+  finally{ if(btn){btn.textContent='Salvar compressores no Firestore';btn.disabled=false;} }
+}
+function cpkDepSetupCompDrop(){
+  const drop=document.getElementById('dep-comp-drop'); if(!drop)return;
+  const fi=document.getElementById('dep-comp-file'); if(!fi)return;
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag');}));
+  drop.addEventListener('drop',e=>{ const f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f&&fi){ const dt=new DataTransfer(); dt.items.add(f); fi.files=dt.files; cpkDepImportCompFile({target:fi}); } });
+}
+
 // ── EXPORTAÇÃO ─────────────────────────────────────────────────────
 function cpkDepExport(){
   const lista=cpkDepListaFiltrada();
@@ -5082,6 +5310,7 @@ function cpkDepSetupDrop(){
 document.addEventListener('DOMContentLoaded',function(){
   try{ cpkSetupDrop(); }catch(_){}
   try{ cpkDepSetupDrop(); }catch(_){}
+  try{ cpkDepSetupCompDrop(); }catch(_){}
   cpkInit();
 });
 
