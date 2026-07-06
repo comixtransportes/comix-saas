@@ -813,6 +813,32 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
             <div class="cpk-nd" style="align-items:flex-start"><span><b>Regras da importação.</b> Apenas placas de <b>frota própria</b> são aceitas (agregados são ignorados). Método aceita <b>linear</b>, <b>percentual</b> ou <b>manual</b>. Datas em DD/MM/AAAA ou AAAA-MM-DD. Valores aceitam 1.234,56 ou 1234.56. Linhas sem placa são ignoradas.</span></div>
           </div>
         </div>
+
+        <!-- Importador dedicado: VC · Residual · 72 meses (mescla por placa) -->
+        <div class="two-col" style="margin-top:14px">
+          <div class="cpk-form">
+            <h3>Importar VC · Residual · 72 meses <span style="font-weight:400;color:var(--mu)">(mescla por placa)</span></h3>
+            <div style="font-size:11px;color:var(--mu);margin:-4px 0 10px">
+              Planilha da base de valores (layout <b>Frota · Placa · Marca · … · Valor de Compra (col G) · … · Data de Compra · … · Valor Residual</b>).
+              Preenche <b>apenas</b> Marca, Valor de compra, Data de compra e Valor residual — <b>mantendo</b> tipo, modelo, ano e status já salvos por placa.
+              Força <b>72 meses / linear</b> em todos. Placas ainda não cadastradas são <b>criadas</b>.
+            </div>
+            <div class="upload-area" id="dep-vc-drop">
+              <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-vc-file" onchange="cpkDepImportVCFile(event)">
+              <div class="ua-ico">📊</div>
+              <div class="ua-txt">Arraste a planilha de valores ou <b>clique para selecionar</b></div>
+              <div class="ua-fn">Casamento pela <b>Placa</b> · período fixado em <b>72 meses</b> · método <b>linear</b></div>
+            </div>
+            <div id="dep-vc-info" style="margin-top:10px"></div>
+            <div class="form-actions">
+              <button class="btn-save" id="dep-vc-save" onclick="cpkDepImportVCSalvar()" disabled>Salvar no Firestore</button>
+              <button class="btn-cancel" onclick="cpkDepImportVCLimpar()">Limpar prévia</button>
+            </div>
+          </div>
+          <div>
+            <div class="cpk-nd" style="align-items:flex-start"><span><b>Como funciona a mescla.</b> Para cada placa da planilha, o sistema busca o registro já salvo e <b>sobrescreve só</b> Marca, Valor de compra, Data de compra e Valor residual, além de fixar <b>Período = 72</b> e <b>Método = linear</b>. Todo o resto do cadastro da placa (tipo, modelo, anos, status) é preservado. Se a placa não existir na base, ela é criada com o tipo herdado do cadastro da frota (ou “cavalo”) e status “ativo”. Agregados e placas-controle são ignorados e listados na prévia.</span></div>
+          </div>
+        </div>
       </div>
 
       <!-- Tabela consolidada -->
@@ -4310,6 +4336,135 @@ function cpkDepModelo(){
   const blob=new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
   a.download='modelo_depreciacao_frota.csv'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+}
+
+// ── IMPORTADOR DEDICADO: VC · Residual · 72 meses (mescla por placa) ─
+//  Planilha de valores (layout Frota·Placa·Marca·…·Valor de Compra(G)·…·
+//  Data de Compra·…·Valor Residual). Preenche SOMENTE marca, valorCompra,
+//  dataCompra e valorResidual, mantendo o restante do cadastro da placa.
+//  Força periodoMeses=72 e metodo='linear'. Placas novas são criadas.
+function cpkDepVCNormHdr(s){
+  return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toUpperCase().replace(/[^A-Z0-9 ]/g,'').replace(/\s+/g,' ').trim();
+}
+function cpkDepVCDetecta(headers){
+  // Casamento por título exato (com fallback posicional para Valor de Compra = col G / idx 6).
+  const H=headers.map(cpkDepVCNormHdr);
+  const acha=(...alvos)=>{ for(const a of alvos){ const i=H.indexOf(a); if(i>-1)return i; } return -1; };
+  const map={
+    placa:        acha('PLACA'),                 // 'PLACA' exato — evita 'PLACA MERCOSUL'
+    marca:        acha('MARCA'),
+    valorCompra:  acha('VALOR DE COMPRA','VALOR COMPRA','VLR COMPRA'),
+    dataCompra:   acha('DATA DE COMPRA','DATA COMPRA','DT COMPRA'),
+    valorResidual:acha('VALOR RESIDUAL','RESIDUAL','VLR RESIDUAL')
+  };
+  if(map.valorCompra===-1 && H.length>6) map.valorCompra=6; // fallback: coluna G
+  return map;
+}
+function cpkDepVCTipoNovo(placa){
+  const v=cpkVeic(placa);
+  if(v){ const t=cpkDepNormTipo(v.tipo||v.categoria||v.especie||''); if(t&&t!=='outro')return t; }
+  return 'cavalo'; // frota da planilha é composta de cavalos mecânicos
+}
+async function cpkDepImportVCFile(ev){
+  const file=ev.target.files&&ev.target.files[0]; if(!file)return;
+  const info=document.getElementById('dep-vc-info');
+  info.innerHTML='<div class="cpk-info">⏳ <span>Lendo planilha de valores…</span></div>';
+  if(!CPK.frota||!CPK.frota.length){ try{ await cpkLoadFrota(); }catch(_){} }
+  try{ if(!CPK.depLoaded) await cpkLoadDep(); }catch(_){}
+  try{
+    const buf=await file.arrayBuffer();
+    const wb=XLSX.read(buf,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+    if(!rows.length){ info.innerHTML='<div class="cpk-err">⛔ <span>Planilha vazia.</span></div>'; return; }
+    // Acha a linha de cabeçalho (procura Placa + Valor de Compra nas 8 primeiras linhas)
+    let hIdx=-1, cols=null;
+    for(let i=0;i<Math.min(rows.length,8);i++){
+      const c=cpkDepVCDetecta(rows[i].map(String));
+      if(c.placa>-1 && c.valorCompra>-1){ hIdx=i; cols=c; break; }
+    }
+    if(!cols){ info.innerHTML='<div class="cpk-err">⛔ <span>Não encontrei as colunas <b>Placa</b> e <b>Valor de Compra</b>. Confira os títulos.</span></div>'; return; }
+
+    const base=CPK.depData&&CPK.depData.veiculos?CPK.depData.veiculos:{};
+    const merge={}, novos=[], atualiza=[], inconsist=[];
+    rows.slice(hIdx+1).forEach(r=>{
+      const get=k=>cols[k]>-1?r[cols[k]]:'';
+      const placa=cpkNormPlaca(get('placa')); if(!placa)return;
+      if(cpkPlacaIgnorada(placa)||cpkPlacaReceitaCompl(placa)){ inconsist.push({placa,problema:'Placa-controle — ignorada'}); return; }
+      const v=cpkVeic(placa);
+      if(v&&v.vinculo==='agregado'){ inconsist.push({placa,problema:'Agregado — fora do escopo Frota'}); return; }
+      const valorCompra=cpkNum(get('valorCompra'));
+      if(!(valorCompra>0)){ inconsist.push({placa,problema:'Valor de compra ausente/zero'}); return; }
+      const dataCompra=cpkNormDate(get('dataCompra'));
+      const valorResidual=cpkNum(get('valorResidual'));
+      const marca=cpkStr(get('marca'));
+      const existe=!!base[placa];
+      const prev=base[placa]||{};
+      // MESCLA: preserva tudo do registro anterior; sobrescreve só os 4 campos + força 72m/linear
+      const rec=Object.assign({}, prev, {
+        placa,
+        marca: marca || prev.marca || '',
+        valorCompra,
+        dataCompra: dataCompra || prev.dataCompra || '',
+        valorResidual,
+        periodoMeses: 72,
+        metodo: 'linear',
+        tipo: prev.tipo || cpkDepVCTipoNovo(placa),
+        status: prev.status || 'ativo'
+      });
+      merge[placa]=rec;
+      (existe?atualiza:novos).push({placa, marca:rec.marca, valorCompra, dataCompra:rec.dataCompra, valorResidual, existe});
+    });
+
+    CPK._depImportVC={ fileName:file.name, merge,
+      count:Object.keys(merge).length, novos, atualiza, inconsist };
+
+    const nTot=Object.keys(merge).length;
+    let html=`<div class="cpk-${nTot?'ok':'nd'}">${nTot?'✓':'⚠'} <span>
+      <b>${cpkAbrev(file.name,28)}</b>: <b>${nTot}</b> placa(s) prontas ·
+      <b>${atualiza.length}</b> mescladas (já existiam) · <b>${novos.length}</b> novas ·
+      <b>${inconsist.length}</b> ignorada(s). Período fixado em <b>72 meses / linear</b>.</span></div>`;
+    if(nTot){
+      const linha=x=>`<tr><td><b>${x.placa}</b></td><td>${x.existe?'<span style="color:var(--gn)">mescla</span>':'<span style="color:var(--am)">nova</span>'}</td>`+
+        `<td>${cpkAbrev(x.marca||'—',14)}</td><td class="r">${cpkFmt(x.valorCompra)}</td>`+
+        `<td>${x.dataCompra||'—'}</td><td class="r">${cpkFmt(x.valorResidual)}</td></tr>`;
+      html+='<div style="margin-top:8px;max-height:260px;overflow:auto;border:1px solid var(--bd2);border-radius:6px">'+
+        '<table class="dt"><thead><tr><th>Placa</th><th>Ação</th><th>Marca</th><th class="r">Vlr compra</th><th>Data</th><th class="r">Residual</th></tr></thead><tbody>'+
+        atualiza.concat(novos).map(linha).join('')+'</tbody></table></div>';
+    }
+    if(inconsist.length){
+      html+='<div style="margin-top:8px;max-height:120px;overflow:auto;border:1px solid var(--bd2);border-radius:6px"><table class="dt"><thead><tr><th>Placa</th><th>Motivo</th></tr></thead><tbody>'+
+        inconsist.slice(0,200).map(i=>`<tr><td><b>${i.placa}</b></td><td style="color:var(--am)">${i.problema}</td></tr>`).join('')+'</tbody></table></div>';
+    }
+    info.innerHTML=html;
+    const btn=document.getElementById('dep-vc-save'); if(btn)btn.disabled=!(nTot>0 && cpkPodeEditarDep());
+  }catch(e){ info.innerHTML='<div class="cpk-err">⛔ <span>Erro ao ler: '+(e.message||e)+'</span></div>'; }
+}
+function cpkDepImportVCLimpar(){
+  CPK._depImportVC=null;
+  const fi=document.getElementById('dep-vc-file'); if(fi)fi.value='';
+  const info=document.getElementById('dep-vc-info'); if(info)info.innerHTML='';
+  const btn=document.getElementById('dep-vc-save'); if(btn)btn.disabled=true;
+}
+async function cpkDepImportVCSalvar(){
+  const imp=CPK._depImportVC;
+  if(!imp||!imp.count){ cpkToast('Nada válido para importar.'); return; }
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão.'); return; }
+  CPK.depData=CPK.depData||{veiculos:{},params:cpkDepParamsDefault()};
+  const veics=Object.assign({}, CPK.depData.veiculos||{}); // mescla sobre a base atual
+  const now=new Date().toISOString(), by=(CPK.user&&CPK.user.email)||'';
+  Object.keys(imp.merge).forEach(pl=>{ veics[pl]=Object.assign({}, imp.merge[pl], {_editadoEm:now,_editadoPor:by}); });
+  CPK.depData.veiculos=veics;
+  const btn=document.getElementById('dep-vc-save'); if(btn){btn.disabled=true;btn.textContent='Salvando…';}
+  try{
+    await cpkDepPersist(); // grava em cpk_lancamentos/DEPRECIACAO (mesmo doc da base)
+    cpkToast('Valores importados: '+imp.count+' placa(s) · 72 meses.');
+    cpkDepImportVCLimpar();
+    cpkDepToggle('dep-import-panel');
+    cpkCalculate(); cpkRenderActive();
+  }catch(e){ cpkToast('Erro ao salvar: '+(e.message||e)); }
+  finally{ if(btn){btn.textContent='Salvar no Firestore';btn.disabled=false;} }
 }
 
 // ── EXPORTAÇÃO ─────────────────────────────────────────────────────
