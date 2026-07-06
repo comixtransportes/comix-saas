@@ -4317,7 +4317,27 @@ async function cpkDepImportSalvar(){
   const substituir=document.getElementById('dep-import-substituir').checked;
   CPK.depData=CPK.depData||{veiculos:{},params:cpkDepParamsDefault()};
   let veics = substituir ? {} : Object.assign({}, CPK.depData.veiculos||{});
-  Object.keys(imp.validos).forEach(pl=>{ veics[pl]=Object.assign({}, imp.validos[pl], {_editadoEm:new Date().toISOString(),_editadoPor:(CPK.user&&CPK.user.email)||''}); });
+  const _now=new Date().toISOString(), _by=(CPK.user&&CPK.user.email)||'';
+  Object.keys(imp.validos).forEach(pl=>{
+    const prev = (!substituir && veics[pl]) ? veics[pl] : {};
+    const inc  = imp.validos[pl];
+    // Mescla no NÍVEL DO CAMPO: campo ausente na planilha preserva o que já
+    // estava salvo (evita zerar período/marca/etc. quando a coluna não existe).
+    const merged = Object.assign({}, prev, inc);
+    if(!(inc.periodoMeses>0)   && prev.periodoMeses>0)   merged.periodoMeses   = prev.periodoMeses;
+    if(!(inc.percentualAnual>0)&& prev.percentualAnual>0)merged.percentualAnual= prev.percentualAnual;
+    if(!inc.marca         && prev.marca)         merged.marca         = prev.marca;
+    if(!inc.modelo        && prev.modelo)        merged.modelo        = prev.modelo;
+    if(!inc.tipo          && prev.tipo)          merged.tipo          = prev.tipo;
+    if(!inc.dataCompra    && prev.dataCompra)    merged.dataCompra    = prev.dataCompra;
+    if(!(inc.valorResidual>0) && prev.valorResidual>0) merged.valorResidual = prev.valorResidual;
+    if(!inc.status        && prev.status)        merged.status        = prev.status;
+    if(!inc.anoFab        && prev.anoFab)        merged.anoFab        = prev.anoFab;
+    if(!inc.anoMod        && prev.anoMod)        merged.anoMod        = prev.anoMod;
+    if(!inc.metodo        && prev.metodo)        merged.metodo        = prev.metodo;
+    merged._editadoEm=_now; merged._editadoPor=_by;
+    veics[pl]=merged;
+  });
   CPK.depData.veiculos=veics;
   const btn=document.getElementById('dep-import-save'); if(btn){btn.disabled=true;btn.textContent='Salvando…';}
   try{
