@@ -191,6 +191,22 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 .dep-subtab:hover{color:var(--tx)}
 .dep-subtab.on{color:var(--ac);border-bottom-color:var(--ac)}
 .dep-plate{font-family:var(--f);font-size:10.5px;font-weight:700;letter-spacing:.45px;color:var(--tx)}
+
+/* Importador unificado — 4 campos (um por tipo) */
+.dep-uni-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media(max-width:720px){.dep-uni-grid{grid-template-columns:1fr}}
+.dep-uni-cell{border:1px solid var(--bd);border-radius:var(--r);padding:10px 11px;background:var(--wh)}
+.dep-uni-hd{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--tx);margin-bottom:8px}
+.dep-uni-ico{font-size:15px}
+.dep-uni-up{padding:14px 12px !important}
+.dep-uni-up .ua-txt{font-size:11px}
+.dep-uni-up .ua-fn{font-size:10px;color:var(--mu);margin-top:3px}
+.dep-uni-info{margin-top:8px;font-size:11px}
+.dep-uni-info:empty{display:none}
+.dep-uni-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 9px;border-radius:4px;font-size:11px;font-weight:600}
+.dep-uni-chip.ok{background:var(--gn-bg);color:var(--gn);border:1px solid var(--gn-bd)}
+.dep-uni-chip.warn{background:var(--am-bg);color:var(--am);border:1px solid var(--am-bd)}
+.dep-uni-chip.err{background:var(--rd-bg);color:var(--rd);border:1px solid var(--rd-bd)}
 .bdg{display:inline-block;padding:1px 5px;border-radius:2px;font-size:9px;font-weight:600;font-family:var(--m);white-space:nowrap}
 .bg{background:var(--gn-bg);color:var(--gn)}.br{background:var(--rd-bg);color:var(--rd)}
 .ba{background:var(--am-bg);color:var(--am)}.bm{background:var(--bg);color:var(--mu);border:1px solid var(--bd)}
@@ -763,13 +779,13 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
         <span class="fl-sep"></span>
         <button class="btn-apply" onclick="cpkDepNovo()">＋ Novo veículo</button>
         <button class="btn-sec" onclick="cpkDepToggle('dep-import-panel')">⬆ Importar</button>
-        <button class="btn-sec" id="dep-comp-import-btn" style="display:none" onclick="cpkDepToggle('dep-comp-import-panel')">⬆ Importar Compressores</button>
         <button class="btn-sec" onclick="cpkDepExport()">⬇ Exportar CSV</button>
       </div>
 
       <div class="dep-subtabs" id="dep-subtabs">
         <button class="dep-subtab on" data-dep-tab="cavalo" onclick="cpkDepSetAba('cavalo',this)">Cavalos Mecânicos</button>
         <button class="dep-subtab" data-dep-tab="carreta" onclick="cpkDepSetAba('carreta',this)">Carretas</button>
+        <button class="dep-subtab" data-dep-tab="carro_apoio" onclick="cpkDepSetAba('carro_apoio',this)">Carro de Apoio</button>
         <button class="dep-subtab" data-dep-tab="compressor" onclick="cpkDepSetAba('compressor',this)">Compressores</button>
       </div>
 
@@ -787,57 +803,65 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
         </div>
       </div>
 
-      <!-- Importação em massa (oculto por padrão) -->
+      <!-- Importação unificada (oculto por padrão) — 4 campos, 1 por tipo -->
       <div id="dep-import-panel" style="display:none">
-        <div class="two-col">
-          <div class="cpk-form">
-            <h3>Importar base de depreciação <span style="font-weight:400;color:var(--mu)">· 72 meses / linear</span></h3>
-            <div style="font-size:11px;color:var(--mu);margin:-4px 0 10px">
-              Lê <b>todos os dados</b> da planilha de valores (layout <b>Frota · Placa · Marca · Modelo · Ano Modelo · Valor de Compra (col G) · … · Data de Compra · … · Valor Residual</b>).
-              Preenche Marca, Modelo, Ano, Valor de compra, Data de compra e Valor residual. Do campo <b>Ano</b> (ex. “2019/2020”): 1º ano = <b>fabricação</b>, 2º ano = <b>modelo</b>.
-              Força <b>72 meses / linear</b> e tipo <b>cavalo</b> (ou o do cadastro). Placas fora da planilha não são tocadas.
-            </div>
-            <div class="upload-area" id="dep-vc-drop">
-              <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-vc-file" onchange="cpkDepImportVCFile(event)">
-              <div class="ua-ico">📊</div>
-              <div class="ua-txt">Arraste a planilha de valores ou <b>clique para selecionar</b></div>
-              <div class="ua-fn">Casamento pela <b>Placa</b> · período fixado em <b>72 meses</b> · método <b>linear</b></div>
-            </div>
-            <div id="dep-vc-info" style="margin-top:10px"></div>
-            <div class="form-actions">
-              <button class="btn-save" id="dep-vc-save" onclick="cpkDepImportVCSalvar()" disabled>Salvar no Firestore</button>
-              <button class="btn-cancel" onclick="cpkDepImportVCLimpar()">Limpar prévia</button>
-            </div>
+        <div class="cpk-form">
+          <h3>Importar base de depreciação <span style="font-weight:400;color:var(--mu)">· um arquivo por tipo de ativo</span></h3>
+          <div style="font-size:11px;color:var(--mu);margin:-4px 0 12px">
+            Adicione a planilha de cada tipo no campo correspondente. Cada arquivo é lido, classificado no seu <b>tipo</b> (independe do que estiver na coluna Tipo da planilha) e mesclado por <b>placa/código</b>. Aceita <b>.xlsx</b> e <b>.csv</b>. Colunas reconhecidas por título: <b>Placa</b>, <b>Marca</b>, <b>Modelo</b>, <b>Ano fab./Ano modelo</b>, <b>Valor de compra</b>, <b>Data de compra</b>, <b>Valor residual</b>, <b>Período (meses)</b>, <b>Método</b>, <b>% anual</b>, <b>Status</b>. Registros fora das planilhas permanecem intactos; agregados e placas-controle são ignorados.
           </div>
-          <div>
-            <div class="cpk-nd" style="align-items:flex-start"><span><b>Como funciona.</b> Para cada placa da planilha o sistema grava um registro completo — Marca, Modelo, Ano de fabricação/modelo, Valor de compra, Data de compra e Valor residual — com <b>Período = 72</b>, <b>Método = linear</b>, <b>Status = ativo</b> e <b>Tipo</b> inferido do cadastro (padrão <b>cavalo</b>). Placas que não estão na planilha permanecem intactas. Agregados e placas-controle são ignorados e listados na prévia.</span></div>
-          </div>
-        </div>
-      </div>
 
-      <!-- Importação dedicada de compressores (oculto por padrão; exibido na subaba Compressores) -->
-      <div id="dep-comp-import-panel" style="display:none">
-        <div class="two-col">
-          <div class="cpk-form">
-            <h3>Importar base de compressores <span style="font-weight:400;color:var(--mu)">· código do compressor / particularidades</span></h3>
-            <div style="font-size:11px;color:var(--mu);margin:-4px 0 10px">
-              Importador separado para a subaba <b>Compressores</b>. O campo <b>Placa</b> da planilha é tratado como <b>código/identificação do compressor</b> (ex.: HD11N0100), força <b>Tipo = compressor</b> e abastece Marca, Modelo, Ano, Valor de compra, Data de compra, Valor residual, Método, % anual e Período em meses.
-              Cavalos, carretas e demais registros de depreciação não são alterados.
+          <div class="dep-uni-grid">
+
+            <div class="dep-uni-cell">
+              <div class="dep-uni-hd"><span class="dep-uni-ico">🚚</span> Cavalos Mecânicos</div>
+              <div class="upload-area dep-uni-up">
+                <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-uni-file-cavalo" onchange="cpkDepUniFile(event,'cavalo')">
+                <div class="ua-txt">Arraste ou <b>clique para selecionar</b></div>
+                <div class="ua-fn">Tipo forçado: <b>cavalo</b></div>
+              </div>
+              <div id="dep-uni-info-cavalo" class="dep-uni-info"></div>
             </div>
-            <div class="upload-area" id="dep-comp-drop">
-              <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-comp-file" onchange="cpkDepImportCompFile(event)">
-              <div class="ua-ico">🧰</div>
-              <div class="ua-txt">Arraste a base de compressores ou <b>clique para selecionar</b></div>
-              <div class="ua-fn">Layout aceito: <b>Placa/Código · Tipo · Marca · Modelo · Ano fab. · Ano modelo · Valor compra · Data compra · Valor residual · Método · % anual · Período meses</b></div>
+
+            <div class="dep-uni-cell">
+              <div class="dep-uni-hd"><span class="dep-uni-ico">🛞</span> Carretas</div>
+              <div class="upload-area dep-uni-up">
+                <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-uni-file-carreta" onchange="cpkDepUniFile(event,'carreta')">
+                <div class="ua-txt">Arraste ou <b>clique para selecionar</b></div>
+                <div class="ua-fn">Tipo forçado: <b>carreta</b></div>
+              </div>
+              <div id="dep-uni-info-carreta" class="dep-uni-info"></div>
             </div>
-            <div id="dep-comp-info" style="margin-top:10px"></div>
-            <div class="form-actions">
-              <button class="btn-save" id="dep-comp-save" onclick="cpkDepImportCompSalvar()" disabled>Salvar compressores no Firestore</button>
-              <button class="btn-cancel" onclick="cpkDepImportCompLimpar()">Limpar prévia</button>
+
+            <div class="dep-uni-cell">
+              <div class="dep-uni-hd"><span class="dep-uni-ico">🚗</span> Carro de Apoio</div>
+              <div class="upload-area dep-uni-up">
+                <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-uni-file-carro_apoio" onchange="cpkDepUniFile(event,'carro_apoio')">
+                <div class="ua-txt">Arraste ou <b>clique para selecionar</b></div>
+                <div class="ua-fn">Tipo forçado: <b>carro de apoio</b></div>
+              </div>
+              <div id="dep-uni-info-carro_apoio" class="dep-uni-info"></div>
             </div>
+
+            <div class="dep-uni-cell">
+              <div class="dep-uni-hd"><span class="dep-uni-ico">🧰</span> Compressores</div>
+              <div class="upload-area dep-uni-up">
+                <input type="file" accept=".xlsx,.xls,.xlsm,.csv" id="dep-uni-file-compressor" onchange="cpkDepUniFile(event,'compressor')">
+                <div class="ua-txt">Arraste ou <b>clique para selecionar</b></div>
+                <div class="ua-fn">Tipo forçado: <b>compressor</b> · chave = código</div>
+              </div>
+              <div id="dep-uni-info-compressor" class="dep-uni-info"></div>
+            </div>
+
           </div>
-          <div>
-            <div class="cpk-nd" style="align-items:flex-start"><span><b>Regra aplicada.</b> A importação usa o código do compressor como chave da depreciação, mantém intactos os demais ativos e atualiza somente os compressores presentes na planilha. Quando o código existir no cadastro de Compressores, a unidade/status do cadastro continuam sendo usados no cálculo. Quando não existir, o registro entra como compressor manual para não travar o abastecimento da base.</span></div>
+
+          <div id="dep-uni-resumo" style="margin-top:12px"></div>
+
+          <div class="form-actions" style="margin-top:12px">
+            <button class="btn-save" id="dep-uni-save" onclick="cpkDepUniSalvar()" disabled>Salvar tudo no Firestore</button>
+            <button class="btn-cancel" onclick="cpkDepUniLimparTudo()">Limpar tudo</button>
+            <button class="btn-cancel" onclick="cpkDepToggle('dep-import-panel')">Fechar</button>
+            <span id="dep-uni-msg" style="font-size:11px;color:var(--mu)"></span>
           </div>
         </div>
       </div>
@@ -981,6 +1005,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
             <select id="dep-i-tipo" onchange="cpkDepFormTipoChange()">
               <option value="cavalo">Cavalo mecânico</option>
               <option value="carreta">Carreta</option>
+              <option value="carro_apoio">Carro de apoio</option>
               <option value="compressor">Compressor</option>
               <option value="outro">Outro ativo da frota</option>
             </select>
@@ -1841,9 +1866,11 @@ function cpkDepVeicEhFrotaPropria(v,tipo){
   if(tv==='AGREGADO') return false;
   if(tv==='FROTA') return true;
   const t=tipo||cpkDepTipoFromVeic(v);
-  // Carretas e compressores do cadastro nem sempre possuem tipo_vinculo;
-  // nesse caso entram na depreciação da frota própria, exceto quando marcados explicitamente como agregados.
-  if(t==='carreta'||t==='compressor') return true;
+  // Carretas, compressores e carros de apoio do cadastro nem sempre possuem
+  // tipo_vinculo; nesse caso entram na depreciação da frota própria, exceto
+  // quando marcados explicitamente como agregados. (Carro de apoio é, por regra
+  // do CPK, custo da frota própria — sua despesa/depreciação dilui na filial.)
+  if(t==='carreta'||t==='compressor'||t==='carro_apoio') return true;
   return v.vinculo==='proprio';
 }
 async function cpkLoadFrota(){
@@ -2113,7 +2140,7 @@ function cpkMaybeRecalc(){
   cpkCalculate(); cpkRenderActive();
 }
 async function cpkReload(){
-  CPK.szbLoaded=CPK.szyLoaded=CPK.szcLoaded=false; CPK.custoLoaded=false; CPK.kmImportLoaded=false; CPK.frotaLoaded=false; CPK.depLoaded=false;
+  CPK.szbLoaded=CPK.szyLoaded=CPK.szcLoaded=false; CPK.custoLoaded=false; CPK.kmImportLoaded=false; CPK.frotaLoaded=false; CPK.depLoaded=false; CPK.depLoadOk=false;
   cpkSyncBadge('Recarregando…');
   const el=document.getElementById('cpk-global-loader');
   if(el){ el.classList.remove('hidden'); }
@@ -3570,15 +3597,17 @@ function cpkSetupDrop(){
 // ════════════════════════════════════════════════════════════════════
 const CPK_DEP_COL = 'cpk_lancamentos';
 const CPK_DEP_DOC = 'DEPRECIACAO';
-const CPK_DEP_TIPOS = ['cavalo','carreta','compressor','outro'];
-const CPK_DEP_ABAS = ['cavalo','carreta','compressor'];
+const CPK_DEP_TIPOS = ['cavalo','carreta','carro_apoio','compressor','outro'];
+const CPK_DEP_ABAS = ['cavalo','carreta','carro_apoio','compressor'];
 
 function cpkDepTipoNorm(t){
   const s=_cpkSemAcento(t||'');
   if(/compress|compres|compressor/.test(s)) return 'compressor';
+  // Carro de apoio ANTES de cavalo/carreta para não ser capturado por outra regra.
+  if(/carro de apoio|carro apoio|carro_apoio|carroapoio|apoio|utilitario|camionete|camioneta|picape|pickup/.test(s)) return 'carro_apoio';
   if(/carreta|semi|semirrebo|semi rebo|reboque|silo|tanque|implement/.test(s)) return 'carreta';
   if(/cavalo|mecan|caminh|trator|truck|veiculo/.test(s)) return 'cavalo';
-  if(['cavalo','carreta','compressor','outro'].includes(String(t||'').toLowerCase())) return String(t||'').toLowerCase();
+  if(['cavalo','carreta','carro_apoio','compressor','outro'].includes(String(t||'').toLowerCase())) return String(t||'').toLowerCase();
   return 'outro';
 }
 function cpkDepTipoFromVeic(v){
@@ -3589,7 +3618,7 @@ function cpkDepTipoFromVeic(v){
   if(String(v.frota||'').toUpperCase().startsWith('CP')) return 'cavalo';
   return 'outro';
 }
-function cpkDepAbaLabel(t){ return {cavalo:'Cavalos Mecânicos',carreta:'Carretas',compressor:'Compressores'}[t]||cpkDepTipoLabel(t); }
+function cpkDepAbaLabel(t){ return {cavalo:'Cavalos Mecânicos',carreta:'Carretas',carro_apoio:'Carros de Apoio',compressor:'Compressores'}[t]||cpkDepTipoLabel(t); }
 function cpkDepSetAba(tipo){
   if(!CPK_DEP_ABAS.includes(tipo)) tipo='cavalo';
   CPK.depAba=tipo;
@@ -3600,16 +3629,13 @@ function cpkDepRefreshTabs(){
   CPK.depAba=tipo;
   document.querySelectorAll('#dep-subtabs .dep-subtab').forEach(b=>b.classList.toggle('on',b.dataset.depTab===tipo));
   const tit=document.getElementById('dep-table-title'); if(tit)tit.textContent=cpkDepAbaLabel(tipo);
-  const compBtn=document.getElementById('dep-comp-import-btn');
-  if(compBtn) compBtn.style.display=(tipo==='compressor')?'':'none';
-  const compPanel=document.getElementById('dep-comp-import-panel');
-  if(compPanel && tipo!=='compressor') compPanel.style.display='none';
 }
 
 function cpkDepParamsDefault(){
   return {
     cavalo:    { prazo:60,  percAnual:20, residualPct:10, metodo:'linear' },
     carreta:   { prazo:60,  percAnual:14, residualPct:10, metodo:'linear' },
+    carro_apoio:{ prazo:72, percAnual:20, residualPct:20, metodo:'linear' },
     compressor:{ prazo:120, percAnual:8,  residualPct:5,  metodo:'linear' },
     outro:     { prazo:60,  percAnual:20, residualPct:10, metodo:'linear' }
   };
@@ -3620,7 +3646,7 @@ function cpkDepParam(tipo){
 }
 function cpkPodeEditarDep(){ return cpkPodeSalvarKm(); }
 
-function cpkDepTipoLabel(t){ return {cavalo:'Cavalo mecânico',carreta:'Carreta',compressor:'Compressor',outro:'Outro ativo'}[t]||(t||'—'); }
+function cpkDepTipoLabel(t){ return {cavalo:'Cavalo mecânico',carreta:'Carreta',carro_apoio:'Carro de apoio',compressor:'Compressor',outro:'Outro ativo'}[t]||(t||'—'); }
 function cpkDepMetodoLabel(m){ return {linear:'Linear',percentual:'% anual',manual:'Manual'}[m]||(m||'—'); }
 function cpkDepStatusBadge(s){
   s=(s||'ativo').toLowerCase();
@@ -3630,22 +3656,64 @@ function cpkDepStatusBadge(s){
 }
 
 // ── CARGA ──────────────────────────────────────────────────────────
-async function cpkLoadDep(){
-  if(CPK.depLoaded) return;
-  CPK.depData={ veiculos:{}, params:cpkDepParamsDefault() };
+//  IMPORTANTE (correção de perda de dados): a leitura da base pode falhar por
+//  timeout da ponte ou corrida do auth do portal. Se isso acontecer, NÃO
+//  marcamos a base como "carregada com sucesso" — assim uma gravação posterior
+//  jamais sobrescreve o documento real (populado) com uma base vazia em memória.
+//  CPK.depLoadOk = a última leitura confirmou o estado remoto (doc lido, mesmo
+//  que vazio de fato). Enquanto for false, a persistência relê e mescla antes.
+async function cpkLoadDep(force){
+  if(CPK.depLoaded && CPK.depLoadOk && !force) return;
+  const prev = CPK.depData; // preserva trabalho em memória se a releitura falhar
+  let okRead=false, remote=null;
   try{
     const doc=await cpkFsGetDoc(CPK_DEP_COL,CPK_DEP_DOC);
-    if(doc&&doc.data){
-      CPK.depData.veiculos=doc.data.veiculos||{};
-      CPK.depData.params=Object.assign(cpkDepParamsDefault(), doc.data.params||{});
-    }
-  }catch(e){ cpkLog('Dep load erro:',e.message); }
-  CPK.depLoaded=true; CPK._depVer=(CPK._depVer||0)+1;
-  cpkLog('Depreciação:',Object.keys(CPK.depData.veiculos||{}).length,'veículo(s)');
+    okRead=true;                                  // o round-trip da leitura respondeu
+    remote = (doc&&doc.data) ? doc.data : { veiculos:{}, params:{} };
+  }catch(e){ cpkLog('Dep load erro:',e.message); okRead=false; }
+
+  if(okRead){
+    CPK.depData={
+      veiculos: remote.veiculos||{},
+      params:   Object.assign(cpkDepParamsDefault(), remote.params||{})
+    };
+    CPK.depLoadOk=true; CPK.depLoaded=true;
+  }else{
+    // Leitura NÃO confirmada → mantém memória anterior (se houver) e permite retry.
+    CPK.depData = prev || { veiculos:{}, params:cpkDepParamsDefault() };
+    CPK.depLoadOk=false; CPK.depLoaded=false;
+  }
+  CPK._depVer=(CPK._depVer||0)+1; CPK._depIdxCache=null;
+  cpkLog('Depreciação:',Object.keys((CPK.depData&&CPK.depData.veiculos)||{}).length,
+    'veículo(s)', CPK.depLoadOk?'(base confirmada)':'(⚠ leitura não confirmada — sem overwrite)');
 }
 
 async function cpkDepPersist(){
   CPK.depData=CPK.depData||{ veiculos:{}, params:cpkDepParamsDefault() };
+
+  // ── GUARDA ANTI-PERDA ──────────────────────────────────────────────
+  //  Nunca faz overwrite (merge:false) da base remota se a carga inicial não
+  //  foi confirmada. Antes de gravar, relê o remoto e mescla por cima dele as
+  //  edições em memória (a intenção do usuário prevalece campo a campo), para
+  //  não apagar placas/tipos que já estavam salvos e não foram carregados.
+  if(!CPK.depLoadOk){
+    try{
+      const doc=await cpkFsGetDoc(CPK_DEP_COL,CPK_DEP_DOC);
+      if(doc&&doc.data){
+        const remoteV=doc.data.veiculos||{};
+        CPK.depData.veiculos=Object.assign({}, remoteV, CPK.depData.veiculos||{});
+        CPK.depData.params=Object.assign(cpkDepParamsDefault(), doc.data.params||{}, CPK.depData.params||{});
+      }
+      CPK.depLoadOk=true; CPK.depLoaded=true;
+    }catch(e){
+      // Ainda sem confirmar o remoto: só grava se a memória tiver conteúdo real.
+      if(!Object.keys(CPK.depData.veiculos||{}).length){
+        throw new Error('Base remota indisponível — gravação cancelada para não apagar dados já salvos. Verifique a conexão e tente novamente.');
+      }
+      cpkLog('Persist sem confirmação remota — gravando memória não-vazia (fallback seguro).');
+    }
+  }
+
   const dd=CPK.depData;
   const payload={
     tipo:'depreciacao_frota',
@@ -3654,7 +3722,28 @@ async function cpkDepPersist(){
       atualizadoPor:(CPK.user&&CPK.user.email)||'' }
   };
   await cpkFsSet(CPK_DEP_COL,CPK_DEP_DOC,payload,false);
-  CPK._depVer=(CPK._depVer||0)+1;
+
+  // ── VERIFICAÇÃO DE GRAVAÇÃO (read-back) ────────────────────────────
+  //  Relê o documento e confere a contagem. Se divergir, o toast de sucesso
+  //  não mente: propaga erro para o chamador tratar. É 1 leitura por gravação
+  //  (ação rara, disparada pelo usuário) — custo desprezível para a integridade.
+  try{
+    const chk=await cpkFsGetDoc(CPK_DEP_COL,CPK_DEP_DOC);
+    const n=(chk&&chk.data&&chk.data.veiculos)?Object.keys(chk.data.veiculos).length:0;
+    if(n!==payload.meta.count){
+      cpkLog('⚠ Verificação de gravação divergente:',n,'≠',payload.meta.count);
+      throw new Error('Gravação não confirmada pelo Firestore (esperado '+payload.meta.count+', lido '+n+'). Tente novamente.');
+    }
+    cpkLog('✓ Gravação verificada:',n,'veículo(s) persistido(s) em',CPK_DEP_COL+'/'+CPK_DEP_DOC);
+  }catch(e){
+    // Se a verificação em si falhou por leitura, não invalida a escrita já feita,
+    // mas registra. Só relança quando a divergência foi real (mensagem acima).
+    if(/não confirmada pelo Firestore/.test(e.message||'')) throw e;
+    cpkLog('Verificação de gravação não pôde ser lida:',e.message);
+  }
+
+  CPK.depLoadOk=true; CPK.depLoaded=true;
+  CPK._depVer=(CPK._depVer||0)+1; CPK._depIdxCache=null;
 }
 
 // ── CÁLCULO POR VEÍCULO ────────────────────────────────────────────
@@ -4280,9 +4369,10 @@ function cpkDepDetectaCols(headers){
 }
 function cpkDepNormTipo(v){
   const n=cpkNormStr(v);
+  if(/COMPRESSOR/.test(n))return'compressor';
+  if(/CARRO DE APOIO|CARRO APOIO|APOIO|UTILITARIO|CAMIONETE|CAMIONETA|PICAPE|PICKUP/.test(n))return'carro_apoio';
   if(/CAVALO|TRATOR|TOCO|CAMINHAO TRATOR/.test(n))return'cavalo';
   if(/CARRETA|REBOQUE|SEMIRR|SEMI|IMPLEMENTO|TANQUE|SILO/.test(n))return'carreta';
-  if(/COMPRESSOR/.test(n))return'compressor';
   if(!n)return'outro';
   return 'outro';
 }
@@ -4718,6 +4808,193 @@ async function cpkDepImportCompSalvar(){
   }catch(e){ cpkToast('Erro ao salvar compressores: '+(e.message||e)); }
   finally{ if(btn){btn.textContent='Salvar compressores no Firestore';btn.disabled=false;} }
 }
+
+// ════════════════════════════════════════════════════════════════════
+//  IMPORTADOR UNIFICADO — 4 campos, um por tipo de ativo
+//  Cada arquivo é lido, classificado no TIPO DO CAMPO (forçado, independe da
+//  coluna "Tipo" da planilha) e mesclado por placa/código. Uma ÚNICA gravação
+//  (cpkDepPersist, com read-back de verificação) persiste todos os tipos.
+//  Layouts suportados (detecção por título + tolerância a variações de nome):
+//   • Cavalos: Frota·Placa·…·Ano Modelo·Valor de Compra·…·Data de Compra·…·Valor Residual
+//   • Carretas / Carro de Apoio: Placa·Frota·Tipo·Marca·Modelo·Ano fab.·Ano modelo·
+//       Valor compra·Data compra·Valor residual·Periodo meses·Unidade·Status
+//   • Compressores: Placa(código)·Tipo·Marca·Modelo·Ano fab.·Ano modelo·Valor compra·
+//       Data compra·Valor residual·Metodo·% anual·Periodo meses
+// ════════════════════════════════════════════════════════════════════
+function cpkDepUniStore(){ return CPK._depUni || (CPK._depUni={}); }
+function cpkDepUniNormHdr(s){
+  return String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toUpperCase().replace(/[^A-Z0-9% ]/g,' ').replace(/\s+/g,' ').trim();
+}
+function cpkDepUniDetecta(headers){
+  const H=headers.map(cpkDepUniNormHdr);
+  const exato=(...alvos)=>{ for(const a of alvos){ const i=H.indexOf(a); if(i>-1) return i; } return -1; };
+  const inc=(...alvos)=>{
+    for(const a of alvos){ const i=H.indexOf(a); if(i>-1) return i; }
+    for(const a of alvos){ for(let i=0;i<H.length;i++){ if(a.length>3 && H[i].includes(a)) return i; } }
+    return -1;
+  };
+  const map={
+    placa:        exato('PLACA','CODIGO','VEICULO','EQUIPAMENTO','IDENTIFICACAO'),
+    frota:        exato('FROTA'),
+    marca:        exato('MARCA','FABRICANTE'),
+    modelo:       exato('MODELO','DESCRICAO'),
+    anoFab:       inc('ANO FAB','ANO FABRICACAO','ANO DE FABRICACAO'),
+    anoMod:       inc('ANO MODELO','ANO MOD'),
+    valorCompra:  -1,
+    dataCompra:   inc('DATA DE COMPRA','DATA COMPRA','DT COMPRA','DATA AQUISICAO'),
+    valorResidual:inc('VALOR RESIDUAL','RESIDUAL'),
+    periodoMeses: inc('PERIODO MESES','PERIODO EM MESES','PERIODO','PRAZO','MESES','VIDA UTIL'),
+    metodo:       inc('METODO'),
+    percentualAnual: exato('% ANUAL','PERCENTUAL ANUAL','PERC ANUAL'),
+    status:       inc('STATUS','SITUACAO'),
+    unidade:      inc('UNIDADE','UNID')
+  };
+  // Placa: fallback tolerante (evita casar "PLACA MERCOSUL" quando existe "PLACA" exato, já tratado acima).
+  if(map.placa<0) map.placa=inc('PLACA','CODIGO','VEICULO');
+  // Valor de compra: prioriza "VALOR (DE) COMPRA" (inclui "VALOR COMPRA2"); nunca casa "VALOR DE NF" nem "VALOR RESIDUAL".
+  for(let i=0;i<H.length;i++){ if(/^VALOR (DE )?COMPRA/.test(H[i]) || H[i]==='VALOR AQUISICAO'){ map.valorCompra=i; break; } }
+  if(map.valorCompra<0){ for(let i=0;i<H.length;i++){ if(H[i].includes('VALOR COMPRA')){ map.valorCompra=i; break; } } }
+  return map;
+}
+function cpkDepUniRec(get, tipo){
+  const placa=cpkNormPlaca(get('placa'));
+  if(!placa) return null;
+  const marca=cpkStr(get('marca'));
+  const modelo=cpkStr(get('modelo'));
+  // Ano: usa colunas fab/mod quando existirem; senão parseia campo único "2011/2011".
+  const apFab=cpkDepAnoParts(get('anoFab'));
+  const apMod=cpkDepAnoParts(get('anoMod'));
+  const anoFab = apFab.fab || apMod.fab || '';
+  const anoMod = apMod.mod || apMod.fab || apFab.mod || apFab.fab || '';
+  const valorCompra=cpkNum(get('valorCompra'));
+  const dataCompra=cpkNormDate(get('dataCompra'));
+  const valorResidual=cpkNum(get('valorResidual'));
+  const p=cpkDepParam(tipo);
+  // Período: usa o da planilha; quando ausente (ex.: base FIPE de cavalos, sem
+  // coluna de período), aplica o padrão de importação por tipo — 72 meses para
+  // veículos (reproduz o importador anterior), 120 para compressores.
+  const IMPORT_PRAZO={ cavalo:72, carreta:72, carro_apoio:72, compressor:120, outro:60 };
+  let periodoMeses=Math.round(cpkNum(get('periodoMeses')));
+  if(!(periodoMeses>0)) periodoMeses=IMPORT_PRAZO[tipo]||Math.round(cpkNum(p.prazo||0))||72;
+  const metodo=cpkDepNormMetodo(get('metodo')||p.metodo||'linear'); // texto FIPE/qualquer → linear
+  const percentualAnual=cpkNum(get('percentualAnual'))||0;
+  const status=cpkDepNormStatus(get('status')||'ativo');
+  const unidade=cpkStr(get('unidade'));
+  return { placa, tipo, marca, modelo, anoFab, anoMod,
+           valorCompra, dataCompra, valorResidual,
+           periodoMeses, metodo, percentualAnual, valorManualMensal:0,
+           status, unidade };
+}
+async function cpkDepUniFile(ev, tipo){
+  const file=ev.target.files&&ev.target.files[0]; if(!file) return;
+  const U=cpkDepUniStore();
+  const info=document.getElementById('dep-uni-info-'+tipo);
+  if(info) info.innerHTML='<span class="dep-uni-chip warn">⏳ Lendo…</span>';
+  if(!CPK.frotaLoaded){ try{ await cpkLoadFrota(); }catch(_){} }
+  try{ await cpkLoadDep(); }catch(_){}
+  try{
+    const rows=await cpkDepCompRowsFromFile(file); // trata .csv e .xlsx
+    if(!rows.length){ if(info) info.innerHTML='<span class="dep-uni-chip err">⛔ Planilha vazia.</span>'; return; }
+    let hIdx=-1, cols=null;
+    for(let i=0;i<Math.min(rows.length,10);i++){
+      const c=cpkDepUniDetecta(rows[i].map(String));
+      if(c.placa>-1 && c.valorCompra>-1){ hIdx=i; cols=c; break; }
+    }
+    if(!cols){ if(info) info.innerHTML='<span class="dep-uni-chip err">⛔ Não achei <b>Placa</b> e <b>Valor de compra</b>. Confira os títulos.</span>'; return; }
+
+    const base=(CPK.depData&&CPK.depData.veiculos)||{};
+    const recs={}, novos=[], atualiza=[], inconsist=[]; const vistos=new Set();
+    rows.slice(hIdx+1).forEach(r=>{
+      const get=k=>cols[k]>-1?r[cols[k]]:'';
+      const placa=cpkNormPlaca(get('placa')); if(!placa) return;
+      if(vistos.has(placa)) inconsist.push({placa,problema:'Duplicado na planilha — prevaleceu a última ocorrência'});
+      vistos.add(placa);
+      if(cpkPlacaIgnorada(placa)||cpkPlacaReceitaCompl(placa)){ inconsist.push({placa,problema:'Placa-controle — ignorada'}); return; }
+      const cad = (tipo==='compressor') ? cpkComp(placa) : cpkVeic(placa);
+      if(cad && !cpkDepVeicEhFrotaPropria(cad,tipo)){ inconsist.push({placa,problema:'Agregado — fora do escopo Frota'}); return; }
+      const rec=cpkDepUniRec(get, tipo);
+      if(!rec || !(rec.valorCompra>0)){ inconsist.push({placa,problema:'Valor de compra ausente/zero'}); return; }
+      // enriquecimento leve pelo cadastro quando a planilha não trouxe o dado
+      if(!rec.marca && cad&&cad.marca) rec.marca=cad.marca;
+      if(!rec.modelo && cad&&(cad.modelo||cad.serie)) rec.modelo=cad.modelo||cad.serie;
+      if(!rec.unidade && cad&&cad.unidade) rec.unidade=cad.unidade;
+      if(tipo==='compressor'){ rec.codigo=(cad&&cad.codigoDisplay)||placa; rec.frota=''; }
+      else { rec.frota=cpkStr(get('frota')) || (cad&&cad.frota) || ''; }
+      recs[placa]=rec;
+      (base[placa]?atualiza:novos).push(placa);
+    });
+    const nTot=Object.keys(recs).length;
+    U[tipo]={ fileName:file.name, recs, count:nTot, novos, atualiza, inconsist };
+    if(info){
+      info.innerHTML = nTot
+        ? `<span class="dep-uni-chip ok">✓ ${nTot} pronto(s)</span> <span style="color:var(--mu)">${atualiza.length} atualiza · ${novos.length} novo(s)${inconsist.length?(' · '+inconsist.length+' ignorado(s)'):''}</span>`
+        : `<span class="dep-uni-chip warn">⚠ Nenhum registro válido</span>${inconsist.length?(' <span style="color:var(--mu)">'+inconsist.length+' ignorado(s)</span>'):''}`;
+    }
+    cpkDepUniAtualizaResumo();
+  }catch(e){ if(info) info.innerHTML='<span class="dep-uni-chip err">⛔ Erro: '+(e.message||e)+'</span>'; }
+}
+function cpkDepUniTotal(){
+  const U=cpkDepUniStore();
+  return CPK_DEP_ABAS.reduce((s,t)=>s+((U[t]&&U[t].count)||0),0);
+}
+function cpkDepUniAtualizaResumo(){
+  const U=cpkDepUniStore();
+  const tot=cpkDepUniTotal();
+  const btn=document.getElementById('dep-uni-save'); if(btn) btn.disabled=!(tot>0 && cpkPodeEditarDep());
+  const el=document.getElementById('dep-uni-resumo'); if(!el) return;
+  const parts=CPK_DEP_ABAS.filter(t=>U[t]).map(t=>{
+    const d=U[t];
+    return `<tr><td><b>${cpkDepAbaLabel(t)}</b></td><td>${cpkAbrev(d.fileName||'—',30)}</td><td class="r">${d.count}</td><td class="r">${d.atualiza.length}</td><td class="r">${d.novos.length}</td><td class="r" style="color:var(--am)">${d.inconsist.length}</td></tr>`;
+  });
+  if(!parts.length){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="cpk-'+(tot?'ok':'nd')+'">'+(tot?'✓':'⚠')+' <span>Total pronto para salvar: <b>'+tot+'</b> registro(s) em <b>'+parts.length+'</b> tipo(s). A gravação é única e verificada (read-back).</span></div>'+
+    '<div style="margin-top:8px;border:1px solid var(--bd2);border-radius:6px;overflow:auto"><table class="dt"><thead><tr><th>Tipo</th><th>Arquivo</th><th class="r">Válidos</th><th class="r">Atualiza</th><th class="r">Novos</th><th class="r">Ignorados</th></tr></thead><tbody>'+parts.join('')+'</tbody></table></div>';
+}
+function cpkDepUniLimpar(tipo){
+  const U=cpkDepUniStore();
+  delete U[tipo];
+  const fi=document.getElementById('dep-uni-file-'+tipo); if(fi) fi.value='';
+  const info=document.getElementById('dep-uni-info-'+tipo); if(info) info.innerHTML='';
+  cpkDepUniAtualizaResumo();
+}
+function cpkDepUniLimparTudo(){
+  CPK_DEP_ABAS.forEach(t=>cpkDepUniLimpar(t));
+  const msg=document.getElementById('dep-uni-msg'); if(msg){ msg.textContent=''; msg.style.color='var(--mu)'; }
+}
+async function cpkDepUniSalvar(){
+  if(!cpkPodeEditarDep()){ cpkToast('Sem permissão para importar depreciação.'); return; }
+  const U=cpkDepUniStore();
+  const tot=cpkDepUniTotal();
+  if(!tot){ cpkToast('Nenhum arquivo válido para salvar.'); return; }
+  try{ await cpkLoadDep(); }catch(_){}   // garante base remota confirmada antes do merge
+  CPK.depData=CPK.depData||{veiculos:{},params:cpkDepParamsDefault()};
+  const veics=Object.assign({}, CPK.depData.veiculos||{});
+  const now=new Date().toISOString(), by=(CPK.user&&CPK.user.email)||'';
+  let n=0;
+  CPK_DEP_ABAS.forEach(t=>{
+    const d=U[t]; if(!d||!d.count) return;
+    Object.keys(d.recs).forEach(pl=>{
+      veics[pl]=Object.assign({}, veics[pl]||{}, d.recs[pl], {_editadoEm:now,_editadoPor:by});
+      n++;
+    });
+  });
+  CPK.depData.veiculos=veics;
+  const btn=document.getElementById('dep-uni-save'); const msg=document.getElementById('dep-uni-msg');
+  if(btn){ btn.disabled=true; btn.textContent='Salvando…'; }
+  if(msg){ msg.textContent='Gravando e verificando…'; msg.style.color='var(--mu)'; }
+  try{
+    await cpkDepPersist();   // grava em cpk_lancamentos/DEPRECIACAO + read-back de verificação
+    cpkToast('Depreciação salva e verificada: '+n+' registro(s).');
+    if(msg){ msg.textContent='✓ '+n+' registro(s) salvos e confirmados no Firestore.'; msg.style.color='var(--gn)'; }
+    cpkDepUniLimparTudo();
+    cpkCalculate(); cpkRenderActive();
+  }catch(e){
+    cpkToast('Erro ao salvar: '+(e.message||e));
+    if(msg){ msg.textContent='⛔ '+(e.message||e); msg.style.color='var(--rd)'; }
+  }finally{ if(btn){ btn.textContent='Salvar tudo no Firestore'; btn.disabled=false; } }
+}
+
 function cpkDepSetupCompDrop(){
   const drop=document.getElementById('dep-comp-drop'); if(!drop)return;
   const fi=document.getElementById('dep-comp-file'); if(!fi)return;
