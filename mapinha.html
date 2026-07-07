@@ -399,6 +399,24 @@ td>.skel-line{vertical-align:middle}
   </div>
 
   <div class="panel">
+    <div class="panel-h"><h3>(–) Custo de Pessoal — Premissa (CPK)</h3></div>
+    <div class="panel-b">
+      <div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">
+        Premissa específica para o <b>CPK</b>, baseada na memória de cálculo da folha com AE diluído. O DRE continua usando o card anterior de <b>Custo de Pessoal — Realizado</b>. No CPK, o campo <b>Custo Frota 35%</b> substitui o custo de pessoal anterior.
+      </div>
+      <div class="frm" style="margin-top:10px">
+        <label class="fld">Unidade<input type="text" id="prCPKUnidade" disabled></label>
+        <label class="fld">Base direta sem AE<input type="number" id="prCPKBaseDiretaSemAE" step="0.01"></label>
+        <label class="fld">% participação no direto<input type="number" id="prCPKPartDiretoPct" step="0.01"></label>
+        <label class="fld">AE alocado<input type="number" id="prCPKAEAlocado" step="0.01"></label>
+        <label class="fld">Base final após AE<input type="number" id="prCPKBaseFinalAposAE" step="0.01"></label>
+        <label class="fld">Custo Frota 35%<input type="number" id="prCPKCustoFrota35" step="0.01"></label>
+        <label class="fld">Custo Agregado 65%<input type="number" id="prCPKCustoAgregado65" step="0.01"></label>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
     <div class="panel-h"><h3>Frota (C.E) — por equipamento</h3>
       <button class="btn sm" onclick="addFrotaRow()">+ equipamento</button></div>
     <div class="panel-b" style="overflow:auto">
@@ -765,7 +783,8 @@ function isConsolidado(){ return ST.filial==='all'; }
 const MONEY_IDS = ['recFat','impICMS','impPIS','impIR','impISS','lcValor',
   'mtFat','mtDiesel','mtAgreg','mtCO','mtCP','mtCE','mtRF',
   'prFolhaAdic','prCPEpi','prCPLegal','prCPOutrosTotal',
-  'prCPFolhaReal','prCPEpiReal','prCPLegalReal','prCPOutrosReal','edValor'];
+  'prCPFolhaReal','prCPEpiReal','prCPLegalReal','prCPOutrosReal',
+  'prCPKBaseDiretaSemAE','prCPKAEAlocado','prCPKBaseFinalAposAE','prCPKCustoFrota35','prCPKCustoAgregado65','edValor'];
 function _moneyFmt(cents){ const v=Math.abs(cents)/100; const s=v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); return cents<0?('-'+s):s; }
 function bindMoneyInputs(){
   const desc=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value');
@@ -1743,6 +1762,25 @@ function calcCPDetalhado(){
   return { folhaReal, epiReal, legalReal, outrosReal, realTotal,
            folhaMeta, epiMeta, legalMeta, outrosMeta, metaTotal, folhaRealPct };
 }
+function cpkPremissaObj(p){ return (p&&p.custoPessoalCpk&&typeof p.custoPessoalCpk==='object') ? p.custoPessoalCpk : ((p&&p.cpPremissaCpk&&typeof p.cpPremissaCpk==='object') ? p.cpPremissaCpk : {}); }
+function valPremissaCpk(p, flatKeys, objKeys, def=0){
+  const o=cpkPremissaObj(p);
+  for(const k of (flatKeys||[])){ if(p && p[k]!==undefined && p[k]!==null && p[k]!=='') return +p[k]||0; }
+  for(const k of (objKeys||flatKeys||[])){ if(o && o[k]!==undefined && o[k]!==null && o[k]!=='') return +o[k]||0; }
+  return def;
+}
+function calcCPKPremissaDetalhada(pArg){
+  const p=pArg||ST.premissa||{};
+  return {
+    unidade: p.filial||ST.filial||'',
+    baseDiretaSemAE: valPremissaCpk(p,['cpkBaseDiretaSemAE'],['baseDiretaSemAE'],0),
+    participacaoDiretoPct: valPremissaCpk(p,['cpkParticipacaoDiretoPct','cpkPartDiretoPct'],['participacaoDiretoPct','partDiretoPct'],0),
+    aeAlocado: valPremissaCpk(p,['cpkAEAlocado'],['aeAlocado'],0),
+    baseFinalAposAE: valPremissaCpk(p,['cpkBaseFinalAposAE'],['baseFinalAposAE'],0),
+    custoFrota35: valPremissaCpk(p,['cpkCustoFrota35'],['custoFrota35'],0),
+    custoAgregado65: valPremissaCpk(p,['cpkCustoAgregado65'],['custoAgregado65'],0)
+  };
+}
 function grupoCE(f){
   const g=upper(f.grupoCE||f.grupo||'');
   if(g) return g;
@@ -1818,13 +1856,15 @@ function calcBreakdownConsolidado(){
   const DD={internoFrota:0,internoAgreg:0,externoFrota:0,externoAgreg:0,arlaFrota:0,arlaAgreg:0,reembolso:0,total:0};
   const AG={comissao:0,szcDiesel:0,szcArla:0,abastSZC:0,debSZI:0,credSZI:0,total:0,falta:[]};
   const M ={fatBruto:0,producaoT:0,diesel:0,agreg:0,co:0,cp:0,ce:0,resultadoFinanceiro:0};
+  const CPKP={baseDiretaSemAE:0,participacaoDiretoPct:0,aeAlocado:0,baseFinalAposAE:0,custoFrota35:0,custoAgregado65:0};
   // snapshot do ST para restaurar depois
   const save={filial:ST.filial,cabecalho:ST.cabecalho,lancManuais:ST.lancManuais,lancOS:ST.lancOS,premissa:ST.premissa};
   (ST._byFilial?fils:[]).forEach(fil=>{
     const b=ST._byFilial[fil]; if(!b) return;
     ST.filial=fil; ST.cabecalho=b.cabecalho; ST.lancManuais=b.lancManuais; ST.lancOS=b.lancOS; ST.premissa=b.premissa;
     const d=calcDRE(); const cp=ST._cpInfo||{}, ce=ST._ceInfo||{}, ag=ST._agregInfo||{}; const co=calcCOSubs();
-    const m=(ST.premissa&&ST.premissa.metas)||{};
+    const m=(ST.premissa&&ST.premissa.metas)||{}; const cpkp=calcCPKPremissaDetalhada(ST.premissa);
+    for(const k in CPKP) CPKP[k]+=+cpkp[k]||0;
     for(const k in D) D[k]+=+d[k]||0;
     for(const k in CP) CP[k]+=+cp[k]||0;
     for(const k in CE) CE[k]+=+ce[k]||0;
@@ -1842,8 +1882,8 @@ function calcBreakdownConsolidado(){
   CP.metaTotal=CP.folhaMeta+CP.epiMeta+CP.legalMeta+CP.outrosMeta;
   CP.folhaRealPct=D.fat?(CP.folhaReal/D.fat*100):0;
   CE.realTotal=CE.cavalos+CE.carretas+CE.va+CE.outros; CE.metaTotal=CE.realTotal;
-  ST._agregInfo=AG; ST._cpInfo=CP; ST._ceInfo=CE;
-  return { d:D, cp:CP, ce:CE, co:CO, agreg:AG, metas:M, consolidado:true };
+  ST._agregInfo=AG; ST._cpInfo=CP; ST._ceInfo=CE; ST._cpkPremissaInfo=CPKP;
+  return { d:D, cp:CP, ce:CE, co:CO, agreg:AG, metas:M, cpkPremissa:CPKP, consolidado:true };
 }
 function renderDre(){
   const cons = isConsolidado();
@@ -1983,6 +2023,15 @@ function fillPremissaForm(){
   document.getElementById('prCPEpiReal').value=(p.cpEpiReal!==undefined&&p.cpEpiReal!==null)?p.cpEpiReal:'';
   document.getElementById('prCPLegalReal').value=(p.cpLegalReal!==undefined&&p.cpLegalReal!==null)?p.cpLegalReal:'';
   document.getElementById('prCPOutrosReal').value=(p.cpOutrosReal!==undefined&&p.cpOutrosReal!==null)?p.cpOutrosReal:'';
+  const cpkp=calcCPKPremissaDetalhada(p);
+  const setCpk=(id,val)=>{ const el=document.getElementById(id); if(el) el.value=(val!==undefined&&val!==null&&val!=='')?val:''; };
+  setCpk('prCPKUnidade', isConsolidado()?'Todas':ST.filial);
+  setCpk('prCPKBaseDiretaSemAE', cpkp.baseDiretaSemAE||'');
+  setCpk('prCPKPartDiretoPct', cpkp.participacaoDiretoPct||'');
+  setCpk('prCPKAEAlocado', cpkp.aeAlocado||'');
+  setCpk('prCPKBaseFinalAposAE', cpkp.baseFinalAposAE||'');
+  setCpk('prCPKCustoFrota35', cpkp.custoFrota35||'');
+  setCpk('prCPKCustoAgregado65', cpkp.custoAgregado65||'');
   renderFolha(); renderFrota(); renderPremReadback();
 }
 /* Conferência (read-back): lista cada premissa imputada individualmente, a partir da
@@ -1991,14 +2040,14 @@ function fillPremissaForm(){
 function renderPremReadback(){
   const box=document.getElementById('premReadback'); if(!box) return;
   const cons=isConsolidado();
-  let cp, ce, m;
+  let cp, ce, m, cpkp;
   if(cons){
     // Reaproveita o que o renderDre acabou de calcular; recomputa só se ausente.
-    if(ST._cpInfo && ST._ceInfo){ cp=ST._cpInfo; ce=ST._ceInfo; }
-    else { const V=dreView(); cp=V.cp||{}; ce=V.ce||{}; }
+    if(ST._cpInfo && ST._ceInfo){ cp=ST._cpInfo; ce=ST._ceInfo; cpkp=ST._cpkPremissaInfo||{}; }
+    else { const V=dreView(); cp=V.cp||{}; ce=V.ce||{}; cpkp=V.cpkPremissa||{}; }
     m=(ST.premissa&&ST.premissa.metas)||{};
   } else {
-    cp=calcCPDetalhado(); ce=calcCEDetalhado(); m=(ST.premissa&&ST.premissa.metas)||{};
+    cp=calcCPDetalhado(); ce=calcCEDetalhado(); cpkp=calcCPKPremissaDetalhada(ST.premissa); m=(ST.premissa&&ST.premissa.metas)||{};
   }
   const p=ST.premissa||{};
 
@@ -2023,6 +2072,17 @@ function renderPremReadback(){
     + row('Legal', money(cp.legalReal))
     + row('Outros — Alim./VT', money(cp.outrosReal))
     + row('= Total realizado', money(cp.realTotal), {strong:true})
+    + `</div>`;
+
+  const grpCpkPessoal =
+    `<div class="pr-grp"><div class="pr-h">Custo de Pessoal — Premissa (CPK)</div>`
+    + row('Unidade', cons?'TOTAL':(cpkp.unidade||ST.filial||'—'))
+    + row('Base direta sem AE', money(cpkp.baseDiretaSemAE))
+    + row('% participação no direto', cpkp.participacaoDiretoPct?num(cpkp.participacaoDiretoPct)+'%':'—')
+    + row('AE alocado', money(cpkp.aeAlocado))
+    + row('Base final após AE', money(cpkp.baseFinalAposAE))
+    + row('= Custo Frota 35% (usado no CPK)', money(cpkp.custoFrota35), {strong:true})
+    + row('Custo Agregado 65%', money(cpkp.custoAgregado65))
     + `</div>`;
 
   const grpMeta =
@@ -2058,7 +2118,7 @@ function renderPremReadback(){
   const grpMetas = metaRows ? `<div class="pr-grp"><div class="pr-h">Metas do mês</div>${metaRows}</div>` : '';
 
   box.innerHTML = `<div class="pr-src">${origem}</div>`
-    + `<div class="pr-cols">${grpRealizado}${grpMeta}${grpParam}${grpCE}${grpMetas}</div>`;
+    + `<div class="pr-cols">${grpRealizado}${grpCpkPessoal}${grpMeta}${grpParam}${grpCE}${grpMetas}</div>`;
 }
 function renderFolha(){
   const tb=document.getElementById('folhaTbody'); const arr=ST.premissa.folha||[];
@@ -2121,6 +2181,21 @@ async function savePremissa(){
     cpEpiReal:+document.getElementById('prCPEpiReal').value||0,
     cpLegalReal:+document.getElementById('prCPLegalReal').value||0,
     cpOutrosReal:+document.getElementById('prCPOutrosReal').value||0,
+    custoPessoalCpk:{
+      unidade:ST.filial,
+      baseDiretaSemAE:+document.getElementById('prCPKBaseDiretaSemAE').value||0,
+      participacaoDiretoPct:+document.getElementById('prCPKPartDiretoPct').value||0,
+      aeAlocado:+document.getElementById('prCPKAEAlocado').value||0,
+      baseFinalAposAE:+document.getElementById('prCPKBaseFinalAposAE').value||0,
+      custoFrota35:+document.getElementById('prCPKCustoFrota35').value||0,
+      custoAgregado65:+document.getElementById('prCPKCustoAgregado65').value||0
+    },
+    cpkBaseDiretaSemAE:+document.getElementById('prCPKBaseDiretaSemAE').value||0,
+    cpkParticipacaoDiretoPct:+document.getElementById('prCPKPartDiretoPct').value||0,
+    cpkAEAlocado:+document.getElementById('prCPKAEAlocado').value||0,
+    cpkBaseFinalAposAE:+document.getElementById('prCPKBaseFinalAposAE').value||0,
+    cpkCustoFrota35:+document.getElementById('prCPKCustoFrota35').value||0,
+    cpkCustoAgregado65:+document.getElementById('prCPKCustoAgregado65').value||0,
     folha:(ST.premissa.folha||[]).filter(f=>f.funcao), frota:(ST.premissa.frota||[]).filter(f=>f.tipo),
     atualizadoPor:userMin(), atualizadoEm:new Date().toISOString() };
   await fsSetDoc('mapinha_premissas', 'PREM_'+ST.filial+'_'+ST.mesRef, payload);
