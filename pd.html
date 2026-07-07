@@ -2687,10 +2687,13 @@ function buildVG(uid, mes){
   datasFech.forEach(d=>{if(!(new Date(d+'T12:00:00').getDay()===0||isFeriado(d,uid)))diasUteisFech++;});
   // [DIA PERDIDO] Dias úteis restantes = calendário a partir de hoje (inclusive).
   const diasRestCal=diasUteisRestantes(ano,mesN,uid);
-  // Projeção = realizado dos dias fechados (mantém bônus de domingo/feriado)
-  //          + média por DIA ÚTIL (sem contaminação de domingo) × dias úteis restantes.
-  // Nunca abaixo do já realizado (que inclui hoje).
-  const proj=mesFechado?fat:Math.max(fatFech+(diasUteisFech>0?fatFechUteis/diasUteisFech:0)*diasRestCal, fat);
+  // Ritmo projetado = média por DIA ÚTIL FECHADO (exclui hoje e domingo/feriado).
+  const rateFatUtil  = diasUteisFech>0 ? fatFechUteis /diasUteisFech : 0;
+  const rateProdUtil = diasUteisFech>0 ? prodFechUteis/diasUteisFech : 0;
+  // [REGRA] O realizado do DIA ATUAL (parcial) NÃO entra na projeção — nem na base, nem na
+  // média, nem como piso. Hoje é um dia por vir, projetado pelo ritmo dos dias fechados.
+  // Piso = realizado FECHADO (sem hoje); a projeção nunca fica abaixo do já consolidado.
+  const proj=mesFechado?fat:Math.max(fatFech + rateFatUtil*diasRestCal, fatFech);
   const pf    =paFat ?fat/paFat*100 :0;
   const pp    =paProd?prod/paProd*100:0;
   const ppj   =paFat ?proj/paFat*100:0;
@@ -2706,15 +2709,15 @@ function buildVG(uid, mes){
   const tmCls =uid!=='all'?'pa-filled':'';
   const fduCls=uid!=='all'?'pa-filled':'';
 
-  // Projetado = prod fechado + média/dia útil (sem domingo) × dias úteis restantes (mês fechado: = realizado)
-  const prodProj = mesFechado?prod:Math.max(prodFech+(diasUteisFech>0?prodFechUteis/diasUteisFech:0)*diasRestCal, prod);
+  // Projetado = prod fechado + ritmo/dia útil × dias úteis restantes; piso = prod FECHADO (sem hoje).
+  const prodProj = mesFechado?prod:Math.max(prodFech + rateProdUtil*diasRestCal, prodFech);
   const ppProdProj = paProd ? prodProj/paProd*100 : 0;
 
   document.getElementById('itb').innerHTML=[
     ['Produção (t)', N(paProd),  N(prod),  pp,   N(prodProj),  ppProdProj, '',''],
     ['Faturamento',  R(paFat),   R(fat),   pf,   R(proj),      ppj,        '',''],
-    ['Tarifa Média', tmPA,       D2(tm),   null, D2(tm),       null,       tmCls,tmCls],
-    ['Fat/Dia Útil', fduPA,      R(medD),  null, R(medD),      null,       fduCls,fduCls],
+    ['Tarifa Média', tmPA,       D2(tm),   null, D2(prodProj>0?proj/prodProj:tm), null, tmCls,tmCls],
+    ['Fat/Dia Útil', fduPA,      R(medD),  null, R(diasOp>0?proj/diasOp:0),        null, fduCls,fduCls],
     ['Viagens',      '—',        N(viag),  null, '—',          null,       '',''],
   ].map(([l,p,re,pt,pr,pj,cpa,cre])=>`<tr>
     <td>${l}</td>
@@ -3102,7 +3105,8 @@ function calcProj(mes, fatReal, prodReal, fatFech, prodFech, uid){
   // de domingo e sem tratar dia útil não trabalhado como recuperável.
   if(window._PROJ_MES===mes && window._PROJ_UID===uid){
     const fF=window._PROJ_FAT_FACTOR||1, fP=window._PROJ_PROD_FACTOR||1;
-    return { fatProj:Math.max(baseFat*fF, fatReal), prodProj:Math.max(baseProd*fP, prodReal) };
+    // Piso = base FECHADA (sem hoje). O realizado do dia atual não infla a projeção da linha.
+    return { fatProj:Math.max(baseFat*fF, baseFat), prodProj:Math.max(baseProd*fP, baseProd) };
   }
   // Fallback (não ocorre no mês atual, pois recalc sempre seta o fator antes das abas):
   // sem projeção extra — nunca infla.
@@ -4404,7 +4408,7 @@ function buildDataSummary(uid, mes) {
     if(new Date(d+'T12:00:00').getDay()!==0 && !isFeriado(d,uid)){ aiFatFechU+=fds[i]; aiDiasU++; }
   });
   const diasRestCalAI=diasUteisRestantes(ano,mesN,uid);
-  const proj=Math.max(aiFatFech+(aiDiasU>0?aiFatFechU/aiDiasU:0)*diasRestCalAI, fatTotal);
+  const proj=Math.max(aiFatFech+(aiDiasU>0?aiFatFechU/aiDiasU:0)*diasRestCalAI, aiFatFech);
   const fatConc=clientes.length>0?clientes.slice(0,2).reduce((a,c)=>a+c.f,0)/fatTotal*100:0;
 
   return {
