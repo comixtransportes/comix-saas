@@ -1860,6 +1860,24 @@ function diasOpMes(ano, mes, uid) {
   return count;
 }
 
+// [DIA PERDIDO] Dias úteis RESTANTES no mês, a partir de HOJE (inclusive).
+// Conta apenas os dias úteis do calendário que ainda estão por vir; um dia útil
+// já passado e não trabalhado é PERDIDO (não volta como "recuperável" na projeção).
+// Fonte única usada pela projeção da Visão Geral, por calcProj e pelos insights.
+function diasUteisRestantes(ano, mes, uid){
+  const hoje=new Date();
+  const isCur=(ano===hoje.getFullYear() && mes===hoje.getMonth()+1);
+  const start=isCur?hoje.getDate():1;                 // mês atual: de hoje em diante; futuro: mês inteiro
+  const last=new Date(ano, mes, 0).getDate();
+  let n=0;
+  for(let d=start; d<=last; d++){
+    const dow=new Date(ano, mes-1, d).getDay();
+    const iso=`${ano}-${String(mes).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    if(dow!==0 && !isFeriado(iso, uid)) n++;
+  }
+  return n;
+}
+
 function mesLabel(mesStr) {
   const [a, m] = mesStr.split('-').map(Number);
   const dt = new Date(a, m-1, 1);
@@ -2552,6 +2570,29 @@ function recalc(){
     return true;
   }).length;
   window._MES_ATUAL_GLOBAL = mes;
+  // [DIA PERDIDO] Fator global de projeção (fat/prod) — mantém Clientes/Rotas/Frota e o Top 10
+  // consistentes com a "Projeção de Fechamento" da Visão Geral. Mesma lógica do buildVG:
+  //   base = realizado fechado (com bônus de domingo/feriado)
+  //   + média por DIA ÚTIL (sem domingo) × dias úteis restantes (dia perdido).
+  // Fator = projeção_global / base_global; cada linha projeta = base_linha × fator (soma = header).
+  (function(){
+    const [gA,gM]=mes.split('-').map(Number);
+    const gFech=dmGlobal.filter(r=>r.data && r.data<hojeISO);
+    let gFatFech=0,gProdFech=0,gFatU=0,gProdU=0;const gDatasU=new Set();
+    gFech.forEach(r=>{
+      gFatFech+=r.fat; gProdFech+=r.peso_t;
+      if(!(new Date(r.data+'T12:00:00').getDay()===0||isFeriado(r.data,uid))){
+        gFatU+=r.fat; gProdU+=r.peso_t; gDatasU.add(r.data);
+      }
+    });
+    const gDiasU=gDatasU.size;
+    const gRest=diasUteisRestantes(gA,gM,uid);
+    const gProjFat =gFatFech +(gDiasU>0?gFatU /gDiasU:0)*gRest;
+    const gProjProd=gProdFech+(gDiasU>0?gProdU/gDiasU:0)*gRest;
+    window._PROJ_FAT_FACTOR  = gFatFech >0 ? gProjFat /gFatFech  : 1;
+    window._PROJ_PROD_FACTOR = gProdFech>0 ? gProjProd/gProdFech : 1;
+    window._PROJ_UID=uid; window._PROJ_MES=mes;
+  })();
   const ulbl=uid==='all'?'Todas':(getPAByMes(mes)[uid]||{}).label||uid;
   const meses=[...new Set(DATA.map(r=>r.mes))].filter(Boolean).sort();
   document.getElementById('h-uni').textContent='Unidade: '+ulbl;
@@ -2634,12 +2675,21 @@ function buildVG(uid, mes){
   const fatFech=dmFech.reduce((a,r)=>a+r.fat,0);
   const prodFech=dmFech.reduce((a,r)=>a+r.peso_t,0);
   const datasFech=[...new Set(dmFech.map(r=>r.data))];
-  let diasUteisFech=0;
-  datasFech.forEach(d=>{const dt=new Date(d+'T12:00:00');const dow=dt.getDay();if(!(dow===0||isFeriado(d,uid)))diasUteisFech++;});
-  const diasRestFech=Math.max(diasOp-diasUteisFech,0);
-  // Projeção = realizado dos dias fechados + média/dia útil fechado × dias úteis restantes.
+  // Receita e contagem SÓ dos dias ÚTEIS fechados (exclui domingo/feriado do denominador
+  // E do numerador da média — a receita de domingo/feriado entra apenas como bônus no base).
+  let diasUteisFech=0, fatFechUteis=0, prodFechUteis=0;
+  dmFech.forEach(r=>{
+    if(!(new Date(r.data+'T12:00:00').getDay()===0 || isFeriado(r.data,uid))){
+      fatFechUteis+=r.fat; prodFechUteis+=r.peso_t;
+    }
+  });
+  datasFech.forEach(d=>{if(!(new Date(d+'T12:00:00').getDay()===0||isFeriado(d,uid)))diasUteisFech++;});
+  // [DIA PERDIDO] Dias úteis restantes = calendário a partir de hoje (inclusive).
+  const diasRestCal=diasUteisRestantes(ano,mesN,uid);
+  // Projeção = realizado dos dias fechados (mantém bônus de domingo/feriado)
+  //          + média por DIA ÚTIL (sem contaminação de domingo) × dias úteis restantes.
   // Nunca abaixo do já realizado (que inclui hoje).
-  const proj=mesFechado?fat:Math.max(fatFech+(diasUteisFech>0?fatFech/diasUteisFech:0)*diasRestFech, fat);
+  const proj=mesFechado?fat:Math.max(fatFech+(diasUteisFech>0?fatFechUteis/diasUteisFech:0)*diasRestCal, fat);
   const pf    =paFat ?fat/paFat*100 :0;
   const pp    =paProd?prod/paProd*100:0;
   const ppj   =paFat ?proj/paFat*100:0;
@@ -2655,8 +2705,8 @@ function buildVG(uid, mes){
   const tmCls =uid!=='all'?'pa-filled':'';
   const fduCls=uid!=='all'?'pa-filled':'';
 
-  // Projetado = fat + media * dias úteis restantes (mês fechado: igual ao realizado)
-  const prodProj = mesFechado?prod:Math.max(prodFech+(diasUteisFech>0?prodFech/diasUteisFech:0)*diasRestFech, prod);
+  // Projetado = prod fechado + média/dia útil (sem domingo) × dias úteis restantes (mês fechado: = realizado)
+  const prodProj = mesFechado?prod:Math.max(prodFech+(diasUteisFech>0?prodFechUteis/diasUteisFech:0)*diasRestCal, prod);
   const ppProdProj = paProd ? prodProj/paProd*100 : 0;
 
   document.getElementById('itb').innerHTML=[
@@ -3042,18 +3092,20 @@ function calcProj(mes, fatReal, prodReal, fatFech, prodFech, uid){
   if(_ano<_hoje.getFullYear()||(_ano===_hoje.getFullYear()&&_mesN<_hoje.getMonth()+1)){
     return {fatProj:fatReal, prodProj:prodReal};
   }
-  const diasOp=diasOpMes(_ano,_mesN,uid);
-  // _DIAS_TRAB_GLOBAL já exclui o dia de hoje → conta SÓ dias fechados (planilha "Dias trabalhados")
-  const diasTrab=(window._MES_ATUAL_GLOBAL===mes ? window._DIAS_TRAB_GLOBAL : 0) || 0;
-  if(diasTrab===0||diasOp===0) return {fatProj:fatReal, prodProj:prodReal};
-  // Projeção contempla SOMENTE dias fechados: usa o realizado dos dias fechados
-  // (sem hoje) quando o chamador informa; senão cai no realizado cheio (retrocompat.).
+  // Base = realizado dos dias fechados (sem hoje; mantém bônus de domingo/feriado) quando
+  // o chamador informa; senão cai no realizado cheio (retrocompat.).
   const baseFat  = (fatFech  !== undefined && fatFech  !== null) ? fatFech  : fatReal;
   const baseProd = (prodFech !== undefined && prodFech !== null) ? prodFech : prodReal;
-  // A projeção nunca pode ficar abaixo do que já foi efetivamente realizado (inclui hoje).
-  const fatProj  = Math.max(baseFat  / diasTrab * diasOp, fatReal);
-  const prodProj = Math.max(baseProd / diasTrab * diasOp, prodReal);
-  return {fatProj, prodProj};
+  // [DIA PERDIDO] Aplica o fator global calculado no recalc (mesma projeção da Visão Geral).
+  // Garante que a soma das linhas = "Projeção de Fechamento" do header, sem dupla contagem
+  // de domingo e sem tratar dia útil não trabalhado como recuperável.
+  if(window._PROJ_MES===mes && window._PROJ_UID===uid){
+    const fF=window._PROJ_FAT_FACTOR||1, fP=window._PROJ_PROD_FACTOR||1;
+    return { fatProj:Math.max(baseFat*fF, fatReal), prodProj:Math.max(baseProd*fP, prodReal) };
+  }
+  // Fallback (não ocorre no mês atual, pois recalc sempre seta o fator antes das abas):
+  // sem projeção extra — nunca infla.
+  return {fatProj:fatReal, prodProj:prodReal};
 }
 
 // ═══════════════════════════════════════════════════════
@@ -4340,7 +4392,18 @@ function buildDataSummary(uid, mes) {
     if(dtAI.getDay()!==0&&!isFeriado(d,uid)) diasAp_uteis_AI++;
   });
   const diasRest=Math.max(diasOp-diasAp_uteis_AI,0);
-  const proj=fatTotal+(diasAp_uteis_AI>0?fatTotal/diasAp_uteis_AI:0)*diasRest;
+  // [DIA PERDIDO] Projeção do alerta alinhada à Visão Geral: base = fechado (sem hoje, mantém
+  // bônus de domingo/feriado) + média por DIA ÚTIL (sem domingo) × dias úteis restantes do
+  // calendário (hoje incluído). Dia útil não trabalhado é perdido.
+  const _hjAI=pdHojeISO();
+  let aiFatFech=0, aiFatFechU=0, aiDiasU=0;
+  dias.forEach((d,i)=>{
+    if(d>=_hjAI) return;                    // ignora hoje e futuro no base
+    aiFatFech+=fds[i];
+    if(new Date(d+'T12:00:00').getDay()!==0 && !isFeriado(d,uid)){ aiFatFechU+=fds[i]; aiDiasU++; }
+  });
+  const diasRestCalAI=diasUteisRestantes(ano,mesN,uid);
+  const proj=Math.max(aiFatFech+(aiDiasU>0?aiFatFechU/aiDiasU:0)*diasRestCalAI, fatTotal);
   const fatConc=clientes.length>0?clientes.slice(0,2).reduce((a,c)=>a+c.f,0)/fatTotal*100:0;
 
   return {
