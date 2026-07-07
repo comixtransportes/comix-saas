@@ -1342,22 +1342,20 @@ function cpkPlacaLancamento(reg){
   if(cand && typeof cand==='object') return cpkNormPlaca(cand.placa||cand.codigo||cand.valor||'');
   return cpkNormPlaca(cand);
 }
-// Pessoal (CP) da premissa do fechamento (idêntico ao DRE).
+// Pessoal (CP) exclusivo do CPK.
+// Fonte única: Mapinha / Premissa (CPK) — campo Custo Frota 35%.
+// Não usa mais cpFolhaReal/cpEpiReal/cpLegalReal/cpOutrosReal, pois esses campos
+// pertencem ao card "Custo de Pessoal — Realizado" e continuam exclusivos do DRE.
 function cpkCampoTemValor(obj,k){ return obj && obj[k]!==undefined && obj[k]!==null && obj[k]!==''; }
 function cpkPremissaCustoFrota35(p){
-  p=p||{}; const o=(p.custoPessoalCpk&&typeof p.custoPessoalCpk==='object')?p.custoPessoalCpk:((p.cpPremissaCpk&&typeof p.cpPremissaCpk==='object')?p.cpPremissaCpk:{});
-  if(cpkCampoTemValor(p,'cpkCustoFrota35')) return +p.cpkCustoFrota35||0;
+  p=p||{};
+  const o=(p.custoPessoalCpk&&typeof p.custoPessoalCpk==='object')?p.custoPessoalCpk:((p.cpPremissaCpk&&typeof p.cpPremissaCpk==='object')?p.cpPremissaCpk:{});
   if(cpkCampoTemValor(o,'custoFrota35')) return +o.custoFrota35||0;
-  return null;
+  if(cpkCampoTemValor(p,'cpkCustoFrota35')) return +p.cpkCustoFrota35||0;
+  return 0;
 }
 function cpkCPdePremissa(p){
-  p=p||{};
-  const legado=(+p.cpFolhaReal||0)+(+p.cpEpiReal||0)+(+p.cpLegalReal||0)+(+p.cpOutrosReal||0);
-  const cpk35=cpkPremissaCustoFrota35(p);
-  // Usa o novo card somente quando houver valor preenchido; se o campo existir zerado
-  // por um salvamento sem preenchimento, preserva o legado para não zerar meses antigos.
-  if(cpk35!==null && (cpk35>0 || legado===0)) return cpk35;
-  return legado;
+  return cpkPremissaCustoFrota35(p);
 }
 // ── CUSTO DE EQUIPAMENTOS (CE) — espelho do DRE (calcCEDetalhado do Mapinha) ──
 // CE = Σ (qtd × valorCE) das linhas de frota da premissa vigente. REGRA 07/2026:
@@ -1391,12 +1389,14 @@ function cpkModoCapital(mes){
   const st=cpkDepCompletude(mes||CPK.filtros.mes);
   return { modo:'dep', stat:st };
 }
-// Premissa vigente para a filial/mês (carry-forward: última vigência ≤ mês).
+// Premissa usada pelo CPK para a filial/mês.
+// Regra: Custo de Pessoal do CPK NÃO herda vigências anteriores e NÃO usa o
+// card antigo "Custo de Pessoal — Realizado". Ele deve existir no documento
+// exato PREM_<filial>_<mês> salvo pelo Mapinha no card "Premissa (CPK)".
 function cpkPremissaVigente(premissas, fil, mes){
-  const cands=(premissas||[]).map(d=>({id:d.id,...(d.data||d)}))
-    .filter(p=>p.filial===fil && p.vigencia && p.vigencia<=mes)
-    .sort((a,b)=> String(b.vigencia).localeCompare(String(a.vigencia)));
-  return cands[0]||null;
+  const docs=(premissas||[]).map(d=>({id:d.id,...(d.data||d)}));
+  const exact=docs.find(p=>p.filial===fil && p.vigencia===mes);
+  return exact||null;
 }
 // Pedágio da FROTA PRÓPRIA, derivado da aba Pedágios do Mapinha (doc PED_<mes>).
 // O doc traz, por placa: comix = Valor Cobrado + Vale Comix (= custo do DRE) e a
