@@ -250,8 +250,14 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
 .xm-radio{display:flex;align-items:flex-start;gap:6px}
 .xm-radio input{margin-top:2px}
 .xm-dos-tools{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 10px;background:#FAFBFD;border-bottom:1px solid var(--bd2);font-size:11px;color:var(--mu)}
-.xm-dos-check{display:flex;align-items:flex-start;gap:6px;cursor:pointer}
-.xm-dos-check input{margin-top:2px;flex-shrink:0}
+.xm-dos-check{display:flex;align-items:flex-start;gap:7px;cursor:pointer;width:100%;text-align:left;border:none;background:transparent;font-family:var(--f);font-size:10.8px;color:var(--tx);padding:0}
+.xm-dos-check:hover .xm-dos-numbox{border-color:var(--ac);background:var(--ac-bg)}
+.xm-dos-numbox{width:18px;height:18px;border:1px solid var(--bd);border-radius:4px;background:#fff;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;font-family:var(--m);font-size:10px;font-weight:800;color:var(--mu)}
+.xm-dos-check.is-paired .xm-dos-numbox{background:var(--ac);border-color:var(--ac);color:#fff}
+.xm-dos-check.is-complete .xm-dos-numbox{background:var(--gn);border-color:var(--gn);color:#fff}
+.xm-dos-check.is-waiting .xm-dos-numbox{background:var(--am-bg);border-color:var(--am-bd);color:var(--am)}
+.xm-dos-pair-tip{margin-top:8px;border:1px solid var(--am-bd);background:var(--am-bg);border-radius:var(--r);padding:7px 10px;font-size:11px;color:var(--tx)}
+.xm-dos-pair-status{font-size:10.5px;color:var(--mu);margin-left:8px}
 .xm-dos-used{opacity:.55;background:#F7F8FA}
 .xm-dos-used .muted{color:#8a97a8}
 .xm-dos-note{font-size:10.5px;color:var(--mu);margin-top:3px}
@@ -433,6 +439,7 @@ function num0(v){ return Number(v||0).toLocaleString('pt-BR',{maximumFractionDig
 function upper(v){ return String(v||'').trim().toLocaleUpperCase('pt-BR'); }
 function toast(msg,type){ const t=document.getElementById('toast-el'); t.textContent=msg; t.className='toast '+(type||'')+' on'; setTimeout(()=>t.classList.remove('on'),3200); }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escAttr(s){ return esc(s).replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function mesLabel(mesStr){ if(!mesStr) return '—'; const [a,m]=mesStr.split('-').map(Number);
   const lbl=new Date(a,m-1,1).toLocaleDateString('pt-BR',{month:'long',year:'numeric'});
   return lbl.charAt(0).toUpperCase()+lbl.slice(1); }
@@ -1945,11 +1952,22 @@ function xmCompatResumo(f,m){
   conf=Math.max(0,Math.min(100,conf));
   return conf+'% · '+(hits.length?hits.join(', '):'sem coincidência forte')+' · Δ '+moeda(delta);
 }
+function xmDossieStatusAberto(r){
+  const st=String(r&&r.status||'');
+  return !/^(OK|OK manual|Associado manualmente|Fora do escopo|Interno)$/.test(st);
+}
 function xmDossieData(row){
-  const keepFech=row&&row.f&&row.f._xmKey||'', keepMap=row&&row.m&&row.m._xmKey||'';
-  const rel=(_xmResult||[]).filter(function(r){ return xmAgregadoKey(r)===xmAgregadoKey(row) && r.placaKey===row.placaKey; });
-  const fMap={}, mMap={}, fech=[], map=[];
-  rel.forEach(function(r){
+  /* O dossiê deve mostrar somente pendências abertas.
+     Linhas já OK, OK manual, associadas manualmente, fora do escopo ou internas
+     ficam fora das listas para não serem validadas/associadas de novo. */
+  const rowAberta=xmDossieStatusAberto(row);
+  const keepFech=rowAberta && row&&row.f&&row.f._xmKey || '', keepMap=rowAberta && row&&row.m&&row.m._xmKey || '';
+  const relAll=(_xmResult||[]).filter(function(r){ return xmAgregadoKey(r)===xmAgregadoKey(row) && r.placaKey===row.placaKey; });
+  const fMap={}, mMap={}, fech=[], map=[], fAll={}, mAll={};
+  relAll.forEach(function(r){
+    if(r.f&&r.f._xmKey&&!fAll[r.f._xmKey]) fAll[r.f._xmKey]=r.f;
+    if(r.m&&r.m._xmKey&&!mAll[r.m._xmKey]) mAll[r.m._xmKey]=r.m;
+    if(!xmDossieStatusAberto(r)) return;
     if(r.f&&r.f._xmKey&&!fMap[r.f._xmKey]){ fMap[r.f._xmKey]=r.f; }
     if(r.m&&r.m._xmKey&&!mMap[r.m._xmKey]){ mMap[r.m._xmKey]=r.m; }
   });
@@ -1957,25 +1975,108 @@ function xmDossieData(row){
   Object.keys(mMap).forEach(function(k){ if(!xmItemJaTratadoPorChave('map',k,{keepFech:keepFech,keepMap:keepMap})) map.push(mMap[k]); });
   fech.sort(function(a,b){ return String(a.data).localeCompare(String(b.data)) || String(a.nf).localeCompare(String(b.nf)); });
   map.sort(function(a,b){ return String(a.data).localeCompare(String(b.data)) || String(a.nf).localeCompare(String(b.nf)); });
-  return {rel:rel,fech:fech,map:map,fMap:fMap,mMap:mMap,keepFech:keepFech,keepMap:keepMap};
+  const ocultos=Math.max(0, Object.keys(fAll).length+Object.keys(mAll).length - fech.length - map.length);
+  return {rel:relAll,fech:fech,map:map,fMap:fMap,mMap:mMap,keepFech:keepFech,keepMap:keepMap,ocultos:ocultos};
 }
 function xmSugestoesHTML(row,d){
   const sug=[];
+  if(!xmDossieStatusAberto(row)){
+    return '<div class="xm-dos-sug"><b>Possíveis correspondências:</b> esta linha já está OK/tratada; nenhum item será exibido para nova validação.</div>';
+  }
   if(row.f&&!row.m){ d.map.forEach(function(m){ sug.push({txt:xmItemMapResumo(m), score:xmCompatResumo(row.f,m), ord:Math.abs(xmValMap(row.f,m)-row.f.valor)}); }); }
   if(!row.f&&row.m){ d.fech.forEach(function(f){ sug.push({txt:xmItemFechResumo(f), score:xmCompatResumo(f,row.m), ord:Math.abs(xmValMap(f,row.m)-f.valor)}); }); }
-  if(row.f&&row.m) sug.push({txt:'Linha já possui os dois lados selecionados.', score:xmCompatResumo(row.f,row.m), ord:0});
+  if(row.f&&row.m) sug.push({txt:'Linha pendente com os dois lados selecionados.', score:xmCompatResumo(row.f,row.m), ord:0});
   sug.sort(function(a,b){ return a.ord-b.ord; });
-  if(!sug.length) return '<div class="xm-dos-sug"><b>Possíveis correspondências:</b> não há candidato do outro lado para esta placa/agregado no mês.</div>';
+  if(!sug.length) return '<div class="xm-dos-sug"><b>Possíveis correspondências:</b> não há candidato aberto do outro lado para esta placa/agregado no mês.</div>';
   return '<div class="xm-dos-sug"><b>Possíveis correspondências:</b><br>'+sug.slice(0,5).map(function(x){ return '• '+esc(x.score)+' — '+esc(x.txt); }).join('<br>')+'</div>';
 }
+function xmDosPairState(){
+  if(!XM_DOSSIE) return null;
+  if(!XM_DOSSIE.pairs) XM_DOSSIE.pairs={next:1,active:null,fech:{},map:{}};
+  return XM_DOSSIE.pairs;
+}
+function xmDosNumList(side){ const p=xmDosPairState(); return p?Object.values(p[side]||{}):[]; }
+function xmDosSideHasNum(side,num){ return xmDosNumList(side).some(function(n){ return +n===+num; }); }
+function xmDosPairComplete(num){ return xmDosSideHasNum('fech',num) && xmDosSideHasNum('map',num); }
+function xmDosKeyByNum(side,num){
+  const p=xmDosPairState(); if(!p) return '';
+  const obj=p[side]||{};
+  return Object.keys(obj).find(function(k){ return +obj[k]===+num; })||'';
+}
+function xmDosPairNums(){
+  const p=xmDosPairState(); if(!p) return [];
+  const nums=new Set();
+  Object.values(p.fech||{}).forEach(function(n){ nums.add(+n); });
+  Object.values(p.map||{}).forEach(function(n){ nums.add(+n); });
+  return Array.from(nums).filter(Boolean).sort(function(a,b){ return a-b; });
+}
+function xmDosParesCompletos(){
+  return xmDosPairNums().map(function(n){ return {num:n,fk:xmDosKeyByNum('fech',n),mk:xmDosKeyByNum('map',n)}; })
+    .filter(function(p){ return p.fk && p.mk; });
+}
+function xmDosParesIncompletos(){
+  return xmDosPairNums().map(function(n){ return {num:n,fk:xmDosKeyByNum('fech',n),mk:xmDosKeyByNum('map',n)}; })
+    .filter(function(p){ return !p.fk || !p.mk; });
+}
 function xmDossieSelecionados(){
-  const fks=[].slice.call(document.querySelectorAll('input[name="xmDosFech"]:checked')).map(function(el){ return el.value; });
-  const mks=[].slice.call(document.querySelectorAll('input[name="xmDosMap"]:checked')).map(function(el){ return el.value; });
-  return {fks:fks,mks:mks};
+  const p=xmDosPairState(); if(!p) return {fks:[],mks:[]};
+  return {fks:Object.keys(p.fech||{}),mks:Object.keys(p.map||{})};
+}
+function xmDosRefreshPairUI(){
+  const p=xmDosPairState(); if(!p) return;
+  const completeNums=new Set(xmDosParesCompletos().map(function(x){ return +x.num; }));
+  [].slice.call(document.querySelectorAll('.xm-dos-check[data-side]')).forEach(function(el){
+    const side=el.getAttribute('data-side'), key=el.getAttribute('data-key');
+    const num=(p[side]||{})[key]||'';
+    const box=el.querySelector('.xm-dos-numbox');
+    el.classList.remove('is-paired','is-complete','is-waiting');
+    if(box) box.textContent=num||'';
+    if(num){
+      el.classList.add('is-paired');
+      el.classList.add(completeNums.has(+num)?'is-complete':'is-waiting');
+    }
+  });
+  const st=document.getElementById('xmDosPairStatus');
+  if(st){
+    const comp=xmDosParesCompletos().length, inc=xmDosParesIncompletos().length;
+    st.textContent=comp+' par(es) completo(s)'+(inc?' · '+inc+' aguardando correspondente':'');
+  }
+}
+function xmDosTogglePairFromEl(el){
+  if(!el) return;
+  xmDosTogglePair(el.getAttribute('data-side'), el.getAttribute('data-key'));
+}
+function xmDosTogglePair(side,key){
+  const p=xmDosPairState(); if(!p||!side||!key) return;
+  const cur=(p[side]||{})[key];
+  if(cur){
+    delete p[side][key];
+    if(p.active===cur && !xmDosPairComplete(cur)) p.active=null;
+    xmDosRefreshPairUI();
+    return;
+  }
+  let num=p.active;
+  if(!num || xmDosPairComplete(num) || xmDosSideHasNum(side,num)){
+    num=p.next++;
+    p.active=num;
+  }
+  p[side][key]=num;
+  if(xmDosPairComplete(num)) p.active=null;
+  xmDosRefreshPairUI();
 }
 function xmDosSelectAll(kind, checked){
-  const name=kind==='fech'?'xmDosFech':'xmDosMap';
-  [].slice.call(document.querySelectorAll('input[name="'+name+'"]')).forEach(function(el){ el.checked=!!checked; });
+  const p=xmDosPairState(); if(!p) return;
+  const side=kind==='fech'?'fech':'map';
+  if(!checked){ p[side]={}; p.active=null; xmDosRefreshPairUI(); return; }
+  [].slice.call(document.querySelectorAll('.xm-dos-check[data-side="'+side+'"]')).forEach(function(el){
+    const key=el.getAttribute('data-key');
+    if(key && !p[side][key]) p[side][key]=p.next++;
+  });
+  p.active=null; xmDosRefreshPairUI();
+}
+function xmDosLimparPares(){
+  const p=xmDosPairState(); if(!p) return;
+  p.fech={}; p.map={}; p.active=null; p.next=1; xmDosRefreshPairUI();
 }
 function xmAbrirDossie(rowId){
   const row=XM_ROW_REGISTRY[rowId]; if(!row){ toast('Linha não encontrada para abrir o dossiê.','am'); return; }
@@ -1983,52 +2084,70 @@ function xmAbrirDossie(rowId){
   const modal=document.getElementById('xmDossieModal'), body=document.getElementById('xmDossieBody'), actions=document.getElementById('xmDossieActions');
   const ass=xmTratativaAssoc(row.f,row.m), fora=xmTratativaFora(row), ok=xmTratativaOkManual(row);
   document.getElementById('xmDossieTitle').textContent='Dossiê — '+xmAgregadoDisplay(row.agregado)+' · '+row.placa;
-  const fSel=row.f&&row.f._xmKey, mSel=row.m&&row.m._xmKey;
-  const tratadas=xmTratativasChavesUsadas({keepFech:fSel,keepMap:mSel});
+  const fSel=d.keepFech, mSel=d.keepMap;
+  XM_DOSSIE.pairs={next:1,active:null,fech:{},map:{}};
+  if(fSel && mSel){ XM_DOSSIE.pairs.fech[fSel]=1; XM_DOSSIE.pairs.map[mSel]=1; XM_DOSSIE.pairs.next=2; }
+  else if(fSel){ XM_DOSSIE.pairs.fech[fSel]=1; XM_DOSSIE.pairs.active=1; XM_DOSSIE.pairs.next=2; }
+  else if(mSel){ XM_DOSSIE.pairs.map[mSel]=1; XM_DOSSIE.pairs.active=1; XM_DOSSIE.pairs.next=2; }
   const fechRows=d.fech.map(function(f){
-    const val=f._xmKey, checked=(val===fSel?'checked':'');
-    return '<tr><td><label class="xm-dos-check"><input type="checkbox" name="xmDosFech" value="'+esc(val)+'" '+checked+'><span>'+esc(xmItemFechResumo(f))+'<br><span class="muted">'+esc(f.desc||'')+'</span></span></label></td></tr>';
-  }).join('') || '<tr><td class="empty">Nenhum débito/crédito pendente do fechamento para esta placa no mês.</td></tr>';
+    const val=f._xmKey;
+    return '<tr><td><button type="button" class="xm-dos-check" data-side="fech" data-key="'+escAttr(val)+'" onclick="xmDosTogglePairFromEl(this)"><span class="xm-dos-numbox"></span><span>'+esc(xmItemFechResumo(f))+'<br><span class="muted">'+esc(f.desc||'')+'</span></span></button></td></tr>';
+  }).join('') || '<tr><td class="empty">Nenhum débito/crédito com pendência aberta no fechamento para esta placa no mês.</td></tr>';
   const mapRows=d.map.map(function(m){
-    const val=m._xmKey, checked=(val===mSel?'checked':'');
-    return '<tr><td><label class="xm-dos-check"><input type="checkbox" name="xmDosMap" value="'+esc(val)+'" '+checked+'><span>'+esc(xmItemMapResumo(m))+'</span></label></td></tr>';
-  }).join('') || '<tr><td class="empty">Nenhum lançamento pendente do Mapinha para esta placa no mês.</td></tr>';
-  const ocultos=tratadas.fech.size+tratadas.map.size;
+    const val=m._xmKey;
+    return '<tr><td><button type="button" class="xm-dos-check" data-side="map" data-key="'+escAttr(val)+'" onclick="xmDosTogglePairFromEl(this)"><span class="xm-dos-numbox"></span><span>'+esc(xmItemMapResumo(m))+'</span></button></td></tr>';
+  }).join('') || '<tr><td class="empty">Nenhum lançamento com pendência aberta no Mapinha para esta placa no mês.</td></tr>';
+  const ocultos=d.ocultos||0;
   body.innerHTML='<div class="lock-note"><b>Linha analisada:</b> '+esc(row.status)+' — '+esc(row.obs)+'</div>'
-    +(ocultos?'<div class="lock-note ok"><b>'+ocultos+' item(ns) já tratado(s)</b> foram ocultados deste dossiê para não serem associados/validados novamente.</div>':'')
+    +(ocultos?'<div class="lock-note ok"><b>'+ocultos+' item(ns) já OK/tratado(s)</b> foram ocultados deste dossiê para não serem associados/validados novamente.</div>':'')
     +'<div class="xm-dos-line"><b>Agregado:</b> '+esc(row.agregado)+' <span class="muted mono">'+esc(row.cod)+'</span> · <b>Placa:</b> <span class="mono">'+esc(row.placa)+'</span></div>'
     +'<div class="xm-dos-line"><b>Fechamento:</b> '+esc(xmItemFechResumo(row.f))+'</div>'
     +'<div class="xm-dos-line"><b>Mapinha:</b> '+esc(xmItemMapResumo(row.m))+'</div>'
     +xmSugestoesHTML(row,d)
-    +'<div class="xm-dos-grid"><div class="xm-dos-box"><div class="xm-dos-box-h">Débitos / créditos pendentes no fechamento do agregado</div><div class="xm-dos-tools"><span>Selecione uma ou mais linhas</span><span><button class="btn sm" onclick="xmDosSelectAll(\'fech\',true)">marcar todos</button> <button class="btn sm" onclick="xmDosSelectAll(\'fech\',false)">limpar</button></span></div><div class="xm-dos-box-b"><table><tbody>'+fechRows+'</tbody></table></div></div>'
-    +'<div class="xm-dos-box"><div class="xm-dos-box-h">Lançamentos pendentes no Mapinha</div><div class="xm-dos-tools"><span>Selecione uma ou mais linhas</span><span><button class="btn sm" onclick="xmDosSelectAll(\'map\',true)">marcar todos</button> <button class="btn sm" onclick="xmDosSelectAll(\'map\',false)">limpar</button></span></div><div class="xm-dos-box-b"><table><tbody>'+mapRows+'</tbody></table></div></div></div>'
+    +'<div class="xm-dos-pair-tip"><b>Associação em lote:</b> clique em uma linha de um lado e depois na correspondente do outro lado. As duas caixas recebem o mesmo número. Repita para formar os pares 2, 3, 4... <span id="xmDosPairStatus" class="xm-dos-pair-status"></span></div>'
+    +'<div class="xm-dos-grid"><div class="xm-dos-box"><div class="xm-dos-box-h">Débitos / créditos com pendência aberta no fechamento do agregado</div><div class="xm-dos-tools"><span>Clique para numerar a equivalência</span><span><button class="btn sm" onclick="xmDosSelectAll(\'fech\',true)">marcar todos</button> <button class="btn sm" onclick="xmDosSelectAll(\'fech\',false)">limpar</button></span></div><div class="xm-dos-box-b"><table><tbody>'+fechRows+'</tbody></table></div></div>'
+    +'<div class="xm-dos-box"><div class="xm-dos-box-h">Lançamentos com pendência aberta no Mapinha</div><div class="xm-dos-tools"><span>Clique para numerar a equivalência</span><span><button class="btn sm" onclick="xmDosSelectAll(\'map\',true)">marcar todos</button> <button class="btn sm" onclick="xmDosSelectAll(\'map\',false)">limpar</button></span></div><div class="xm-dos-box-b"><table><tbody>'+mapRows+'</tbody></table></div></div></div>'
     +'<textarea id="xmDosMotivo" class="xm-dos-motivo" placeholder="Motivo obrigatório para associação manual, OK manual ou fora do escopo. Ex.: NF lançada diferente, fornecedor abreviado, valor com taxa/desconto, competência diferente, lançamento validado pela conferência operacional.">'+esc((ass&&ass.motivo)||(fora&&fora.motivo)||(ok&&ok.motivo)||'')+'</textarea>';
-  let a='<button class="btn pri" onclick="xmAssociarSelecionados()">Associar 1 x 1</button>'
+  let a='<button class="btn pri" onclick="xmAssociarSelecionados()">Associar pares numerados</button>'
        +'<button class="btn" onclick="xmOkSelecionados()">Dar OK selecionados</button>'
+       +'<button class="btn" onclick="xmDosLimparPares()">Limpar seleção</button>'
        +'<button class="btn" onclick="xmMarcarForaEscopo()">Marcar linha fora do escopo</button>';
   if(ass) a+='<button class="btn" onclick="xmRemoverTratativaAtual(\''+ass.id+'\')">Desassociar</button>';
   if(fora) a+='<button class="btn" onclick="xmRemoverTratativaAtual(\''+fora.id+'\')">Reabrir divergência</button>';
   if(ok) a+='<button class="btn" onclick="xmRemoverTratativaAtual(\''+ok.id+'\')">Remover OK manual</button>';
   a+='<button class="btn" onclick="xmFecharDossie()">Cancelar</button>';
   actions.innerHTML=a;
+  xmDosRefreshPairUI();
   modal.classList.add('on'); modal.setAttribute('aria-hidden','false');
 }
 function xmFecharDossie(){ const modal=document.getElementById('xmDossieModal'); if(modal){ modal.classList.remove('on'); modal.setAttribute('aria-hidden','true'); } XM_DOSSIE=null; }
 function xmMotivoDossie(){ const v=(document.getElementById('xmDosMotivo')&&document.getElementById('xmDosMotivo').value||'').trim(); if(v.length<4){ toast('Informe o motivo da tratativa.','am'); return ''; } return v; }
 async function xmAssociarSelecionados(){
   if(!XM_DOSSIE) return; const motivo=xmMotivoDossie(); if(!motivo) return;
-  const sel=xmDossieSelecionados();
-  if(sel.fks.length!==1 || sel.mks.length!==1){ toast('Para associar, selecione exatamente 1 linha do fechamento e 1 linha do Mapinha. Para várias linhas, use “Dar OK selecionados”.','am'); return; }
-  const f=XM_DOSSIE.data.fMap[sel.fks[0]], m=XM_DOSSIE.data.mMap[sel.mks[0]];
-  if(!f||!m){ toast('Seleção inválida no dossiê.','am'); return; }
-  if(xmItemJaTratadoPorChave('fech',f._xmKey,{keepFech:XM_DOSSIE.data.keepFech,keepMap:XM_DOSSIE.data.keepMap}) || xmItemJaTratadoPorChave('map',m._xmKey,{keepFech:XM_DOSSIE.data.keepFech,keepMap:XM_DOSSIE.data.keepMap})){
-    toast('Uma das linhas selecionadas já possui tratativa. Reabra/remova a tratativa antes de associar novamente.','am'); return;
+  const pares=xmDosParesCompletos();
+  const incompletos=xmDosParesIncompletos();
+  if(!pares.length){ toast('Monte ao menos 1 par numerado: uma linha do fechamento e a equivalente no Mapinha com o mesmo número.','am'); return; }
+  if(incompletos.length && !confirm(incompletos.length+' seleção(ões) sem correspondente serão ignoradas. Continuar?')) return;
+  const alertas=[];
+  const validos=[];
+  pares.forEach(function(p){
+    const f=XM_DOSSIE.data.fMap[p.fk], m=XM_DOSSIE.data.mMap[p.mk];
+    if(!f||!m) return;
+    if(xmItemJaTratadoPorChave('fech',f._xmKey,{keepFech:XM_DOSSIE.data.keepFech,keepMap:XM_DOSSIE.data.keepMap}) || xmItemJaTratadoPorChave('map',m._xmKey,{keepFech:XM_DOSSIE.data.keepFech,keepMap:XM_DOSSIE.data.keepMap})) return;
+    const delta=f.valor-xmValMap(f,m);
+    const a=[]; if(Math.abs(delta)>XMAP_TOL) a.push('valor divergente '+moeda(delta)); if(!xmNfCompat(f.nf,m.nf)) a.push('NF diferente'); if(!xmFornecedorLinhaCompat(f,m)) a.push('fornecedor diferente');
+    if(a.length) alertas.push('Par '+p.num+': '+a.join(', '));
+    validos.push({num:p.num,f:f,m:m,delta:delta});
+  });
+  if(!validos.length){ toast('Nenhum par válido para associar. Verifique se as linhas já possuem tratativa.','am'); return; }
+  if(alertas.length && !confirm('Alguns pares possuem divergências:\n\n'+alertas.slice(0,8).join('\n')+(alertas.length>8?'\n...':'')+'\n\nConfirmar mesmo assim?')) return;
+  if(!confirm('Registrar '+validos.length+' associação(ões) manual(is) numerada(s)?')) return;
+  let salvos=0;
+  for(const p of validos){
+    await xmSalvarTratativa({tipo:'assoc_manual',fechKey:p.f._xmKey,mapKey:p.m._xmKey,agregado:XM_DOSSIE.row.agregado,cod:XM_DOSSIE.row.cod,placa:XM_DOSSIE.row.placa,placaKey:XM_DOSSIE.row.placaKey,motivo:motivo,valorFech:p.f.valor,valorMap:xmValMap(p.f,p.m),delta:p.delta,parNumero:p.num});
+    salvos++;
   }
-  const delta=f.valor-xmValMap(f,m);
-  const alerta=[]; if(Math.abs(delta)>XMAP_TOL) alerta.push('valor divergente '+moeda(delta)); if(!xmNfCompat(f.nf,m.nf)) alerta.push('NF diferente'); if(!xmFornecedorLinhaCompat(f,m)) alerta.push('fornecedor diferente');
-  if(alerta.length && !confirm('A associação possui '+alerta.join(', ')+'. Confirmar mesmo assim?')) return;
-  await xmSalvarTratativa({tipo:'assoc_manual',fechKey:f._xmKey,mapKey:m._xmKey,agregado:XM_DOSSIE.row.agregado,cod:XM_DOSSIE.row.cod,placa:XM_DOSSIE.row.placa,placaKey:XM_DOSSIE.row.placaKey,motivo:motivo,valorFech:f.valor,valorMap:xmValMap(f,m),delta:delta});
-  toast('Associação manual registrada.','gn'); xmFecharDossie(); renderXMapinha();
+  toast(salvos+' associação(ões) manual(is) registrada(s).','gn'); xmFecharDossie(); renderXMapinha();
 }
 async function xmOkSelecionados(){
   if(!XM_DOSSIE) return; const motivo=xmMotivoDossie(); if(!motivo) return;
