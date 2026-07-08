@@ -249,6 +249,12 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
 .xm-dos-motivo:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac-bg)}
 .xm-radio{display:flex;align-items:flex-start;gap:6px}
 .xm-radio input{margin-top:2px}
+.xm-dos-tools{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 10px;background:#FAFBFD;border-bottom:1px solid var(--bd2);font-size:11px;color:var(--mu)}
+.xm-dos-check{display:flex;align-items:flex-start;gap:6px;cursor:pointer}
+.xm-dos-check input{margin-top:2px;flex-shrink:0}
+.xm-dos-used{opacity:.55;background:#F7F8FA}
+.xm-dos-used .muted{color:#8a97a8}
+.xm-dos-note{font-size:10.5px;color:var(--mu);margin-top:3px}
 #v-xmap th:nth-child(1),#v-xmap td:nth-child(1){width:6%}
 #v-xmap th:nth-child(2),#v-xmap td:nth-child(2){width:4%}
 #v-xmap th:nth-child(3),#v-xmap td:nth-child(3){width:15%}
@@ -350,6 +356,7 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
           <select id="xmStatus" class="sel" onchange="renderXMapinha()">
             <option value="">Todos os status</option>
             <option>OK</option>
+            <option>OK manual</option>
             <option>Divergência de valor</option>
             <option>Centro incorreto</option>
             <option>Sem lançamento no Mapinha</option>
@@ -1296,6 +1303,33 @@ function xmMesclarTratativas(docs){
 function xmTratativasAtivas(tipo){
   return (MAPREF.trat||[]).filter(function(t){ return t && t.active!==false && t.mesRef===ST.mesRef && t.filial===ST.filial && (!tipo || t.tipo===tipo); });
 }
+function xmTratativasChavesUsadas(opts){
+  opts=opts||{};
+  const keepFech=opts.keepFech||'', keepMap=opts.keepMap||'';
+  const F=new Set(), M=new Set();
+  xmTratativasAtivas().forEach(function(t){
+    if(!/^(assoc_manual|fora_escopo|ok_manual)$/.test(t.tipo||'')) return;
+    if(t.fechKey && t.fechKey!==keepFech) F.add(t.fechKey);
+    if(t.mapKey && t.mapKey!==keepMap) M.add(t.mapKey);
+  });
+  return {fech:F,map:M};
+}
+function xmItemJaTratadoPorChave(kind,key,opts){
+  if(!key) return null;
+  opts=opts||{};
+  if(kind==='fech' && key===opts.keepFech) return null;
+  if(kind==='map' && key===opts.keepMap) return null;
+  return xmTratativasAtivas().find(function(t){
+    if(!/^(assoc_manual|fora_escopo|ok_manual)$/.test(t.tipo||'')) return false;
+    return kind==='fech' ? t.fechKey===key : t.mapKey===key;
+  })||null;
+}
+function xmTratativaOkManual(row){
+  const fk=row&&row.f&&row.f._xmKey, mk=row&&row.m&&row.m._xmKey;
+  return xmTratativasAtivas('ok_manual').find(function(t){
+    return (fk&&t.fechKey===fk) || (mk&&t.mapKey===mk) || (t.rowKey && t.rowKey===xmRowNaturalKey(row));
+  })||null;
+}
 async function xmSalvarTratativa(t){
   t=Object.assign({},t||{});
   t.active = t.active!==false;
@@ -1591,6 +1625,12 @@ function classificarXMapinha(row){
     row.obs='Tratativa manual: fora do escopo da cobrança/conciliação. Motivo: '+(fora.motivo||'sem motivo informado')+'.';
     return row;
   }
+  const okManual=xmTratativaOkManual(row);
+  if(okManual){
+    row.status='OK manual'; row.sev='ok'; row.tratativa=okManual;
+    row.obs='Linha validada manualmente pelo usuário. Motivo: '+(okManual.motivo||'sem motivo informado')+'.';
+    return row;
+  }
   if(f && !m){
     row.status='Sem lançamento no Mapinha'; row.sev='err';
     row.obs=(f.tipo==='C'?'Crédito':'Débito')+' de '+moeda(f.valor)+' cobrado no fechamento sem lançamento correspondente no Mapinha.'+(f.nf?' NF '+f.nf+' não encontrada no Mapinha para este prestador/placa.':'');
@@ -1751,7 +1791,7 @@ function xmResumoGrupo(rows){
   return R;
 }
 function xmStatusStyle(r){
-  if(r.status==='OK') return 'background:#E8F5EC;color:#1E7D44;';
+  if(r.status==='OK'||r.status==='OK manual') return 'background:#E8F5EC;color:#1E7D44;';
   if(r.status==='Divergência de valor'||r.status==='Sem lançamento no Mapinha') return 'background:#FBEAEA;color:#B3322E;';
   if(r.status==='Centro incorreto'||r.status==='Sem cobrança no fechamento') return 'background:#FCF3DF;color:#9A6A0B;';
   if(r.status==='Interno') return 'background:#F4F6FA;color:#69788C;';
@@ -1906,12 +1946,18 @@ function xmCompatResumo(f,m){
   return conf+'% · '+(hits.length?hits.join(', '):'sem coincidência forte')+' · Δ '+moeda(delta);
 }
 function xmDossieData(row){
+  const keepFech=row&&row.f&&row.f._xmKey||'', keepMap=row&&row.m&&row.m._xmKey||'';
   const rel=(_xmResult||[]).filter(function(r){ return xmAgregadoKey(r)===xmAgregadoKey(row) && r.placaKey===row.placaKey; });
   const fMap={}, mMap={}, fech=[], map=[];
-  rel.forEach(function(r){ if(r.f&&r.f._xmKey&&!fMap[r.f._xmKey]){ fMap[r.f._xmKey]=r.f; fech.push(r.f); } if(r.m&&r.m._xmKey&&!mMap[r.m._xmKey]){ mMap[r.m._xmKey]=r.m; map.push(r.m); } });
+  rel.forEach(function(r){
+    if(r.f&&r.f._xmKey&&!fMap[r.f._xmKey]){ fMap[r.f._xmKey]=r.f; }
+    if(r.m&&r.m._xmKey&&!mMap[r.m._xmKey]){ mMap[r.m._xmKey]=r.m; }
+  });
+  Object.keys(fMap).forEach(function(k){ if(!xmItemJaTratadoPorChave('fech',k,{keepFech:keepFech,keepMap:keepMap})) fech.push(fMap[k]); });
+  Object.keys(mMap).forEach(function(k){ if(!xmItemJaTratadoPorChave('map',k,{keepFech:keepFech,keepMap:keepMap})) map.push(mMap[k]); });
   fech.sort(function(a,b){ return String(a.data).localeCompare(String(b.data)) || String(a.nf).localeCompare(String(b.nf)); });
   map.sort(function(a,b){ return String(a.data).localeCompare(String(b.data)) || String(a.nf).localeCompare(String(b.nf)); });
-  return {rel:rel,fech:fech,map:map,fMap:fMap,mMap:mMap};
+  return {rel:rel,fech:fech,map:map,fMap:fMap,mMap:mMap,keepFech:keepFech,keepMap:keepMap};
 }
 function xmSugestoesHTML(row,d){
   const sug=[];
@@ -1922,27 +1968,47 @@ function xmSugestoesHTML(row,d){
   if(!sug.length) return '<div class="xm-dos-sug"><b>Possíveis correspondências:</b> não há candidato do outro lado para esta placa/agregado no mês.</div>';
   return '<div class="xm-dos-sug"><b>Possíveis correspondências:</b><br>'+sug.slice(0,5).map(function(x){ return '• '+esc(x.score)+' — '+esc(x.txt); }).join('<br>')+'</div>';
 }
+function xmDossieSelecionados(){
+  const fks=[].slice.call(document.querySelectorAll('input[name="xmDosFech"]:checked')).map(function(el){ return el.value; });
+  const mks=[].slice.call(document.querySelectorAll('input[name="xmDosMap"]:checked')).map(function(el){ return el.value; });
+  return {fks:fks,mks:mks};
+}
+function xmDosSelectAll(kind, checked){
+  const name=kind==='fech'?'xmDosFech':'xmDosMap';
+  [].slice.call(document.querySelectorAll('input[name="'+name+'"]')).forEach(function(el){ el.checked=!!checked; });
+}
 function xmAbrirDossie(rowId){
   const row=XM_ROW_REGISTRY[rowId]; if(!row){ toast('Linha não encontrada para abrir o dossiê.','am'); return; }
   const d=xmDossieData(row); XM_DOSSIE={rowId:rowId,row:row,data:d};
   const modal=document.getElementById('xmDossieModal'), body=document.getElementById('xmDossieBody'), actions=document.getElementById('xmDossieActions');
-  const ass=xmTratativaAssoc(row.f,row.m), fora=xmTratativaFora(row);
+  const ass=xmTratativaAssoc(row.f,row.m), fora=xmTratativaFora(row), ok=xmTratativaOkManual(row);
   document.getElementById('xmDossieTitle').textContent='Dossiê — '+xmAgregadoDisplay(row.agregado)+' · '+row.placa;
   const fSel=row.f&&row.f._xmKey, mSel=row.m&&row.m._xmKey;
-  const fechRows=d.fech.map(function(f){ const val=f._xmKey; return '<tr><td><label class="xm-radio"><input type="radio" name="xmDosFech" value="'+esc(val)+'" '+(val===fSel?'checked':'')+'><span>'+esc(xmItemFechResumo(f))+'<br><span class="muted">'+esc(f.desc||'')+'</span></span></label></td></tr>'; }).join('') || '<tr><td class="empty">Nenhum débito/crédito do fechamento para esta placa no mês.</td></tr>';
-  const mapRows=d.map.map(function(m){ const val=m._xmKey; return '<tr><td><label class="xm-radio"><input type="radio" name="xmDosMap" value="'+esc(val)+'" '+(val===mSel?'checked':'')+'><span>'+esc(xmItemMapResumo(m))+'</span></label></td></tr>'; }).join('') || '<tr><td class="empty">Nenhum lançamento do Mapinha para esta placa no mês.</td></tr>';
+  const tratadas=xmTratativasChavesUsadas({keepFech:fSel,keepMap:mSel});
+  const fechRows=d.fech.map(function(f){
+    const val=f._xmKey, checked=(val===fSel?'checked':'');
+    return '<tr><td><label class="xm-dos-check"><input type="checkbox" name="xmDosFech" value="'+esc(val)+'" '+checked+'><span>'+esc(xmItemFechResumo(f))+'<br><span class="muted">'+esc(f.desc||'')+'</span></span></label></td></tr>';
+  }).join('') || '<tr><td class="empty">Nenhum débito/crédito pendente do fechamento para esta placa no mês.</td></tr>';
+  const mapRows=d.map.map(function(m){
+    const val=m._xmKey, checked=(val===mSel?'checked':'');
+    return '<tr><td><label class="xm-dos-check"><input type="checkbox" name="xmDosMap" value="'+esc(val)+'" '+checked+'><span>'+esc(xmItemMapResumo(m))+'</span></label></td></tr>';
+  }).join('') || '<tr><td class="empty">Nenhum lançamento pendente do Mapinha para esta placa no mês.</td></tr>';
+  const ocultos=tratadas.fech.size+tratadas.map.size;
   body.innerHTML='<div class="lock-note"><b>Linha analisada:</b> '+esc(row.status)+' — '+esc(row.obs)+'</div>'
+    +(ocultos?'<div class="lock-note ok"><b>'+ocultos+' item(ns) já tratado(s)</b> foram ocultados deste dossiê para não serem associados/validados novamente.</div>':'')
     +'<div class="xm-dos-line"><b>Agregado:</b> '+esc(row.agregado)+' <span class="muted mono">'+esc(row.cod)+'</span> · <b>Placa:</b> <span class="mono">'+esc(row.placa)+'</span></div>'
     +'<div class="xm-dos-line"><b>Fechamento:</b> '+esc(xmItemFechResumo(row.f))+'</div>'
     +'<div class="xm-dos-line"><b>Mapinha:</b> '+esc(xmItemMapResumo(row.m))+'</div>'
     +xmSugestoesHTML(row,d)
-    +'<div class="xm-dos-grid"><div class="xm-dos-box"><div class="xm-dos-box-h">Débitos / créditos no fechamento do agregado</div><div class="xm-dos-box-b"><table><tbody>'+fechRows+'</tbody></table></div></div>'
-    +'<div class="xm-dos-box"><div class="xm-dos-box-h">Lançamentos no Mapinha</div><div class="xm-dos-box-b"><table><tbody>'+mapRows+'</tbody></table></div></div></div>'
-    +'<textarea id="xmDosMotivo" class="xm-dos-motivo" placeholder="Motivo obrigatório para associação manual ou fora do escopo. Ex.: NF lançada diferente, fornecedor abreviado, valor com taxa/desconto, competência diferente, lançamento fora da cobrança do agregado.">'+esc((ass&&ass.motivo)||(fora&&fora.motivo)||'')+'</textarea>';
-  let a='<button class="btn pri" onclick="xmAssociarSelecionados()">Associar selecionados</button>'
-       +'<button class="btn" onclick="xmMarcarForaEscopo()">Marcar fora do escopo</button>';
+    +'<div class="xm-dos-grid"><div class="xm-dos-box"><div class="xm-dos-box-h">Débitos / créditos pendentes no fechamento do agregado</div><div class="xm-dos-tools"><span>Selecione uma ou mais linhas</span><span><button class="btn sm" onclick="xmDosSelectAll(\'fech\',true)">marcar todos</button> <button class="btn sm" onclick="xmDosSelectAll(\'fech\',false)">limpar</button></span></div><div class="xm-dos-box-b"><table><tbody>'+fechRows+'</tbody></table></div></div>'
+    +'<div class="xm-dos-box"><div class="xm-dos-box-h">Lançamentos pendentes no Mapinha</div><div class="xm-dos-tools"><span>Selecione uma ou mais linhas</span><span><button class="btn sm" onclick="xmDosSelectAll(\'map\',true)">marcar todos</button> <button class="btn sm" onclick="xmDosSelectAll(\'map\',false)">limpar</button></span></div><div class="xm-dos-box-b"><table><tbody>'+mapRows+'</tbody></table></div></div></div>'
+    +'<textarea id="xmDosMotivo" class="xm-dos-motivo" placeholder="Motivo obrigatório para associação manual, OK manual ou fora do escopo. Ex.: NF lançada diferente, fornecedor abreviado, valor com taxa/desconto, competência diferente, lançamento validado pela conferência operacional.">'+esc((ass&&ass.motivo)||(fora&&fora.motivo)||(ok&&ok.motivo)||'')+'</textarea>';
+  let a='<button class="btn pri" onclick="xmAssociarSelecionados()">Associar 1 x 1</button>'
+       +'<button class="btn" onclick="xmOkSelecionados()">Dar OK selecionados</button>'
+       +'<button class="btn" onclick="xmMarcarForaEscopo()">Marcar linha fora do escopo</button>';
   if(ass) a+='<button class="btn" onclick="xmRemoverTratativaAtual(\''+ass.id+'\')">Desassociar</button>';
   if(fora) a+='<button class="btn" onclick="xmRemoverTratativaAtual(\''+fora.id+'\')">Reabrir divergência</button>';
+  if(ok) a+='<button class="btn" onclick="xmRemoverTratativaAtual(\''+ok.id+'\')">Remover OK manual</button>';
   a+='<button class="btn" onclick="xmFecharDossie()">Cancelar</button>';
   actions.innerHTML=a;
   modal.classList.add('on'); modal.setAttribute('aria-hidden','false');
@@ -1951,15 +2017,39 @@ function xmFecharDossie(){ const modal=document.getElementById('xmDossieModal');
 function xmMotivoDossie(){ const v=(document.getElementById('xmDosMotivo')&&document.getElementById('xmDosMotivo').value||'').trim(); if(v.length<4){ toast('Informe o motivo da tratativa.','am'); return ''; } return v; }
 async function xmAssociarSelecionados(){
   if(!XM_DOSSIE) return; const motivo=xmMotivoDossie(); if(!motivo) return;
-  const fkEl=document.querySelector('input[name="xmDosFech"]:checked'), mkEl=document.querySelector('input[name="xmDosMap"]:checked');
-  if(!fkEl||!mkEl){ toast('Selecione uma linha do fechamento e uma linha do Mapinha.','am'); return; }
-  const f=XM_DOSSIE.data.fMap[fkEl.value], m=XM_DOSSIE.data.mMap[mkEl.value];
+  const sel=xmDossieSelecionados();
+  if(sel.fks.length!==1 || sel.mks.length!==1){ toast('Para associar, selecione exatamente 1 linha do fechamento e 1 linha do Mapinha. Para várias linhas, use “Dar OK selecionados”.','am'); return; }
+  const f=XM_DOSSIE.data.fMap[sel.fks[0]], m=XM_DOSSIE.data.mMap[sel.mks[0]];
   if(!f||!m){ toast('Seleção inválida no dossiê.','am'); return; }
+  if(xmItemJaTratadoPorChave('fech',f._xmKey,{keepFech:XM_DOSSIE.data.keepFech,keepMap:XM_DOSSIE.data.keepMap}) || xmItemJaTratadoPorChave('map',m._xmKey,{keepFech:XM_DOSSIE.data.keepFech,keepMap:XM_DOSSIE.data.keepMap})){
+    toast('Uma das linhas selecionadas já possui tratativa. Reabra/remova a tratativa antes de associar novamente.','am'); return;
+  }
   const delta=f.valor-xmValMap(f,m);
   const alerta=[]; if(Math.abs(delta)>XMAP_TOL) alerta.push('valor divergente '+moeda(delta)); if(!xmNfCompat(f.nf,m.nf)) alerta.push('NF diferente'); if(!xmFornecedorLinhaCompat(f,m)) alerta.push('fornecedor diferente');
   if(alerta.length && !confirm('A associação possui '+alerta.join(', ')+'. Confirmar mesmo assim?')) return;
   await xmSalvarTratativa({tipo:'assoc_manual',fechKey:f._xmKey,mapKey:m._xmKey,agregado:XM_DOSSIE.row.agregado,cod:XM_DOSSIE.row.cod,placa:XM_DOSSIE.row.placa,placaKey:XM_DOSSIE.row.placaKey,motivo:motivo,valorFech:f.valor,valorMap:xmValMap(f,m),delta:delta});
   toast('Associação manual registrada.','gn'); xmFecharDossie(); renderXMapinha();
+}
+async function xmOkSelecionados(){
+  if(!XM_DOSSIE) return; const motivo=xmMotivoDossie(); if(!motivo) return;
+  const sel=xmDossieSelecionados();
+  if(!sel.fks.length && !sel.mks.length){ toast('Selecione uma ou mais linhas para dar OK.','am'); return; }
+  const qtd=sel.fks.length+sel.mks.length;
+  if(!confirm('Registrar OK manual para '+qtd+' linha(s) selecionada(s)?')) return;
+  let salvos=0;
+  for(const k of sel.fks){
+    const f=XM_DOSSIE.data.fMap[k]; if(!f) continue;
+    if(xmItemJaTratadoPorChave('fech',f._xmKey,{keepFech:XM_DOSSIE.data.keepFech,keepMap:XM_DOSSIE.data.keepMap})) continue;
+    await xmSalvarTratativa({tipo:'ok_manual',fechKey:f._xmKey,mapKey:'',rowKey:'',agregado:XM_DOSSIE.row.agregado,cod:XM_DOSSIE.row.cod,placa:XM_DOSSIE.row.placa,placaKey:XM_DOSSIE.row.placaKey,motivo:motivo,valorFech:f.valor,valorMap:'',delta:f.valor});
+    salvos++;
+  }
+  for(const k of sel.mks){
+    const m=XM_DOSSIE.data.mMap[k]; if(!m) continue;
+    if(xmItemJaTratadoPorChave('map',m._xmKey,{keepFech:XM_DOSSIE.data.keepFech,keepMap:XM_DOSSIE.data.keepMap})) continue;
+    await xmSalvarTratativa({tipo:'ok_manual',fechKey:'',mapKey:m._xmKey,rowKey:'',agregado:XM_DOSSIE.row.agregado,cod:XM_DOSSIE.row.cod,placa:XM_DOSSIE.row.placa,placaKey:XM_DOSSIE.row.placaKey,motivo:motivo,valorFech:'',valorMap:m.valor,delta:-(+m.valor||0)});
+    salvos++;
+  }
+  toast(salvos+' OK manual(is) registrado(s).','gn'); xmFecharDossie(); renderXMapinha();
 }
 async function xmMarcarForaEscopo(){
   if(!XM_DOSSIE) return; const motivo=xmMotivoDossie(); if(!motivo) return;
@@ -1992,7 +2082,7 @@ function renderXMapinha(){
   banner.innerHTML=xmMapinhaStatusHTML();
 
   /* cards de resumo (sobre o universo completo, sem filtros de tela) */
-  const C={lin:0,ok:0,divg:0,cc:0,semMap:0,semFech:0,manual:0,fora:0,rev:0,fech:0,map:0};
+  const C={lin:0,ok:0,okManual:0,divg:0,cc:0,semMap:0,semFech:0,manual:0,fora:0,rev:0,fech:0,map:0};
   _xmResult.forEach(function(r){
     if(r.status==='Interno') return;
     C.lin++;
@@ -2003,6 +2093,7 @@ function renderXMapinha(){
     else if(r.status==='Centro incorreto') C.cc++;
     else if(r.status==='Sem lançamento no Mapinha') C.semMap++;
     else if(r.status==='Sem cobrança no fechamento') C.semFech++;
+    else if(r.status==='OK manual') C.okManual++;
     else if(r.status==='Associado manualmente') C.manual++;
     else if(r.status==='Fora do escopo') C.fora++;
     else C.rev++;
@@ -2010,6 +2101,7 @@ function renderXMapinha(){
   cards.innerHTML=
     '<div class="card"><div class="k">Linhas conferidas</div><div class="v">'+C.lin+'</div><div class="s">'+moeda(C.fech)+' fech. × '+moeda(C.map)+' Mapinha</div></div>'
    +'<div class="card"><div class="k">Pareadas OK</div><div class="v cred">'+C.ok+'</div><div class="s">valor e centro corretos</div></div>'
+   +'<div class="card"><div class="k">OK manual</div><div class="v cred">'+C.okManual+'</div><div class="s">validado com motivo</div></div>'
    +'<div class="card"><div class="k">Divergência de valor</div><div class="v'+(C.divg?' deb':'')+'">'+C.divg+'</div><div class="s">pareadas com Δ</div></div>'
    +'<div class="card"><div class="k">Centro incorreto</div><div class="v'+(C.cc?' deb':'')+'">'+C.cc+'</div><div class="s">valor ok, centro errado</div></div>'
    +'<div class="card"><div class="k">Sem lançamento no Mapinha</div><div class="v'+(C.semMap?' deb':'')+'">'+C.semMap+'</div><div class="s">débito sem espelho</div></div>'
