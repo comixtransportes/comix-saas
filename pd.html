@@ -1289,18 +1289,24 @@ var __PD_PRE_SIG = { szb: null, szc: null, szy: null };
    de CPU/memória do boot no celular. Janela de 3s por tabela: o 1º pedido passa, os
    redundantes viram no-op; retries legítimos (>3s depois) continuam funcionando. */
 var __PD_REQ_TS = { szb: 0, szc: 0, szy: 0 };
+/* [FIX][PD][v2] Janela de dedup encurtada de 2000ms → 700ms. A janela longa
+   suprimia o retry de 900ms — que é ESTRUTURAL no mobile: o parent não
+   pré-carrega bases no celular e só inicia o download quando recebe um pedido;
+   se o pedido de t=100ms chega antes do Firebase do parent estar pronto, ele
+   falha em silêncio e NUNCA responde. Sem o retry de 900ms, o parent só era
+   acionado de novo aos 4s e o PD caía no fallback (baixar 53 chunks sozinho,
+   em paralelo com o parent — a lentidão do iPhone). Com 700ms: a rajada
+   100/150ms vira 1 pedido, a rajada dupla de 900ms vira 1 pedido, e o retry
+   que importa continua vivo. Pedidos redundantes pós-carga são bloqueados pela
+   checagem de "já carregado" dentro de cada requestAtlas* (não por tempo). */
 function __pdShouldRequest(t){
   var now = Date.now();
-  if (now - (__PD_REQ_TS[t] || 0) < 2000) return false;
+  if (now - (__PD_REQ_TS[t] || 0) < 700) return false;
   __PD_REQ_TS[t] = now;
   return true;
 }
-/* [FIX][PD] Libera o dedup de uma tabela. Usado quando:
-   (a) o parent anuncia ATLAS_DATA_READY — ele ESTÁ dizendo "tenho dados, peça";
-       suprimir esse pedido fazia o PD cair no fallback e baixar os chunks sozinho
-       (lentidão no desktop);
-   (b) uma ATLAS_DATA_RESPONSE chega — o ciclo pedido→resposta fechou e novos
-       pedidos legítimos não devem ficar presos na janela. */
+/* [FIX][PD] Libera o dedup de uma tabela (usado ao receber ATLAS_DATA_RESPONSE,
+   fechando o ciclo pedido→resposta). */
 function __pdReleaseRequest(t){
   if (t) { __PD_REQ_TS[t] = 0; return; }
   __PD_REQ_TS.szb = 0; __PD_REQ_TS.szc = 0; __PD_REQ_TS.szy = 0;
@@ -4285,9 +4291,12 @@ window.addEventListener('DOMContentLoaded', ()=>{
       // o web preso na tela "Baixando dados (N/53)…". Se o parent não responder,
       // o fallback da nuvem roda exatamente como antes (mesma fonte de dados).
       if (typeof requestAtlasSZB === 'function') {
-        __pdReleaseRequest('szb');
-        requestAtlasSZB();
-        await new Promise(r=>setTimeout(r, __pdMobFb ? 1500 : 1200));
+        requestAtlasSZB(true); // força: última chance antes da auto-carga
+        // [FIX][PD][v2] Mobile espera 2,5s (antes 1,5s): se o parent estiver no
+        // MEIO do download compartilhado dele, dar mais essa folga evita que o
+        // PD comece um download PARALELO dos mesmos 53 chunks no celular —
+        // banda dividida + CPU disputada = tudo mais lento.
+        await new Promise(r=>setTimeout(r, __pdMobFb ? 2500 : 1200));
         if (__ATLAS_PD_CARREGADO) return;
       }
       try {
@@ -5181,10 +5190,13 @@ function tryAtlasSZC() {
   catch(e) { console.warn('[PD Diário] tryAtlasSZC erro:', e); return false; }
 }
 
-function requestAtlasSZC() {
+function requestAtlasSZC(force) {
   try {
     if (window.parent && window.parent !== window) {
-      if (!__pdShouldRequest('szc')) return; // [PERF][PD] dedup 3s
+      if (!force) {
+        if (typeof RAW_SZC !== 'undefined' && RAW_SZC && RAW_SZC.length) return; // já temos
+        if (!__pdShouldRequest('szc')) return; // dedup 700ms p/ rajada
+      }
       window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szc'}, '*');
     }
   } catch(e) {}
@@ -5218,10 +5230,13 @@ function applyAtlasSZY(parentData, origem) {
   return true;
 }
 function tryAtlasSZY() { return false; }
-function requestAtlasSZY() {
+function requestAtlasSZY(force) {
   try {
     if (window.parent && window.parent !== window) {
-      if (!__pdShouldRequest('szy')) return; // [PERF][PD] dedup 3s
+      if (!force) {
+        if (typeof RAW_SZY !== 'undefined' && RAW_SZY && RAW_SZY.length) return; // já temos
+        if (!__pdShouldRequest('szy')) return; // dedup 700ms p/ rajada
+      }
       window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szy'}, '*');
     }
   } catch(e) {}
@@ -5350,12 +5365,17 @@ function tryAtlasSZB() {
   catch(e) { console.warn('[PD Diário] tryAtlasSZB erro:', e); return false; }
 }
 
-function requestAtlasSZB() {
+function requestAtlasSZB(force) {
   try {
     if (window.parent && window.parent !== window) {
-      // [PERF][PD] Dedup 3s: cada pedido faz o parent clonar e postar a base
-      // inteira. Os timers de boot redundantes viram no-op; retries >3s passam.
-      if (!__pdShouldRequest('szb')) return;
+      if (!force) {
+        // [FIX][PD][v2] Já carregado ⇒ pedidos "cegos" dos timers de boot são
+        // inúteis (cada um faria o parent clonar a base inteira). Pedidos com
+        // motivo explícito (READY do parent / última chance do fallback) passam
+        // com force=true — inclusive para novas versões da base no desktop.
+        if (typeof __ATLAS_PD_CARREGADO !== 'undefined' && __ATLAS_PD_CARREGADO) return;
+        if (!__pdShouldRequest('szb')) return; // dedup 700ms só p/ rajada
+      }
       window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szb'}, '*');
       setAtlasSyncMsg('Aguardando SZB da Download Base…', false);
     }
@@ -5416,18 +5436,17 @@ window.addEventListener('message', function(event) {
       return; // já temos a SZB; ignora rebroadcast para não re-renderizar
     }
     setTimeout(function() {
-      // [FIX][PD] READY = o parent ANUNCIOU que tem a base. Este pedido não pode
-      // ser suprimido pelo dedup do boot — era isso que empurrava o desktop para
-      // o fallback (baixar os chunks sozinho, tela "Baixando dados N/53" lenta).
-      __pdReleaseRequest(d.table || null);
+      // [FIX][PD] READY = o parent ANUNCIOU que tem a base ⇒ pedido com
+      // force=true: passa pelo dedup e pela checagem de "já carregado"
+      // (necessário p/ novas versões da base no desktop).
       if (d.table === 'szc') {
-        if (!tryAtlasSZC()) requestAtlasSZC();
+        if (!tryAtlasSZC()) requestAtlasSZC(true);
       } else if (d.table === 'szy') {
-        if (!tryAtlasSZY()) requestAtlasSZY();
+        if (!tryAtlasSZY()) requestAtlasSZY(true);
       } else {
-        if (!tryAtlasSZB()) requestAtlasSZB();
-        if (!tryAtlasSZC()) requestAtlasSZC();
-        if (!tryAtlasSZY()) requestAtlasSZY();
+        if (!tryAtlasSZB()) requestAtlasSZB(true);
+        if (!tryAtlasSZC()) requestAtlasSZC(true);
+        if (!tryAtlasSZY()) requestAtlasSZY(true);
       }
     }, 80);
   }
