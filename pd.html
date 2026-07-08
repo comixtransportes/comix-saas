@@ -1291,9 +1291,19 @@ var __PD_PRE_SIG = { szb: null, szc: null, szy: null };
 var __PD_REQ_TS = { szb: 0, szc: 0, szy: 0 };
 function __pdShouldRequest(t){
   var now = Date.now();
-  if (now - (__PD_REQ_TS[t] || 0) < 3000) return false;
+  if (now - (__PD_REQ_TS[t] || 0) < 2000) return false;
   __PD_REQ_TS[t] = now;
   return true;
+}
+/* [FIX][PD] Libera o dedup de uma tabela. Usado quando:
+   (a) o parent anuncia ATLAS_DATA_READY — ele ESTÁ dizendo "tenho dados, peça";
+       suprimir esse pedido fazia o PD cair no fallback e baixar os chunks sozinho
+       (lentidão no desktop);
+   (b) uma ATLAS_DATA_RESPONSE chega — o ciclo pedido→resposta fechou e novos
+       pedidos legítimos não devem ficar presos na janela. */
+function __pdReleaseRequest(t){
+  if (t) { __PD_REQ_TS[t] = 0; return; }
+  __PD_REQ_TS.szb = 0; __PD_REQ_TS.szc = 0; __PD_REQ_TS.szy = 0;
 }
 /* [PERF][PD] Recalc coalescido: no boot, SZB → fullRebuild/recalc, e logo em
    seguida SZC e SZY chegam (parent + nuvem), cada um disparando OUTRO recalc —
@@ -4268,10 +4278,16 @@ window.addEventListener('DOMContentLoaded', ()=>{
     try { __pdMobFb = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (window.matchMedia && window.matchMedia('(max-width:820px)').matches); } catch(_) {}
     setTimeout(async ()=>{
       if (__ATLAS_PD_CARREGADO) return;
-      // Mobile: última checagem — pede a base ao parent mais uma vez e espera curto
-      if (__pdMobFb && typeof requestAtlasSZB === 'function') {
+      // [FIX][PD] Última checagem ANTES da auto-carga — agora também no DESKTOP.
+      // Força um re-pedido ao parent (liberando o dedup) e espera curto: se o
+      // parent tem a base em memória, ele responde em ms e evitamos baixar os
+      // ~53 chunks em dobro (parent + PD ao mesmo tempo), que era o que deixava
+      // o web preso na tela "Baixando dados (N/53)…". Se o parent não responder,
+      // o fallback da nuvem roda exatamente como antes (mesma fonte de dados).
+      if (typeof requestAtlasSZB === 'function') {
+        __pdReleaseRequest('szb');
         requestAtlasSZB();
-        await new Promise(r=>setTimeout(r, 1500));
+        await new Promise(r=>setTimeout(r, __pdMobFb ? 1500 : 1200));
         if (__ATLAS_PD_CARREGADO) return;
       }
       try {
@@ -5380,6 +5396,8 @@ window.addEventListener('message', function(event) {
   var d = event.data || {};
   if (d.table && !['szb','szc','szy'].includes(d.table)) return;
   if (d.type === 'ATLAS_DATA_RESPONSE' && d.payload) {
+    // [FIX][PD] Ciclo pedido→resposta fechado: libera o dedup da tabela.
+    __pdReleaseRequest(d.table || 'szb');
     if (d.scope) setAtlasPDScope(d.scope);
     if (d.table === 'szc') applyAtlasSZC(d.payload, 'Download Base SZC');
     else if (d.table === 'szy') applyAtlasSZY(d.payload, 'Download Base SZY');
@@ -5398,6 +5416,10 @@ window.addEventListener('message', function(event) {
       return; // já temos a SZB; ignora rebroadcast para não re-renderizar
     }
     setTimeout(function() {
+      // [FIX][PD] READY = o parent ANUNCIOU que tem a base. Este pedido não pode
+      // ser suprimido pelo dedup do boot — era isso que empurrava o desktop para
+      // o fallback (baixar os chunks sozinho, tela "Baixando dados N/53" lenta).
+      __pdReleaseRequest(d.table || null);
       if (d.table === 'szc') {
         if (!tryAtlasSZC()) requestAtlasSZC();
       } else if (d.table === 'szy') {
