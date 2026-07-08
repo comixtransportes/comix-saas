@@ -1120,6 +1120,29 @@ html{ -webkit-text-size-adjust:100%; }
 if(typeof ChartDataLabels !== 'undefined') Chart.register(ChartDataLabels);
 if(typeof Chart !== 'undefined') Chart.defaults.events = ['mousemove','mouseout','click'];
 
+/* [PERF][PD][MOBILE] Detector único de mobile — mesma expressão já usada nos
+   demais pontos do arquivo, centralizada para os ajustes de performance. */
+function __pdIsMobile(){
+  try {
+    return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+           (window.matchMedia && window.matchMedia('(max-width:820px)').matches);
+  } catch(_) { return false; }
+}
+
+/* [PERF][PD][MOBILE] No celular (Samsung/Android em especial):
+   1) Animações de entrada dos gráficos desligadas — cada recalc no boot replayava
+      ~1s de animação em todos os canvases, consumindo CPU/GPU e causando a
+      "oscilação" visual no fim do carregamento. O estado FINAL dos gráficos é
+      byte-a-byte idêntico; só a transição de entrada deixa de rodar no mobile.
+   2) devicePixelRatio limitado a 2 — aparelhos Samsung têm DPR 2.6–4 e o custo de
+      rasterização do canvas cresce com DPR². DPR 2 mantém nitidez retina nos
+      gráficos pequenos do PD com ~1/4 do custo de pintura.
+   Desktop permanece exatamente como era. */
+if (typeof Chart !== 'undefined' && __pdIsMobile()) {
+  Chart.defaults.animation = false;
+  try { Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2); } catch(_) {}
+}
+
 // ═══════════════════════════════════════════════════════
 // CONFIGURAÇÃO — altere a URL do Worker após o deploy
 // ═══════════════════════════════════════════════════════
@@ -1253,6 +1276,38 @@ const CHS={};
    as ocultas são montadas ao abrir); (3) IA fora do caminho crítico.
    ════════════════════════════════════════════════════════════════════════ */
 var __PD_SZB_SIG = null, __PD_SZC_SIG = null, __PD_SZY_SIG = null;
+/* [PERF][PD] Assinatura PRÉ-normalização (ts|nº bruto de linhas|escopo). O guard
+   antigo (__PD_*_SIG) só era checado DEPOIS de normalizar + filtrar a base inteira
+   — cada resposta duplicada do parent ainda custava uma varredura completa das
+   linhas no mobile. Mesma versão (ts) + mesma contagem bruta + mesmo escopo ⇒
+   payload idêntico ⇒ podemos sair antes de tocar em qualquer linha. */
+var __PD_PRE_SIG = { szb: null, szc: null, szy: null };
+/* [PERF][PD] Anti-tempestade de pedidos: os múltiplos timers de boot (IIFE 100/900ms
+   + DOMContentLoaded 150/900ms + fallback mobile 4000ms) disparavam até 4–5
+   ATLAS_REQUEST_DATA por tabela em ~1s. Cada pedido faz o parent clonar e postar a
+   base COMPLETA (structured clone de dezenas de milhares de linhas) — o maior custo
+   de CPU/memória do boot no celular. Janela de 3s por tabela: o 1º pedido passa, os
+   redundantes viram no-op; retries legítimos (>3s depois) continuam funcionando. */
+var __PD_REQ_TS = { szb: 0, szc: 0, szy: 0 };
+function __pdShouldRequest(t){
+  var now = Date.now();
+  if (now - (__PD_REQ_TS[t] || 0) < 3000) return false;
+  __PD_REQ_TS[t] = now;
+  return true;
+}
+/* [PERF][PD] Recalc coalescido: no boot, SZB → fullRebuild/recalc, e logo em
+   seguida SZC e SZY chegam (parent + nuvem), cada um disparando OUTRO recalc —
+   3 destruições/recriações de todos os gráficos em <1s (a "oscilação" no fim do
+   carregamento). Este agendador junta chamadas próximas em UM recalc, 200ms após
+   a última chegada. recalc() em si e todos os cálculos permanecem idênticos. */
+var __PD_RECALC_T = null;
+function schedulePDRecalc(){
+  if (__PD_RECALC_T) clearTimeout(__PD_RECALC_T);
+  __PD_RECALC_T = setTimeout(function(){
+    __PD_RECALC_T = null;
+    try { recalc(); } catch(e) { console.warn('[PD Diário] recalc coalescido:', e.message); }
+  }, 200);
+}
 var __PD_GEN = 0;                // geração monotônica: incrementa a cada recalc
 var __PD_CTX = '';               // assinatura do contexto atual (geração + uid|mes)
 var __PD_TAB_BUILT = {};         // aba -> __PD_CTX com que foi montada
@@ -2427,7 +2482,7 @@ async function loadF(file){
     ldSet(100,'Pronto!');
     await new Promise(r=>setTimeout(r,400));
     ldHide();
-    setTimeout(triggerAI,800);
+    scheduleTriggerAI(); // [PERF][PD] coalescido — recalc já agenda a IA; evita 2ª execução
   } catch(e){
     ldHide();
     alert('Erro ao carregar arquivo: '+e.message);
@@ -2550,6 +2605,8 @@ function fullRebuild(){
 }
 
 function recalc(){
+  // [PERF][PD] Se um recalc coalescido estava agendado, este recalc já o cobre.
+  if (typeof __PD_RECALC_T !== 'undefined' && __PD_RECALC_T) { clearTimeout(__PD_RECALC_T); __PD_RECALC_T = null; }
   const uid=document.getElementById('su').value;
   const mes=document.getElementById('sm').value;
   if(!mes) return;
@@ -4230,7 +4287,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
           fullRebuild();
           ldSet(100, 'Pronto!');
           setTimeout(ldHide, 350);
-          setTimeout(triggerAI, 1000);
+          scheduleTriggerAI(); // [PERF][PD] coalescido com o agendamento do recalc
         } else {
           ldHide();
           pdPreloadEmpty('Nenhum dado encontrado na nuvem para este perfil.');
@@ -4253,7 +4310,7 @@ window.addEventListener('DOMContentLoaded', ()=>{
         fullRebuild();
         ldSet(100, 'Pronto!');
         setTimeout(ldHide, 350);
-        setTimeout(triggerAI, 1000);
+        scheduleTriggerAI(); // [PERF][PD] coalescido com o agendamento do recalc
       } else {
         ldHide();
         pdPreloadEmpty('Nenhum dado salvo na nuvem.');
@@ -5076,6 +5133,12 @@ function atlasParentSZC() {
 function applyAtlasSZC(parentData, origem) {
   if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
   if (parentData.scope) setAtlasPDScope(parentData.scope);
+  // [PERF][PD] Saída antes da normalização (mesma lógica do SZB).
+  var __pre = (parentData.ts || '') + '|' + parentData.rows.length + '|' + __pdScopeKey();
+  if (__pre === __PD_PRE_SIG.szc && SZC_DATA && SZC_DATA.length) {
+    console.log('[PERF][PD] SZC ignorado antes da normalização (versão já aplicada)');
+    return true;
+  }
   var rows = normalizeAtlasSZCRows(parentData.rows);
   rows = atlasFilterRowsForScope(rows, 'szc');
   if (!rows.length) return false;
@@ -5087,10 +5150,12 @@ function applyAtlasSZC(parentData, origem) {
     return true;
   }
   __PD_SZC_SIG = __sig;
+  __PD_PRE_SIG.szc = __pre;
   RAW_SZC = rows;
   SZC_DATA = enrichSZC(RAW_SZC);
   if (DATA.length || RAW.length) {
-    try { recalc(); } catch(e) { console.warn('[PD Diário] recalc SZC:', e.message); }
+    // [PERF][PD] Coalescido: se SZY chegar logo em seguida (boot), vira UM recalc só.
+    schedulePDRecalc();
   }
   return true;
 }
@@ -5103,6 +5168,7 @@ function tryAtlasSZC() {
 function requestAtlasSZC() {
   try {
     if (window.parent && window.parent !== window) {
+      if (!__pdShouldRequest('szc')) return; // [PERF][PD] dedup 3s
       window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szc'}, '*');
     }
   } catch(e) {}
@@ -5111,6 +5177,12 @@ function requestAtlasSZC() {
 
 function applyAtlasSZY(parentData, origem) {
   if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
+  // [PERF][PD] Saída antes da normalização (SZY não é filtrada por escopo).
+  var __pre = (parentData.ts || '') + '|' + parentData.rows.length;
+  if (__pre === __PD_PRE_SIG.szy && RAW_SZY && RAW_SZY.length) {
+    console.log('[PERF][PD] SZY ignorado antes da normalização (versão já aplicada)');
+    return true;
+  }
   var rows = normalizeAtlasSZYRows(parentData.rows);
   if (!rows.length) return false;
   // [PERF][PD] Idempotência: a SZY pode chegar do parent E do Firestore (corrida).
@@ -5120,10 +5192,12 @@ function applyAtlasSZY(parentData, origem) {
     return true;
   }
   __PD_SZY_SIG = __sig;
+  __PD_PRE_SIG.szy = __pre;
   RAW_SZY = rows;
   rebuildSZYMap();
   if (DATA.length || RAW.length) {
-    try { recalc(); } catch(e) { console.warn('[PD Diário] recalc SZY:', e.message); }
+    // [PERF][PD] Coalescido junto com o recalc da SZC quando ambas chegam no boot.
+    schedulePDRecalc();
   }
   return true;
 }
@@ -5131,6 +5205,7 @@ function tryAtlasSZY() { return false; }
 function requestAtlasSZY() {
   try {
     if (window.parent && window.parent !== window) {
+      if (!__pdShouldRequest('szy')) return; // [PERF][PD] dedup 3s
       window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szy'}, '*');
     }
   } catch(e) {}
@@ -5166,6 +5241,16 @@ function setAtlasSyncMsg(txt, ok) {
 function applyAtlasSZB(parentData, origem) {
   if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
   if (parentData.scope) setAtlasPDScope(parentData.scope);
+  // [PERF][PD] Saída ANTES da normalização: mesma versão (ts) + mesma contagem
+  // bruta + mesmo escopo ⇒ payload idêntico ao já aplicado. O guard antigo só
+  // rodava depois de normalizar+filtrar a base inteira — cada resposta duplicada
+  // do parent custava uma varredura completa das linhas no mobile.
+  var __pre = (parentData.ts || '') + '|' + parentData.rows.length + '|' + __pdScopeKey();
+  if (__pre === __PD_PRE_SIG.szb && DATA.length) {
+    console.log('[PERF][PD] SZB ignorado antes da normalização (versão já carregada) ' + (origem||''));
+    try { parentData.rows = null; } catch(_) {}
+    return true;
+  }
   var rows = normalizeAtlasSZBRows(parentData.rows);
   rows = atlasFilterRowsForScope(rows, 'szb');
   if (!rows.length) return false;
@@ -5181,6 +5266,7 @@ function applyAtlasSZB(parentData, origem) {
     return true;
   }
   __PD_SZB_SIG = __sig;
+  __PD_PRE_SIG.szb = __pre;
   console.log('[PERF][PD] SZB aplicado: ' + rows.length + ' reg — ' + (origem||''));
 
   // Mesmo contrato usado após parseXLSM(file): RAW recebe registros; DATA é recriado por fullRebuild/enrich.
@@ -5216,17 +5302,30 @@ function applyAtlasSZB(parentData, origem) {
   ldShow();
   ldSet(80, 'Montando dashboard…');
   fullRebuild();
+  // [PERF][PD] Antes, o fallback da nuvem (Firestore) disparava IMEDIATAMENTE em
+  // paralelo ao pedido ao parent — na prática as duas fontes respondiam e a base
+  // era baixada/processada em dobro (o guard só descartava no fim). Agora o
+  // Firestore continua como fallback (mesma coleção, mesmos dados), mas só roda
+  // se o parent NÃO entregar a tabela em 1,2s. Fonte de dados inalterada.
   if (!tryAtlasSZC()) {
     requestAtlasSZC();
-    loadSZCFromFirestore().then(function(szc){ if(szc) applyAtlasSZC(szc, 'Nuvem SZC'); }).catch(function(){});
+    setTimeout(function(){
+      if (RAW_SZC && RAW_SZC.length) return; // parent já entregou
+      loadSZCFromFirestore().then(function(szc){ if(szc) applyAtlasSZC(szc, 'Nuvem SZC'); }).catch(function(){});
+    }, 1200);
   }
   if (!tryAtlasSZY()) {
     requestAtlasSZY();
-    loadSZYFromFirestore().then(function(szy){ if(szy) applyAtlasSZY(szy, 'Nuvem SZY'); }).catch(function(){});
+    setTimeout(function(){
+      if (RAW_SZY && RAW_SZY.length) return; // parent já entregou
+      loadSZYFromFirestore().then(function(szy){ if(szy) applyAtlasSZY(szy, 'Nuvem SZY'); }).catch(function(){});
+    }, 1200);
   }
   ldSet(100, 'Pronto!');
   setTimeout(ldHide, 350);
-  setTimeout(triggerAI, 800);
+  // [PERF][PD] IA agora passa pelo agendador coalescido (recalc também agenda);
+  // antes este setTimeout direto gerava uma 2ª execução completa de runAI.
+  scheduleTriggerAI();
   return true;
 }
 
@@ -5238,6 +5337,9 @@ function tryAtlasSZB() {
 function requestAtlasSZB() {
   try {
     if (window.parent && window.parent !== window) {
+      // [PERF][PD] Dedup 3s: cada pedido faz o parent clonar e postar a base
+      // inteira. Os timers de boot redundantes viram no-op; retries >3s passam.
+      if (!__pdShouldRequest('szb')) return;
       window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szb'}, '*');
       setAtlasSyncMsg('Aguardando SZB da Download Base…', false);
     }
@@ -5381,7 +5483,28 @@ window.addEventListener('message', function(event) {
 
 <script id="atlas-pd-mobile-fit">
 (function(){
-  var raf = 0;
+  /* [PERF][PD] Correção do LOOP de retroalimentação que travava o mobile:
+     ANTES: o MutationObserver observava body inteiro com attributes+characterData
+     +childList. Cada mutação → rAF → applyMobileClass → 3 timers chamando
+     chart.resize() em TODOS os gráficos. Só que chart.resize() altera os
+     atributos width/height dos <canvas> → o observer disparava DE NOVO →
+     novo ciclo de resizes, indefinidamente. Durante o carregamento (centenas de
+     innerHTML), isso virava um redimensionamento contínuo de todos os canvases —
+     a causa direta da tela "oscilando" no fim do load e dos minutos de espera
+     em Samsung/Android.
+     AGORA:
+     1) O observer só escuta childList (estrutura). Mudanças de atributo do
+        próprio chart.resize() não retroalimentam o ciclo.
+     2) Mutações de DOM só disparam resize dos gráficos se algo RELEVANTE mudou:
+        o estado mobile/desktop trocou OU o nº de canvases mudou (gráfico novo).
+        Texto/valores atualizando não redimensiona nada.
+     3) Eventos reais de viewport (resize/orientation/pageshow/visualViewport)
+        continuam forçando o resize SEMPRE — comportamento original preservado.
+     4) Coalescência com debounce de 120ms: rajadas de mutações viram 1 passada.
+     Nenhuma função foi removida: classe .atlas-pd-mobile, resize dos gráficos e
+     o hook window.atlasFitPDDashboard continuam existindo e funcionando. */
+  var tmr = 0, rsz = [0,0,0];
+  var lastMobile = null, lastCanvasCount = -1;
   function resizeChartsSoon(){
     try {
       if (typeof CHS !== 'undefined' && CHS) {
@@ -5391,34 +5514,49 @@ window.addEventListener('message', function(event) {
       }
     } catch(e) {}
   }
-  function applyMobileClass(){
+  function scheduleResizes(){
+    // Mesmas 3 janelas de antes (60/250/700ms), mas coalescidas: uma nova
+    // solicitação reinicia os timers em vez de empilhar novos.
+    clearTimeout(rsz[0]); clearTimeout(rsz[1]); clearTimeout(rsz[2]);
+    rsz[0]=setTimeout(resizeChartsSoon, 60);
+    rsz[1]=setTimeout(resizeChartsSoon, 250);
+    rsz[2]=setTimeout(resizeChartsSoon, 700);
+  }
+  function applyMobileClass(force){
     var mobile = false;
     try { mobile = (window.matchMedia && (window.matchMedia('(hover:none) and (pointer:coarse)').matches || window.matchMedia('(max-width:900px)').matches)); } catch(e) {}
-    document.documentElement.classList.toggle('atlas-pd-mobile', !!mobile);
-    setTimeout(resizeChartsSoon, 60);
-    setTimeout(resizeChartsSoon, 250);
-    setTimeout(resizeChartsSoon, 700);
+    mobile = !!mobile;
+    document.documentElement.classList.toggle('atlas-pd-mobile', mobile);
+    var canvases = 0;
+    try { canvases = document.getElementsByTagName('canvas').length; } catch(e) {}
+    var changed = (mobile !== lastMobile) || (canvases !== lastCanvasCount);
+    lastMobile = mobile; lastCanvasCount = canvases;
+    if (force || changed) scheduleResizes();
   }
-  function queue(){
-    cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(applyMobileClass);
+  function queueSoft(){ // mutações de DOM: só age se algo relevante mudou
+    clearTimeout(tmr);
+    tmr = setTimeout(function(){ applyMobileClass(false); }, 120);
   }
-  window.atlasFitPDDashboard = queue;
-  window.addEventListener('resize', queue, {passive:true});
-  window.addEventListener('orientationchange', queue, {passive:true});
-  window.addEventListener('pageshow', queue, {passive:true});
+  function queueForce(){ // eventos reais de viewport: sempre redimensiona
+    clearTimeout(tmr);
+    tmr = setTimeout(function(){ applyMobileClass(true); }, 60);
+  }
+  window.atlasFitPDDashboard = queueForce;
+  window.addEventListener('resize', queueForce, {passive:true});
+  window.addEventListener('orientationchange', queueForce, {passive:true});
+  window.addEventListener('pageshow', queueForce, {passive:true});
   if(window.visualViewport){
-    window.visualViewport.addEventListener('resize', queue, {passive:true});
-    window.visualViewport.addEventListener('scroll', queue, {passive:true});
+    window.visualViewport.addEventListener('resize', queueForce, {passive:true});
+    window.visualViewport.addEventListener('scroll', queueForce, {passive:true});
   }
   document.addEventListener('DOMContentLoaded', function(){
     if(window.MutationObserver){
       var root = document.getElementById('atlas_pd_canvas') || document.body;
-      new MutationObserver(queue).observe(root, {childList:true, subtree:true, attributes:true, characterData:true});
+      new MutationObserver(queueSoft).observe(root, {childList:true, subtree:true});
     }
-    queue();
+    queueForce();
   });
-  queue();
+  queueForce();
 })();
 </script>
 
