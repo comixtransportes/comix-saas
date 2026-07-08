@@ -2579,6 +2579,22 @@ function recalc(){
     const gF=gDiasTrab>0?gDiasOp/gDiasTrab:1;
     window._PROJ_FAT_FACTOR  = gF;
     window._PROJ_PROD_FACTOR = gF;
+    // [FIX CONSOLIDADO] Fatores POR FILIAL. Na visão "Todas", cada filial tem seu
+    // próprio calendário (feriado estadual/municipal ⇒ diasOp diferentes) e seus
+    // próprios dias trabalhados (um domingo trabalhado só no PR não pode diluir a
+    // média de SC/SP). Aplicar o fator agregado (união de datas ÷ diasOp nacional)
+    // faz Σ(projeções por filial) ≠ projeção consolidada. calcProj usa este mapa
+    // para projetar cada registro pelo fator da SUA filial — assim a soma das
+    // linhas de qualquer aba = Σ das projeções por filial = header da Visão Geral.
+    const unidsF = uid==='all' ? pdOpsForAll() : [uid];
+    const factors = {};
+    unidsF.forEach(u=>{
+      const dmU = dmGlobal.filter(r=>r.op===u);
+      const dtU = [...new Set(dmU.map(r=>r.data))].filter(d=>d && d<hojeISO).length;
+      const opU = diasOpMes(gA,gM,u);
+      factors[u] = dtU>0 ? opU/dtU : 1;
+    });
+    window._PROJ_FACTORS = factors;
     window._PROJ_UID=uid; window._PROJ_MES=mes;
   })();
   const ulbl=uid==='all'?'Todas':(getPAByMes(mes)[uid]||{}).label||uid;
@@ -2668,8 +2684,35 @@ function buildVG(uid, mes){
   // necessário para esses casos.
   const diasTrabFech=datasFech.length;
   const tmFech=prodFech>0?fatFech/prodFech:0;
-  // Fat/Dia Útil = Realizado fechado ÷ dias trabalhados (regra SZB)
-  const medD=diasTrabFech>0?fatFech/diasTrabFech:0;
+  // ═══ [FIX CONSOLIDADO] Base por filial para projeção e Fat/Dia Útil ═══
+  // Na visão "Todas", a regra SZB aplicada sobre o AGREGADO não é equivalente à
+  // soma das filiais: (1) a união de datas trata um domingo trabalhado em UMA
+  // filial como dia trabalhado de todas, diluindo a média diária; (2) diasOp('all')
+  // ignora feriados estaduais/municipais (ex.: SP com 26 dias úteis vs 27 nas
+  // demais). Consequência: Σ(projetado por filial) ≠ projetado consolidado.
+  // Correção: consolidado = Σ das parcelas por filial, cada uma com seus próprios
+  // dias trabalhados e dias úteis. Piso por filial = realizado fechado da filial.
+  const _porFilial=(uid==='all')?pdOpsForAll().map(u=>{
+    const dmUF=dmFech.filter(r=>r.op===u);
+    const fatU=dmUF.reduce((a,r)=>a+r.fat,0);
+    const prodU=dmUF.reduce((a,r)=>a+r.peso_t,0);
+    const dtU=[...new Set(dmUF.map(r=>r.data))].length;
+    const opU=diasOpMes(ano,mesN,u);
+    return {u,fatU,prodU,dtU,opU};
+  }):null;
+  // Registros fechados sem filial identificada (fallback: regra agregada legada)
+  const _semOp=(uid==='all')?dmFech.filter(r=>!(r.op!=null && pdOpsForAll().includes(r.op))):[];
+  const _semOpFat=_semOp.reduce((a,r)=>a+r.fat,0);
+  const _semOpProd=_semOp.reduce((a,r)=>a+r.peso_t,0);
+  const _semOpDt=[...new Set(_semOp.map(r=>r.data))].length;
+  // Fat/Dia Útil (realizado):
+  //  - filial única: Realizado fechado ÷ dias trabalhados (regra SZB da planilha)
+  //  - Todas: Σ dos ritmos diários por filial — o ritmo diário da EMPRESA é a soma
+  //    dos ritmos das filiais; dividir o total pela união de datas subestima o
+  //    ritmo sempre que uma filial trabalha um dia em que as outras não trabalham.
+  const medD=(uid==='all')
+    ? _porFilial.reduce((a,x)=>a+(x.dtU>0?x.fatU/x.dtU:0),0) + (_semOpDt>0?_semOpFat/_semOpDt:0)
+    : (diasTrabFech>0?fatFech/diasTrabFech:0);
   // Dias úteis restantes no calendário, de HOJE (inclusive) até o fim do mês
   // (usado apenas pelo card "Necessário/Dia p/ PA"). Dia útil já perdido não volta.
   const diasRestCal=diasUteisRestantes(ano,mesN,uid);
@@ -2677,8 +2720,24 @@ function buildVG(uid, mes){
   // ═══ [REGRA SZB] Projeção de Fechamento — fórmula oficial da planilha ═══
   //   Projetado = Realizado_fechado ÷ dias_trabalhados × dias_úteis_mês
   // Piso = realizado fechado: a projeção nunca fica abaixo do já consolidado.
-  const proj    =mesFechado?fat :(diasTrabFech>0?Math.max(fatFech /diasTrabFech*diasOp, fatFech ):0);
-  const prodProjSZB=mesFechado?prod:(diasTrabFech>0?Math.max(prodFech/diasTrabFech*diasOp, prodFech):0);
+  // [FIX CONSOLIDADO] Em "Todas", aplica a fórmula POR FILIAL e soma — garante
+  // Projeção(Todas) = Projeção(SC) + Projeção(PR) + Projeção(SP).
+  let proj, prodProjSZB;
+  if(mesFechado){
+    proj=fat; prodProjSZB=prod;
+  }else if(uid==='all'){
+    proj=0; prodProjSZB=0;
+    _porFilial.forEach(x=>{
+      proj       += x.dtU>0?Math.max(x.fatU /x.dtU*x.opU, x.fatU ):x.fatU;
+      prodProjSZB+= x.dtU>0?Math.max(x.prodU/x.dtU*x.opU, x.prodU):x.prodU;
+    });
+    // fallback para registros sem filial: projeta pela regra agregada
+    proj       += _semOpDt>0?Math.max(_semOpFat /_semOpDt*diasOp, _semOpFat ):_semOpFat;
+    prodProjSZB+= _semOpDt>0?Math.max(_semOpProd/_semOpDt*diasOp, _semOpProd):_semOpProd;
+  }else{
+    proj       =diasTrabFech>0?Math.max(fatFech /diasTrabFech*diasOp, fatFech ):0;
+    prodProjSZB=diasTrabFech>0?Math.max(prodFech/diasTrabFech*diasOp, prodFech):0;
+  }
   const pf    =paFat ?fatFech/paFat*100 :0;
   const pp    =paProd?prodFech/paProd*100:0;
   const ppj   =paFat ?proj/paFat*100:0;
@@ -3048,7 +3107,11 @@ function buildVG(uid, mes){
   document.getElementById('pv-nec').textContent=diasR>0?R(fatN):'—';
   document.getElementById('ps-nec').textContent=diasR+' dias restantes';
   document.getElementById('pv-fdu').textContent=R(medD);
-  document.getElementById('ps-fdu').textContent=`${diasTrabFech} dias trabalhados`;
+  // [FIX CONSOLIDADO] Em "Todas", medD = Σ dos ritmos diários por filial; o rótulo
+  // "N dias trabalhados" (união de datas) deixaria de descrever o cálculo.
+  document.getElementById('ps-fdu').textContent=uid==='all'
+    ? 'Σ ritmo/dia das filiais'
+    : `${diasTrabFech} dias trabalhados`;
 
   const dieselKPI = calcDieselKPI(uid, mes, fat);
   const elDieselPm = document.getElementById('pv-diesel-pm');
@@ -3075,7 +3138,7 @@ function buildVG(uid, mes){
 //   Dias_trabalhados_GLOBAIS = dias distintos com qualquer registro na operação
 //   (= célula "Dias trabalhados" da planilha — NÃO os dias do cliente individualmente)
 // ═══════════════════════════════════════════════════════
-function calcProj(mes, fatReal, prodReal, fatFech, prodFech, uid){
+function calcProj(mes, fatReal, prodReal, fatFech, prodFech, uid, arr){
   // Mês fechado (anterior ao mês atual): projetado = realizado
   const _hoje=new Date();
   const [_ano,_mesN]=mes.split('-').map(Number);
@@ -3086,10 +3149,33 @@ function calcProj(mes, fatReal, prodReal, fatFech, prodFech, uid){
   // o chamador informa; senão cai no realizado cheio (retrocompat.).
   const baseFat  = (fatFech  !== undefined && fatFech  !== null) ? fatFech  : fatReal;
   const baseProd = (prodFech !== undefined && prodFech !== null) ? prodFech : prodReal;
-  // [REGRA SZB] Aplica o fator global (diasOp/diasTrab) calculado no recalc — mesma projeção
+  // [REGRA SZB] Aplica o fator (diasOp/diasTrab) calculado no recalc — mesma projeção
   // da Visão Geral. Garante que a soma das linhas = "Projeção de Fechamento" do header, sem dupla contagem
   // de domingo e sem tratar dia útil não trabalhado como recuperável.
   if(window._PROJ_MES===mes && window._PROJ_UID===uid){
+    // [FIX CONSOLIDADO] Na visão "Todas", projeta cada parcela pelo fator da SUA
+    // filial (calendário e dias trabalhados próprios). O fator agregado (legado)
+    // fica como fallback para registros sem filial identificada e para chamadas
+    // antigas que não passam o array de registros.
+    if(uid==='all' && Array.isArray(arr) && window._PROJ_FACTORS){
+      const hj=pdHojeISO();
+      const fLegF=window._PROJ_FAT_FACTOR||1, fLegP=window._PROJ_PROD_FACTOR||1;
+      const byOp={};
+      arr.forEach(r=>{
+        if(!(r.data && r.data<hj)) return;               // base fechada (sem hoje)
+        const k=(r.op!=null && window._PROJ_FACTORS[r.op]!==undefined)?r.op:'__leg__';
+        if(!byOp[k]) byOp[k]={f:0,p:0};
+        byOp[k].f+=r.fat; byOp[k].p+=(r.peso_t||0);
+      });
+      let fatProj=0, prodProj=0;
+      Object.entries(byOp).forEach(([k,s])=>{
+        const fF=k==='__leg__'?fLegF:window._PROJ_FACTORS[k];
+        // Piso por filial = base fechada da filial: nunca projeta abaixo do consolidado.
+        fatProj +=Math.max(s.f*fF, s.f);
+        prodProj+=Math.max(s.p*fF, s.p);
+      });
+      return {fatProj, prodProj};
+    }
     const fF=window._PROJ_FAT_FACTOR||1, fP=window._PROJ_PROD_FACTOR||1;
     // Piso = base FECHADA (sem hoje). O realizado do dia atual não infla a projeção da linha.
     return { fatProj:Math.max(baseFat*fF, baseFat), prodProj:Math.max(baseProd*fP, baseProd) };
@@ -3113,7 +3199,7 @@ function buildCl(uid,mes){
     const s=agg(arr);
     const datas=[...new Set(arr.map(r=>r.data))];
     const sF=aggFechado(arr);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
     return{rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj};
   }).sort((a,b)=>b.f-a.f);
   document.getElementById('cnt-cl').textContent=' — '+rows.length+' clientes';
@@ -3185,10 +3271,11 @@ function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
   // Para cada mês: realizado; para o mês atual usa fatProj via calcProj
   const _hjISO = pdHojeISO();
   const fats = ult12.map(m=>{
-    const fatReal = allRota.filter(r=>r.mes===m).reduce((a,r)=>a+r.fat,0);
+    const rowsM   = allRota.filter(r=>r.mes===m);
+    const fatReal = rowsM.reduce((a,r)=>a+r.fat,0);
     if(m === mesAtual){
-      const fatRealF = allRota.filter(r=>r.mes===m && r.data && r.data<_hjISO).reduce((a,r)=>a+r.fat,0);
-      const {fatProj} = calcProj(m, fatReal, 0, fatRealF, 0, _clUID);
+      const fatRealF = rowsM.filter(r=>r.data && r.data<_hjISO).reduce((a,r)=>a+r.fat,0);
+      const {fatProj} = calcProj(m, fatReal, 0, fatRealF, 0, _clUID, rowsM);
       return fatProj;
     }
     return fatReal;
@@ -3286,7 +3373,7 @@ function buildTa(uid,mes){
     const[op,rota,rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
     const s=agg(arr);
     const sF=aggFechado(arr);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
     return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
   }).sort((a,b)=>b.f-a.f);
   rows.forEach(r=>{
@@ -3526,7 +3613,7 @@ function buildFr(uid,mes){
     const arrOrd=arr.slice().sort((a,b)=>(b.data||'').localeCompare(a.data||''));
     const mt=arrOrd[0]?arrOrd[0].mot:'';
     const sF=aggFechado(arr);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
     // Valor comparado depende do modo: ritmo=projetado, pontual=realizado
     const valComp = base==='ritmo' ? fatProj : s.f;
     const atingPct= meta>0 ? Math.min(valComp/meta*100,100) : 0;
@@ -3621,7 +3708,7 @@ function _buildCcTable(uid, mes, diaSel) {
     const[rem,frt]=k.split('§');
     const s=agg(arr);
     const sF=aggFechado(arr);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
     // Dados do dia selecionado para este grupo
     const arrDia = gDia[k] || [];
     const sDia = arrDia.length ? agg(arrDia) : {p:0,f:0};
@@ -3642,7 +3729,7 @@ function _buildCcTable(uid, mes, diaSel) {
     const prodReal=arr.reduce((a,r)=>a+(r.prod||0),0);
     const fatRealF=arr.filter(r=>r.data && r.data<_hjISO2).reduce((a,r)=>a+r.fat,0);
     const prodRealF=arr.filter(r=>r.data && r.data<_hjISO2).reduce((a,r)=>a+(r.prod||0),0);
-    const {fatProj}=calcProj(mes,fatReal,prodReal,fatRealF,prodRealF,uid);
+    const {fatProj}=calcProj(mes,fatReal,prodReal,fatRealF,prodRealF,uid,arr);
     return {rem,f:fatReal,fatProj};
   }).sort((a,b)=>b.f-a.f).slice(0,10);
   // Mês anterior
@@ -4393,7 +4480,27 @@ function buildDataSummary(uid, mes) {
     aiFatFech+=fds[i]; aiDatasFech.add(d);
   });
   const aiDiasTrab=aiDatasFech.size;
-  const proj=aiDiasTrab>0?Math.max(aiFatFech/aiDiasTrab*diasOp, aiFatFech):aiFatFech;
+  // [FIX CONSOLIDADO] Mesma regra da Visão Geral: em "Todas", projeta por filial
+  // (dias trabalhados e dias úteis próprios) e soma; senão, fórmula SZB direta.
+  let proj;
+  if(uid==='all'){
+    proj=0;
+    const dmFechAI=dm.filter(r=>r.data && r.data<_hjAI);
+    const opsAI=pdOpsForAll();
+    opsAI.forEach(u=>{
+      const dmU=dmFechAI.filter(r=>r.op===u);
+      const fatU=dmU.reduce((a,r)=>a+r.fat,0);
+      const dtU=[...new Set(dmU.map(r=>r.data))].length;
+      const opU=diasOpMes(ano,mesN,u);
+      proj+=dtU>0?Math.max(fatU/dtU*opU, fatU):fatU;
+    });
+    const semOp=dmFechAI.filter(r=>!(r.op!=null && opsAI.includes(r.op)));
+    const soF=semOp.reduce((a,r)=>a+r.fat,0);
+    const soDt=[...new Set(semOp.map(r=>r.data))].length;
+    proj+=soDt>0?Math.max(soF/soDt*diasOp, soF):soF;
+  }else{
+    proj=aiDiasTrab>0?Math.max(aiFatFech/aiDiasTrab*diasOp, aiFatFech):aiFatFech;
+  }
   const fatConc=clientes.length>0?clientes.slice(0,2).reduce((a,c)=>a+c.f,0)/fatTotal*100:0;
 
   return {
