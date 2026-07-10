@@ -1840,70 +1840,124 @@ function xmXmlCellNumber(v, styleId){
   if(v===''||v===null||v===undefined||!isFinite(Number(v))) return '<Cell ss:StyleID="'+styleId+'"/>';
   return '<Cell ss:StyleID="'+styleId+'"><Data ss:Type="Number">'+String(Number(v).toFixed(2))+'</Data></Cell>';
 }
+/* ── situação simplificada de associação (usada só no Excel) ── */
+function xmExcelSituacao(r){
+  if(r.status==='Interno')        return {label:'Interno',                 ord:4, tone:'Int'};
+  if(r.status==='Fora do escopo') return {label:'Fora do escopo',          ord:3, tone:'Int'};
+  if(r.status==='Associado manualmente' || r.status==='OK manual' || r.matchMode==='manualUsuario')
+                                  return {label:'ASSOCIADO MANUALMENTE',   ord:1, tone:'Man'};
+  if(r.f && r.m)                  return {label:'Associado automático',    ord:2, tone:'Auto'};
+  return {label:'PENDENTE DE ASSOCIAÇÃO', ord:0, tone:'Pend'};
+}
 function xmExportarExcel(){
   if(!(BASES.szb.loaded&&BASES.szc.loaded&&BASES.szi.loaded)){ toast('Aguardando SZB/SZC/SZI para exportar.','am'); return; }
   if(!MAPREF.loaded){ toast('Atualize/carregue o Mapinha antes de exportar.','am'); ensureMapinhaRefs(); return; }
   const rows=buildFechamentoXMapinha();
   if(!rows.length){ toast('Nenhuma linha para exportar no escopo atual.','am'); return; }
-  const headers=['Agregado','Código','Placa','Fonte','Data Fech.','NF Fech.','Prestador Fech.','Valor Fech.','Data Mapinha','NF Mapinha','Fornecedor Mapinha','Valor Mapinha','Delta','Iguais encontrados','Associação','CC aplicado','CC esperado','Status','Tratativa','Observação'];
+
+  /* uma linha por item, sem separação por agregado — pendências primeiro, depois manuais, automáticas, internas */
+  const linhas=rows.map(function(r){ return {r:r, sit:xmExcelSituacao(r)}; });
+  linhas.sort(function(a,b){
+    return a.sit.ord-b.sit.ord
+      || a.r.agregado.localeCompare(b.r.agregado)
+      || a.r.placa.localeCompare(b.r.placa)
+      || String((a.r.f&&a.r.f.data)||(a.r.m&&a.r.m.data)||'').localeCompare(String((b.r.f&&b.r.f.data)||(b.r.m&&b.r.m.data)||''));
+  });
+  const cnt={0:0,1:0,2:0,3:0,4:0};
+  linhas.forEach(function(x){ cnt[x.sit.ord]++; });
+
+  const headers=['Situação','Agregado','Código','Placa',
+    'Fonte','Data','Descrição','NF','Prestador','Valor (R$)',
+    'Data','NF','Fornecedor','Centro de custo','Valor (R$)',
+    'Δ (R$)','Status detalhado','Tratativa','Observações'];
+  const widths=[168,190,64,78, 52,72,220,86,210,90, 72,86,210,170,90, 84,168,220,420];
+  const NCOL=headers.length;
+
+  function bordas(){ return '<Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E3E6EA"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EFF1F3"/></Borders>'; }
+  function estilo(id, fill, fontColor, bold, num, center){
+    return '<Style ss:ID="'+id+'">'
+      +'<Font ss:FontName="Segoe UI" ss:Size="10"'+(bold?' ss:Bold="1"':'')+(fontColor?' ss:Color="'+fontColor+'"':'')+'/>'
+      +(fill?'<Interior ss:Color="'+fill+'" ss:Pattern="Solid"/>':'')
+      +bordas()
+      +'<Alignment ss:Horizontal="'+(num?'Right':(center?'Center':'Left'))+'" ss:Vertical="Center" ss:WrapText="1"/>'
+      +(num?'<NumberFormat ss:Format="#,##0.00"/>':'')
+      +'</Style>';
+  }
+  const TONE={ Pend:{fill:'#FDECEA',font:'#B3322E'}, Man:{fill:'#E8F5EC',font:'#1E7D44'}, Auto:{fill:'',font:'#2B5DA8'}, Int:{fill:'#F4F6FA',font:'#69788C'} };
+  let styles='';
+  Object.keys(TONE).forEach(function(t){
+    styles+=estilo('Sit'+t,  TONE[t].fill, TONE[t].font, true,  false, true);   /* célula Situação */
+    styles+=estilo('Txt'+t,  TONE[t].fill, '',           false, false, false);  /* texto            */
+    styles+=estilo('Num'+t,  TONE[t].fill, '',           false, true,  false);  /* números          */
+  });
+  styles+='<Style ss:ID="Titulo"><Font ss:FontName="Segoe UI" ss:Size="12" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F2A38" ss:Pattern="Solid"/><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>'
+    +'<Style ss:ID="GrpId"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#7F8C8D" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/></Style>'
+    +'<Style ss:ID="GrpFech"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#2C3E50" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/></Style>'
+    +'<Style ss:ID="GrpMap"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#148F77" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/></Style>'
+    +'<Style ss:ID="GrpAna"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#5D6D7E" ss:Pattern="Solid"/><Alignment ss:Horizontal="Center" ss:Vertical="Center"/></Style>'
+    +'<Style ss:ID="Header"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#34495E" ss:Pattern="Solid"/><Borders><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#4A6076"/></Borders><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/></Style>';
+
+  const titulo='FECHAMENTO x MAPINHA · '+mesLabel(ST.mesRef)+' · Filial '+(ST.filial==='all'?'TODAS':ST.filial)
+    +'   |   '+cnt[0]+' PENDENTE(S) DE ASSOCIAÇÃO · '+cnt[1]+' associada(s) manualmente · '+cnt[2]+' automática(s) · '+(cnt[3]+cnt[4])+' interna(s)/fora do escopo';
+
   let xml='<?xml version="1.0" encoding="UTF-8"?>\n<?mso-application progid="Excel.Sheet"?>\n'
     +'<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">'
-    +'<DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"><Author>COMIX Atlas</Author><Title>Fechamento Executivo</Title></DocumentProperties>'
-    +'<Styles>'
-    +'<Style ss:ID="Header"><Font ss:FontName="Segoe UI" ss:Size="11" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#2C3E50" ss:Pattern="Solid"/><Borders><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#FFFFFF"/><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#2C3E50"/></Borders><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/></Style>'
-    +'<Style ss:ID="Body"><Font ss:FontName="Segoe UI" ss:Size="10"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EBEDEF"/></Borders><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>'
-    +'<Style ss:ID="BodyAlt"><Font ss:FontName="Segoe UI" ss:Size="10"/><Interior ss:Color="#F8F9F9" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EBEDEF"/></Borders><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>'
-    +'<Style ss:ID="Num"><Font ss:FontName="Segoe UI" ss:Size="10"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EBEDEF"/></Borders><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><NumberFormat ss:Format="#,##0.00"/></Style>'
-    +'<Style ss:ID="NumAlt"><Font ss:FontName="Segoe UI" ss:Size="10"/><Interior ss:Color="#F8F9F9" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EBEDEF"/></Borders><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><NumberFormat ss:Format="#,##0.00"/></Style>'
-    +'<Style ss:ID="BodyEq"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Underline="Single"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EBEDEF"/></Borders><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>'
-    +'<Style ss:ID="BodyAltEq"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Underline="Single"/><Interior ss:Color="#F8F9F9" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EBEDEF"/></Borders><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>'
-    +'<Style ss:ID="NumEq"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Underline="Single"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EBEDEF"/></Borders><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><NumberFormat ss:Format="#,##0.00"/></Style>'
-    +'<Style ss:ID="NumAltEq"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Underline="Single"/><Interior ss:Color="#F8F9F9" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EBEDEF"/></Borders><Alignment ss:Horizontal="Right" ss:Vertical="Center"/><NumberFormat ss:Format="#,##0.00"/></Style>'
-    +'</Styles>'
-    +'<Worksheet ss:Name="Fechamento Executivo"><Table ss:DefaultRowHeight="15">';
-  headers.forEach(function(){ xml+='<Column ss:AutoFitWidth="0" ss:Width="360"/>'; });
-  xml+='<Row ss:Height="30">'+headers.map(function(h){ return xmXmlCellText(h,'Header'); }).join('')+'</Row>';
-  rows.forEach(function(r,idx){
-    const f=r.f, m=r.m;
+    +'<DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"><Author>COMIX Atlas</Author><Title>Fechamento x Mapinha — Associações</Title></DocumentProperties>'
+    +'<Styles>'+styles+'</Styles>'
+    +'<Worksheet ss:Name="Associações"><Table ss:DefaultRowHeight="16">';
+  widths.forEach(function(w){ xml+='<Column ss:AutoFitWidth="0" ss:Width="'+w+'"/>'; });
+
+  /* linha 1 — resumo */
+  xml+='<Row ss:Height="26"><Cell ss:StyleID="Titulo" ss:MergeAcross="'+(NCOL-1)+'"><Data ss:Type="String">'+xmExcelEsc(titulo)+'</Data></Cell></Row>';
+  /* linha 2 — grupos de colunas */
+  xml+='<Row ss:Height="18">'
+    +'<Cell ss:StyleID="GrpId" ss:MergeAcross="3"><Data ss:Type="String">IDENTIFICAÇÃO</Data></Cell>'
+    +'<Cell ss:StyleID="GrpFech" ss:MergeAcross="5"><Data ss:Type="String">DADOS DO FECHAMENTO</Data></Cell>'
+    +'<Cell ss:StyleID="GrpMap" ss:MergeAcross="4"><Data ss:Type="String">DADOS DO MAPINHA</Data></Cell>'
+    +'<Cell ss:StyleID="GrpAna" ss:MergeAcross="3"><Data ss:Type="String">ANÁLISE</Data></Cell>'
+    +'</Row>';
+  /* linha 3 — cabeçalhos */
+  xml+='<Row ss:Height="28">'+headers.map(function(h){ return xmXmlCellText(h,'Header'); }).join('')+'</Row>';
+
+  linhas.forEach(function(x){
+    const r=x.r, f=r.f, m=r.m, t=x.sit.tone;
     const valFech=xmExcelValorFech(f);
     const valMap=m?(+m.valor||0):'';
-    const delta=(f||m)?r.delta:'';
-    const eqValor=!!(f&&m&&Math.abs(valFech-(+m.valor||0))<=XMAP_TOL);
-    const eqNF=!!(f&&m&&xmNfCompat(f.nf,m.nf));
-    const eqForn=!!(f&&m&&xmFornecedorLinhaCompat(f,m));
-    const eqData=!!(f&&m&&f.data&&m.data&&String(f.data).slice(0,10)===String(m.data).slice(0,10));
-    const eqCC=!!(f&&m&&f.esperado&&m.centroCusto&&String(f.esperado)===String(m.centroCusto));
+    const delta=(f&&m)?r.delta:'';
     xml+='<Row>'
-      +xmXmlCellText(r.agregado, xmExcelStyle(idx,false,false))
-      +xmXmlCellText(r.cod, xmExcelStyle(idx,false,false))
-      +xmXmlCellText(r.placa, xmExcelStyle(idx,false,false))
-      +xmXmlCellText(f?f.fonte:'', xmExcelStyle(idx,false,false))
-      +xmXmlCellText(f?diaBR(f.data):'', xmExcelStyle(idx,false,eqData))
-      +xmXmlCellText(f?f.nf:'', xmExcelStyle(idx,false,eqNF))
-      +xmXmlCellText(xmExcelFornecedorFech(f), xmExcelStyle(idx,false,eqForn))
-      +xmXmlCellNumber(valFech, xmExcelStyle(idx,true,eqValor))
-      +xmXmlCellText(m?diaBR(m.data):'', xmExcelStyle(idx,false,eqData))
-      +xmXmlCellText(m?m.nf:'', xmExcelStyle(idx,false,eqNF))
-      +xmXmlCellText(xmExcelFornecedorMap(m), xmExcelStyle(idx,false,eqForn))
-      +xmXmlCellNumber(valMap, xmExcelStyle(idx,true,eqValor))
-      +xmXmlCellNumber(delta, xmExcelStyle(idx,true,false))
-      +xmXmlCellText(xmExcelIguais(r), xmExcelStyle(idx,false,false))
-      +xmXmlCellText(xmMatchLabel(r.matchMode||'manual'), xmExcelStyle(idx,false,false))
-      +xmXmlCellText(m?xmCC(m.centroCusto):'', xmExcelStyle(idx,false,eqCC))
-      +xmXmlCellText(f&&f.esperado?xmCC(f.esperado):(f&&f.interno?'n/a':'a revisar'), xmExcelStyle(idx,false,eqCC))
-      +xmXmlCellText(r.status, xmExcelStyle(idx,false,false))
-      +xmXmlCellText(xmTratativaResumo(r), xmExcelStyle(idx,false,false))
-      +xmXmlCellText(r.obs, xmExcelStyle(idx,false,false))
+      +xmXmlCellText(x.sit.label,'Sit'+t)
+      +xmXmlCellText(r.agregado,'Txt'+t)
+      +xmXmlCellText(r.cod,'Txt'+t)
+      +xmXmlCellText(r.placa,'Txt'+t)
+      +xmXmlCellText(f?f.fonte:'','Txt'+t)
+      +xmXmlCellText(f?diaBR(f.data):'','Txt'+t)
+      +xmXmlCellText(f?f.desc:'','Txt'+t)
+      +xmXmlCellText(f?f.nf:'','Txt'+t)
+      +xmXmlCellText(xmExcelFornecedorFech(f),'Txt'+t)
+      +xmXmlCellNumber(valFech,'Num'+t)
+      +xmXmlCellText(m?diaBR(m.data):'','Txt'+t)
+      +xmXmlCellText(m?m.nf:'','Txt'+t)
+      +xmXmlCellText(xmExcelFornecedorMap(m),'Txt'+t)
+      +xmXmlCellText(m?xmCC(m.centroCusto):'','Txt'+t)
+      +xmXmlCellNumber(valMap,'Num'+t)
+      +xmXmlCellNumber(delta,'Num'+t)
+      +xmXmlCellText(r.status,'Txt'+t)
+      +xmXmlCellText(xmTratativaResumo(r),'Txt'+t)
+      +xmXmlCellText(r.obs,'Txt'+t)
       +'</Row>';
   });
-  xml+='</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DoNotDisplayGridlines/><FreezePanes/><FrozenNoSplit/><SplitHorizontal>1</SplitHorizontal><TopRowBottomPane>1</TopRowBottomPane><ActivePane>2</ActivePane></WorksheetOptions></Worksheet></Workbook>';
+
+  xml+='</Table>'
+    +'<AutoFilter x:Range="R3C1:R'+(3+linhas.length)+'C'+NCOL+'" xmlns="urn:schemas-microsoft-com:office:excel"/>'
+    +'<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DoNotDisplayGridlines/><FreezePanes/><FrozenNoSplit/><SplitHorizontal>3</SplitHorizontal><TopRowBottomPane>3</TopRowBottomPane><ActivePane>2</ActivePane></WorksheetOptions></Worksheet></Workbook>';
+
   const blob=new Blob([xml],{type:'application/vnd.ms-excel;charset=utf-8;'});
   const a=document.createElement('a');
   a.href=URL.createObjectURL(blob);
-  a.download='fechamento_executivo_'+(ST.filial==='all'?'TODAS':ST.filial)+'_'+ST.mesRef+'.xls';
+  a.download='fechamento_x_mapinha_associacoes_'+(ST.filial==='all'?'TODAS':ST.filial)+'_'+ST.mesRef+'.xls';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(function(){ URL.revokeObjectURL(a.href); },800);
-  toast('Excel exportado no padrão executivo com '+rows.length+' linha(s).','gn');
+  toast('Excel exportado: '+cnt[0]+' pendente(s), '+cnt[1]+' manual(is), '+cnt[2]+' automática(s).','gn');
 }
 
 /* ── render principal da aba ── */
