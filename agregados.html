@@ -9,7 +9,7 @@
 :root{
   --f:'Segoe UI',system-ui,-apple-system,sans-serif; --m:'Consolas','SF Mono',Menlo,monospace;
   --bg:#F4F6FA; --wh:#FFFFFF; --tx:#1A2433; --mu:#69788C; --hd:#13243B;
-  --bd:#D8DFE8; --bd2:#EAEEF4; --ht:#F2F6FB;
+  --bd:#D8DFE8; --bd2:#EAEEF4; --ht:#F2F6FB; --sf:#F7F8FA;
   --ac:#2B5DA8; --ac-h:#234C8A; --ac-bg:#EAF1FA;
   --gn:#1E7D44; --gn-bg:#E8F5EC; --gn-bd:#BFE3CC;
   --rd:#B3322E; --rd-bg:#FBEAEA; --rd-bd:#EFC7C5;
@@ -36,6 +36,26 @@ h3{font-size:13px;font-weight:600}
 .tabs-r{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .sel{font-family:var(--f);font-size:11.5px;color:var(--tx);background:var(--wh);border:1px solid var(--bd);border-radius:3px;padding:3px 6px;height:28px;outline:none}
 .sel:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac-bg)}
+/* seletor de mês estilo calendário (idêntico ao PD) */
+.mes-field{position:relative;display:inline-flex;}
+.tb-mes{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--bd);border-radius:3px;padding:3px 8px;font-size:11px;font-family:var(--m);letter-spacing:-.2px;white-space:nowrap;background:var(--wh);color:var(--tx);height:24px;cursor:pointer;outline:none;}
+.tb-mes:hover{border-color:var(--ac);}
+.tb-mes-ic{color:var(--mu);flex-shrink:0;}
+.tb-mes:hover .tb-mes-ic{color:var(--ac);}
+.mes-pop{position:fixed;z-index:9999;width:236px;background:var(--wh);border:1px solid var(--bd);border-radius:8px;box-shadow:var(--shd);padding:10px;display:none;}
+.mes-pop.on{display:block;}
+.mes-pop-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;user-select:none;}
+.mes-pop-yr{font-family:var(--m);font-size:14px;font-weight:600;color:var(--tx);letter-spacing:.5px;min-width:54px;text-align:center;}
+.mes-nav{width:26px;height:26px;border:1px solid var(--bd);background:var(--wh);border-radius:5px;color:var(--mu);font-size:16px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.12s;}
+.mes-nav:hover:not(:disabled){border-color:var(--ac);color:var(--ac);background:var(--ac-bg);}
+.mes-nav:disabled{opacity:.32;cursor:default;}
+.mes-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;}
+.mes-cell{font-family:var(--f);font-size:11.5px;font-weight:500;padding:7px 0;border:1px solid var(--bd2);border-radius:5px;background:var(--sf);color:var(--tx);cursor:pointer;text-align:center;transition:.12s;text-transform:capitalize;}
+.mes-cell:hover{border-color:var(--ac);color:var(--ac);background:var(--ac-bg);}
+.mes-cell.sel{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600;}
+.mes-cell.sel:hover{background:var(--ac-h);color:#fff;}
+.mes-cell.now{box-shadow:inset 0 0 0 1px var(--ac);}
+.mes-cell.disb{color:var(--mu);opacity:.4;cursor:default;pointer-events:none;}
 .btn{font-family:var(--f);font-size:12px;font-weight:600;padding:6px 12px;border-radius:var(--r);border:1px solid var(--bd);background:var(--wh);color:var(--tx);cursor:pointer}
 .btn:hover{background:var(--ht)}
 .btn.pri{background:var(--ac);border-color:var(--ac);color:#fff}.btn.pri:hover{background:var(--ac-h)}
@@ -304,7 +324,21 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
   <button class="tab" data-v="cons" onclick="tab('cons')">Consolidado</button>
   <button class="tab" data-v="xmap" onclick="tab('xmap')">Fechamento x Mapinha</button>
   <div class="tabs-r">
-    <select id="selMes" class="sel" onchange="onScopeChange()"></select>
+    <select id="selMes" class="sel" onchange="onScopeChange()" style="display:none"></select>
+    <div class="mes-field" id="ag-mes-field">
+      <button type="button" class="tb-mes" id="ag-mes-trigger" onclick="agToggleMesPop(event)" title="Período">
+        <svg class="tb-mes-ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+        <span id="ag-mes-lbl">—</span>
+      </button>
+      <div class="mes-pop" id="ag-mes-pop" aria-hidden="true" onwheel="agMesPopWheel(event)" title="Role para mudar o ano">
+        <div class="mes-pop-hd">
+          <button type="button" class="mes-nav" id="ag-mes-prev" onclick="agMesPopYear(-1)" title="Ano anterior">‹</button>
+          <span class="mes-pop-yr" id="ag-mes-pop-yr">—</span>
+          <button type="button" class="mes-nav" id="ag-mes-next" onclick="agMesPopYear(1)" title="Próximo ano">›</button>
+        </div>
+        <div class="mes-grid" id="ag-mes-grid"></div>
+      </div>
+    </div>
     <select id="selFilial" class="sel" onchange="onScopeChange()">
       <option value="SC">SC</option><option value="PR">PR</option><option value="SP">SP</option>
       <option value="all">Todas</option>
@@ -558,6 +592,85 @@ function montarMeses(){
   const atual=ST.mesRef && ord.includes(ST.mesRef) ? ST.mesRef : ord[0];
   sel.innerHTML=''; ord.forEach(m=>{ const o=new Option(mesLabel(m),m); sel.appendChild(o); });
   sel.value=atual; ST.mesRef=atual;
+  window._AG_MESES=ord; window._AG_MESES_SET=new Set(ord);
+  agUpdateMesLabel();
+}
+
+// ── Seletor de mês estilo calendário (espelha o PD) ─────────────────
+// O <select id="selMes"> (oculto) continua sendo o detentor do valor: onScopeChange() lê/escreve nele.
+// O calendário apenas grava selMes.value e dispara onScopeChange.
+const AG_MESES_ABREV=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+let _agMesPopYear=null;
+function agMesYears(){
+  const ys=[...new Set((window._AG_MESES||[]).map(m=>+String(m).split('-')[0]))].filter(Boolean);
+  if(!ys.length) ys.push(new Date().getFullYear());
+  return {min:Math.min(...ys), max:Math.max(...ys)};
+}
+function agGetMes(){ const el=document.getElementById('selMes'); return el?el.value:''; }
+function agUpdateMesLabel(){
+  const lbl=document.getElementById('ag-mes-lbl'); if(!lbl) return;
+  const v=agGetMes(); lbl.textContent = v ? mesLabel(v) : '—';
+}
+function agToggleMesPop(ev){
+  if(ev)ev.stopPropagation();
+  const pop=document.getElementById('ag-mes-pop'); if(!pop)return;
+  if(pop.classList.contains('on')){ agCloseMesPop(); return; }
+  const cur=(agGetMes()||'').split('-');
+  const yr=agMesYears();
+  _agMesPopYear = cur[0]? +cur[0] : new Date().getFullYear();
+  _agMesPopYear = Math.min(yr.max, Math.max(yr.min, _agMesPopYear));
+  agRenderMesPop();
+  const r=document.getElementById('ag-mes-trigger').getBoundingClientRect();
+  pop.style.top=(r.bottom+6)+'px';
+  pop.style.left=Math.max(8, r.right-236)+'px';
+  pop.classList.add('on'); pop.setAttribute('aria-hidden','false');
+  setTimeout(()=>document.addEventListener('click',agMesPopOutside),0);
+}
+function agCloseMesPop(){
+  const pop=document.getElementById('ag-mes-pop'); if(!pop)return;
+  pop.classList.remove('on'); pop.setAttribute('aria-hidden','true');
+  document.removeEventListener('click',agMesPopOutside);
+}
+function agMesPopOutside(e){
+  const fld=document.getElementById('ag-mes-field');
+  if(fld&&!fld.contains(e.target)) agCloseMesPop();
+}
+function agMesPopYear(delta){
+  const yr=agMesYears();
+  if(_agMesPopYear==null)_agMesPopYear=new Date().getFullYear();
+  const ny=_agMesPopYear+delta;
+  if(ny<yr.min||ny>yr.max)return;
+  _agMesPopYear=ny; agRenderMesPop();
+}
+function agMesPopWheel(e){ e.preventDefault(); agMesPopYear(e.deltaY>0?1:-1); }
+function agRenderMesPop(){
+  const yr=agMesYears();
+  const yrEl=document.getElementById('ag-mes-pop-yr'); if(yrEl)yrEl.textContent=_agMesPopYear;
+  const prev=document.getElementById('ag-mes-prev'), next=document.getElementById('ag-mes-next');
+  if(prev)prev.disabled=_agMesPopYear<=yr.min;
+  if(next)next.disabled=_agMesPopYear>=yr.max;
+  const cur=(agGetMes()||'').split('-');
+  const selY=cur[0]?+cur[0]:null, selM=cur[1]?+cur[1]:null;
+  const now=new Date(), nowY=now.getFullYear(), nowM=now.getMonth()+1;
+  const avail=window._AG_MESES_SET||new Set();
+  const grid=document.getElementById('ag-mes-grid'); if(!grid)return;
+  grid.innerHTML=AG_MESES_ABREV.map((nm,i)=>{
+    const m=i+1, mes=_agMesPopYear+'-'+String(m).padStart(2,'0');
+    const has=avail.has(mes);
+    const cls=['mes-cell'];
+    if(selY===_agMesPopYear&&selM===m)cls.push('sel');
+    if(nowY===_agMesPopYear&&nowM===m)cls.push('now');
+    if(!has)cls.push('disb');
+    const oc=has?(' onclick="agPickMes('+m+')"'):' disabled title="Sem dados neste mês"';
+    return '<button type="button" class="'+cls.join(' ')+'"'+oc+'>'+nm+'</button>';
+  }).join('');
+}
+function agPickMes(m){
+  const mes=_agMesPopYear+'-'+String(m).padStart(2,'0');
+  const sel=document.getElementById('selMes'); if(!sel)return;
+  if(!(window._AG_MESES_SET&&window._AG_MESES_SET.has(mes)))return; // mês sem dados: ignora
+  sel.value=mes;
+  agUpdateMesLabel(); agCloseMesPop(); onScopeChange();
 }
 function scopeSet(){ return ST.filial==='all' ? new Set(['SC','PR','SP']) : new Set([ST.filial]); }
 
