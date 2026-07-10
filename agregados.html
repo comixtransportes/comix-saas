@@ -1303,7 +1303,13 @@ function xmTratLocalLoad(){ try{ return JSON.parse(localStorage.getItem(XM_TRAT_
 function xmTratLocalSave(list){ try{ localStorage.setItem(XM_TRAT_LOCAL_KEY, JSON.stringify(list||[])); }catch(_){} }
 function xmMesclarTratativas(docs){
   const map={};
-  (docs||[]).forEach(function(d){ const x=Object.assign({id:d.id},d.data||{}); if(x.id) map[x.id]=x; });
+  (docs||[]).forEach(function(d){
+    if(!d) return;
+    /* aceita doc do Firestore ({id,data:{...}}) OU tratativa já achatada ({id,tipo,fechKey,...}) —
+       antes, tratativas achatadas viravam cascas {id} a cada merge, apagando associações em memória */
+    const x=(d.data && typeof d.data==='object') ? Object.assign({id:d.id},d.data) : d;
+    if(x.id) map[x.id]=x;
+  });
   xmTratLocalLoad().forEach(function(x){ if(x&&x.id) map[x.id]=x; });
   return Object.values(map).filter(function(x){ return x && x.active!==false; });
 }
@@ -1346,7 +1352,8 @@ async function xmSalvarTratativa(t){
   if(!t.usuario) t.usuario=xmGetUsuario();
   if(!t.id) t.id='XMAP_'+xmHash([t.tipo,t.scopeKey,t.fechKey||'',t.mapKey||'',t.rowKey||'',t.createdAt].join('|'));
   const loc=xmTratLocalLoad().filter(function(x){ return x.id!==t.id; }); loc.push(t); xmTratLocalSave(loc);
-  MAPREF.trat=xmMesclarTratativas(MAPREF.trat.concat([{id:t.id,data:t}]));
+  /* replace-in-place: não re-mescla a lista inteira (o merge corrompia as tratativas já achatadas) */
+  MAPREF.trat=(MAPREF.trat||[]).filter(function(x){ return x && x.id!==t.id; }).concat([t]);
   try{ await xmParent('setDoc',{collection:XM_TRAT_COLLECTION,docId:t.id,data:t,merge:true},12000); }
   catch(e){ console.warn('[Atlas/Agregados] tratativa salva localmente; ponte indisponível:', e.message); }
   return t;
@@ -2089,6 +2096,27 @@ function xmAbrirDossie(rowId){
   if(fSel && mSel){ XM_DOSSIE.pairs.fech[fSel]=1; XM_DOSSIE.pairs.map[mSel]=1; XM_DOSSIE.pairs.next=2; }
   else if(fSel){ XM_DOSSIE.pairs.fech[fSel]=1; XM_DOSSIE.pairs.active=1; XM_DOSSIE.pairs.next=2; }
   else if(mSel){ XM_DOSSIE.pairs.map[mSel]=1; XM_DOSSIE.pairs.active=1; XM_DOSSIE.pairs.next=2; }
+  /* pré-seleção: pares já encontrados pelo matcher automático (mesma placa/agregado, ainda pendentes)
+     entram numerados na ordem da lista do fechamento — o usuário só ajusta se necessário */
+  let autoPre=0;
+  (function(){
+    const p=XM_DOSSIE.pairs;
+    const fOrder={}; d.fech.forEach(function(f,i){ fOrder[f._xmKey]=i; });
+    const cands=(d.rel||[]).filter(function(r){
+      return xmDossieStatusAberto(r) && r.f && r.m && r.f._xmKey && r.m._xmKey
+        && r.matchMode && r.matchMode!=='manual'
+        && d.fMap[r.f._xmKey] && d.mMap[r.m._xmKey]
+        && !p.fech[r.f._xmKey] && !p.map[r.m._xmKey];
+    }).sort(function(a,b){ return (fOrder[a.f._xmKey]||0)-(fOrder[b.f._xmKey]||0); });
+    const seen={};
+    cands.forEach(function(r){
+      const fk=r.f._xmKey, mk=r.m._xmKey;
+      if(seen['F'+fk] || seen['M'+mk] || p.fech[fk] || p.map[mk]) return;
+      seen['F'+fk]=1; seen['M'+mk]=1;
+      const num=p.next++;
+      p.fech[fk]=num; p.map[mk]=num; autoPre++;
+    });
+  })();
   const fechRows=d.fech.map(function(f){
     const val=f._xmKey;
     return '<tr><td><button type="button" class="xm-dos-check" data-side="fech" data-key="'+escAttr(val)+'" onclick="xmDosTogglePairFromEl(this)"><span class="xm-dos-numbox"></span><span>'+esc(xmItemFechResumo(f))+'<br><span class="muted">'+esc(f.desc||'')+'</span></span></button></td></tr>';
@@ -2104,7 +2132,9 @@ function xmAbrirDossie(rowId){
     +'<div class="xm-dos-line"><b>Fechamento:</b> '+esc(xmItemFechResumo(row.f))+'</div>'
     +'<div class="xm-dos-line"><b>Mapinha:</b> '+esc(xmItemMapResumo(row.m))+'</div>'
     +xmSugestoesHTML(row,d)
-    +'<div class="xm-dos-pair-tip"><b>Associação em lote:</b> clique em uma linha de um lado e depois na correspondente do outro lado. As duas caixas recebem o mesmo número. Repita para formar os pares 2, 3, 4... <span id="xmDosPairStatus" class="xm-dos-pair-status"></span></div>'
+    +'<div class="xm-dos-pair-tip"><b>Associação em lote:</b> clique em uma linha de um lado e depois na correspondente do outro lado. As duas caixas recebem o mesmo número. Repita para formar os pares 2, 3, 4...'
+    +(autoPre?' <b>'+autoPre+' par(es) sugerido(s) pelo pareamento automático já vieram numerados</b> — confira e ajuste se necessário (clique para desmarcar).':'')
+    +' <span id="xmDosPairStatus" class="xm-dos-pair-status"></span></div>'
     +'<div class="xm-dos-grid"><div class="xm-dos-box"><div class="xm-dos-box-h">Débitos / créditos com pendência aberta no fechamento do agregado</div><div class="xm-dos-tools"><span>Clique para numerar a equivalência</span><span><button class="btn sm" onclick="xmDosSelectAll(\'fech\',true)">marcar todos</button> <button class="btn sm" onclick="xmDosSelectAll(\'fech\',false)">limpar</button></span></div><div class="xm-dos-box-b"><table><tbody>'+fechRows+'</tbody></table></div></div>'
     +'<div class="xm-dos-box"><div class="xm-dos-box-h">Lançamentos com pendência aberta no Mapinha</div><div class="xm-dos-tools"><span>Clique para numerar a equivalência</span><span><button class="btn sm" onclick="xmDosSelectAll(\'map\',true)">marcar todos</button> <button class="btn sm" onclick="xmDosSelectAll(\'map\',false)">limpar</button></span></div><div class="xm-dos-box-b"><table><tbody>'+mapRows+'</tbody></table></div></div></div>'
     +'<textarea id="xmDosMotivo" class="xm-dos-motivo" placeholder="Motivo obrigatório para associação manual, OK manual ou fora do escopo. Ex.: NF lançada diferente, fornecedor abreviado, valor com taxa/desconto, competência diferente, lançamento validado pela conferência operacional.">'+esc((ass&&ass.motivo)||(fora&&fora.motivo)||(ok&&ok.motivo)||'')+'</textarea>';
