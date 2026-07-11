@@ -2177,10 +2177,28 @@ function agg(arr){
   const n=s.v||1;
   return{...s,tm:s.p>0?s.f/s.p:0,cpk:s.cs/n,vpk:s.vs/n,mkp:s.ms/n};
 }
-// Data de hoje em ISO (yyyy-mm-dd) — usada para isolar dias FECHADOS na projeção.
+// Data de hoje em ISO (yyyy-mm-dd) — usada como teto do corte da projeção.
 function pdHojeISO(){const h=new Date();return `${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,'0')}-${String(h.getDate()).padStart(2,'0')}`;}
-// Agregado considerando APENAS dias fechados (exclui o dia de hoje). Base da projeção.
-function aggFechado(arr){const hj=pdHojeISO();return agg(arr.filter(r=>r.data && r.data<hj));}
+// [DIA EM ABERTO] Corte da base FECHADA ancorado nos DADOS, não no relógio.
+// Regra: o ÚLTIMO dia com registro no mês corrente é tratado como "em aberto"
+// (dado potencialmente parcial da carga SZB) e só entra na projeção quando
+// chegar registro de um dia POSTERIOR — ou seja, o Projetado só se altera com
+// inserção de dados, nunca na simples virada da meia-noite. Antes o corte era
+// `data < hoje`: um dia parcial (ex.: SZB carregado ao meio-dia) entrava
+// inteiro na base no dia seguinte e derrubava a média sem dado novo.
+// Teto = hoje: registro com data futura (erro de digitação) não fecha o dia corrente.
+// Cache invalidado a cada recalc (window._PD_CUTOFF=null).
+function pdCutoffISO(){
+  if(window._PD_CUTOFF) return window._PD_CUTOFF;
+  const hj=pdHojeISO(), mesAtual=hj.slice(0,7);
+  let max='';
+  (DATA||[]).forEach(r=>{ if(r.data && r.data.slice(0,7)===mesAtual && r.data>max) max=r.data; });
+  const cut=(max && max<hj)?max:hj;
+  window._PD_CUTOFF=cut;
+  return cut;
+}
+// Agregado considerando APENAS dias fechados (exclui o dia em aberto). Base da projeção.
+function aggFechado(arr){const hj=pdCutoffISO();return agg(arr.filter(r=>r.data && r.data<hj));}
 
 // ═══════════════════════════════════════════════════════
 // FORMATTERS
@@ -2630,15 +2648,16 @@ function recalc(){
   // fullRebuild() já chama enrich() antes de invocar recalc() — evita duplo processamento.
   if(!DATA.length) DATA=enrich(RAW);
   _clearFopCache(); // invalida cache de filterByOp para o novo uid/mes
+  window._PD_CUTOFF=null; // invalida o corte de dias fechados (recalcula sobre o DATA atual)
   // Dias trabalhados globais do mês = datas distintas com registro na operação selecionada
   // Usados por calcProj em todas as tabelas (igual à célula "Dias trabalhados" da planilha)
   const dmGlobal=filterByOp(uid).filter(r=>r.mes===mes);
-  const hoje=new Date();
-  const hojeISO=`${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-${String(hoje.getDate()).padStart(2,'0')}`;
-  // [REGRA SZB] Dias trabalhados = dias distintos FECHADOS com registro (inclui domingo/
-  // feriado trabalhado; exclui apenas hoje e nulos) — espelha a célula "Dias trabalhados"
-  // da planilha SZB. Contagem invariante a remanejamento de faturamento de fim de semana.
-  window._DIAS_TRAB_GLOBAL = [...new Set(dmGlobal.map(r=>r.data))].filter(d=>d && d<hojeISO).length;
+  const cutISO=pdCutoffISO();
+  // [REGRA SZB][DIA EM ABERTO] Dias trabalhados = dias distintos FECHADOS com registro
+  // (inclui domingo/feriado trabalhado; exclui o dia em aberto — último dia com dados —
+  // e nulos) — espelha a célula "Dias trabalhados" da planilha SZB. Contagem invariante
+  // a remanejamento de faturamento de fim de semana.
+  window._DIAS_TRAB_GLOBAL = [...new Set(dmGlobal.map(r=>r.data))].filter(d=>d && d<cutISO).length;
   window._MES_ATUAL_GLOBAL = mes;
   // [REGRA SZB] Fator global de projeção (fat/prod) — mantém Clientes/Rotas/Frota e o Top 10
   // consistentes com a "Projeção de Fechamento" da Visão Geral. Fórmula oficial da planilha:
@@ -2663,7 +2682,7 @@ function recalc(){
     const factors = {};
     unidsF.forEach(u=>{
       const dmU = dmGlobal.filter(r=>r.op===u);
-      const dtU = [...new Set(dmU.map(r=>r.data))].filter(d=>d && d<hojeISO).length;
+      const dtU = [...new Set(dmU.map(r=>r.data))].filter(d=>d && d<cutISO).length;
       const opU = diasOpMes(gA,gM,u);
       factors[u] = dtU>0 ? opU/dtU : 1;
     });
@@ -2741,10 +2760,13 @@ function buildVG(uid, mes){
   const hojeAno=hoje.getFullYear(), hojeMes=hoje.getMonth()+1;
   const [mesAno2,mesN2]=mes.split('-').map(Number);
   const mesFechado=(mesAno2<hojeAno)||(mesAno2===hojeAno&&mesN2<hojeMes);
-  // ═══ [REGRA SZB] Acompanhamento do Mês espelha a planilha oficial ═══
-  // Base = APENAS dias FECHADOS (exclui o dia de hoje). O dia corrente aparece
-  // somente no painel "Produção Diária" e no gráfico diário, como na planilha.
-  const dmFech=dm.filter(r=>r.data && r.data<hojeISO);
+  // ═══ [REGRA SZB][DIA EM ABERTO] Acompanhamento do Mês espelha a planilha oficial ═══
+  // Base = APENAS dias FECHADOS. O corte é ancorado nos DADOS (pdCutoffISO): o último
+  // dia com registro no mês corrente fica "em aberto" e só entra quando chegar dado de
+  // um dia posterior — a projeção não muda na virada da meia-noite com dia parcial.
+  // O dia em aberto aparece somente no painel "Produção Diária" e no gráfico diário.
+  const cutISO=pdCutoffISO();
+  const dmFech=dm.filter(r=>r.data && r.data<cutISO);
   const fatFech=dmFech.reduce((a,r)=>a+r.fat,0);
   const prodFech=dmFech.reduce((a,r)=>a+r.peso_t,0);
   const viagFech=dmFech.length;
@@ -2925,8 +2947,8 @@ function buildVG(uid, mes){
     {ytk:{callback:v=>'R$'+N(v)}});
 
   // Top 10 — Faturamento consolidado por cliente dev (igual Clientes Consolidado)
-  // Exclui o dia atual dos dados para o cálculo de projeção
-  const dmSemHoje=dm.filter(r=>r.data!==hojeISO);
+  // Exclui o dia EM ABERTO (último dia com dados) do cálculo de projeção
+  const dmSemHoje=dm.filter(r=>r.data && r.data<cutISO);
   const t10vg = (() => {
     const g10=grp(dmSemHoje,r=>r.cli_dev||r.r_nome);
     return Object.entries(g10).map(([n,arr])=>({n,f:arr.reduce((a,r)=>a+r.fat,0)}))
@@ -3231,11 +3253,11 @@ function calcProj(mes, fatReal, prodReal, fatFech, prodFech, uid, arr){
     // fica como fallback para registros sem filial identificada e para chamadas
     // antigas que não passam o array de registros.
     if(uid==='all' && Array.isArray(arr) && window._PROJ_FACTORS){
-      const hj=pdHojeISO();
+      const hj=pdCutoffISO();
       const fLegF=window._PROJ_FAT_FACTOR||1, fLegP=window._PROJ_PROD_FACTOR||1;
       const byOp={};
       arr.forEach(r=>{
-        if(!(r.data && r.data<hj)) return;               // base fechada (sem hoje)
+        if(!(r.data && r.data<hj)) return;               // base fechada (sem o dia em aberto)
         const k=(r.op!=null && window._PROJ_FACTORS[r.op]!==undefined)?r.op:'__leg__';
         if(!byOp[k]) byOp[k]={f:0,p:0};
         byOp[k].f+=r.fat; byOp[k].p+=(r.peso_t||0);
@@ -3342,7 +3364,7 @@ function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
   const mesAtual = `${_hoje.getFullYear()}-${String(_hoje.getMonth()+1).padStart(2,'0')}`;
 
   // Para cada mês: realizado; para o mês atual usa fatProj via calcProj
-  const _hjISO = pdHojeISO();
+  const _hjISO = pdCutoffISO();
   const fats = ult12.map(m=>{
     const rowsM   = allRota.filter(r=>r.mes===m);
     const fatReal = rowsM.reduce((a,r)=>a+r.fat,0);
@@ -3796,7 +3818,7 @@ function _buildCcTable(uid, mes, diaSel) {
 
   // ── Linha Dupla: Faturamento Projetado Atual vs Faturamento Real Mês Anterior ──
   const gRemAtual=grp(d,r=>r.cli_dev||r.r_nome);
-  const _hjISO2 = pdHojeISO();
+  const _hjISO2 = pdCutoffISO();
   const top10Atual=Object.entries(gRemAtual).map(([rem,arr])=>{
     const fatReal=arr.reduce((a,r)=>a+r.fat,0);
     const prodReal=arr.reduce((a,r)=>a+(r.prod||0),0);
@@ -4555,10 +4577,10 @@ function buildDataSummary(uid, mes) {
   // [REGRA SZB] Projeção dos insights alinhada à Visão Geral (fórmula oficial da planilha):
   //   Projetado = Realizado_fechado ÷ dias_trabalhados × dias_úteis_mês; piso = fechado.
   // Dias trabalhados = dias distintos fechados (inclui domingo/feriado trabalhado).
-  const _hjAI=pdHojeISO();
+  const _hjAI=pdCutoffISO();
   let aiFatFech=0; const aiDatasFech=new Set();
   dias.forEach((d,i)=>{
-    if(d>=_hjAI) return;                    // ignora hoje e futuro no base
+    if(d>=_hjAI) return;                    // ignora o dia em aberto e futuro na base
     aiFatFech+=fds[i]; aiDatasFech.add(d);
   });
   const aiDiasTrab=aiDatasFech.size;
