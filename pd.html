@@ -1352,6 +1352,17 @@ function __pdBuildTab(id){
   if(!__PD_LAST) return;
   var u = __PD_LAST.uid, m = __PD_LAST.mes, ms = __PD_LAST.meses;
   var t0 = performance.now();
+
+  // #CPK-SNAPSHOT — as abas Rotas e Tarifa exibem o CPK da filial, que vem de um
+  // doc do Firestore (leitura assíncrona). Se o doc ainda não chegou, a aba é
+  // montada já (sem travar o render — mobile) e REMONTADA quando o CPK chegar.
+  // Uma leitura por mês; trocar de aba não relê.
+  if((id==='cl' || id==='ta') && CPK_FIL_MES !== m){
+    loadCpkFilial(m).then(function(){
+      if(__PD_LAST && __PD_LAST.mes === m && (__pdVisibleTab()===id)) __pdBuildTab(id);
+    }).catch(function(){});
+  }
+
   switch(id){
     case 'vg': buildVG(u, m); break;
     case 'cl': buildCl(u, m); break;
@@ -1476,6 +1487,114 @@ function atlasFilterRowsForScope(rows, table) {
 }
 function pdBranchLabel(op) {
   return op === '17' ? 'SC' : op === '18' ? 'PR' : op === '03' ? 'SP' : op;
+}
+
+// ═══════════════════════════════════════════════════════
+// CPK POR FILIAL — leitura do snapshot publicado pelo cpk.html (#CPK-SNAPSHOT)
+// ═══════════════════════════════════════════════════════
+// O CPK NÃO é calculado aqui. Ele é calculado no cpk.html (motor de custo:
+// diesel + C.O + C.P + pedágio + depreciação, só frota própria) e publicado no
+// doc cpk_lancamentos/CPKFIL_<mes>. Este módulo apenas LÊ o número pronto —
+// assim existe uma única fonte de verdade do CPK no Atlas: mudou a regra no
+// cpk.html, o pd reflete sozinho, sem divergência silenciosa.
+//
+// Sem snapshot do mês (cpk.html ainda não abriu naquele mês), CPK e Markup
+// aparecem como "—". O VPK NÃO depende disto e continua sendo exibido.
+const PD_CPK_COL = 'cpk_lancamentos';
+const PD_CPK_DOC = mes => 'CPKFIL_' + mes;
+const OP_SIGLA = { '17':'SC', '18':'PR', '03':'SP' };   // mesmo mapa do cpk.html
+
+let CPK_FIL = {};        // { 'SC': 8.76, 'PR': ..., 'SP': ... } do mês corrente
+let CPK_FIL_MES = '';    // mês já carregado
+let CPK_FIL_META = null; // { calculadoEm, consolidado } — p/ rodapé/diagnóstico
+let _cpkFilPromise = null;
+
+async function loadCpkFilial(mes){
+  if(!mes) return CPK_FIL;
+  if(CPK_FIL_MES === mes && _cpkFilPromise === null) return CPK_FIL;
+  if(_cpkFilPromise && CPK_FIL_MES === mes) return _cpkFilPromise;
+  CPK_FIL_MES = mes;
+  _cpkFilPromise = (async () => {
+    try{
+      const fb = pdGetFirebase();
+      if(!fb) { CPK_FIL={}; CPK_FIL_META=null; return CPK_FIL; }
+      const snap = await fb.firestore().collection(PD_CPK_COL).doc(PD_CPK_DOC(mes)).get();
+      if(!snap.exists){ CPK_FIL={}; CPK_FIL_META=null; return CPK_FIL; }
+      const d = snap.data() || {};
+      const fils = d.filiais || {};
+      const out = {};
+      Object.keys(fils).forEach(f => {
+        const v = fils[f];
+        if(v && v.cpk > 0) out[f] = +v.cpk;   // filial sem km/cpk vem null → fica de fora
+      });
+      CPK_FIL = out;
+      CPK_FIL_META = { calculadoEm: d.calculadoEm || null, consolidado: d.consolidado || null };
+      return CPK_FIL;
+    }catch(e){
+      CPK_FIL = {}; CPK_FIL_META = null;
+      return CPK_FIL;
+    }finally{ _cpkFilPromise = null; }
+  })();
+  return _cpkFilPromise;
+}
+
+// CPK da filial à qual a rota pertence. r.op = '17'|'18'|'03'.
+// Sem snapshot ou sem filial → null (a coluna mostra "—", nunca um número falso).
+function cpkDaRota(r){
+  const sig = OP_SIGLA[String((r && r.op) || '').trim()];
+  if(!sig) return null;
+  const v = CPK_FIL[sig];
+  return (v > 0) ? v : null;
+}
+
+// ═══════════════════════════════════════════════════════
+// VPK POR ROTA — receita por km rodado
+// ═══════════════════════════════════════════════════════
+// km_rodados = viagens × (dist_ida + dist_volta)   ← SZY, decisão 07/2026:
+//   o cavalo percorre ida e volta em toda viagem, e o CPK da filial é apurado
+//   sobre TODO o km rodado (telemetria, inclusive trechos vazios). Para o Markup
+//   (VPK ÷ CPK) comparar bases equivalentes, o VPK usa o km físico completo.
+//   Rota que retorna carregada tem seu trecho de volta contado também na rota de
+//   retorno (dupla contagem aceita — decisão do Diretor Operacional).
+// VPK = faturamento da rota ÷ km_rodados
+// Sem SZY (rota sem distância) → km=0 → VPK null → "—". A linha continua
+// listada normalmente: todo deslocamento faturado aparece na tabela.
+function calcVpkRota(r){
+  const szy = getSZYByRota(r.rota, r.op || '');
+  const ida   = szy ? (+szy.kmIda   || 0) : 0;
+  const volta = szy ? (+szy.kmVolta || 0) : 0;
+  const distTotal = ida + volta;
+  const viagens = +r.v || 0;
+  const km  = distTotal * viagens;
+  const fat = +r.f || 0;
+  const vpk = (km > 0 && fat > 0) ? fat / km : null;
+  const cpk = cpkDaRota(r);
+  const mkp = (vpk != null && cpk > 0) ? (vpk / cpk - 1) * 100 : null;
+  return { km, distTotal, vpk, cpk, mkp };
+}
+
+// Aplica CPK/VPK/Markup em uma lista de linhas agregadas (aba Tarifa e Rotas).
+function aplicaCpkVpk(rows){
+  (rows || []).forEach(r => {
+    const c = calcVpkRota(r);
+    r.kmRod  = c.km;
+    r.vpkRota = c.vpk;
+    r.cpkFil  = c.cpk;
+    r.mkpRota = c.mkp;
+  });
+  return rows;
+}
+
+// Célula: valor ou "—" quando não há base para o número.
+function cellNum(v, dec){
+  if(v == null || !isFinite(v)) return '<span style="color:var(--bd)">—</span>';
+  return dec === 1 ? D1(v) : D2(v);
+}
+// Markup colorido (verde acima do CPK, vermelho abaixo).
+function cellMkp(v){
+  if(v == null || !isFinite(v)) return '<span style="color:var(--bd)">—</span>';
+  const cor = v >= 0 ? 'var(--gn)' : 'var(--rd)';
+  return '<span style="color:'+cor+';font-weight:500">'+D1(v)+'%</span>';
 }
 let __pdUnitSelectInitDone = false;
 function configureUnitSelectForScope() {
@@ -3288,21 +3407,25 @@ let _clUID='', _clMes='';
 function buildCl(uid,mes){
   _clUID=uid; _clMes=mes;
   const d=filterByOp(uid).filter(r=>r.mes===mes);
-  const g=grp(d,r=>r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
+  // A rota entra na chave: sem ela não há como buscar a distância no SZY nem a
+  // filial do CPK. Mesma granularidade da aba Tarifa (op+rota+…), para que CPK,
+  // VPK e Markup signifiquem exatamente a mesma coisa nas duas abas.
+  const g=grp(d,r=>(r.op||'')+'§'+(r.rota||'')+'§'+r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
   const rows=Object.entries(g).map(([k,arr])=>{
-    const[rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
+    const[op,rota,rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
     const s=agg(arr);
-    const datas=[...new Set(arr.map(r=>r.data))];
     const sF=aggFechado(arr);
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
-    return{rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj};
+    return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj};
   }).sort((a,b)=>b.f-a.f);
-  document.getElementById('cnt-cl').textContent=' — '+rows.length+' clientes';
+  aplicaCpkVpk(rows);   // mesmas regras da aba Tarifa
+  document.getElementById('cnt-cl').textContent=' — '+rows.length+' rotas';
   const t10=rows.slice(0,10);
   mkC('c-cf','bar',t10.map(r=>wrapLabel(r.dst,14,4)),[{data:t10.map(r=>r.f),backgroundColor:'rgba(26,86,219,.6)',borderRadius:2}],{ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0},ex:{scales:{x:{ticks:{color:CT,font:{size:8},maxRotation:0,autoSkip:false}},y:{ticks:{color:CT,font:{size:9}},grid:{color:CG,lineWidth:.5}}}}});
   mkC('c-cm','bar',[],[{data:[],backgroundColor:'rgba(26,86,219,.5)',borderRadius:2}]);
   const ft=rows.reduce((a,r)=>a+r.f,0);
   bldT('tbl-cl',rows,[
+    {h:'Rota',            fn:r=>escHtml(r.rota||'—')},
     {h:'Remetente',       fn:r=>`<span class="nm">${r.rem}</span>`},
     {h:'Destinatário',    fn:r=>`<span class="nm">${r.dst}</span>`},
     {h:'Local Coleta',    fn:r=>`${r.orig}/${r.ufo}`},
@@ -3312,10 +3435,11 @@ function buildCl(uid,mes){
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
     {h:'Fat.(R$) Real.',  fn:r=>R(r.f),          n:true},
     {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
-    {h:'Tarifa',              fn:r=>D2(r.tm),       n:true},
-    {h:'CPK',             fn:r=>D2(r.cpk),      n:true},
-    {h:'VPK',             fn:r=>D2(r.vpk),      n:true},
-    {h:'Markup',          fn:r=>bdg(r.mkp,50),  n:true},
+    {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
+    {h:'KM Rodado',       fn:r=>r.kmRod>0?N(r.kmRod):'<span style="color:var(--bd)">—</span>', n:true},
+    {h:'CPK',             fn:r=>cellNum(r.cpkFil),  n:true},
+    {h:'VPK',             fn:r=>cellNum(r.vpkRota), n:true},
+    {h:'Markup',          fn:r=>cellMkp(r.mkpRota), n:true},
     {h:'% Fat',           fn:r=>Pct(ft?r.f/ft*100:0),n:true},
   ]);
   addClRowClick();
@@ -3418,8 +3542,10 @@ function updateTaFreteMinFilterBtn(){
 }
 function toggleTaFreteMinFilter(){
   _taFiltroAbaixoMin=!_taFiltroAbaixoMin;
-  updateTaFreteMinFilterBtn();
-  applyTaFilters();
+  // O botão troca o CONJUNTO DE COLUNAS (CPK/VPK ⇄ ANTT), não só a visibilidade
+  // das linhas — por isso a tabela é remontada em vez de apenas refiltrada.
+  if(_taUID && _taMes) buildTa(_taUID,_taMes);
+  else { updateTaFreteMinFilterBtn(); applyTaFilters(); }
 }
 function applyTaFilters(){
   const t=document.getElementById('tbl-ta');
@@ -3476,6 +3602,7 @@ function buildTa(uid,mes){
     r.freteMin=c.freteMin||0;
     r._taAbaixoMin=taIsAbaixoMin(r);
   });
+  aplicaCpkVpk(rows);   // CPK (snapshot da filial) + VPK + Markup
 
   const cnt=document.getElementById('cnt-ta');
   if(cnt) cnt.textContent=' — '+rows.length+' linhas';
@@ -3484,7 +3611,12 @@ function buildTa(uid,mes){
   const ct=document.getElementById('ct-tarifa');
   if(ct) ct.textContent='Histórico de Variação de Tarifa — selecione uma linha';
 
-  bldT('tbl-ta',rows,[
+  // ── COLUNAS ──
+  // Modo padrão (botão "Abaixo Frete mínimo: Não"): colunas de CPK e VPK.
+  // Modo frete mínimo (botão "Sim"): entram as colunas do cálculo ANTT
+  // (Retorna Vazio, Alto Desemp., Frete Mínimo, Frete Atual, Tarifa) e a lista
+  // passa a exibir só as rotas abaixo do frete mínimo — comportamento de hoje.
+  const colsBase=[
     {h:'Rota',            fn:r=>escHtml(r.rota||'—')},
     {h:'Remetente',       fn:r=>`<span class="nm">${escHtml(r.rem)}</span>`},
     {h:'Destinatário',    fn:r=>`<span class="nm">${escHtml(r.dst)}</span>`},
@@ -3498,12 +3630,22 @@ function buildTa(uid,mes){
     {h:'N°',              fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'eixos',c.eixos,[{v:'5',t:'5'},{v:'6',t:'6'},{v:'7',t:'7'},{v:'9',t:'9'}]);}},
     {h:'Dist. Ida',       fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distIda):'—';}, n:true},
     {h:'Dist. Volta',     fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distVolta):'—';}, n:true},
+  ];
+  const colsAntt=[
     {h:'Retorna Vazio',   fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'retornaVazio',c.retornaVazio,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
     {h:'Alto Desemp.',    fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'altoDesemp',c.altoDesemp,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
     {h:'Frete Mínimo',    fn:r=>r.freteMin>0?R(r.freteMin):'—', n:true},
     {h:'Frete Atual',     fn:r=>r.freteAtual>0?`<span class="${r._taAbaixoMin?'ta-frete-baixo':''}">${R(r.freteAtual)}</span>`:'—', n:true},
     {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
-  ]);
+  ];
+  const colsCpk=[
+    {h:'KM Rodado',       fn:r=>r.kmRod>0?N(r.kmRod):'<span style="color:var(--bd)">—</span>', n:true},
+    {h:'CPK',             fn:r=>cellNum(r.cpkFil),  n:true},
+    {h:'VPK',             fn:r=>cellNum(r.vpkRota), n:true},
+    {h:'Markup',          fn:r=>cellMkp(r.mkpRota), n:true},
+  ];
+
+  bldT('tbl-ta',rows, colsBase.concat(_taFiltroAbaixoMin ? colsAntt : colsCpk));
   addTarivaRowClick();
   updateTaFreteMinFilterBtn();
   applyTaFilters();
