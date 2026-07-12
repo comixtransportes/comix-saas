@@ -1172,6 +1172,17 @@ const CPK_BASES_SET = new Set(CPK_BASES);
 const CPK_KM_COL = 'cpk_lancamentos';
 const CPK_KM_DOC = mes => 'KM_'+mes;
 
+// ── SNAPSHOT DO CPK POR FILIAL (#CPK-SNAPSHOT) ───────────────────────
+// O CPK por filial nasce e morre na memória deste módulo (cpkCalculate →
+// cpkAggFilial). Outros módulos do Atlas (pd.html) precisam do NÚMERO PRONTO,
+// sem replicar as ~700 linhas de regra de custo daqui — duplicar a fórmula
+// garantiria divergência silenciosa no primeiro ajuste de regra.
+// Este bloco NÃO CALCULA NADA: apenas PERSISTE o resultado que cpkCalculate já
+// produziu, no mesmo doc por mês. Nenhuma fórmula, premissa ou dado de custo é
+// alterado. Escrita best-effort: falhou, o CPK segue normal (só não publica).
+const CPK_SNAP_COL = 'cpk_lancamentos';
+const CPK_SNAP_DOC = mes => 'CPKFIL_'+mes;
+
 // ── CONSTANTES DO DRE (espelho exato do mapinha.html) ──────────────
 const FILIAIS_PADRAO = ['SC','PR','SP'];
 const OPCODE_SIGLA = { '17':'SC','18':'PR','03':'SP' };
@@ -2243,6 +2254,50 @@ function cpkBuildDerivIndex(){
 // ════════════════════════════════════════════════════════════════════
 //  MOTOR DE CÁLCULO — somente FROTA própria
 // ════════════════════════════════════════════════════════════════════
+// ── PUBLICAÇÃO DO SNAPSHOT (#CPK-SNAPSHOT) ───────────────────────────
+// Grava o CPK por filial JÁ CALCULADO por cpkCalculate/cpkAggFilial.
+// Regras de guarda:
+//  · só publica com escopo COMPLETO (sem filtro de unidade) — com filtro, as
+//    filiais fora do escopo não são calculadas e o doc sairia furado;
+//  · só publica com as bases carregadas (custo + KM), senão gravaria zero;
+//  · só publica filial com km>0 e cpk!=null (o resto vai como null, e o pd
+//    mostra "—" em vez de um número inventado);
+//  · não regrava se nada mudou (evita write a cada re-render);
+//  · falha de escrita é silenciosa: o CPK do módulo não depende disto.
+async function cpkPublicaSnapshot(mes, fils){
+  try{
+    if(!mes) return;
+    if(CPK.filtros && CPK.filtros.unidade) return;      // escopo parcial → não publica
+    if(!CPK.custoLoaded || !CPK.frotaLoaded) return;    // base incompleta → não publica
+    const filiais={};
+    (fils||[]).forEach(f=>{
+      const ok = f && f.km>0 && f.cpk!=null && isFinite(f.cpk);
+      filiais[f.sigla] = ok ? {
+        cpk:   +(+f.cpk).toFixed(4),
+        km:    +(+f.km||0).toFixed(1),
+        custo: +(+f.custo||0).toFixed(2)
+      } : null;
+    });
+    if(!Object.keys(filiais).length) return;
+    const kmTot=(fils||[]).reduce((s,f)=>s+(+f.km||0),0);
+    const cuTot=(fils||[]).reduce((s,f)=>s+(+f.custo||0),0);
+    const payload={
+      mesRef: mes,
+      filiais,
+      consolidado: (kmTot>0&&cuTot>0)? +(cuTot/kmTot).toFixed(4) : null,
+      calculadoEm: Date.now(),
+      por: (CPK.user&&CPK.user.email)||'',
+      origem: 'cpk.html'
+    };
+    // Anti-write redundante: só grava se o conteúdo mudou de fato.
+    const assinatura=JSON.stringify({m:payload.mesRef,f:payload.filiais,c:payload.consolidado});
+    if(CPK._snapSig===assinatura) return;
+    await cpkFsSet(CPK_SNAP_COL, CPK_SNAP_DOC(mes), payload, false);
+    CPK._snapSig=assinatura;
+    cpkLog('CPK snapshot publicado:', mes, payload.filiais);
+  }catch(e){ cpkLog('CPK snapshot: falha ao publicar (ignorado) —', e.message); }
+}
+
 function cpkCalculate(){
   const f=CPK.filtros, mes=f.mes, scopeArr=cpkScopeFiliais(), scope=new Set(scopeArr);
   CPK.aggPlaca=[]; CPK.aggRota=[]; CPK.aggCliente=[];
@@ -2566,6 +2621,11 @@ function cpkCalculate(){
   // filtrados (para busca/sort)
   CPK.filtrados={ placa:placas.slice(), rota:CPK.aggRota.slice(), cliente:CPK.aggCliente.slice() };
   cpkSyncBadge('✓ Calculado · '+cpkMesLabel(mes)+(CPK.filtros.unidade?(' · '+CPK.filtros.unidade):' · todas'),'ok');
+
+  // #CPK-SNAPSHOT — publica o CPK por filial JÁ CALCULADO acima (não recalcula
+  // nada; cpkAggFilial é a mesma função que alimenta os cards da Visão Geral).
+  // Assíncrono e best-effort: não bloqueia o render nem altera o resultado.
+  try{ cpkPublicaSnapshot(mes, cpkAggFilial(false)); }catch(_){}
 }
 
 // ════════════════════════════════════════════════════════════════════
