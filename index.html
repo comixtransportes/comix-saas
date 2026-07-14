@@ -2376,6 +2376,24 @@ const ATLAS_NOTIF_FROTA_SEM_CARGA_EVENTOS = [
   { unidade: 'PR', eventId: 'frota_sem_carregamento_5_dias_pr' }
 ];
 
+/* [FROTA-MAIL] Placas/frotas que NUNCA entram na notificação de frota sem
+   carregamento (comparação por chave normalizada — só letras e números).
+   Para excluir outra placa no futuro, basta adicioná-la aqui. */
+const ATLAS_NOTIF_FROTA_PLACAS_EXCLUIDAS = ['LZJ0H81'];
+
+function atlasFrotaChaveNorm(v){
+  return atlasNormUpper(v).replace(/[^A-Z0-9]/g, '');
+}
+
+function atlasFrotaItemExcluido(item){
+  const placa = atlasFrotaChaveNorm(item && item.placa);
+  const frota = atlasFrotaChaveNorm(item && item.frota);
+  return ATLAS_NOTIF_FROTA_PLACAS_EXCLUIDAS.some(p => {
+    const k = atlasFrotaChaveNorm(p);
+    return k && (k === placa || k === frota);
+  });
+}
+
 function atlasEscapeHtml(v){
   return String(v == null ? '' : v)
     .replace(/&/g, '&amp;')
@@ -2619,29 +2637,70 @@ function atlasBuildFrotaSemCarregamentoPorSZB(rows, unidade, hojeISO, limiteDias
 
 function atlasBuildFrotaSemCarregamento(rows, unidade, hojeISO, limiteDias, veiculosFrota){
   const un = atlasUnidadeSiglaFromAny(unidade) || atlasNormUpper(unidade);
-  if (Array.isArray(veiculosFrota) && veiculosFrota.length){
-    return atlasBuildFrotaSemCarregamentoPorCadastro(rows, un, hojeISO, limiteDias, veiculosFrota);
+  const itens = (Array.isArray(veiculosFrota) && veiculosFrota.length)
+    ? atlasBuildFrotaSemCarregamentoPorCadastro(rows, un, hojeISO, limiteDias, veiculosFrota)
+    : atlasBuildFrotaSemCarregamentoPorSZB(rows, un, hojeISO, limiteDias);
+  // [FROTA-MAIL] Filtro central de exclusão — vale para os dois caminhos (cadastro e SZB).
+  return itens.filter(item => !atlasFrotaItemExcluido(item));
+}
+
+/* [FROTA-MAIL] Veículos com O.S de manutenção em aberto (aguardando finalizar).
+   Lê a coleção ordens_servico UMA vez por apuração (1x/dia, no mesmo start do
+   e-mail) e monta um Set de chaves normalizadas (placa/frota). Considera
+   "aberta" qualquer O.S cujo status NÃO indique conclusão/cancelamento. */
+async function atlasLoadVeiculosEmManutencao(){
+  const keys = new Set();
+  try {
+    const snap = await db.collection('ordens_servico').get();
+    snap.forEach(doc => {
+      const os = doc.data() || {};
+      const st = atlasNormUpper(os.status);
+      if (/CONCLU|CANCEL|REPROV|FINALIZ|EXCLU/.test(st)) return;
+      [os.veiculo, os.placa, os.frota].forEach(v => {
+        const k = atlasFrotaChaveNorm(v);
+        if (k) keys.add(k);
+      });
+    });
+    console.log(`[Atlas Frota-mail] veículos com O.S de manutenção em aberto: ${keys.size}.`);
+  } catch (e) {
+    console.warn('[Atlas Frota-mail] não foi possível ler ordens_servico; e-mail sai sem o indicador de manutenção:', e && e.message);
   }
-  return atlasBuildFrotaSemCarregamentoPorSZB(rows, un, hojeISO, limiteDias);
+  return keys;
 }
 
 function atlasFrotaResumoText(itens){
   if (!itens || !itens.length) return 'Nenhuma frota acima do limite configurado.';
-  return itens.map(item => {
-    const id = [item.frota, item.placa].filter(Boolean).join(' / ') || '-';
+  const linhas = itens.map(item => {
+    // [FROTA-MAIL] 🔧 à direita do número de frota quando há O.S aguardando finalizar.
+    const marca = item.emManutencao ? ' 🔧' : '';
+    const frotaTxt = item.frota ? `${item.frota}${marca}` : '';
+    const partes = [frotaTxt, item.placa].filter(Boolean);
+    let id = partes.join(' / ') || '-';
+    if (!item.frota && item.emManutencao) id += marca; // sem nº de frota, marca ao fim
     return `- ${id} — ${item.diasSemCarregar} dias sem carregamento; último carregamento em ${item.ultimoCarregamentoBR || '-'}.`;
-  }).join('\n');
+  });
+  if (itens.some(i => i.emManutencao)) linhas.push('', '🔧 = veículo em manutenção (O.S aguardando finalização).');
+  return linhas.join('\n');
 }
 
 function atlasFrotaResumoHtml(itens){
   if (!itens || !itens.length) return '<p>Nenhuma frota acima do limite configurado.</p>';
-  const rows = itens.map(item => `
+  const rows = itens.map(item => {
+    // [FROTA-MAIL] 🔧 à direita do número de frota quando há O.S aguardando finalizar.
+    const chave = item.emManutencao
+      ? ' <span title="Em manutenção — O.S aguardando finalização" style="font-size:13px;">🔧</span>'
+      : '';
+    return `
     <tr>
-      <td style="padding:6px 8px;border:1px solid #dbe4ef;">${atlasEscapeHtml(item.frota || '-')}</td>
+      <td style="padding:6px 8px;border:1px solid #dbe4ef;white-space:nowrap;">${atlasEscapeHtml(item.frota || '-')}${chave}</td>
       <td style="padding:6px 8px;border:1px solid #dbe4ef;">${atlasEscapeHtml(item.placa || '-')}</td>
       <td style="padding:6px 8px;border:1px solid #dbe4ef;text-align:right;">${atlasEscapeHtml(item.diasSemCarregar)}</td>
       <td style="padding:6px 8px;border:1px solid #dbe4ef;">${atlasEscapeHtml(item.ultimoCarregamentoBR || '-')}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
+  const legenda = itens.some(i => i.emManutencao)
+    ? '<p style="font-family:Arial,sans-serif;font-size:12px;color:#64748b;margin:6px 0 0;">🔧 = veículo em manutenção (O.S aguardando finalização).</p>'
+    : '';
   return `
     <table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:13px;">
       <thead>
@@ -2653,7 +2712,7 @@ function atlasFrotaResumoHtml(itens){
         </tr>
       </thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>${legenda}`;
 }
 
 async function atlasResolveNotifRecipients(destUids){
@@ -2857,6 +2916,7 @@ async function atlasMaybeQueueFrotaSemCarregamentoNotifications({ rows, payload,
   }
 
   const veiculosFrota = await atlasLoadFrotaVeiculosCadastrados();
+  const osAbertas = await atlasLoadVeiculosEmManutencao();
   console.log(`[Atlas Frota-mail] Iniciando apuração: eventos=${eventos.length}, linhasSZB=${rows.length}, veiculosCadastro=${veiculosFrota.length}.`);
 
   for (const cfg of eventos){
@@ -2865,6 +2925,11 @@ async function atlasMaybeQueueFrotaSemCarregamentoNotifications({ rows, payload,
     const unidade = atlasUnidadeSiglaFromAny(ev.unidade || (ev.regraDisparo && ev.regraDisparo.unidade) || cfg.unidade) || cfg.unidade;
     const limite = Number(ev.regraDisparo && ev.regraDisparo.limiteDiasSemCarregamento) || 5;
     const itens = atlasBuildFrotaSemCarregamento(rows, unidade, hojeISO, limite, veiculosFrota);
+
+    // [FROTA-MAIL] Marca veículos com O.S de manutenção aguardando finalizar (🔧 no e-mail).
+    itens.forEach(item => {
+      item.emManutencao = osAbertas.has(atlasFrotaChaveNorm(item.placa)) || osAbertas.has(atlasFrotaChaveNorm(item.frota));
+    });
 
     if (!itens.length){
       console.log(`[Atlas Frota-mail] ${eventId}: nenhuma frota própria da unidade ${unidade} acima de ${limite} dias.`);
