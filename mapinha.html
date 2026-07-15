@@ -1426,11 +1426,8 @@ async function loadConsolidadoScope(){
       .filter(l=> l.filial===fil && l.mesRef===ST.mesRef && l.origem!=='manutencao' && l.status!=='estornado');
     // lançamentos de OS (ao vivo)
     const lancOS = derivarLancOS(ossAll, fil);
-    // premissa por carry-forward
-    const cands = premAll.map(d=>({id:d.id,...d.data}))
-      .filter(p=> p.filial===fil && p.vigencia && p.vigencia<=ST.mesRef)
-      .sort((a,b)=> b.vigencia.localeCompare(a.vigencia));
-    const premissa = cands[0] || { filial:fil, vigencia:null, folha:[], frota:[], encargosPct:0, metas:{} };
+    // premissa por carry-forward, mantendo campos anteriores não alterados
+    const premissa = resolverPremissa(premAll, fil, ST.mesRef);
     ST._byFilial[fil] = { cabecalho, lancManuais, lancOS, premissa };
   });
   // estado "consolidado" para as telas que listam (somas + concatenações)
@@ -1990,12 +1987,56 @@ function renderLancCards(){
 function card(k,v,cls='',s=''){ return `<div class="card ${cls}"><div class="k">${k}</div><div class="v">${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`; }
 
 /* ══ PREMISSAS (carry-forward por vigência mensal) ══ */
+function premissaBase(filial){
+  return { filial, vigencia:null, folha:[], frota:[], encargosPct:0, metas:{} };
+}
+function premissaValorInformado(v){ return v!==undefined && v!==null && v!==''; }
+function premissaObjeto(v){ return !!v && typeof v==='object' && !Array.isArray(v); }
+/*
+  Resolve a vigência por composição, do mês mais antigo ao mais recente.
+  Assim, uma premissa posterior pode alterar apenas alguns campos sem apagar
+  os demais dados herdados. Isso também mantém compatibilidade com documentos
+  antigos, criados antes da inclusão de novos grupos de premissas (como CPK).
+*/
+function mesclarPremissa(base, atual){
+  const out=_clone(base||{}), src=atual||{};
+  Object.keys(src).forEach(k=>{
+    const v=src[k];
+    // Metadados de origem precisam aceitar limpeza explícita (null), para que
+    // uma edição manual no mês substitua corretamente uma cópia herdada.
+    if(k==='herdadaDe' || k==='origemVigencia'){
+      out[k]=(v===undefined?'':v);
+      return;
+    }
+    if(k==='folha' || k==='frota'){
+      // Lista vazia em documento antigo não deve apagar a última lista válida.
+      if(Array.isArray(v) && v.length) out[k]=_clone(v);
+      else if(!Array.isArray(out[k])) out[k]=[];
+      return;
+    }
+    if(k==='metas' || k==='custoPessoalCpk' || k==='cpPremissaCpk'){
+      if(!premissaObjeto(v)) return;
+      const obj=premissaObjeto(out[k])?_clone(out[k]):{};
+      Object.keys(v).forEach(sk=>{ if(premissaValorInformado(v[sk])) obj[sk]=_clone(v[sk]); });
+      out[k]=obj;
+      return;
+    }
+    if(premissaValorInformado(v)) out[k]=_clone(v);
+  });
+  return out;
+}
+function resolverPremissa(all, filial, mesRef){
+  const cands=(all||[]).map(d=>({id:d.id,...d.data}))
+    .filter(p=> p.filial===filial && p.vigencia && p.vigencia<=mesRef)
+    .sort((a,b)=> a.vigencia.localeCompare(b.vigencia));
+  let efetiva=premissaBase(filial);
+  cands.forEach(p=>{ efetiva=mesclarPremissa(efetiva,p); });
+  efetiva.filial=filial;
+  return efetiva;
+}
 async function loadPremissa(){
   const all = await fsGetCollection('mapinha_premissas');
-  const cands = all.map(d=>({id:d.id,...d.data}))
-    .filter(p=> p.filial===ST.filial && p.vigencia && p.vigencia<=ST.mesRef)
-    .sort((a,b)=> b.vigencia.localeCompare(a.vigencia));
-  ST.premissa = cands[0] || { filial:ST.filial, vigencia:null, folha:[], frota:[], encargosPct:0, metas:{} };
+  ST.premissa = resolverPremissa(all, ST.filial, ST.mesRef);
 }
 function fillPremissaForm(){
   const p=ST.premissa, m=p.metas||{};
@@ -2003,8 +2044,10 @@ function fillPremissaForm(){
   if(isConsolidado()){
     info.textContent = 'Visão consolidada (Todas) — metas somadas das filiais. Premissas são editáveis por filial; selecione SC, PR ou SP.';
   } else {
-    info.textContent = p.vigencia ? `Premissa vigente desde ${p.vigencia} (herdada). Salvar abaixo cria nova vigência a partir de ${ST.mesRef}.`
-                                  : `Nenhuma premissa cadastrada para ${ST.filial}. Salvar cria a vigência ${ST.mesRef}.`;
+    const origem=p.herdadaDe||p.origemVigencia||p.vigencia;
+    if(p.herdadaDe) info.textContent = `Premissa herdada da alteração feita em ${p.herdadaDe}. Salvar abaixo substitui a vigência a partir de ${ST.mesRef} e replica a alteração para os meses seguintes.`;
+    else if(p.vigencia) info.textContent = `Premissa vigente desde ${origem}. Salvar abaixo substitui a vigência a partir de ${ST.mesRef} e replica a alteração para os meses seguintes.`;
+    else info.textContent = `Nenhuma premissa cadastrada para ${ST.filial}. Salvar cria a vigência ${ST.mesRef} e a aplica aos meses seguintes.`;
   }
   document.getElementById('mtFat').value=m.fatBruto||''; document.getElementById('mtProd').value=m.producaoT||'';
   document.getElementById('mtDiesel').value=m.diesel||''; document.getElementById('mtAgreg').value=m.agreg||'';
@@ -2052,9 +2095,11 @@ function renderPremReadback(){
   const p=ST.premissa||{};
 
   let origem;
+  const origemVigencia=p.herdadaDe||p.origemVigencia||p.vigencia;
   if(cons) origem='Consolidado (soma das filiais) — somente leitura. Edite premissas por filial.';
-  else if(p.vigencia===ST.mesRef) origem='Premissa própria de '+mesLabel(ST.mesRef)+'.';
-  else if(p.vigencia) origem='Herdada da vigência '+p.vigencia+' — ainda não há premissa salva em '+mesLabel(ST.mesRef)+'.';
+  else if(p.herdadaDe) origem='Herdada da alteração de '+p.herdadaDe+' — esta vigência segue automaticamente nos meses posteriores.';
+  else if(p.vigencia===ST.mesRef) origem='Premissa própria de '+mesLabel(ST.mesRef)+' — aplicada também aos meses seguintes.';
+  else if(origemVigencia) origem='Herdada da vigência '+origemVigencia+' — ainda não há alteração própria em '+mesLabel(ST.mesRef)+'.';
   else origem='Nenhuma premissa cadastrada para este escopo.';
 
   const money=v=>moeda(+v||0);
@@ -2062,8 +2107,8 @@ function renderPremReadback(){
     return `<div class="pr-row${opt.strong?' strong':''}${z}"><span class="pr-k">${k}</span><span class="pr-v mono">${v}</span></div>`; };
 
   // Herança do realizado (é específico do mês): sinaliza quando vem de vigência anterior.
-  const realHerdado = (!cons && p.vigencia && p.vigencia!==ST.mesRef && (+cp.realTotal>0))
-    ? `<span class="pr-warn">herdado de ${p.vigencia}</span>` : '';
+  const realHerdado = (!cons && origemVigencia && (p.herdadaDe || p.vigencia!==ST.mesRef) && (+cp.realTotal>0))
+    ? `<span class="pr-warn">herdado de ${origemVigencia}</span>` : '';
 
   const grpRealizado =
     `<div class="pr-grp"><div class="pr-h">Custo de Pessoal — Realizado (alimenta o DRE)${realHerdado}</div>`
@@ -2166,11 +2211,15 @@ async function savePremissa(){
   if(isConsolidado()) return toast('Selecione uma filial (SC/PR/SP) para editar premissas — a visão Todas é consolidada.','am');
   if(!isAdminOuLR() && !(ATLAS_CURRENT_USER.filiais||[]).map(upper).includes(ST.filial))
     return toast('Sem permissão para esta filial.','am');
+  // Lê as vigências já existentes antes de gravar. As vigências posteriores
+  // serão atualizadas com a nova base, garantindo que uma alteração em março,
+  // por exemplo, passe a valer também em abril e nos meses seguintes.
+  const premissasExistentes=await fsGetCollection('mapinha_premissas');
   const metas={ fatBruto:+document.getElementById('mtFat').value||0, producaoT:+document.getElementById('mtProd').value||0,
     diesel:+document.getElementById('mtDiesel').value||0, agreg:+document.getElementById('mtAgreg').value||0,
     co:+document.getElementById('mtCO').value||0, cp:+document.getElementById('mtCP').value||0,
     ce:+document.getElementById('mtCE').value||0, resultadoFinanceiro:+document.getElementById('mtRF').value||0 };
-  const payload={ filial:ST.filial, vigencia:ST.mesRef, metas,
+  const payload={ filial:ST.filial, vigencia:ST.mesRef, origemVigencia:ST.mesRef, herdadaDe:null, metas,
     encargosPct:+document.getElementById('prEnc').value||0,
     folhaRealPct:+document.getElementById('prFolhaRealPct').value||4.9,
     folhaAdicional:+document.getElementById('prFolhaAdic').value||0,
@@ -2199,7 +2248,21 @@ async function savePremissa(){
     folha:(ST.premissa.folha||[]).filter(f=>f.funcao), frota:(ST.premissa.frota||[]).filter(f=>f.tipo),
     atualizadoPor:userMin(), atualizadoEm:new Date().toISOString() };
   await fsSetDoc('mapinha_premissas', 'PREM_'+ST.filial+'_'+ST.mesRef, payload);
-  toast('Premissa salva (vigência '+ST.mesRef+').','gn');
+
+  // Sobrescreve somente registros futuros que já existam. Meses futuros sem
+  // documento continuam herdando naturalmente pelo resolverPremissa().
+  const futuros=(premissasExistentes||[])
+    .map(d=>({id:d.id,...(d.data||{})}))
+    .filter(p=>p.id && p.filial===ST.filial && p.vigencia && p.vigencia>ST.mesRef);
+  if(futuros.length){
+    await Promise.all(futuros.map(f=>{
+      const propagada={..._clone(payload), vigencia:f.vigencia, origemVigencia:ST.mesRef, herdadaDe:ST.mesRef,
+        atualizadoPor:userMin(), atualizadoEm:new Date().toISOString()};
+      return fsSetDoc('mapinha_premissas', f.id, propagada);
+    }));
+  }
+
+  toast('Premissa salva e aplicada aos meses seguintes.','gn');
   await loadPremissa(); fillPremissaForm(); renderDre(); renderLancCards();
 }
 
