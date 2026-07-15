@@ -1834,6 +1834,19 @@ function cpkSzyVal(row,names){
   for(const k of Object.keys(row||{})){ if(wanted.includes(cpkNormRouteText(k))) return row[k]; }
   return '';
 }
+function cpkSplitSzyTrecho(row){
+  const raw=cpkStr(cpkSzyVal(row,[
+    'Coleta -> Entrega (base do cálculo)','Coleta->Entrega (base do cálculo)',
+    'Coleta -> Entrega','Coleta->Entrega','Origem -> Destino','Origem->Destino',
+    'Trecho','Descrição da Rota','Descricao da Rota','Rota Descrição','Rota Descricao'
+  ]));
+  if(!raw)return {origem:'',destino:'',ufO:'',ufD:''};
+  const p=raw.split(/\s*(?:->|→|–>|—>)\s*/);
+  if(p.length<2)return {origem:'',destino:'',ufO:'',ufD:''};
+  const side=s=>{const v=String(s||'').trim(),m=v.match(/^(.*?)(?:\s*\/\s*([A-Za-z]{2}))?\s*$/);return {local:(m&&m[1]?m[1]:v).trim(),uf:(m&&m[2]?m[2]:'').trim()};};
+  const a=side(p[0]),b=side(p.slice(1).join(' -> '));
+  return {origem:a.local,destino:b.local,ufO:a.uf,ufD:b.uf};
+}
 function cpkApplySZY(rows){
   const byOpRota=Object.create(null), byRota=Object.create(null);
   const push=(bucket,key,row)=>{ if(!key)return; if(!bucket[key])bucket[key]=[]; bucket[key].push(row); };
@@ -1845,10 +1858,11 @@ function cpkApplySZY(rows){
     const kmVolta=cpkNum(cpkSzyVal(r,['Km Volta','KM Volta','km_volta','Distância Volta','Distancia Volta','Volta']));
     const revisto=String(cpkSzyVal(r,['Revisto'])||'').trim().toLowerCase()==='sim';
     const op=cpkNormFilialRota(cpkSzyVal(r,['Operacao','Operação','Filial','Filial de In','Filial incl','Cod Filial','Cod. Filial','Unidade','Unid','UF Filial']));
-    const ufO=cpkStr(cpkSzyVal(r,['UF Origem','Uf Origem','UF Or','Uf Or']));
-    const ufD=cpkStr(cpkSzyVal(r,['UF Destino','Uf Destino','UF Dest','Uf Dest']));
-    const origem=cpkStr(cpkSzyVal(r,['Local Coleta','Origem','Local Origem','Cidade Origem','Município Origem','Municipio Origem','Região Origem','Regiao Origem']));
-    const destino=cpkStr(cpkSzyVal(r,['Local Entrega','Destino','Local Destino','Cidade Destino','Município Destino','Municipio Destino','Região Destino','Regiao Destino']));
+    const trecho=cpkSplitSzyTrecho(r);
+    const ufO=cpkStr(cpkSzyVal(r,['UF Origem','Uf Origem','UF Or','Uf Or'])||trecho.ufO);
+    const ufD=cpkStr(cpkSzyVal(r,['UF Destino','Uf Destino','UF Dest','Uf Dest'])||trecho.ufD);
+    const origem=cpkStr(cpkSzyVal(r,['Local Coleta','Origem','Local Origem','Cidade Origem','Município Origem','Municipio Origem','Região Origem','Regiao Origem','Desc.Reg.Orig','Desc Reg Orig','Descrição Região Origem','Descricao Regiao Origem'])||trecho.origem);
+    const destino=cpkStr(cpkSzyVal(r,['Local Entrega','Destino','Local Destino','Cidade Destino','Município Destino','Municipio Destino','Região Destino','Regiao Destino','Desc.Reg.Dest','Desc Reg Dest','Descrição Região Destino','Descricao Regiao Destino'])||trecho.destino);
     const item={
       cod,op,km_ida:kmIda,km_volta:kmVolta,km_total:kmIda+kmVolta,revisto,
       uf_orig:ufO,uf_dest:ufD,uf_orig_key:cpkNormUfRota(ufO)||cpkNormUfRota(origem),uf_dest_key:cpkNormUfRota(ufD)||cpkNormUfRota(destino),
@@ -2219,17 +2233,24 @@ async function cpkReload(){
 // ════════════════════════════════════════════════════════════════════
 //  RESOLVEDOR DE KM POR VIAGEM (SZB×SZY)
 // ════════════════════════════════════════════════════════════════════
+function cpkChooseSzyCandidate(list,op,level){
+  if(!list||!list.length)return null;
+  if(list.length===1)return {status:'exato',row:list[0],matchLevel:level};
+  if(op){
+    const same=list.filter(c=>cpkNormFilialRota(c.op)===op);
+    if(same.length===1)return {status:'exato',row:same[0],matchLevel:level+'_filial_desempate'};
+  }
+  const kms=[...new Set(list.map(c=>(+c.km_ida||0)+'§'+(+c.km_volta||0)))];
+  if(kms.length===1)return {status:'exato',row:list[0],matchLevel:level+'_mesma_distancia'};
+  return {status:'ambiguo',row:null,matchLevel:level+'_ambiguo'};
+}
 function cpkResolveSZY(r){
   r=r||{};
   const cod=cpkPadRota(r.rota||r['Rota']||r['rota']||'');
   if(!cod||!CPK.szy||!CPK.szy.byRota) return {status:'nao_encontrado',row:null};
   const op=cpkNormFilialRota(r.unidade||r.op||r.operacao||r['Operacao']||r['Operação']||r['Filial']||'');
-  const all=op ? ((CPK.szy.byOpRota&&CPK.szy.byOpRota[op+'§'+cod])||[]) : (CPK.szy.byRota[cod]||[]);
+  const all=CPK.szy.byRota[cod]||[];
   if(!all.length)return {status:'nao_encontrado',row:null};
-  // Mantém o mesmo critério do PD: filial + rota é a identidade principal.
-  // Os locais, UFs e códigos regionais servem apenas para desempatar quando
-  // houver mais de uma definição da mesma rota dentro da mesma filial.
-  if(all.length===1)return {status:'exato',row:all[0],matchLevel:'unico_filial_rota'};
   const ctx={
     ufO:cpkNormUfRota(r.ufO||r.ufo||r['Uf Origem']||r['UF Origem']||''),
     ufD:cpkNormUfRota(r.ufD||r.ufd||r['Uf Destino']||r['UF Destino']||''),
@@ -2238,24 +2259,27 @@ function cpkResolveSZY(r){
     regO:cpkNormRouteCode(r.codRegOrig||r.codRegOrigem||r['Cod.Reg.Orig']||r['Cod.Reg.Origem']||''),
     regD:cpkNormRouteCode(r.codRegDest||r.codRegDestino||r['Cod.Reg.Dest']||r['Cod.Reg.Destino']||'')
   };
-  const ok=[];
-  for(const c of all){
-    let score=0,comparable=0,mismatch=false;
-    const test=(a,b,w)=>{if(a&&b){comparable++;if(a===b)score+=w;else mismatch=true;}};
-    test(ctx.regO,cpkNormRouteCode(c.reg_orig),8);
-    test(ctx.regD,cpkNormRouteCode(c.reg_dest),8);
-    test(ctx.ufO,c.uf_orig_key,4);
-    test(ctx.ufD,c.uf_dest_key,4);
-    test(ctx.origem,c.origem_key,3);
-    test(ctx.destino,c.destino_key,3);
-    if(!mismatch)ok.push({row:c,score,comparable});
+  if(ctx.regO&&ctx.regD){
+    const x=all.filter(c=>cpkNormRouteCode(c.reg_orig)===ctx.regO&&cpkNormRouteCode(c.reg_dest)===ctx.regD);
+    const p=cpkChooseSzyCandidate(x,op,'regioes_exatas'); if(p)return p;
   }
-  if(!ok.length)return {status:'nao_encontrado',row:null};
-  if(ok.length===1)return {status:'exato',row:ok[0].row};
-  ok.sort((a,b)=>b.score-a.score);
-  if(ok[0].score>0&&ok[0].score>ok[1].score)return {status:'exato',row:ok[0].row};
-  return {status:'ambiguo',row:null};
+  if(ctx.origem&&ctx.destino){
+    const x=all.filter(c=>c.origem_key&&c.destino_key&&c.origem_key===ctx.origem&&c.destino_key===ctx.destino);
+    const p=cpkChooseSzyCandidate(x,op,'locais_exatos'); if(p)return p;
+  }
+  if(ctx.ufO&&ctx.ufD){
+    const x=all.filter(c=>c.uf_orig_key&&c.uf_dest_key&&c.uf_orig_key===ctx.ufO&&c.uf_dest_key===ctx.ufD);
+    const p=cpkChooseSzyCandidate(x,op,'ufs_exatas'); if(p)return p;
+    if(all.some(c=>c.uf_orig_key&&c.uf_dest_key))return {status:'nao_encontrado',row:null,matchLevel:'ufs_incompativeis'};
+  }
+  if(op){
+    const x=all.filter(c=>cpkNormFilialRota(c.op)===op);
+    const p=cpkChooseSzyCandidate(x,op,'filial_rota_sem_identidade_fisica'); if(p)return p;
+  }
+  if(all.length===1)return {status:'exato',row:all[0],matchLevel:'unica_definicao_global'};
+  return {status:'ambiguo',row:null,matchLevel:'multiplas_definicoes'};
 }
+
 function cpkKmViagem(r){
   const res=cpkResolveSZY(r);
   if(res.row&&res.row.km_total>0){ const s=res.row; return {km:s.km_total,fonte:'szy',revisto:s.revisto,uf_o:s.uf_orig,uf_d:s.uf_dest}; }
