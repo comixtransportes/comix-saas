@@ -1560,7 +1560,7 @@ function cpkDaRota(r){
 // Sem SZY (rota sem distância) → km=0 → VPK null → "—". A linha continua
 // listada normalmente: todo deslocamento faturado aparece na tabela.
 function calcVpkRota(r){
-  const szy = getSZYByRota(r.rota, r.op || '');
+  const szy = getSZYByRota(r, r.op || '');
   const ida   = szy ? (+szy.kmIda   || 0) : 0;
   const volta = szy ? (+szy.kmVolta || 0) : 0;
   const distTotal = ida + volta;
@@ -2212,8 +2212,11 @@ function enrich(recs){
     const tar   =toN(row['Tarifa']);
     const vpk   =tar>0?tar/r:0;
     const mkp   =cpk_>0?(vpk/cpk_-1)*100:0;
+    const opRaw = row['Operacao'] || row['Filial'] || row['Filial de In'] || row['Filial incl'] || '';
     return{
-      op:    (row['Operacao']   ||'').trim(),
+      // A operação é normalizada na entrada para impedir que 3/03/SP ou
+      // 17/SC e 18/PR criem identidades diferentes para a mesma filial.
+      op:    pdOpFromValue(opRaw) || normOpKey(opRaw),
       data:  dtStr(row['Dt. Emissao']),
       mes:   mesStr(row['Dt. Emissao']),
       r_nome:(row['Nome Remeten']||'').trim(),
@@ -2225,6 +2228,10 @@ function enrich(recs){
       dest:  (row['Local Entreg']||'').trim(),
       ufd:   (row['Uf Destino'] ||'').trim(),
       rota:  (row['Rota']       ||'').trim(),
+      // Campos opcionais: quando existirem no SZB, aumentam a precisão da
+      // associação com a definição regional da SZY. A ausência não altera o fluxo.
+      codRegOrig:String(row['Cod.Reg.Orig']||row['Cod.Reg.Origem']||row['Cod Reg Orig']||row['Cod Reg Origem']||'').trim(),
+      codRegDest:String(row['Cod.Reg.Dest']||row['Cod.Reg.Destino']||row['Cod Reg Dest']||row['Cod Reg Destino']||'').trim(),
       placa: (row['Placa Veicul']||'').trim(),
       mot:   (row['Nome Motoris']||'').trim(),
       frtp:  (row['Frota']      ||'').trim(),
@@ -2444,9 +2451,10 @@ function normRotaKey(v){
 function normOpKey(v){
   const s=String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
   if(!s) return '';
-  if(/(^|\D)0?3($|\D)/.test(s) || /\bSP\b/.test(s) || /SAO PAULO/.test(s)) return '03';
-  if(/(^|\D)17($|\D)/.test(s) || /\bSC\b/.test(s) || /SANTA CATARINA/.test(s)) return '17';
-  if(/(^|\D)18($|\D)/.test(s) || /\bPR\b/.test(s) || /PARANA/.test(s)) return '18';
+  const compact=s.replace(/\s+/g,'');
+  if(compact==='0003' || /(^|\D)0?3($|\D)/.test(s) || /\bSP\b/.test(s) || /SAO PAULO/.test(s)) return '03';
+  if(compact==='0117' || /(^|\D)17($|\D)/.test(s) || /\bSC\b/.test(s) || /SANTA CATARINA/.test(s)) return '17';
+  if(compact==='0118' || /(^|\D)18($|\D)/.test(s) || /\bPR\b/.test(s) || /PARANA/.test(s)) return '18';
   const digits=s.replace(/\D/g,'');
   if(digits){
     const n=parseInt(digits,10);
@@ -2470,48 +2478,102 @@ function normalizeAtlasSZYRows(rows) {
     return Object.values(r).some(function(v) { return v !== '' && v !== null && v !== undefined; });
   });
 }
+function normRouteText(v){
+  return String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .toUpperCase().replace(/[^A-Z0-9]+/g,' ').replace(/\s+/g,' ').trim();
+}
+function normRouteCode(v){
+  return String(v==null?'':v).toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/^0+(?=\d)/,'');
+}
+function normUfKey(v){
+  const s=normRouteText(v);
+  const m=s.match(/(?:^|\s)(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)(?:$|\s)/);
+  return m ? m[1] : (s.length===2?s:'');
+}
 function enrichSZY(recs){
-  return (recs||[]).map(row=>{
+  return (recs||[]).map((row,idx)=>{
     const codigo = String(rowLoose(row,['Codigo','Código','Cod. Rota','Cod Rota','Rota'])||'').trim();
     const op = normOpKey(rowLoose(row,['Operacao','Operação','Filial','Filial de In','Filial incl','Cod Filial','Cod. Filial','Unidade','Unid','UF Filial']));
     const kmIda = toN(rowLoose(row,['Km Ida','KM Ida','Km IDA','Distância Ida','Distancia Ida','Ida']));
     const kmVolta = toN(rowLoose(row,['Km Volta','KM Volta','Km VOLTA','Distância Volta','Distancia Volta','Volta']));
     if(!codigo) return null;
-    return { codigo, key:normRotaKey(codigo), op, kmIda, kmVolta,
-      ufo:String(rowLoose(row,['UF Origem','Uf Origem'])||'').trim(),
-      ufd:String(rowLoose(row,['UF Destino','Uf Destino'])||'').trim(),
+    const orig=String(rowLoose(row,['Local Coleta','Origem','Local Origem','Cidade Origem','Município Origem','Municipio Origem','Região Origem','Regiao Origem'])||'').trim();
+    const dest=String(rowLoose(row,['Local Entrega','Destino','Local Destino','Cidade Destino','Município Destino','Municipio Destino','Região Destino','Regiao Destino'])||'').trim();
+    const ufo=String(rowLoose(row,['UF Origem','Uf Origem','UF Or','Uf Or'])||'').trim();
+    const ufd=String(rowLoose(row,['UF Destino','Uf Destino','UF Dest','Uf Dest'])||'').trim();
+    return {
+      _idx:idx, codigo, key:normRotaKey(codigo), op, kmIda, kmVolta,
+      ufo, ufd, orig, dest,
+      ufoKey:normUfKey(ufo)||normUfKey(orig),
+      ufdKey:normUfKey(ufd)||normUfKey(dest),
+      origKey:normRouteText(orig), destKey:normRouteText(dest),
+      codRegOrig:String(rowLoose(row,['Cod.Reg.Orig','Cod.Reg.Origem','Cod Reg Orig','Cod Reg Origem','Cod. Reg. Orig','Código Região Origem','Codigo Regiao Origem'])||'').trim(),
+      codRegDest:String(rowLoose(row,['Cod.Reg.Dest','Cod.Reg.Destino','Cod Reg Dest','Cod Reg Destino','Cod. Reg. Dest','Código Região Destino','Codigo Regiao Destino'])||'').trim(),
       revisto:String(rowLoose(row,['Revisto'])||'').trim()
     };
   }).filter(Boolean);
 }
 function rebuildSZYMap(){
   SZY_DATA = enrichSZY(RAW_SZY);
-  SZY_MAP = {};
-  const rotaGroups = {};
-  const addKey=(key,row)=>{ if(key) SZY_MAP[key]=row; };
+  SZY_MAP = { byOpRota:Object.create(null), byRota:Object.create(null) };
+  const push=(bucket,key,row)=>{
+    if(!key) return;
+    if(!bucket[key]) bucket[key]=[];
+    bucket[key].push(row);
+  };
   SZY_DATA.forEach(r=>{
-    const op=normOpKey(r.op);
-    const keys=[r.key, String(r.codigo||'').trim().toUpperCase()].filter(Boolean);
-    keys.forEach(k=>{
-      if(op) addKey(op+'§'+k, r);
-      (rotaGroups[k]||(rotaGroups[k]=[])).push(r);
-    });
-  });
-  Object.entries(rotaGroups).forEach(([k,list])=>{
-    const uniq=[...new Set(list)];
-    const ops=[...new Set(uniq.map(r=>normOpKey(r.op)).filter(Boolean))];
-    if(uniq.length===1 || ops.length<=1) addKey(k, uniq[0]);
+    const op=normOpKey(r.op), key=r.key||normRotaKey(r.codigo);
+    if(!key) return;
+    push(SZY_MAP.byRota,key,r);
+    if(op) push(SZY_MAP.byOpRota,op+'§'+key,r);
   });
 }
-function getSZYByRota(rota, filial){
+function szyRouteContext(rotaOuLinha, filial, contexto){
+  const src=(rotaOuLinha&&typeof rotaOuLinha==='object')?rotaOuLinha:(contexto||{});
+  const rota=(rotaOuLinha&&typeof rotaOuLinha==='object')?(src.rota||src.codigo||''):rotaOuLinha;
+  const op=normOpKey(src.op||src.operacao||src.filial||filial||'');
+  return {
+    rota, key:normRotaKey(rota), op,
+    ufo:normUfKey(src.ufo||src.ufO||src.ufOrigem||src['Uf Origem']||src['UF Origem']||''),
+    ufd:normUfKey(src.ufd||src.ufD||src.ufDestino||src['Uf Destino']||src['UF Destino']||''),
+    orig:normRouteText(src.orig||src.origem||src.localColeta||src['Local Coleta']||''),
+    dest:normRouteText(src.dest||src.destino||src.localEntrega||src.localEntreg||src['Local Entreg']||src['Local Entrega']||''),
+    codRegOrig:normRouteCode(src.codRegOrig||src.codRegOrigem||src['Cod.Reg.Orig']||src['Cod.Reg.Origem']||''),
+    codRegDest:normRouteCode(src.codRegDest||src.codRegDestino||src['Cod.Reg.Dest']||src['Cod.Reg.Destino']||'')
+  };
+}
+function resolveSZYRoute(rotaOuLinha, filial, contexto){
   if(!SZY_DATA.length && RAW_SZY.length) rebuildSZYMap();
-  const k=normRotaKey(rota);
-  const raw=String(rota||'').trim().toUpperCase();
-  const op=normOpKey(filial);
-  if(op){
-    return SZY_MAP[op+'§'+k] || SZY_MAP[op+'§'+raw] || null;
+  const ctx=szyRouteContext(rotaOuLinha,filial,contexto);
+  if(!ctx.key) return {status:'nao_encontrado',row:null,candidates:[],matchLevel:'sem_rota'};
+  const all=ctx.op ? ((SZY_MAP.byOpRota&&SZY_MAP.byOpRota[ctx.op+'§'+ctx.key])||[]) : ((SZY_MAP.byRota&&SZY_MAP.byRota[ctx.key])||[]);
+  if(!all.length) return {status:'nao_encontrado',row:null,candidates:[],matchLevel:ctx.op?'filial_rota':'rota'};
+
+  const scored=[];
+  all.forEach(c=>{
+    let score=0, comparable=0, mismatch=false;
+    const test=(a,b,w)=>{ if(a&&b){ comparable++; if(a===b) score+=w; else mismatch=true; } };
+    test(ctx.codRegOrig,normRouteCode(c.codRegOrig),8);
+    test(ctx.codRegDest,normRouteCode(c.codRegDest),8);
+    test(ctx.ufo,c.ufoKey,4);
+    test(ctx.ufd,c.ufdKey,4);
+    test(ctx.orig,c.origKey,3);
+    test(ctx.dest,c.destKey,3);
+    if(!mismatch) scored.push({row:c,score,comparable});
+  });
+  if(!scored.length) return {status:'nao_encontrado',row:null,candidates:all,matchLevel:'atributos_incompativeis'};
+  if(scored.length===1){
+    const only=scored[0];
+    return {status:'exato',row:only.row,candidates:all,matchLevel:only.comparable>0?'filial_rota_atributos':'unico_filial_rota'};
   }
-  return SZY_MAP[k] || SZY_MAP[raw] || null;
+  scored.sort((a,b)=>b.score-a.score);
+  if(scored[0].score>0 && scored[0].score>scored[1].score){
+    return {status:'exato',row:scored[0].row,candidates:all,matchLevel:'melhor_correspondencia'};
+  }
+  return {status:'ambiguo',row:null,candidates:scored.map(x=>x.row),matchLevel:'multiplos_candidatos'};
+}
+function getSZYByRota(rotaOuLinha, filial, contexto){
+  return resolveSZYRoute(rotaOuLinha,filial,contexto).row;
 }
 
 let TA_CFG={};
@@ -3410,13 +3472,13 @@ function buildCl(uid,mes){
   // A rota entra na chave: sem ela não há como buscar a distância no SZY nem a
   // filial do CPK. Mesma granularidade da aba Tarifa (op+rota+…), para que CPK,
   // VPK e Markup signifiquem exatamente a mesma coisa nas duas abas.
-  const g=grp(d,r=>(r.op||'')+'§'+(r.rota||'')+'§'+r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
+  const g=grp(d,r=>(r.op||'')+'§'+(r.rota||'')+'§'+r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd+'§'+(r.codRegOrig||'')+'§'+(r.codRegDest||''));
   const rows=Object.entries(g).map(([k,arr])=>{
-    const[op,rota,rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
+    const[op,rota,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest]=k.split('§');
     const s=agg(arr);
     const sF=aggFechado(arr);
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
-    return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj};
+    return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest,...s,fatProj,prodProj};
   }).sort((a,b)=>b.f-a.f);
   aplicaCpkVpk(rows);   // mesmas regras da aba Tarifa
   document.getElementById('cnt-cl').textContent=' — '+rows.length+' rotas';
@@ -3481,7 +3543,9 @@ function showCliHist(remNome, dstNome, frt, orig, ufo, dest, ufd){
     r.orig    === orig    &&
     r.ufo     === ufo     &&
     r.dest    === dest    &&
-    r.ufd     === ufd
+    r.ufd     === ufd     &&
+    (!codRegOrig || (r.codRegOrig||'') === codRegOrig) &&
+    (!codRegDest || (r.codRegDest||'') === codRegDest)
   );
   const mesesHist = [...new Set(allRota.map(r=>r.mes))].filter(Boolean).sort();
   const ult12 = mesesHist.slice(-12);
@@ -3581,7 +3645,7 @@ function taFreteAtual(arr){
 function taBuildCalc(row){
   const cfg=taCfgGet(row);
   const filial=row.op || _taUID || '';
-  const szy=getSZYByRota(row.rota, filial);
+  const szy=getSZYByRota(row, filial);
   const distIda=szy ? szy.kmIda : 0;
   const distVolta=szy ? szy.kmVolta : 0;
   const freteMin=calcAnttFreteMinimo(distIda, distVolta, cfg.eixos, cfg.retornaVazio, cfg.altoDesemp);
@@ -3592,13 +3656,13 @@ function buildTa(uid,mes){
   ensureAnttParams();
   _taUID=uid; _taMes=mes;
   const d=filterByOp(uid).filter(r=>r.mes===mes);
-  const g=grp(d,r=>(r.op||'')+'§'+(r.rota||'')+'§'+r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd);
+  const g=grp(d,r=>(r.op||'')+'§'+(r.rota||'')+'§'+r.r_nome+'§'+r.d_nome+'§'+r.frete+'§'+r.orig+'§'+r.ufo+'§'+r.dest+'§'+r.ufd+'§'+(r.codRegOrig||'')+'§'+(r.codRegDest||''));
   const rows=Object.entries(g).map(([k,arr])=>{
-    const[op,rota,rem,dst,frt,orig,ufo,dest,ufd]=k.split('§');
+    const[op,rota,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest]=k.split('§');
     const s=agg(arr);
     const sF=aggFechado(arr);
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
-    return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
+    return{op,rota,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
   }).sort((a,b)=>b.f-a.f);
   rows.forEach(r=>{
     const c=taBuildCalc(r);
@@ -3666,7 +3730,7 @@ function addTarivaRowClick(){
       const idx=Number(tr.dataset.ri);
       const row=(tbl && tbl._view && tbl._view[idx]) ? tbl._view[idx] : null;
       if(row){
-        showTarivaHist(row.op||'', row.rota||'', row.rem||'', row.dst||'', row.frt||'', row.orig||'', row.ufo||'', row.dest||'', row.ufd||'');
+        showTarivaHist(row.op||'', row.rota||'', row.rem||'', row.dst||'', row.frt||'', row.orig||'', row.ufo||'', row.dest||'', row.ufd||'', row.codRegOrig||'', row.codRegDest||'');
         return;
       }
       const t=tr.querySelectorAll('td');
@@ -3684,7 +3748,7 @@ function addTarivaRowClick(){
   });
 }
 
-function showTarivaHist(op,rota,remNome,dstNome,frt,orig,ufo,dest,ufd){
+function showTarivaHist(op,rota,remNome,dstNome,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest){
   const corte='2025-01-01';
   const allRota = filterByOp(_taUID).filter(r=>
     r.data > corte &&
