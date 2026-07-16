@@ -2715,6 +2715,7 @@ function cpkCalculate(){
     pa.cliente_princ = Object.entries(pa.clientes).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
     pa.rota_princ = Object.entries(pa.rotas).sort((a,b)=>b[1]-a[1])[0]?.[0]||'—';
     pa.status = cpkStatus(pa.margem_km);
+    pa.ehCarreta = cpkEhCarreta(cpkVeic(pa.placa));   // carreta não roda km próprio → fora da saúde por margem/km
     if(!cpkVeic(pa.placa)&&!CPK.diag.semCadastro.includes(pa.placa))CPK.diag.semCadastro.push(pa.placa);
     return pa;
   });
@@ -2970,7 +2971,9 @@ function cpkAggFilial(scopeOnly){
     // Placa órfã real (sem unidade/cadastro/apontamento) cai na 1ª filial do escopo,
     // garantindo que a soma do KM dos cards = KM Total do headline (sem placa perdida).
     let u=cpkFilialDe(p,scopeFils); if(!u)u=scopeFils[0]; if(!map[u])return;
-    const m=map[u]; m.placas++; m.km+=p.km_total||0; m.rec+=p.faturamento||0;
+    const m=map[u]; m.km+=p.km_total||0; m.rec+=p.faturamento||0;
+    if(p.ehCarreta) return;   // carreta não roda km próprio → não entra na contagem de placas por status
+    m.placas++;
     if(p.status==='saudavel')m.saud++; else if(p.status==='atencao')m.aten++; else if(p.status==='critico')m.crit++; else m.semkm++;
   });
   // CUSTO autoritativo = DRE por filial (CPK.custoFilial), invariante ao escopo,
@@ -3000,8 +3003,9 @@ function cpkAggFilial(scopeOnly){
 // Conta placas por status no escopo atual → {tot, cnt}
 function cpkFleetCounts(){
   const cnt={saudavel:0,atencao:0,critico:0,'sem-km':0};
-  CPK.aggPlaca.forEach(p=>{ cnt[p.status]=(cnt[p.status]||0)+1; });
-  return { tot:CPK.aggPlaca.length, cnt };
+  const base=CPK.aggPlaca.filter(p=>!p.ehCarreta);   // carreta não roda km próprio → fora da contagem de status por margem
+  base.forEach(p=>{ cnt[p.status]=(cnt[p.status]||0)+1; });
+  return { tot:base.length, cnt };
 }
 // Visão Geral — Saúde da Frota COMPACTA: 1 caminhão colorido por status.
 function cpkRenderFleetStatus(rowId, metaId){
@@ -3030,7 +3034,7 @@ function cpkRenderPlateHeat(rowId, gridId){
       '<div class="fst-p">'+pct+'% da frota</div></div></div>';
   }).join('');
   const phCls={saudavel:'ph-gn',atencao:'ph-am',critico:'ph-rd','sem-km':'ph-mu'};
-  const placas=CPK.aggPlaca.slice().sort((a,b)=>{
+  const placas=CPK.aggPlaca.filter(p=>!p.ehCarreta).sort((a,b)=>{
     const d=(CPK_ST_RANK[a.status]??9)-(CPK_ST_RANK[b.status]??9); if(d)return d;
     return (a.margem_km==null?-1e9:a.margem_km)-(b.margem_km==null?-1e9:b.margem_km);
   });
@@ -3122,6 +3126,7 @@ function cpkRenderVG(){
   const margemPct = rec>0 ? margem/rec*100 : null;
   const recKm = km>0 ? rec/km : null;
   const comKmCnt = CPK.aggPlaca.filter(p=>p.km_total>0).length;
+  const totKmBase = CPK.aggPlaca.filter(p=>!p.ehCarreta).length;   // base de km = frota que roda (carreta não roda km próprio)
   const medido = CPK.cobertura ? CPK.cobertura.medidoPct : null;
 
   // ── Faixa: Resultado do mês · CPK da Frota ($, destaque) · KM Total · Custo medido (trena)
@@ -3153,7 +3158,7 @@ function cpkRenderVG(){
       (margemPct!=null?cpkFmtPct(margemPct)+' de margem':'Receita − Custo'),
       margem>=0?'gn':'rd') +
     cpkKpi('road','cy','KM Total', cpkFmtKm(km),
-      comKmCnt+'/'+CPK.aggPlaca.length+' placas c/ KM') +
+      comKmCnt+'/'+totKmBase+' placas c/ KM') +
     cpkKpi('ruler', (medido!=null&&medido>=0.5)?'gn':'am','Custo medido',
       medido!=null?cpkFmtPct(medido*100,0):'—', 'apontado por placa') +
     resultCard;
