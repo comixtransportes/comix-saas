@@ -3005,11 +3005,17 @@ function cpkAggFilial(scopeOnly){
   // exatamente o headline (Custo Total ÷ KM Total).
   const _depBy=(CPK.audit&&CPK.audit.depByPlaca)||{};
   const _plsFil=(CPK.audit&&CPK.audit.placasPorFil)||{};
+  const _depCarr=(CPK.audit&&CPK.audit.depCarretaFil)||{};   // depreciação de carreta (sem linha própria), diluída na filial — entra no pool/headline
+  const _modoDep=CPK.capModo==='dep';                        // mesma regra da Auditoria por Filial
   Object.keys(map).forEach(f=>{
     const cf=(CPK.custoFilial||{})[f];
-    let c = cf?(+cf.total||0):0;
-    c += ((_plsFil[f]||[]).reduce((s,p)=>s+(+_depBy[p]||0),0));
-    map[f].custo = c;
+    const base = cf?(+cf.total||0):0;
+    // Custo de capital da filial = Depreciação por placa própria + Depreciação de carreta diluída na filial.
+    // A carreta não roda km próprio, mas a sua depreciação entra no pool (CPK.pool) — sem somá-la aqui,
+    // o Custo dos cards da Visão Geral ficava abaixo do headline/Auditoria pelo total de depCarretaFil.
+    const dep = (_plsFil[f]||[]).reduce((s,p)=>s+(+_depBy[p]||0),0) + (+_depCarr[f]||0);
+    const cap = _modoDep ? dep : (cf?(+cf.ce||0):0);
+    map[f].custo = base + cap;
   });
   // RECEITA — soma a Carta Frete Complementar (FSC0000) na filial do CT-e (uniC),
   // receita real sem placa/KM. Sem filial no CT-e, cai na 1ª do escopo (mesma
