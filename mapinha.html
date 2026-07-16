@@ -497,6 +497,20 @@ td>.skel-line{vertical-align:middle}
   </div>
 
   <div class="panel">
+    <div class="panel-h"><h3>Pedágio de placas próprias por filial (frota) <span class="muted" style="font-weight:400;font-size:12px">— base do CPK · não altera o DRE</span></h3></div>
+    <div class="panel-b" style="overflow:auto">
+      <div class="lock-note" style="margin-bottom:10px;color:var(--mu);background:#fafbfc;border-color:var(--bd2)">
+        Divide o Custo Comix por filial considerando a <b>frota própria (cavalos + carros de apoio)</b> conforme o cadastro de veículos — cada carro de apoio entra na sua filial, igual aos cavalos. Exclui agregados, carretas e pedágio sem placa. É este valor, por unidade, que o <b>CPK</b> utiliza como pedágio.
+      </div>
+      <table>
+        <thead><tr><th>Filial</th><th class="num">Pedágio bruto</th><th class="num">Valor Cobrado</th>
+          <th class="num">Vale Comix</th><th class="num">Custo Comix (próprias)</th><th class="num">Placas</th></tr></thead>
+        <tbody id="pedFilPropriaTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
     <div class="panel-h"><h3>Detalhe por placa</h3>
       <div class="ctrls">
         <select id="pedFiltroFil" class="sel" onchange="renderPedagios()"><option value="">Todas as filiais</option></select>
@@ -2527,6 +2541,54 @@ async function ensurePlacaFilial(){
   ST._placaFilialCache = map; return map;
 }
 
+/* ── Classificação placa → FROTA PRÓPRIA (para o card de pedágio)? ────────────
+   Considera a FROTA PRÓPRIA conforme cadastro, igual ao CPK:
+     · cavalo próprio  (vínculo FROTA / frota CP..., não-carreta, não-apoio)
+     · carro de apoio  (prefixo AP / tipo apoio) — alocado na sua filial, como os cavalos
+   Ficam DE FORA: agregado (AGREGADO / CA...), carreta (prefixo SL, silo, tanque…),
+   placa sem cadastro e vínculo indefinido (que não seja carro de apoio).
+   Usada só no card "Pedágio de placas próprias por filial" — é exatamente o pedágio
+   que o CPK puxa por unidade. Não interfere no DRE nem no restante da aba. */
+ST._placaPropriaCache = null;   // Set de placas normalizadas: frota própria (cavalos + carros de apoio)
+function pedVinculoProprio(v){
+  const tv=String(v.tipo_vinculo||v.vinculo||'').toUpperCase().trim();
+  if(tv==='AGREGADO') return false;
+  if(tv==='FROTA')    return true;
+  const pref=String(v.frota||'').toUpperCase().slice(0,2);
+  return pref==='CP' ? true : false;                 // CA... ou indefinido → não-próprio
+}
+function pedTipoNorm(v){
+  return String(v.tipo||v.categoria||v.especie||v.tipo_veiculo||v.tipo_equipamento||v.grupo||'')
+           .normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+}
+function pedEhCarreta(v){
+  if(String(v.frota||'').toUpperCase().startsWith('SL')) return true;
+  return /carreta|semi|reboque|silo|tanque|implement/.test(pedTipoNorm(v));
+}
+function pedEhCarroApoio(v){
+  if(String(v.frota||'').toUpperCase().startsWith('AP')) return true;
+  return /apoio/.test(pedTipoNorm(v));
+}
+async function ensurePlacaPropria(){
+  if(ST._placaPropriaCache) return ST._placaPropriaCache;
+  const set=new Set();
+  try{
+    const vs = await fsGetCollection('veiculos');
+    vs.forEach(d=>{
+      const v=d.data||{};
+      const placa = normPlaca(v.placa || v.Placa || d.id);
+      if(!placa) return;
+      const agregado = String(v.tipo_vinculo||v.vinculo||'').toUpperCase().trim()==='AGREGADO';
+      const carreta  = pedEhCarreta(v);
+      const apoio    = pedEhCarroApoio(v);
+      // cavalo próprio OU carro de apoio (ambos alocados por filial); exclui carreta/agregado
+      const considerado = !carreta && !agregado && ( apoio || pedVinculoProprio(v) );
+      if(considerado) set.add(placa);
+    });
+  }catch(e){ console.warn('[Pedágio] cadastro próprias:', e.message); }
+  ST._placaPropriaCache = set; return set;
+}
+
 /* ── Parser da fatura (CSV ; com aspas; cabeçalho dinâmico) ── */
 function pedSplitCsvLine(line){
   const out=[]; let cur=''; let q=false;
@@ -2597,6 +2659,7 @@ function parsePedagioResumo(text){
      valeCliente (exibição) = max(0, usado − valeComix)  (resto do vale usado = do cliente) */
 async function computePedagio(fatRows, resRows){
   const map = await ensurePlacaFilial();
+  await ensurePlacaPropria();   // pré-carrega classificação de frota própria p/ o card
   const FB={}, FU={}, FC={};      // placa -> bruto(−T), usado(U), cobrado(−V)
   let spBruto=0, spUsado=0, spCobrado=0;
   fatRows.forEach(r=>{
@@ -2730,9 +2793,11 @@ function renderPedagios(){
   const cards=document.getElementById('pedCards');
   const filTb=document.getElementById('pedFilTbody');
   const plTb=document.getElementById('pedPlacaTbody');
+  const propTb0=document.getElementById('pedFilPropriaTbody');
   if(!d || ST.pedagioMes!==ST.mesRef){
     if(cards) cards.innerHTML='';
     if(filTb) filTb.innerHTML='<tr><td colspan="5" class="empty">Nenhum pedágio importado para '+ST.mesRef+'.</td></tr>';
+    if(propTb0) propTb0.innerHTML='<tr><td colspan="6" class="empty">Nenhum pedágio importado para '+ST.mesRef+'.</td></tr>';
     if(plTb) plTb.innerHTML='<tr><td colspan="6" class="empty">Importe os arquivos para ver o detalhe por placa.</td></tr>';
     return;
   }
@@ -2751,6 +2816,33 @@ function renderPedagios(){
     <td class="num"><b>${moeda(pf[s].comix)}</b></td></tr>`).join('')
     + `<tr class="res"><td>Total</td><td class="num">${moeda(d.totalBruto)}</td><td class="num">${moeda(d.totalCobrado)}</td><td class="num">${moeda(d.totalValeComix||0)}</td><td class="num">${moeda(d.totalComix)}</td></tr>`
     : '<tr><td colspan="5" class="empty">Sem dados.</td></tr>';
+  // por filial — SOMENTE placas próprias (frota) conforme cadastro.
+  // Base do CPK (pedágio por unidade). NÃO altera o DRE nem o resumo acima.
+  const propTb=document.getElementById('pedFilPropriaTbody');
+  if(propTb){
+    const propSet=ST._placaPropriaCache;
+    if(!propSet){
+      propTb.innerHTML='<tr><td colspan="6" class="empty">Carregando cadastro de veículos…</td></tr>';
+      ensurePlacaPropria().then(()=>{ if(ST.pedagio && ST.pedagioMes===ST.mesRef) renderPedagios(); });
+    } else {
+      const acc={};
+      (d.placas||[]).forEach(p=>{
+        if(!propSet.has(normPlaca(p.placa))) return;      // só frota própria
+        const s=p.filial||'SC';
+        const a=acc[s]||(acc[s]={bruto:0,cobrado:0,valeComix:0,comix:0,n:0});
+        a.bruto+=(+p.bruto||0); a.cobrado+=(+p.cobrado||0); a.valeComix+=(+p.valeComix||0); a.comix+=(+p.comix||0); a.n++;
+      });
+      const ks=Object.keys(acc).sort();
+      let tB=0,tC=0,tV=0,tX=0,tN=0; ks.forEach(s=>{ tB+=acc[s].bruto; tC+=acc[s].cobrado; tV+=acc[s].valeComix; tX+=acc[s].comix; tN+=acc[s].n; });
+      propTb.innerHTML = ks.length? ks.map(s=>`<tr><td>${s}</td>
+          <td class="num">${moeda(acc[s].bruto)}</td><td class="num">${moeda(acc[s].cobrado)}</td>
+          <td class="num">${moeda(acc[s].valeComix)}</td>
+          <td class="num"><b>${moeda(acc[s].comix)}</b></td>
+          <td class="num">${acc[s].n}</td></tr>`).join('')
+        + `<tr class="res"><td>Total</td><td class="num">${moeda(tB)}</td><td class="num">${moeda(tC)}</td><td class="num">${moeda(tV)}</td><td class="num">${moeda(tX)}</td><td class="num">${tN}</td></tr>`
+        : '<tr><td colspan="6" class="empty">Nenhuma placa própria com pedágio no mês.</td></tr>';
+    }
+  }
   // por placa
   const ff=sel?sel.value:'';
   const rows=(d.placas||[]).filter(p=>!ff||p.filial===ff).sort((a,b)=> b.comix-a.comix);
