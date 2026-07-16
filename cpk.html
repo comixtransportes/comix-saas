@@ -683,7 +683,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
 
     <!-- ══════════ PLACAS ══════════ -->
     <div class="cpk-pane" id="pane-placas">
-      <div class="cpk-info"><span>CPK individual por placa (frota própria). Custo da placa = parcela do <strong>DRE do Mapinha sem custos de agregados</strong> (exceto a <strong>Garantia Agregados</strong>, que entra como C.O rateado): diesel e C.O com placa, e o <strong>pedágio por placa</strong> (Valor Cobrado + Vale Comix da aba Pedágios) permanecem na placa; o saldo sem placa (C.P Premissa CPK + Garantia Agregados + custos diluídos de carreta/carro de apoio, incluindo o pedágio de carro de apoio) é rateado igualmente entre as placas da filial. A <strong>depreciação mensal</strong> de cada placa, quando cadastrada, entra como custo direto da placa (sem rateio) — o C.E da premissa não entra no CPK. KM por placa via aba <strong>Dados</strong> ou derivado de SZB×SZY. Receita via SZB.</span></div>
+      <div class="cpk-info"><span>CPK individual por placa (frota própria). Custo da placa = parcela do <strong>DRE do Mapinha sem custos de agregados</strong> (exceto a <strong>Garantia Agregados</strong>, que entra como C.O rateado): diesel e C.O com placa, e o <strong>pedágio por placa</strong> (Valor Cobrado + Vale Comix da aba Pedágios) permanecem na placa; o saldo sem placa (C.P Premissa CPK + Garantia Agregados + custos diluídos de carreta/carro de apoio, incluindo o pedágio de carro de apoio) é rateado igualmente entre as placas da filial. A <strong>depreciação mensal</strong> de cada placa (cavalo/carro de apoio), quando cadastrada, entra como custo direto da placa (sem rateio) — o C.E da premissa não entra no CPK. <strong>Carretas não aparecem como placa aqui</strong> (não rodam km próprio, logo não têm CPK): a sua depreciação é custo da frota, <strong>rateada igualmente entre as placas da filial</strong>, como os demais custos de carreta. KM por placa via aba <strong>Dados</strong> ou derivado de SZB×SZY. Receita via SZB.</span></div>
       <div class="kpi-row" id="placas-cards"></div>
       <div class="insight-row" id="placas-insights"></div>
 
@@ -2593,6 +2593,7 @@ function cpkCalculate(){
     if(!(depByPlaca[placa]>0))continue;
     const v=cpkVeic(placa);
     if(!v||!cpkDepVeicEhFrotaPropria(v,cpkDepTipoFromVeic(v)))continue;
+    if(cpkEhCarreta(v))continue;   // carreta não roda km próprio → não vira linha da tabela por placa; a sua depreciação é diluída na filial (ver depCarretaFil)
     const filEst=cpkFilialDe({placa,unidade:v.unidade},scopeArr);
     if(scope.size&&filEst&&!scope.has(filEst))continue;
     if(f.placa && placa!==cpkNormPlaca(f.placa))continue;
@@ -2609,12 +2610,31 @@ function cpkCalculate(){
   CPK.cpkRate = totalKm>0 ? CPK.pool/totalKm : null;
   rate=CPK.cpkRate;
 
+  // ── DEPRECIAÇÃO DE CARRETA — DILUÍDA NA FILIAL ────────────────────────
+  // Carreta não roda km próprio: não vira linha da tabela por placa (sem CPK)
+  // e a sua depreciação é CUSTO DA FROTA, rateado igualmente entre as placas
+  // da filial (mesmo tratamento dos demais custos de carreta — regra 07/2026).
+  const depCarretaFil={};
+  for(const placa in depByPlaca){
+    if(!(depByPlaca[placa]>0))continue;
+    if(aggP[placa])continue;                       // já é linha própria (cavalo / carro de apoio)
+    const vc=cpkVeic(placa); if(!vc||!cpkEhCarreta(vc))continue;
+    if(!cpkDepVeicEhFrotaPropria(vc,cpkDepTipoFromVeic(vc)))continue;
+    const filC=cpkFilialDe({placa,unidade:vc.unidade},scopeArr);
+    if(scope.size&&filC&&!scope.has(filC))continue;
+    if(f.placa)continue;                            // filtro de placa única: sem escopo p/ diluir carreta
+    depCarretaFil[filC]=(depCarretaFil[filC]||0)+(+depByPlaca[placa]||0);
+  }
+  CPK.depCarretaFil=depCarretaFil;
+
   // ── DEPRECIAÇÃO NO POOL DA FROTA ──────────────────────────────────────
   // Soma a depreciação mensal das placas no escopo (já presentes em aggP) e a
   // adiciona ao custo total da frota. É um custo direto por placa (sem rateio,
-  // sem reconciliação): cada placa carrega exatamente a sua depreciação.
+  // sem reconciliação): cada placa carrega exatamente a sua depreciação. A
+  // depreciação de carreta (sem linha própria) entra aqui via depCarretaFil.
   let depScopeTotal=0;
   for(const placa in aggP){ depScopeTotal += (+depByPlaca[placa]||0); }
+  for(const filC in depCarretaFil){ depScopeTotal += depCarretaFil[filC]; }
   pool.dep = depScopeTotal;
   if(depScopeTotal>0){
     pool.total += depScopeTotal;
@@ -2673,6 +2693,7 @@ function cpkCalculate(){
     igualFil:Object.assign({},igualFil),
     placasPorFil:Object.fromEntries(_scopeFils.map(f=>[f,(placasPorFil[f]||[]).slice()])),
     garantiaAgregFil:Object.assign({},CPK.garantiaAgregFil||{}),
+    depCarretaFil:Object.assign({},depCarretaFil),
     recFil, pool, depByPlaca,
     capModo:CPK.capModo, depStat:CPK.depStat
   };
@@ -2697,7 +2718,9 @@ function cpkCalculate(){
     const rf=recFil[f]||{}; const ig=igualFil[f]||0;
     const g=balde=>{ const rc=rf[balde]; return rc?((rc.placed[pa.placa]||0)+rc.residuo*ig):0; };
     const diesel=g('diesel'), co=g('co'), cp=g('cp'), ce=g('ce'), ped=g('ped');
-    const dep=(+depByPlaca[pa.placa]||0); // depreciação mensal direta da placa (sem rateio)
+    const depProp=(+depByPlaca[pa.placa]||0);              // depreciação direta da placa (cavalo / carro de apoio)
+    const depCarreta=(+((depCarretaFil||{})[f]||0))*ig;    // depreciação de carreta da filial → rateio igual entre as placas (carreta não roda km próprio)
+    const dep=depProp+depCarreta;
     // Garantia Agregados desta placa = Garantia da filial ÷ nº de placas próprias da filial (rateio igual, já contido em "co").
     const garantia=(+((CPK.garantiaAgregFil||{})[f]||0))*ig;
     return { diesel, co, ped, cp, ce, dep, garantia, total:diesel+co+cp+ce+ped+dep };
@@ -5509,7 +5532,8 @@ function cpkAudPorFilial(fils){
     const cf=(CPK.custoFilial||{})[f]||{diesel:0,co:0,cp:0,ce:0,ped:0,total:0,receita:0};
     const gar=+(CPK.garantiaAgregFil||{})[f]||0; const coSemGar=(+cf.co||0)-gar;
     const km=(kmRec[f]||{}).km||0, rec=(kmRec[f]||{}).rec||0;
-    const dep=(CPK.audit&&CPK.audit.depByPlaca)?(CPK.audit.placasPorFil[f]||[]).reduce((s,p)=>s+(+CPK.audit.depByPlaca[p]||0),0):0;
+    const dep=((CPK.audit&&CPK.audit.depByPlaca)?(CPK.audit.placasPorFil[f]||[]).reduce((s,p)=>s+(+CPK.audit.depByPlaca[p]||0),0):0)
+      + ((CPK.audit&&CPK.audit.depCarretaFil)?(+CPK.audit.depCarretaFil[f]||0):0);   // + depreciação de carreta diluída na filial (sem linha própria)
     const cap=modoDep?dep:(+cf.ce||0);
     const custo=(+cf.total||0)+cap, cpk=km>0?custo/km:null, resultado=rec-custo, margem=rec>0?resultado/rec*100:null;
     const mgT=resultado>=0?'var(--gn)':'var(--rd)';
