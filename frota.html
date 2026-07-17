@@ -1281,7 +1281,9 @@ table.data-table{
     const cav=aloc ? (ctx.vehById[aloc.cavalo_id]||ctx.vehByPlaca[aloc.cavalo_placa]) : null;
     const vinc=cav?cav.vinculo:(c.vinculo||"FROTA");
     const uni=(cav?unidadeFull(cav):"") || UNIT_FULL[normSlug(c.unidade)] || c.unidade || "";
-    const st=COMP_STATUS[String(c.status||"").toLowerCase()] || (c.status?String(c.status).toUpperCase():"-");
+    const raw=String(c.status||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+    const eff=raw.includes("manut")?"manutencao":(aloc?"operando":"estoque");
+    const st=COMP_STATUS[eff] || eff.toUpperCase();
     return { A:c.id||c.identificacao||"", B:aloc?(aloc.cavalo_placa||""):"", C:cav?(cav.motorista||""):"",
       D:vinc==="AGREGADO"?"AGREGADO":"FROTA", E:c.identificacao||c.id||"", F:c.serie||"", G:uni, H:st }; }; }
 
@@ -1886,6 +1888,11 @@ async function loadAllData() {
     } else {
       console.warn("Frota: SZY sem dados na nuvem — distância da viagem ficará como '—'");
     }
+
+    // === COMPRESSORES: alocação_frota é a fonte oficial do vínculo ===
+    // Corrige localmente antes da primeira renderização e, para admin, saneia
+    // vínculos duplicados/campos antigos no Firestore em segundo plano.
+    reconciliarCompressoresComAlocacao(STATE.isAdmin);
 
     _frotaLoaderHide();
 
@@ -2800,10 +2807,24 @@ async function moveCavalo(id, targetCol) {
 async function clearSlot(cavaloId, slot) {
   if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
   const aloc = STATE.alocacoes[cavaloId] || {};
+
+  if (slot === "compressor") {
+    const compressorId = aloc.compressor_id;
+    if (!compressorId) return;
+    try {
+      await definirAlocacaoCompressor(compressorId, null, { confirmarSubstituicao: false });
+      renderBoard();
+      renderCompressores();
+      renderDashboard();
+      const statusFinal = visaoCompressor(STATE.compressores.find(c => c.id === compressorId)).status;
+      showToast(statusFinal === "manutencao" ? "Compressor removido · permanece em manutenção" : "Compressor removido · em estoque", "success");
+    } catch(e) { showToast("Erro: " + e.message, "error"); }
+    return;
+  }
+
   const patch = { ...aloc };
   let itemRemovidoId = null;
-  if (slot === "compressor") patch.compressor_id = null;
-  else if (slot === "carreta1") { itemRemovidoId = aloc.carreta1_id; patch.carreta1_id = null; }
+  if (slot === "carreta1") { itemRemovidoId = aloc.carreta1_id; patch.carreta1_id = null; }
   else if (slot === "carreta2") { itemRemovidoId = aloc.carreta2_id; patch.carreta2_id = null; }
   try {
     await window._FB.salvarAlocacao(cavaloId, sanitizeAloc(patch, cavaloId));
@@ -2828,11 +2849,22 @@ async function assignSlot(targetCavalo, slot, payload) {
   if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
   const itemId = payload.id;
 
+  if (slot === "compressor") {
+    try {
+      await definirAlocacaoCompressor(itemId, targetCavalo, { confirmarSubstituicao: false });
+      renderBoard();
+      renderCompressores();
+      renderDashboard();
+      const statusFinal = visaoCompressor(STATE.compressores.find(c => c.id === itemId)).status;
+      showToast(statusFinal === "manutencao" ? "Compressor atribuído · permanece em manutenção" : "Compressor atribuído · operando", "success");
+    } catch(e) { showToast("Erro: " + e.message, "error"); }
+    return;
+  }
+
   // 1) Se o item já estava em outro cavalo, remove de lá + marca carreta como disponivel
   if (payload.fromCavalo && payload.fromCavalo !== targetCavalo && payload.fromSlot) {
     const src = { ...(STATE.alocacoes[payload.fromCavalo] || {}) };
-    if (payload.fromSlot === "compressor") src.compressor_id = null;
-    else if (payload.fromSlot === "carreta1") src.carreta1_id = null;
+    if (payload.fromSlot === "carreta1") src.carreta1_id = null;
     else if (payload.fromSlot === "carreta2") src.carreta2_id = null;
     try {
       await window._FB.salvarAlocacao(payload.fromCavalo, sanitizeAloc(src, payload.fromCavalo));
@@ -2842,20 +2874,17 @@ async function assignSlot(targetCavalo, slot, payload) {
 
   // 2) Atribui no destino
   const tgt = { ...(STATE.alocacoes[targetCavalo] || {}) };
-  if (slot === "compressor") tgt.compressor_id = itemId;
-  else if (slot === "carreta1") tgt.carreta1_id = itemId;
+  if (slot === "carreta1") tgt.carreta1_id = itemId;
   else if (slot === "carreta2") tgt.carreta2_id = itemId;
   try {
     await window._FB.salvarAlocacao(targetCavalo, sanitizeAloc(tgt, targetCavalo));
     STATE.alocacoes[targetCavalo] = tgt;
 
     // Sincroniza status da carreta -> operando (alocada = em uso = operando)
-    if (slot !== "compressor") {
-      const carreta = findVeiculo(itemId);
-      if (carreta && carreta.disponibilidade !== "operando") {
-        carreta.disponibilidade = "operando";
-        try { await window._FB.atualizarVeiculo(carreta.placa, { status: "OPERANDO" }); } catch(_){}
-      }
+    const carreta = findVeiculo(itemId);
+    if (carreta && carreta.disponibilidade !== "operando") {
+      carreta.disponibilidade = "operando";
+      try { await window._FB.atualizarVeiculo(carreta.placa, { status: "OPERANDO" }); } catch(_){}
     }
 
     renderBoard();
@@ -3302,14 +3331,182 @@ window.editGeralField = async function(id, field, value) {
 };
 
 /* ─── COMPRESSORES ─── */
+function normalizarStatusCompressor(status) {
+  const s = String(status || "").trim().toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (s.includes("manut")) return "manutencao";
+  if (s.includes("estoque") || s.includes("dispon")) return "estoque";
+  if (s.includes("oper")) return "operando";
+  return s || "estoque";
+}
+
+function _alocTimestampMs(a) {
+  const t = a && a.updatedAt;
+  if (!t) return 0;
+  if (typeof t.toMillis === "function") return t.toMillis();
+  if (typeof t.seconds === "number") return t.seconds * 1000 + Math.floor((t.nanoseconds || 0) / 1e6);
+  const n = Number(t);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function cavaloDaAlocacao(cavaloId, aloc) {
+  const placa = String((aloc && aloc.cavalo_placa) || "").trim().toUpperCase();
+  return STATE.veiculos.find(v => v.categoria === "cavalo" &&
+    (v.id === cavaloId || v.placa === cavaloId || (placa && v.placa === placa))) || null;
+}
+
+function obterAlocacaoDoCompressor(compressorId) {
+  const encontrados = Object.entries(STATE.alocacoes)
+    .filter(([,a]) => a && a.compressor_id === compressorId)
+    .map(([cavaloId,a]) => ({ cavaloId, aloc: a, cavalo: cavaloDaAlocacao(cavaloId, a) }));
+  if (!encontrados.length) return null;
+  encontrados.sort((x,y) => _alocTimestampMs(y.aloc) - _alocTimestampMs(x.aloc));
+  return encontrados[0];
+}
+
+function visaoCompressor(c) {
+  const info = obterAlocacaoDoCompressor(c.id);
+  const manutencaoManual = normalizarStatusCompressor(c.status) === "manutencao";
+  const status = manutencaoManual ? "manutencao" : (info ? "operando" : "estoque");
+  const placa = info ? String((info.cavalo && info.cavalo.placa) || info.aloc.cavalo_placa || "").toUpperCase() : "";
+  const unidade = info
+    ? ((info.cavalo && info.cavalo.unidade) || info.aloc.unidade || c.unidade || "")
+    : (c.unidade || "");
+  const vinculo = info && info.cavalo ? (info.cavalo.vinculo || "FROTA") : (c.vinculo || "FROTA");
+  return { info, status, placa, unidade, vinculo };
+}
+
+function _patchCompressorPelaAlocacao(c) {
+  const view = visaoCompressor(c);
+  const patch = {
+    status: view.status,
+    cavalo_placa: view.placa || "",
+  };
+  if (view.info) {
+    patch.unidade = view.unidade || "";
+    patch.vinculo = view.vinculo || "FROTA";
+  }
+  return patch;
+}
+
+function _aplicarPatchCompressorLocal(c, patch) {
+  let mudou = false;
+  Object.entries(patch).forEach(([k,v]) => {
+    const atual = c[k] == null ? "" : String(c[k]);
+    const novo = v == null ? "" : String(v);
+    if (atual !== novo) mudou = true;
+    c[k] = v;
+  });
+  return mudou;
+}
+
+async function sincronizarCompressorComAlocacao(compressorId, persistir) {
+  const c = STATE.compressores.find(x => x.id === compressorId);
+  if (!c) return;
+  const patch = _patchCompressorPelaAlocacao(c);
+  const mudou = _aplicarPatchCompressorLocal(c, patch);
+  if (mudou && persistir !== false && STATE.isAdmin) {
+    await window._FB.salvarCompressor(c.id, patch);
+  }
+}
+
+function reconciliarCompressoresComAlocacao(persistir) {
+  const gravacoes = [];
+  const porCompressor = new Map();
+
+  // Um compressor só pode estar em um cavalo. Em legado duplicado, mantém a
+  // alocação atualizada mais recentemente e limpa as demais.
+  Object.entries(STATE.alocacoes).forEach(([cavaloId,a]) => {
+    if (!a || !a.compressor_id) return;
+    if (!porCompressor.has(a.compressor_id)) porCompressor.set(a.compressor_id, []);
+    porCompressor.get(a.compressor_id).push({ cavaloId, aloc: a });
+  });
+
+  porCompressor.forEach(lista => {
+    if (lista.length <= 1) return;
+    lista.sort((x,y) => _alocTimestampMs(y.aloc) - _alocTimestampMs(x.aloc));
+    lista.slice(1).forEach(({cavaloId,aloc}) => {
+      const limpo = { ...aloc, compressor_id: null };
+      STATE.alocacoes[cavaloId] = limpo;
+      if (persistir && STATE.isAdmin) {
+        gravacoes.push(window._FB.salvarAlocacao(cavaloId, sanitizeAloc(limpo, cavaloId)));
+      }
+    });
+  });
+
+  STATE.compressores.forEach(c => {
+    const patch = _patchCompressorPelaAlocacao(c);
+    const mudou = _aplicarPatchCompressorLocal(c, patch);
+    if (mudou && persistir && STATE.isAdmin) {
+      gravacoes.push(window._FB.salvarCompressor(c.id, patch));
+    }
+  });
+
+  if (gravacoes.length) {
+    Promise.allSettled(gravacoes).then(resultados => {
+      const falhas = resultados.filter(r => r.status === "rejected");
+      if (falhas.length) console.warn("[Frota] Falhas ao reconciliar compressores:", falhas.length);
+      else console.log("[Frota] Compressores reconciliados com a tela Alocação:", gravacoes.length);
+    });
+  }
+}
+
+async function definirAlocacaoCompressor(compressorId, alvoCavalo, opcoes) {
+  opcoes = opcoes || {};
+  if (!STATE.isAdmin) throw new Error("Apenas administradores podem alterar compressores");
+  const compressor = STATE.compressores.find(c => c.id === compressorId);
+  if (!compressor) throw new Error("Compressor não encontrado");
+
+  let cavaloAlvo = null;
+  if (alvoCavalo) {
+    const chave = String(alvoCavalo).trim().toUpperCase();
+    cavaloAlvo = STATE.veiculos.find(v => v.categoria === "cavalo" &&
+      (String(v.id).toUpperCase() === chave || String(v.placa).toUpperCase() === chave));
+    if (!cavaloAlvo) throw new Error("Cavalo não encontrado");
+  }
+
+  const alvoId = cavaloAlvo ? cavaloAlvo.id : null;
+  const alocAlvo = alvoId ? (STATE.alocacoes[alvoId] || {}) : null;
+  const deslocadoId = alocAlvo && alocAlvo.compressor_id && alocAlvo.compressor_id !== compressorId
+    ? alocAlvo.compressor_id : null;
+
+  if (deslocadoId && opcoes.confirmarSubstituicao) {
+    const deslocado = STATE.compressores.find(c => c.id === deslocadoId);
+    const nome = deslocado ? (deslocado.identificacao || deslocado.id) : deslocadoId;
+    if (!confirm("O cavalo " + cavaloAlvo.placa + " já possui o compressor " + nome + ". Substituir?")) {
+      return { cancelado: true };
+    }
+  }
+
+  const alteracoes = new Map();
+  Object.entries(STATE.alocacoes).forEach(([cavaloId,a]) => {
+    if (a && a.compressor_id === compressorId && cavaloId !== alvoId) {
+      alteracoes.set(cavaloId, { ...a, compressor_id: null });
+    }
+  });
+  if (alvoId) alteracoes.set(alvoId, { ...(STATE.alocacoes[alvoId] || {}), compressor_id: compressorId });
+
+  // Persiste primeiro; só depois confirma o estado local.
+  for (const [cavaloId,patch] of alteracoes.entries()) {
+    await window._FB.salvarAlocacao(cavaloId, sanitizeAloc(patch, cavaloId));
+  }
+  alteracoes.forEach((patch,cavaloId) => { STATE.alocacoes[cavaloId] = patch; });
+
+  // Compressor substituído fica sem vínculo: estoque, exceto manutenção manual.
+  if (deslocadoId) await sincronizarCompressorComAlocacao(deslocadoId, true);
+  await sincronizarCompressorComAlocacao(compressorId, true);
+  return { cancelado: false, deslocadoId, cavaloAlvo };
+}
+
 function renderCompressores() {
   const wrap = document.getElementById("comp-table-wrap");
   let items = STATE.compressores.slice();
   const q = STATE.search.comp.toLowerCase();
-  if (STATE.filterComp.unit !== "all") items = items.filter(c => normalizeUnitSlug(c.unidade) === STATE.filterComp.unit);
-  if (STATE.filterComp.st !== "all") items = items.filter(c => (c.status || "operando") === STATE.filterComp.st);
+  if (STATE.filterComp.unit !== "all") items = items.filter(c => normalizeUnitSlug(visaoCompressor(c).unidade) === STATE.filterComp.unit);
+  if (STATE.filterComp.st !== "all") items = items.filter(c => visaoCompressor(c).status === STATE.filterComp.st);
   if (q) items = items.filter(c => {
-    const hay = [c.identificacao, c.serie, c.cavalo_placa, c.id].filter(Boolean).join(" ").toLowerCase();
+    const view = visaoCompressor(c);
+    const hay = [c.identificacao, c.serie, view.placa, c.id].filter(Boolean).join(" ").toLowerCase();
     return hay.includes(q);
   });
   document.getElementById("comp-total").textContent = items.length;
@@ -3344,22 +3541,13 @@ function renderCompressores() {
       </thead>
       <tbody>
         ${items.map(c => {
-          // Encontra cavalo onde compressor está alocado
-          const alocCav = Object.values(STATE.alocacoes).find(a => a.compressor_id === c.id);
-          const placaAtual = alocCav ? alocCav.cavalo_placa : "";
-          // Vínculo derivado do CAVALO ao qual está alocado
-          // (não usa mais c.vinculo - vínculo segue o veículo)
-          let vincLabel = "—";
-          let vincCls = "frota";
-          if (placaAtual) {
-            const cavalo = STATE.veiculos.find(v => v.placa === placaAtual && v.categoria === "cavalo");
-            if (cavalo) {
-              const cvVinc = (cavalo.vinculo || "FROTA").toUpperCase();
-              if (cvVinc === "AGREGADO") { vincLabel = "Agregado"; vincCls = "agregado"; }
-              else { vincLabel = "Frota"; vincCls = "frota"; }
-            }
-          }
-          // Placa visual quando vinculada
+          // A tela Alocação é a fonte oficial para placa, unidade, vínculo e status.
+          const view = visaoCompressor(c);
+          const placaAtual = view.placa;
+          const cvVinc = String(view.vinculo || "FROTA").toUpperCase();
+          const vincLabel = view.info ? (cvVinc === "AGREGADO" ? "Agregado" : "Frota") : "—";
+          const vincCls = cvVinc === "AGREGADO" ? "agregado" : "frota";
+          const statusAtual = view.status;
           const placaVisual = placaAtual ? renderPlaca(placaAtual, "sm") : '';
           return `
           <tr>
@@ -3378,8 +3566,8 @@ function renderCompressores() {
                          onchange="vincularCompressorAPlaca('${escapeHtml(c.id)}',this.value.trim().toUpperCase())">
                 </div>`
               : (placaAtual ? renderPlaca(placaAtual, "sm") : '<span class="muted">—</span>')}</td>
-            <td>${escapeHtml(c.unidade || '—')}</td>
-            <td><span class="status-tag ${stClass[c.status||'operando']||'reserva'}">${stLabel[c.status||'operando']||c.status||'—'}</span></td>
+            <td>${escapeHtml(view.unidade || '—')}</td>
+            <td><span class="status-tag ${stClass[statusAtual]||'reserva'}">${stLabel[statusAtual]||statusAtual||'—'}</span></td>
             ${STATE.isAdmin ? '<td><button class="btn-icon" onclick="editCompressor(\''+escapeHtml(c.id)+'\');event.stopPropagation()" title="Editar">✏</button></td>' : ''}
           </tr>`;
         }).join("")}
@@ -3391,50 +3579,33 @@ function renderCompressores() {
 window.vincularCompressorAPlaca = async function(compressorId, placa) {
   if (!STATE.isAdmin) { showToast("Apenas admin", "error"); return; }
   placa = String(placa || "").trim().toUpperCase();
-  // Validação: se placa informada mas não existe, aborta
-  if (placa) {
-    const exists = STATE.veiculos.find(v => v.placa === placa && v.categoria === "cavalo");
-    if (!exists) {
-      showToast("Placa não encontrada: " + placa, "error");
-      renderCompressores();
-      return;
+  try {
+    const result = await definirAlocacaoCompressor(compressorId, placa || null, { confirmarSubstituicao: true });
+    if (result.cancelado) { renderCompressores(); return; }
+    if (placa && result.cavaloAlvo) {
+      await window._FB.registrarHistorico(result.cavaloAlvo.id, "vincular_compressor", { compressor_id: compressorId });
     }
+    renderCompressores();
+    renderBoard();
+    renderDashboard();
+    const comp = STATE.compressores.find(c => c.id === compressorId);
+    const statusFinal = comp ? visaoCompressor(comp).status : "estoque";
+    const msg = placa
+      ? (statusFinal === "manutencao" ? "Vinculado a " + placa + " · permanece em manutenção" : "Vinculado a " + placa + " · operando")
+      : (statusFinal === "manutencao" ? "Vínculo removido · permanece em manutenção" : "Vínculo removido · compressor em estoque");
+    showToast(msg, "success");
+  } catch(e) {
+    renderCompressores();
+    showToast("Erro: " + e.message, "error");
   }
-  // 1. Encontra alocação atual desse compressor (se houver) e remove
-  const cavAtual = Object.entries(STATE.alocacoes).find(([id,a]) => a.compressor_id === compressorId);
-  if (cavAtual) {
-    const [oldId, oldA] = cavAtual;
-    if (oldA.cavalo_placa === placa) return; // sem mudança
-    const patch = { ...oldA, compressor_id: null };
-    await window._FB.salvarAlocacao(oldId, sanitizeAloc(patch, oldId));
-    STATE.alocacoes[oldId] = patch;
-  }
-  // 2. Vincula ao novo cavalo (se placa informada)
-  if (placa) {
-    const v = STATE.veiculos.find(x => x.placa === placa && x.categoria === "cavalo");
-    const aloc = STATE.alocacoes[v.id] || {};
-    if (aloc.compressor_id && aloc.compressor_id !== compressorId) {
-      if (!confirm("O cavalo " + placa + " já tem outro compressor. Substituir?")) {
-        renderCompressores();
-        return;
-      }
-    }
-    const patch = { ...aloc, compressor_id: compressorId };
-    await window._FB.salvarAlocacao(v.id, sanitizeAloc(patch, v.id));
-    STATE.alocacoes[v.id] = patch;
-    await window._FB.registrarHistorico(v.id, "vincular_compressor", { compressor_id: compressorId });
-  }
-  renderCompressores();
-  renderBoard();
-  showToast(placa ? "Vinculado a " + placa : "Vínculo removido", "success");
 };
 
 function normalizeUnitSlug(s) {
   if (!s) return null;
-  const u = String(s).toUpperCase();
-  if (u.includes("SANTA CATARINA")) return "SC";
-  if (u.includes("SÃO PAULO") || u.includes("SAO PAULO")) return "SP";
-  if (u.includes("PARANÁ") || u.includes("PARANA")) return "PR";
+  const u = String(s).trim().toUpperCase();
+  if (u === "SC" || u === "17" || u.includes("SANTA CATARINA")) return "SC";
+  if (u === "SP" || u === "03" || u === "3" || u.includes("SÃO PAULO") || u.includes("SAO PAULO")) return "SP";
+  if (u === "PR" || u === "18" || u.includes("PARANÁ") || u.includes("PARANA")) return "PR";
   return null;
 }
 
@@ -3445,11 +3616,12 @@ window.editCompressor = function(id) {
   document.getElementById("comp-modal-title").textContent = "Editar compressor";
   document.getElementById("cf_id").value = c.identificacao || "";
   document.getElementById("cf_id").dataset.editId = c.id;
+  const view = visaoCompressor(c);
   document.getElementById("cf_serie").value = c.serie || "";
-  document.getElementById("cf_vinculo").value = c.vinculo || "FROTA";
-  document.getElementById("cf_status").value = c.status || "operando";
-  document.getElementById("cf_unidade").value = c.unidade || "";
-  document.getElementById("cf_cavalo").value = c.cavalo_placa || "";
+  document.getElementById("cf_vinculo").value = view.vinculo || "FROTA";
+  document.getElementById("cf_status").value = view.status;
+  document.getElementById("cf_unidade").value = view.unidade || "";
+  document.getElementById("cf_cavalo").value = view.placa || "";
   document.getElementById("cf_obs").value = c.observacao || "";
   document.getElementById("cf_del").style.display = "inline-flex";
   openModal("modal-compressor");
@@ -3461,7 +3633,7 @@ function newCompressor() {
   ["cf_id","cf_serie","cf_obs"].forEach(i => document.getElementById(i).value = "");
   document.getElementById("cf_id").dataset.editId = "";
   document.getElementById("cf_vinculo").value = "FROTA";
-  document.getElementById("cf_status").value = "operando";
+  document.getElementById("cf_status").value = "estoque";
   document.getElementById("cf_unidade").value = "";
   document.getElementById("cf_cavalo").value = "";
   document.getElementById("cf_del").style.display = "none";
@@ -3473,22 +3645,58 @@ async function saveCompressor() {
   const identificacao = document.getElementById("cf_id").value.trim();
   const editId = document.getElementById("cf_id").dataset.editId;
   if (!identificacao) { showToast("Informe a identificação", "error"); return; }
+
+  const placaSelecionada = document.getElementById("cf_cavalo").value;
+  const cavaloSelecionado = placaSelecionada
+    ? STATE.veiculos.find(v => v.categoria === "cavalo" && v.placa === placaSelecionada)
+    : null;
+  if (placaSelecionada && !cavaloSelecionado) {
+    showToast("Cavalo selecionado não encontrado", "error");
+    return;
+  }
+
+  // Confirma antes de gravar os dados do modal, evitando edição parcial.
+  if (cavaloSelecionado) {
+    const ocupante = (STATE.alocacoes[cavaloSelecionado.id] || {}).compressor_id;
+    if (ocupante && ocupante !== editId) {
+      const outro = STATE.compressores.find(c => c.id === ocupante);
+      const nome = outro ? (outro.identificacao || outro.id) : ocupante;
+      if (!confirm("O cavalo " + cavaloSelecionado.placa + " já possui o compressor " + nome + ". Substituir?")) return;
+    }
+  }
+
+  const statusEscolhido = normalizarStatusCompressor(document.getElementById("cf_status").value);
   const dados = {
     identificacao: identificacao.toUpperCase(),
     serie: document.getElementById("cf_serie").value.trim(),
     vinculo: document.getElementById("cf_vinculo").value,
-    status: document.getElementById("cf_status").value,
+    status: statusEscolhido,
     unidade: document.getElementById("cf_unidade").value,
-    cavalo_placa: document.getElementById("cf_cavalo").value,
+    // A placa não é mais uma segunda fonte de verdade; será sincronizada da alocação.
+    cavalo_placa: "",
     observacao: document.getElementById("cf_obs").value.trim(),
   };
+
   try {
-    await window._FB.salvarCompressor(editId || null, dados);
-    showToast("Compressor salvo", "success");
+    const savedId = await window._FB.salvarCompressor(editId || null, dados);
+    let local = STATE.compressores.find(c => c.id === savedId);
+    if (!local) {
+      local = { id: savedId, ...dados };
+      STATE.compressores.push(local);
+    } else {
+      Object.assign(local, dados);
+    }
+
+    const result = await definirAlocacaoCompressor(savedId, cavaloSelecionado ? cavaloSelecionado.id : null, { confirmarSubstituicao: false });
+    if (result.cancelado) return;
+
     closeModal("modal-compressor");
     STATE.compressores = await window._FB.listarCompressores();
+    reconciliarCompressoresComAlocacao(false);
     renderCompressores();
+    renderBoard();
     renderDashboard();
+    showToast("Compressor salvo", "success");
   } catch(e) {
     showToast("Erro: " + e.message, "error");
   }
@@ -3500,6 +3708,7 @@ async function deleteCompressor() {
   if (!editId) return;
   if (!confirm("Excluir este compressor permanentemente?")) return;
   try {
+    await definirAlocacaoCompressor(editId, null, { confirmarSubstituicao: false });
     await window._FB.excluirCompressor(editId);
     showToast("Compressor excluído", "success");
     closeModal("modal-compressor");
@@ -3664,9 +3873,10 @@ function calcResumo() {
   // Subtipos contam placas individuais — mesma grandeza do card KPI (sem divisão por 2)
 
   STATE.compressores.forEach(c => {
-    const unit = normalizeUnitSlug(c.unidade);
+    const view = visaoCompressor(c);
+    const unit = normalizeUnitSlug(view.unidade);
     if (!unit || !u[unit]) return;
-    const st = c.status || "operando";
+    const st = view.status;
     if (st === "operando") u[unit].compressores_op++;
     else if (st === "estoque") u[unit].compressores_estoque++;
     else if (st === "manutencao") u[unit].compressores_manut++;
@@ -4120,15 +4330,16 @@ async function imprimirRelatorio() {
 
     // === Aba COMPRESSORES ===
     const comps = STATE.compressores.map(c => {
-      const aloc = Object.values(STATE.alocacoes).find(a => a.compressor_id === c.id);
+      const view = visaoCompressor(c);
+      const aloc = view.info ? view.info.aloc : null;
       return {
         "Identificação": c.identificacao || c.id,
         "Série": c.serie || "",
-        "Vínculo": c.vinculo === "AGREGADO" ? "PRÓPRIO" : (c.vinculo || "FROTA"),
-        "Placa vinculada": aloc ? aloc.cavalo_placa : "",
-        "Cavalo": aloc ? aloc.cavalo_frota : "",
-        "Unidade": c.unidade || "",
-        "Status": c.status || "",
+        "Vínculo": view.vinculo || "FROTA",
+        "Placa vinculada": view.placa || "",
+        "Cavalo": aloc ? (aloc.cavalo_frota || "") : "",
+        "Unidade": view.unidade || "",
+        "Status": view.status || "",
       };
     });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(comps), "Compressores");
