@@ -1585,6 +1585,35 @@ function aplicaCpkVpk(rows){
   return rows;
 }
 
+// ═══════════════════════════════════════════════════════
+// CARTA-FRETE COMPLEMENTAR  (abas Rotas e Tarifa)
+// ═══════════════════════════════════════════════════════
+// FSC-000 / FSP-000 / FPR-000 são placas-marcador (uma por filial: SC/SP/PR) que
+// identificam cartas-frete COMPLEMENTARES — pagamentos suplementares emitidos sobre
+// uma viagem que já existe, e não uma viagem física nova. Se entrarem na agregação
+// da rota elas somam +1 viagem e +km fantasma no denominador do VPK (viagens ×
+// dist_ida+volta) e ainda misturam sua receita ao faturamento das viagens reais,
+// distorcendo o VPK/Markup da rota. Portanto, nas abas Rotas e Tarifa:
+//   • são REMOVIDAS da contagem de viagens, do km, do peso, da tarifa e do
+//     faturamento usado no VPK (só as "viagens corretas" compõem o VPK);
+//   • seu faturamento é SEPARADO na coluna "Fat. Compl." (nada some — o total da
+//     rota continua reconciliável: Fat. Real. + Fat. Compl.).
+// Nas demais abas (Visão Geral, Clientes, Frota) nada muda — o faturamento segue
+// contabilizado normalmente. A normalização remove hífen/espaço para casar
+// "FSC-000", "FSC000" ou "FSC 000".
+const PLACAS_CARTA_FRETE_COMPL = new Set(['FSC000','FSP000','FPR000']);
+function isCartaFreteComplementar(r){
+  const p = String((r && r.placa) || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  return PLACAS_CARTA_FRETE_COMPL.has(p);
+}
+// Separa um grupo de rota em viagens reais e cartas-frete complementares.
+function pdSplitCartaFrete(arr){
+  const real = [], compl = [];
+  (arr || []).forEach(r => (isCartaFreteComplementar(r) ? compl : real).push(r));
+  const fatCompl = compl.reduce((a, r) => a + (+r.fat || 0), 0);
+  return { real, compl, fatCompl, nCompl: compl.length };
+}
+
 // Célula: valor ou "—" quando não há base para o número.
 function cellNum(v, dec){
   if(v == null || !isFinite(v)) return '<span style="color:var(--bd)">—</span>';
@@ -3625,11 +3654,13 @@ function buildCl(uid,mes){
     const ufo=pdFirstRouteValue(arr,'ufo'), dest=pdFirstRouteValue(arr,'dest'), ufd=pdFirstRouteValue(arr,'ufd');
     const codRegOrig=pdFirstRouteValue(arr,'codRegOrig'), codRegDest=pdFirstRouteValue(arr,'codRegDest');
     const base={op,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest};
-    const routeInfo=pdDominantRouteCode(arr,base);
-    const s=agg(arr);
-    const sF=aggFechado(arr);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
-    return{...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj};
+    // Carta-frete complementar não compõe viagens/km/peso/faturamento da rota → VPK correto.
+    const {real,fatCompl,nCompl}=pdSplitCartaFrete(arr);
+    const routeInfo=pdDominantRouteCode(real.length?real:arr,base);
+    const s=agg(real);
+    const sF=aggFechado(real);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,real);
+    return{...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj,fatCompl,nCompl};
   }).sort((a,b)=>b.f-a.f);
   aplicaCpkVpk(rows);   // mesmas regras da aba Tarifa
   document.getElementById('cnt-cl').textContent=' — '+rows.length+' rotas';
@@ -3648,6 +3679,7 @@ function buildCl(uid,mes){
     {h:'Viagens',         fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
     {h:'Fat.(R$) Real.',  fn:r=>R(r.f),          n:true},
+    {h:'Fat. Compl.',     fn:r=>r.fatCompl>0?`<span style="color:var(--mu)" title="${r.nCompl} carta(s)-frete complementar(es) — fora do VPK">${R(r.fatCompl)}</span>`:'<span style="color:var(--bd)">—</span>', n:true},
     {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
     {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
     {h:'KM Rodado',       fn:r=>r.kmRod>0?N(r.kmRod):'<span style="color:var(--bd)">—</span>', n:true},
@@ -3682,6 +3714,7 @@ function showCliHist(op, rota, remNome, dstNome, frt, orig, ufo, dest, ufd, codR
   // Assim mudanças 000011 → 000090 ou código vazio não quebram a série.
   const alvo={orig,ufo,dest,ufd,codRegOrig,codRegDest};
   const allRota = filterByOp(_clUID).filter(r=>
+    !isCartaFreteComplementar(r) &&
     (!op || normOpKey(r.op)===normOpKey(op)) &&
     normRouteText(r.d_nome)===normRouteText(dstNome) &&
     normRouteText(r.r_nome)===normRouteText(remNome) &&
@@ -3805,11 +3838,13 @@ function buildTa(uid,mes){
     const ufo=pdFirstRouteValue(arr,'ufo'), dest=pdFirstRouteValue(arr,'dest'), ufd=pdFirstRouteValue(arr,'ufd');
     const codRegOrig=pdFirstRouteValue(arr,'codRegOrig'), codRegDest=pdFirstRouteValue(arr,'codRegDest');
     const base={op,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest};
-    const routeInfo=pdDominantRouteCode(arr,base);
-    const s=agg(arr);
-    const sF=aggFechado(arr);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
-    return{...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj,freteAtual:taFreteAtual(arr)};
+    // Carta-frete complementar não compõe viagens/km/peso/faturamento/tarifa da rota → VPK correto.
+    const {real,fatCompl,nCompl}=pdSplitCartaFrete(arr);
+    const routeInfo=pdDominantRouteCode(real.length?real:arr,base);
+    const s=agg(real);
+    const sF=aggFechado(real);
+    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,real);
+    return{...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj,fatCompl,nCompl,freteAtual:taFreteAtual(real)};
   }).sort((a,b)=>b.f-a.f);
   rows.forEach(r=>{
     const c=taBuildCalc(r);
@@ -3841,6 +3876,7 @@ function buildTa(uid,mes){
     {h:'Viagens',         fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
     {h:'Fat.(R$) Real.',  fn:r=>R(r.f),         n:true},
+    {h:'Fat. Compl.',     fn:r=>r.fatCompl>0?`<span style="color:var(--mu)" title="${r.nCompl} carta(s)-frete complementar(es) — fora do VPK">${R(r.fatCompl)}</span>`:'<span style="color:var(--bd)">—</span>', n:true},
     {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`, n:true},
     {h:'N°',              fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'eixos',c.eixos,[{v:'5',t:'5'},{v:'6',t:'6'},{v:'7',t:'7'},{v:'9',t:'9'}]);}},
     {h:'Dist. Ida',       fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distIda):'—';}, n:true},
@@ -3901,6 +3937,7 @@ function showTarivaHist(op,rota,remNome,dstNome,frt,orig,ufo,dest,ufd,codRegOrig
   const corte='2025-01-01';
   const alvo={orig,ufo,dest,ufd,codRegOrig,codRegDest};
   const allRota = filterByOp(_taUID).filter(r=>
+    !isCartaFreteComplementar(r) &&
     r.data > corte &&
     (!op || normOpKey(r.op)===normOpKey(op)) &&
     normRouteText(r.d_nome)===normRouteText(dstNome) &&
