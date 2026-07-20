@@ -1641,16 +1641,81 @@ function pdCcRouteRow(compl, base, refRow, mes, uid){
     kmRod:null, vpkRota:null, cpkFil:null, mkpRota:null,
     freteMin:0, freteAtual:0, _cc:true, _placas:pdPlacasDoGrupo(compl)};
 }
-// Badge "CC" exibido ao lado do Fat.(R$) Real. das linhas de carta complementar.
-const PD_CC_BADGE='<span style="font-size:8px;font-weight:700;color:var(--mu);border:1px solid var(--bd);border-radius:3px;padding:0 3px;margin-left:5px;letter-spacing:.5px;vertical-align:middle;" title="Carta-frete complementar">CC</span>';
-// Expande grupos {realRow, ccRow} em: linhas reais (p/ gráfico e %) e a view da
-// tabela (real seguida da CC logo abaixo).
-function pdExpandRouteGroups(groups){
-  const rows=[], view=[];
-  groups.sort((a,b)=>b.anchor-a.anchor).forEach(gr=>{
-    if(gr.realRow){ rows.push(gr.realRow); view.push(gr.realRow); }
-    if(gr.ccRow){ view.push(gr.ccRow); }
+// Badge "CFC" (Carta Frete Complementar) exibido ao lado do Fat.(R$) Real. das linhas complementares.
+const PD_CC_BADGE='<span style="font-size:8px;font-weight:700;color:var(--mu);border:1px solid var(--bd);border-radius:3px;padding:0 3px;margin-left:5px;letter-spacing:.5px;vertical-align:middle;" title="Carta Frete Complementar">CFC</span>';
+
+// Identidade-base de um grupo (campos de exibição da rota).
+function pdRouteBase(arr){
+  const op=normOpKey(pdFirstRouteValue(arr,'op'));
+  const rem=pdFirstRouteValue(arr,'r_nome'), dst=pdFirstRouteValue(arr,'d_nome');
+  const frt=pdFirstRouteValue(arr,'frete'), orig=pdFirstRouteValue(arr,'orig');
+  const ufo=pdFirstRouteValue(arr,'ufo'), dest=pdFirstRouteValue(arr,'dest'), ufd=pdFirstRouteValue(arr,'ufd');
+  const codRegOrig=pdFirstRouteValue(arr,'codRegOrig'), codRegDest=pdFirstRouteValue(arr,'codRegDest');
+  return {op,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest};
+}
+// Chave de CLIENTE (filial + remetente + destinatário + frete) — SEM Coleta/Entrega.
+// As cartas complementares (motorista administrativo) frequentemente não carregam
+// a Coleta/Entrega física, então elas são agrupadas e atribuídas pelo cliente, e a
+// linha CC é pendurada embaixo da rota real de maior faturamento desse cliente.
+function pdClientGroupKey(r){
+  return [normOpKey(r&&r.op),normRouteText(r&&r.r_nome),normRouteText(r&&r.d_nome),normRouteText(r&&r.frete)].join('§');
+}
+function pdClientKeyFromBase(b){
+  return [normOpKey(b.op),normRouteText(b.rem),normRouteText(b.dst),normRouteText(b.frt)].join('§');
+}
+
+// Monta as linhas das abas Rotas/Tarifa a partir dos registros do mês:
+//   • viagens reais → agrupadas pela rota física (compõem o VPK);
+//   • cartas complementares (FSC/FSP/FPR-0000) → penduradas como linha CC embaixo da
+//     rota real anfitriã: casa pela ROTA FÍSICA quando a carta a possui; senão, pelo
+//     CLIENTE (rota real de maior faturamento do mesmo remetente/destinatário/frete);
+//     sem rota real do cliente, vira uma linha CC solta.
+// Retorna { rows (só reais, p/ gráfico/contagem/%), view (reais + CC intercaladas) }.
+function pdBuildRouteView(d, mes, uid, opts){
+  opts=opts||{};
+  const realRecs=[], complRecs=[];
+  (d||[]).forEach(r => (isCartaFreteComplementar(r) ? complRecs : realRecs).push(r));
+
+  const realRows=Object.values(grp(realRecs,pdPhysicalRouteGroupKey)).map(arr=>{
+    const base=pdRouteBase(arr);
+    const row=pdRealRouteRow(arr,base,mes,uid);
+    if(opts.freteAtual) row.freteAtual=taFreteAtual(arr);
+    row._clientKey=pdClientKeyFromBase(base);
+    row._physKey=pdPhysicalRouteGroupKey(arr[0]);
+    return row;
+  }).sort((a,b)=>b.f-a.f);
+
+  // Índices p/ achar a rota anfitriã de cada carta complementar.
+  const realByPhys={};    // rota física → linha real
+  const hostByClient={};  // cliente → linha real de maior faturamento
+  realRows.forEach(r=>{
+    if(!realByPhys[r._physKey] || r.f>realByPhys[r._physKey].f) realByPhys[r._physKey]=r;
+    if(!hostByClient[r._clientKey] || r.f>hostByClient[r._clientKey].f) hostByClient[r._clientKey]=r;
   });
+
+  // Cada carta complementar sob sua anfitriã (física primeiro, cliente como fallback).
+  const complByHost=new Map(); const orphanRecs=[];
+  complRecs.forEach(rec=>{
+    const host = realByPhys[pdPhysicalRouteGroupKey(rec)] || hostByClient[pdClientGroupKey(rec)];
+    if(host){ if(!complByHost.has(host)) complByHost.set(host,[]); complByHost.get(host).push(rec); }
+    else orphanRecs.push(rec);
+  });
+
+  // Linha CC por anfitriã, herdando a identidade/rota da anfitriã.
+  const ccByHost=new Map();
+  complByHost.forEach((recs,host)=>{
+    const cc=pdCcRouteRow(recs,pdRouteBase(recs),host,mes,uid);
+    Object.assign(cc,{op:host.op,rem:host.rem,dst:host.dst,frt:host.frt,orig:host.orig,ufo:host.ufo,dest:host.dest,ufd:host.ufd,codRegOrig:host.codRegOrig,codRegDest:host.codRegDest,rota:host.rota});
+    ccByHost.set(host,cc);
+  });
+
+  // Cartas órfãs (sem rota real do cliente) → linha CC solta por cliente.
+  const orphanRows=Object.values(grp(orphanRecs,pdClientGroupKey)).map(arr=>pdCcRouteRow(arr,pdRouteBase(arr),null,mes,uid)).sort((a,b)=>b.f-a.f);
+
+  const rows=realRows;   // gráfico, contagem, %Fat
+  const view=[];
+  realRows.forEach(r=>{ view.push(r); const cc=ccByHost.get(r); if(cc) view.push(cc); });
+  orphanRows.forEach(c=>view.push(c));
   return {rows, view};
 }
 
@@ -3686,22 +3751,7 @@ function buildCl(uid,mes){
   // Operações permanecem separadas. Dentro da mesma filial, a linha é consolidada
   // pela identidade física do trajeto, mesmo que o código da SZB tenha mudado,
   // esteja vazio ou possua zeros/formatação diferentes.
-  const g=grp(d,pdPhysicalRouteGroupKey);
-  const groups=Object.values(g).map(arr=>{
-    const op=normOpKey(pdFirstRouteValue(arr,'op'));
-    const rem=pdFirstRouteValue(arr,'r_nome'), dst=pdFirstRouteValue(arr,'d_nome');
-    const frt=pdFirstRouteValue(arr,'frete'), orig=pdFirstRouteValue(arr,'orig');
-    const ufo=pdFirstRouteValue(arr,'ufo'), dest=pdFirstRouteValue(arr,'dest'), ufd=pdFirstRouteValue(arr,'ufd');
-    const codRegOrig=pdFirstRouteValue(arr,'codRegOrig'), codRegDest=pdFirstRouteValue(arr,'codRegDest');
-    const base={op,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest};
-    // Rota quebrada em 2 linhas: viagens reais (VPK) + carta-frete complementar (CC).
-    const {real,compl}=pdSplitCartaFrete(arr);
-    const realRow = real.length ? pdRealRouteRow(real,base,mes,uid) : null;
-    const ccRow   = compl.length ? pdCcRouteRow(compl,base,realRow,mes,uid) : null;
-    const anchor  = realRow ? realRow.f : (ccRow ? ccRow.f : 0);
-    return {realRow, ccRow, anchor};
-  });
-  const {rows, view}=pdExpandRouteGroups(groups);   // rows = só reais; view = real+CC
+  const {rows, view}=pdBuildRouteView(d, mes, uid, {});   // rows = reais; view = reais + CC por cliente
   aplicaCpkVpk(rows);   // VPK só nas linhas reais (CC já vem sem VPK)
   document.getElementById('cnt-cl').textContent=' — '+rows.length+' rotas';
   const t10=rows.slice(0,10);
@@ -3869,23 +3919,7 @@ function buildTa(uid,mes){
   ensureAnttParams();
   _taUID=uid; _taMes=mes;
   const d=filterByOp(uid).filter(r=>r.mes===mes);
-  const g=grp(d,pdPhysicalRouteGroupKey);
-  const groups=Object.values(g).map(arr=>{
-    const op=normOpKey(pdFirstRouteValue(arr,'op'));
-    const rem=pdFirstRouteValue(arr,'r_nome'), dst=pdFirstRouteValue(arr,'d_nome');
-    const frt=pdFirstRouteValue(arr,'frete'), orig=pdFirstRouteValue(arr,'orig');
-    const ufo=pdFirstRouteValue(arr,'ufo'), dest=pdFirstRouteValue(arr,'dest'), ufd=pdFirstRouteValue(arr,'ufd');
-    const codRegOrig=pdFirstRouteValue(arr,'codRegOrig'), codRegDest=pdFirstRouteValue(arr,'codRegDest');
-    const base={op,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest};
-    // Rota quebrada em 2 linhas: viagens reais (VPK) + carta-frete complementar (CC).
-    const {real,compl}=pdSplitCartaFrete(arr);
-    let realRow=null;
-    if(real.length){ realRow=pdRealRouteRow(real,base,mes,uid); realRow.freteAtual=taFreteAtual(real); }
-    const ccRow  = compl.length ? pdCcRouteRow(compl,base,realRow,mes,uid) : null;
-    const anchor = realRow ? realRow.f : (ccRow ? ccRow.f : 0);
-    return {realRow, ccRow, anchor};
-  });
-  const {rows, view}=pdExpandRouteGroups(groups);   // rows = só reais; view = real+CC
+  const {rows, view}=pdBuildRouteView(d, mes, uid, {freteAtual:true});   // reais + CC por cliente
   rows.forEach(r=>{
     const c=taBuildCalc(r);
     r.freteMin=c.freteMin||0;
