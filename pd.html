@@ -1588,30 +1588,62 @@ function aplicaCpkVpk(rows){
 // ═══════════════════════════════════════════════════════
 // CARTA-FRETE COMPLEMENTAR  (abas Rotas e Tarifa)
 // ═══════════════════════════════════════════════════════
-// FSC-000 / FSP-000 / FPR-000 são placas-marcador (uma por filial: SC/SP/PR) que
-// identificam cartas-frete COMPLEMENTARES — pagamentos suplementares emitidos sobre
-// uma viagem que já existe, e não uma viagem física nova. Se entrarem na agregação
-// da rota elas somam +1 viagem e +km fantasma no denominador do VPK (viagens ×
-// dist_ida+volta) e ainda misturam sua receita ao faturamento das viagens reais,
-// distorcendo o VPK/Markup da rota. Portanto, nas abas Rotas e Tarifa:
-//   • são REMOVIDAS da contagem de viagens, do km, do peso, da tarifa e do
-//     faturamento usado no VPK (só as "viagens corretas" compõem o VPK);
-//   • seu faturamento é SEPARADO na coluna "Fat. Compl." (nada some — o total da
-//     rota continua reconciliável: Fat. Real. + Fat. Compl.).
-// Nas demais abas (Visão Geral, Clientes, Frota) nada muda — o faturamento segue
-// contabilizado normalmente. A normalização remove hífen/espaço para casar
-// "FSC-000", "FSC000" ou "FSC 000".
-const PLACAS_CARTA_FRETE_COMPL = new Set(['FSC000','FSP000','FPR000']);
+// FSC-0000 / FSP-0000 / FPR-0000 são placas-marcador (uma por filial: SC/SP/PR)
+// que identificam cartas-frete COMPLEMENTARES — pagamentos suplementares emitidos
+// sobre uma viagem que já existe, e não uma viagem física nova. Se entrarem na
+// agregação normal da rota elas somam +1 viagem e +km fantasma no denominador do
+// VPK (viagens × dist_ida+volta) e ainda misturam sua receita ao faturamento das
+// viagens reais, distorcendo o VPK/Markup. Portanto, nas abas Rotas e Tarifa a rota
+// é quebrada em DUAS LINHAS:
+//   • linha das viagens reais (tudo que NÃO é placa-marcador) → compõe o VPK;
+//   • linha da carta-frete complementar (as placas-marcador) → marcada com "CC"
+//     ao lado do Fat.(R$) Real.; sem KM/CPK/VPK/Markup (não é km físico), fora do
+//     Top 10 e do % Fat.
+// Nas demais abas (Visão Geral, Clientes, Frota) nada muda.
+// Match: prefixo F + SC/SP/PR seguido SÓ de zeros (aceita -000, -0000, -00000…);
+// a normalização remove hífen/espaço. Placa real (ex.: FSC-1D23) nunca casa.
 function isCartaFreteComplementar(r){
   const p = String((r && r.placa) || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
-  return PLACAS_CARTA_FRETE_COMPL.has(p);
+  return /^F(SC|SP|PR)0+$/.test(p);
 }
 // Separa um grupo de rota em viagens reais e cartas-frete complementares.
 function pdSplitCartaFrete(arr){
   const real = [], compl = [];
   (arr || []).forEach(r => (isCartaFreteComplementar(r) ? compl : real).push(r));
-  const fatCompl = compl.reduce((a, r) => a + (+r.fat || 0), 0);
-  return { real, compl, fatCompl, nCompl: compl.length };
+  return { real, compl };
+}
+// Linha agregada das viagens REAIS de um grupo de rota (compõe o VPK).
+function pdRealRouteRow(real, base, mes, uid){
+  const routeInfo=pdDominantRouteCode(real,base);
+  const s=agg(real);
+  const sF=aggFechado(real);
+  const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,real);
+  return {...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj,_cc:false};
+}
+// Linha CC — carta-frete complementar. Herda a identidade da rota, mas sem
+// KM/CPK/VPK/Markup/Projeção (não é km físico). refRow = linha real da mesma rota
+// (para casar o código de rota exibido), quando existir.
+function pdCcRouteRow(compl, base, refRow){
+  const routeInfo=pdDominantRouteCode(compl,base);
+  const s=agg(compl);
+  return {...base,
+    rota:(refRow && refRow.rota) ? refRow.rota : routeInfo.rota,
+    rotaOriginais:routeInfo.rotaOriginais,
+    ...s, fatProj:null, prodProj:null,
+    kmRod:null, vpkRota:null, cpkFil:null, mkpRota:null,
+    freteMin:0, freteAtual:0, _cc:true};
+}
+// Badge "CC" exibido ao lado do Fat.(R$) Real. das linhas de carta complementar.
+const PD_CC_BADGE='<span style="font-size:8px;font-weight:700;color:var(--mu);border:1px solid var(--bd);border-radius:3px;padding:0 3px;margin-left:5px;letter-spacing:.5px;vertical-align:middle;" title="Carta-frete complementar">CC</span>';
+// Expande grupos {realRow, ccRow} em: linhas reais (p/ gráfico e %) e a view da
+// tabela (real seguida da CC logo abaixo).
+function pdExpandRouteGroups(groups){
+  const rows=[], view=[];
+  groups.sort((a,b)=>b.anchor-a.anchor).forEach(gr=>{
+    if(gr.realRow){ rows.push(gr.realRow); view.push(gr.realRow); }
+    if(gr.ccRow){ view.push(gr.ccRow); }
+  });
+  return {rows, view};
 }
 
 // Célula: valor ou "—" quando não há base para o número.
@@ -3647,28 +3679,28 @@ function buildCl(uid,mes){
   // pela identidade física do trajeto, mesmo que o código da SZB tenha mudado,
   // esteja vazio ou possua zeros/formatação diferentes.
   const g=grp(d,pdPhysicalRouteGroupKey);
-  const rows=Object.values(g).map(arr=>{
+  const groups=Object.values(g).map(arr=>{
     const op=normOpKey(pdFirstRouteValue(arr,'op'));
     const rem=pdFirstRouteValue(arr,'r_nome'), dst=pdFirstRouteValue(arr,'d_nome');
     const frt=pdFirstRouteValue(arr,'frete'), orig=pdFirstRouteValue(arr,'orig');
     const ufo=pdFirstRouteValue(arr,'ufo'), dest=pdFirstRouteValue(arr,'dest'), ufd=pdFirstRouteValue(arr,'ufd');
     const codRegOrig=pdFirstRouteValue(arr,'codRegOrig'), codRegDest=pdFirstRouteValue(arr,'codRegDest');
     const base={op,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest};
-    // Carta-frete complementar não compõe viagens/km/peso/faturamento da rota → VPK correto.
-    const {real,fatCompl,nCompl}=pdSplitCartaFrete(arr);
-    const routeInfo=pdDominantRouteCode(real.length?real:arr,base);
-    const s=agg(real);
-    const sF=aggFechado(real);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,real);
-    return{...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj,fatCompl,nCompl};
-  }).sort((a,b)=>b.f-a.f);
-  aplicaCpkVpk(rows);   // mesmas regras da aba Tarifa
+    // Rota quebrada em 2 linhas: viagens reais (VPK) + carta-frete complementar (CC).
+    const {real,compl}=pdSplitCartaFrete(arr);
+    const realRow = real.length ? pdRealRouteRow(real,base,mes,uid) : null;
+    const ccRow   = compl.length ? pdCcRouteRow(compl,base,realRow) : null;
+    const anchor  = realRow ? realRow.f : (ccRow ? ccRow.f : 0);
+    return {realRow, ccRow, anchor};
+  });
+  const {rows, view}=pdExpandRouteGroups(groups);   // rows = só reais; view = real+CC
+  aplicaCpkVpk(rows);   // VPK só nas linhas reais (CC já vem sem VPK)
   document.getElementById('cnt-cl').textContent=' — '+rows.length+' rotas';
   const t10=rows.slice(0,10);
   mkC('c-cf','bar',t10.map(r=>wrapLabel(r.dst,14,4)),[{data:t10.map(r=>r.f),backgroundColor:'rgba(26,86,219,.6)',borderRadius:2}],{ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0},ex:{scales:{x:{ticks:{color:CT,font:{size:8},maxRotation:0,autoSkip:false}},y:{ticks:{color:CT,font:{size:9}},grid:{color:CG,lineWidth:.5}}}}});
   mkC('c-cm','bar',[],[{data:[],backgroundColor:'rgba(26,86,219,.5)',borderRadius:2}]);
   const ft=rows.reduce((a,r)=>a+r.f,0);
-  bldT('tbl-cl',rows,[
+  bldT('tbl-cl',view,[
     {h:'Filial',          fn:r=>escHtml(pdBranchLabel(r.op)||'—')},
     {h:'Rota',            fn:r=>escHtml(r.rota||'—')},
     {h:'Remetente',       fn:r=>`<span class="nm">${r.rem}</span>`},
@@ -3678,15 +3710,14 @@ function buildCl(uid,mes){
     {h:'Frete',           fn:r=>r.frt},
     {h:'Viagens',         fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
-    {h:'Fat.(R$) Real.',  fn:r=>R(r.f),          n:true},
-    {h:'Fat. Compl.',     fn:r=>r.fatCompl>0?`<span style="color:var(--mu)" title="${r.nCompl} carta(s)-frete complementar(es) — fora do VPK">${R(r.fatCompl)}</span>`:'<span style="color:var(--bd)">—</span>', n:true},
-    {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
+    {h:'Fat.(R$) Real.',  fn:r=>R(r.f)+(r._cc?PD_CC_BADGE:''),          n:true},
+    {h:'Fat.(R$) Proj.',  fn:r=>r._cc?'<span style="color:var(--bd)">—</span>':`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
     {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
     {h:'KM Rodado',       fn:r=>r.kmRod>0?N(r.kmRod):'<span style="color:var(--bd)">—</span>', n:true},
     {h:'CPK',             fn:r=>cellNum(r.cpkFil),  n:true},
     {h:'VPK',             fn:r=>cellNum(r.vpkRota), n:true},
     {h:'Markup',          fn:r=>cellMkp(r.mkpRota), n:true},
-    {h:'% Fat',           fn:r=>Pct(ft?r.f/ft*100:0),n:true},
+    {h:'% Fat',           fn:r=>r._cc?'<span style="color:var(--bd)">—</span>':Pct(ft?r.f/ft*100:0),n:true},
   ]);
   addClRowClick();
 }
@@ -3831,27 +3862,28 @@ function buildTa(uid,mes){
   _taUID=uid; _taMes=mes;
   const d=filterByOp(uid).filter(r=>r.mes===mes);
   const g=grp(d,pdPhysicalRouteGroupKey);
-  const rows=Object.values(g).map(arr=>{
+  const groups=Object.values(g).map(arr=>{
     const op=normOpKey(pdFirstRouteValue(arr,'op'));
     const rem=pdFirstRouteValue(arr,'r_nome'), dst=pdFirstRouteValue(arr,'d_nome');
     const frt=pdFirstRouteValue(arr,'frete'), orig=pdFirstRouteValue(arr,'orig');
     const ufo=pdFirstRouteValue(arr,'ufo'), dest=pdFirstRouteValue(arr,'dest'), ufd=pdFirstRouteValue(arr,'ufd');
     const codRegOrig=pdFirstRouteValue(arr,'codRegOrig'), codRegDest=pdFirstRouteValue(arr,'codRegDest');
     const base={op,rem,dst,frt,orig,ufo,dest,ufd,codRegOrig,codRegDest};
-    // Carta-frete complementar não compõe viagens/km/peso/faturamento/tarifa da rota → VPK correto.
-    const {real,fatCompl,nCompl}=pdSplitCartaFrete(arr);
-    const routeInfo=pdDominantRouteCode(real.length?real:arr,base);
-    const s=agg(real);
-    const sF=aggFechado(real);
-    const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,real);
-    return{...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj,fatCompl,nCompl,freteAtual:taFreteAtual(real)};
-  }).sort((a,b)=>b.f-a.f);
+    // Rota quebrada em 2 linhas: viagens reais (VPK) + carta-frete complementar (CC).
+    const {real,compl}=pdSplitCartaFrete(arr);
+    let realRow=null;
+    if(real.length){ realRow=pdRealRouteRow(real,base,mes,uid); realRow.freteAtual=taFreteAtual(real); }
+    const ccRow  = compl.length ? pdCcRouteRow(compl,base,realRow) : null;
+    const anchor = realRow ? realRow.f : (ccRow ? ccRow.f : 0);
+    return {realRow, ccRow, anchor};
+  });
+  const {rows, view}=pdExpandRouteGroups(groups);   // rows = só reais; view = real+CC
   rows.forEach(r=>{
     const c=taBuildCalc(r);
     r.freteMin=c.freteMin||0;
     r._taAbaixoMin=taIsAbaixoMin(r);
   });
-  aplicaCpkVpk(rows);   // CPK (snapshot da filial) + VPK + Markup
+  aplicaCpkVpk(rows);   // CPK (snapshot da filial) + VPK + Markup — só nas reais
 
   const cnt=document.getElementById('cnt-ta');
   if(cnt) cnt.textContent=' — '+rows.length+' linhas';
@@ -3875,16 +3907,15 @@ function buildTa(uid,mes){
     {h:'Frete',           fn:r=>escHtml(r.frt)},
     {h:'Viagens',         fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
-    {h:'Fat.(R$) Real.',  fn:r=>R(r.f),         n:true},
-    {h:'Fat. Compl.',     fn:r=>r.fatCompl>0?`<span style="color:var(--mu)" title="${r.nCompl} carta(s)-frete complementar(es) — fora do VPK">${R(r.fatCompl)}</span>`:'<span style="color:var(--bd)">—</span>', n:true},
-    {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`, n:true},
-    {h:'N°',              fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'eixos',c.eixos,[{v:'5',t:'5'},{v:'6',t:'6'},{v:'7',t:'7'},{v:'9',t:'9'}]);}},
-    {h:'Dist. Ida',       fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distIda):'—';}, n:true},
-    {h:'Dist. Volta',     fn:r=>{const c=taBuildCalc(r); return c.szy?D1(c.distVolta):'—';}, n:true},
+    {h:'Fat.(R$) Real.',  fn:r=>R(r.f)+(r._cc?PD_CC_BADGE:''),         n:true},
+    {h:'Fat.(R$) Proj.',  fn:r=>r._cc?'<span style="color:var(--bd)">—</span>':`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`, n:true},
+    {h:'N°',              fn:r=>{ if(r._cc) return '<span style="color:var(--bd)">—</span>'; const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'eixos',c.eixos,[{v:'5',t:'5'},{v:'6',t:'6'},{v:'7',t:'7'},{v:'9',t:'9'}]);}},
+    {h:'Dist. Ida',       fn:r=>{ if(r._cc) return '<span style="color:var(--bd)">—</span>'; const c=taBuildCalc(r); return c.szy?D1(c.distIda):'—';}, n:true},
+    {h:'Dist. Volta',     fn:r=>{ if(r._cc) return '<span style="color:var(--bd)">—</span>'; const c=taBuildCalc(r); return c.szy?D1(c.distVolta):'—';}, n:true},
   ];
   const colsAntt=[
-    {h:'Retorna Vazio',   fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'retornaVazio',c.retornaVazio,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
-    {h:'Alto Desemp.',    fn:r=>{const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'altoDesemp',c.altoDesemp,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
+    {h:'Retorna Vazio',   fn:r=>{ if(r._cc) return '<span style="color:var(--bd)">—</span>'; const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'retornaVazio',c.retornaVazio,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
+    {h:'Alto Desemp.',    fn:r=>{ if(r._cc) return '<span style="color:var(--bd)">—</span>'; const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'altoDesemp',c.altoDesemp,[{v:'nao',t:'Não'},{v:'sim',t:'Sim'}]);}},
     {h:'Frete Mínimo',    fn:r=>r.freteMin>0?R(r.freteMin):'—', n:true},
     {h:'Frete Atual',     fn:r=>r.freteAtual>0?`<span class="${r._taAbaixoMin?'ta-frete-baixo':''}">${R(r.freteAtual)}</span>`:'—', n:true},
     {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
@@ -3896,7 +3927,7 @@ function buildTa(uid,mes){
     {h:'Markup',          fn:r=>cellMkp(r.mkpRota), n:true},
   ];
 
-  bldT('tbl-ta',rows, colsBase.concat(_taFiltroAbaixoMin ? colsAntt : colsCpk));
+  bldT('tbl-ta',view, colsBase.concat(_taFiltroAbaixoMin ? colsAntt : colsCpk));
   addTarivaRowClick();
   updateTaFreteMinFilterBtn();
   applyTaFilters();
