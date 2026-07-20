@@ -1600,11 +1600,12 @@ function aplicaCpkVpk(rows){
 //     ao lado do Fat.(R$) Real.; sem KM/CPK/VPK/Markup (não é km físico), fora do
 //     Top 10 e do % Fat.
 // Nas demais abas (Visão Geral, Clientes, Frota) nada muda.
-// Match: prefixo F + SC/SP/PR seguido SÓ de zeros (aceita -000, -0000, -00000…);
-// a normalização remove hífen/espaço. Placa real (ex.: FSC-1D23) nunca casa.
+// Match: prefixo F + SC/SP/PR seguido SÓ de zeros (aceita -000, -0000, -00000…),
+// tolerando a confusão de digitação O↔0 (ex.: FSC-000O, FSC-OOOO). A normalização
+// remove hífen/espaço. Placa real (ex.: FSC-1D23, FSC-0001) nunca casa.
 function isCartaFreteComplementar(r){
   const p = String((r && r.placa) || '').toUpperCase().replace(/[^A-Z0-9]/g,'');
-  return /^F(SC|SP|PR)0+$/.test(p);
+  return /^F(SC|SP|PR)[0O]+$/.test(p);
 }
 // Separa um grupo de rota em viagens reais e cartas-frete complementares.
 function pdSplitCartaFrete(arr){
@@ -1612,26 +1613,33 @@ function pdSplitCartaFrete(arr){
   (arr || []).forEach(r => (isCartaFreteComplementar(r) ? compl : real).push(r));
   return { real, compl };
 }
+// Placas distintas de um grupo (diagnóstico exibido no tooltip da coluna Viagens).
+function pdPlacasDoGrupo(arr){
+  return [...new Set((arr||[]).map(r=>String(r&&r.placa||'').trim()).filter(Boolean))].slice(0,15).join(', ');
+}
 // Linha agregada das viagens REAIS de um grupo de rota (compõe o VPK).
 function pdRealRouteRow(real, base, mes, uid){
   const routeInfo=pdDominantRouteCode(real,base);
   const s=agg(real);
   const sF=aggFechado(real);
   const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,real);
-  return {...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj,_cc:false};
+  return {...base,rota:routeInfo.rota,rotaOriginais:routeInfo.rotaOriginais,...s,fatProj,prodProj,_cc:false,_placas:pdPlacasDoGrupo(real)};
 }
-// Linha CC — carta-frete complementar. Herda a identidade da rota, mas sem
-// KM/CPK/VPK/Markup/Projeção (não é km físico). refRow = linha real da mesma rota
+// Linha CC — carta-frete complementar. Herda a identidade da rota; Fat.(R$) Real. e
+// Projetado são preenchidos normalmente (soma/projeção das CTRCs complementares),
+// mas SEM KM/CPK/VPK/Markup (não é km físico). refRow = linha real da mesma rota
 // (para casar o código de rota exibido), quando existir.
-function pdCcRouteRow(compl, base, refRow){
+function pdCcRouteRow(compl, base, refRow, mes, uid){
   const routeInfo=pdDominantRouteCode(compl,base);
   const s=agg(compl);
+  const sF=aggFechado(compl);
+  const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,compl);
   return {...base,
     rota:(refRow && refRow.rota) ? refRow.rota : routeInfo.rota,
     rotaOriginais:routeInfo.rotaOriginais,
-    ...s, fatProj:null, prodProj:null,
+    ...s, fatProj, prodProj,
     kmRod:null, vpkRota:null, cpkFil:null, mkpRota:null,
-    freteMin:0, freteAtual:0, _cc:true};
+    freteMin:0, freteAtual:0, _cc:true, _placas:pdPlacasDoGrupo(compl)};
 }
 // Badge "CC" exibido ao lado do Fat.(R$) Real. das linhas de carta complementar.
 const PD_CC_BADGE='<span style="font-size:8px;font-weight:700;color:var(--mu);border:1px solid var(--bd);border-radius:3px;padding:0 3px;margin-left:5px;letter-spacing:.5px;vertical-align:middle;" title="Carta-frete complementar">CC</span>';
@@ -3689,7 +3697,7 @@ function buildCl(uid,mes){
     // Rota quebrada em 2 linhas: viagens reais (VPK) + carta-frete complementar (CC).
     const {real,compl}=pdSplitCartaFrete(arr);
     const realRow = real.length ? pdRealRouteRow(real,base,mes,uid) : null;
-    const ccRow   = compl.length ? pdCcRouteRow(compl,base,realRow) : null;
+    const ccRow   = compl.length ? pdCcRouteRow(compl,base,realRow,mes,uid) : null;
     const anchor  = realRow ? realRow.f : (ccRow ? ccRow.f : 0);
     return {realRow, ccRow, anchor};
   });
@@ -3708,10 +3716,10 @@ function buildCl(uid,mes){
     {h:'Local Coleta',    fn:r=>`${r.orig}/${r.ufo}`},
     {h:'Local Entrega',   fn:r=>`${r.dest}/${r.ufd}`},
     {h:'Frete',           fn:r=>r.frt},
-    {h:'Viagens',         fn:r=>N(r.v),        n:true},
+    {h:'Viagens',         fn:r=>`<span title="Placas do grupo: ${escHtml(r._placas||'\u2014')}">${N(r.v)}</span>`,        n:true},
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
     {h:'Fat.(R$) Real.',  fn:r=>R(r.f)+(r._cc?PD_CC_BADGE:''),          n:true},
-    {h:'Fat.(R$) Proj.',  fn:r=>r._cc?'<span style="color:var(--bd)">—</span>':`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
+    {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
     {h:'Tarifa',          fn:r=>D2(r.tm),       n:true},
     {h:'KM Rodado',       fn:r=>r.kmRod>0?N(r.kmRod):'<span style="color:var(--bd)">—</span>', n:true},
     {h:'CPK',             fn:r=>cellNum(r.cpkFil),  n:true},
@@ -3873,7 +3881,7 @@ function buildTa(uid,mes){
     const {real,compl}=pdSplitCartaFrete(arr);
     let realRow=null;
     if(real.length){ realRow=pdRealRouteRow(real,base,mes,uid); realRow.freteAtual=taFreteAtual(real); }
-    const ccRow  = compl.length ? pdCcRouteRow(compl,base,realRow) : null;
+    const ccRow  = compl.length ? pdCcRouteRow(compl,base,realRow,mes,uid) : null;
     const anchor = realRow ? realRow.f : (ccRow ? ccRow.f : 0);
     return {realRow, ccRow, anchor};
   });
@@ -3905,10 +3913,10 @@ function buildTa(uid,mes){
     {h:'Local Coleta',    fn:r=>`${escHtml(r.orig)}/${escHtml(r.ufo)}`},
     {h:'Local Entrega',   fn:r=>`${escHtml(r.dest)}/${escHtml(r.ufd)}`},
     {h:'Frete',           fn:r=>escHtml(r.frt)},
-    {h:'Viagens',         fn:r=>N(r.v),        n:true},
+    {h:'Viagens',         fn:r=>`<span title="Placas do grupo: ${escHtml(r._placas||'\u2014')}">${N(r.v)}</span>`,        n:true},
     {h:'Prod.(T) Real.',  fn:r=>D1(r.p),        n:true},
     {h:'Fat.(R$) Real.',  fn:r=>R(r.f)+(r._cc?PD_CC_BADGE:''),         n:true},
-    {h:'Fat.(R$) Proj.',  fn:r=>r._cc?'<span style="color:var(--bd)">—</span>':`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`, n:true},
+    {h:'Fat.(R$) Proj.',  fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`, n:true},
     {h:'N°',              fn:r=>{ if(r._cc) return '<span style="color:var(--bd)">—</span>'; const k=taCfgKey(r), c=taCfgGet(k); return taSelect(k,'eixos',c.eixos,[{v:'5',t:'5'},{v:'6',t:'6'},{v:'7',t:'7'},{v:'9',t:'9'}]);}},
     {h:'Dist. Ida',       fn:r=>{ if(r._cc) return '<span style="color:var(--bd)">—</span>'; const c=taBuildCalc(r); return c.szy?D1(c.distIda):'—';}, n:true},
     {h:'Dist. Volta',     fn:r=>{ if(r._cc) return '<span style="color:var(--bd)">—</span>'; const c=taBuildCalc(r); return c.szy?D1(c.distVolta):'—';}, n:true},
