@@ -758,9 +758,24 @@ auth.onAuthStateChanged(async user => {
     _authReadyResolve && _authReadyResolve();
     showApp();
   } else {
+    const hadUser = !!curUser;
     curUser = null; curPerfil = 'usuario';
     _authReadyResolve && _authReadyResolve();
-    showLogin();
+    if (!hadUser) {
+      /* Primeira resolução do auth sem sessão persistida: login legítimo. */
+      showLogin();
+    } else {
+      /* [FIX][AUTH] Havia sessão ativa e o estado virou null. No celular isso
+         acontece de forma TRANSITÓRIA (pressão de memória, refresh de token,
+         retorno do background) e derrubava o usuário para o login sem
+         necessidade. Só mostramos o login se, após uma janela de carência,
+         a ausência de sessão for CONFIRMADA. Se a sessão voltar, o próprio
+         onAuthStateChanged (ramo user) restaura o app normalmente. */
+      setTimeout(() => {
+        if (auth.currentUser) return; // sessão restaurada — nada a fazer
+        showLogin();
+      }, 2500);
+    }
   }
 });
 
@@ -872,17 +887,21 @@ function go(viewId, el) {
     dispatchNav(viewId, v.nav);
   }
 
-  /* MOBILE: descarrega os iframes dos OUTROS menus para liberar memória.
-     No desktop todos os iframes coexistem vivos (troca instantânea de menu).
-     No mobile, manter 5+ iframes vivos — cada um com suas bases carregadas —
-     somava memória até a aba ser morta pelo navegador. Aqui, ao entrar num
-     menu, zeramos o src dos demais já carregados; eles recarregam rápido na
-     próxima vez que forem abertos. A base no parent (ATLAS_DATA) é reusada,
-     então o recarregamento é leve. */
+  /* [PERF][MOBILE] LRU keep-2: mantém vivos o módulo ATUAL e o ÚLTIMO visitado.
+     Antes descarregávamos TODOS os outros iframes a cada troca de menu — isso
+     liberava memória, mas fazia o usuário pagar o boot completo (HTML + JS +
+     dados) sempre que voltava ao menu anterior, o padrão de navegação mais
+     comum (ida-e-volta). Com keep-2, a volta é instantânea e o teto de memória
+     continua controlado (no máx. 2 iframes vivos). Os demais são descarregados
+     exatamente como antes (src=about:blank + frFlags=null p/ recarga limpa). */
   if (window.ATLAS_IS_MOBILE) {
+    if (!window.__atlasMru) window.__atlasMru = [];
+    window.__atlasMru = window.__atlasMru.filter(v => v !== viewId);
+    window.__atlasMru.unshift(viewId);
+    const keep = new Set(window.__atlasMru.slice(0, 2)); // atual + anterior
     requestAnimationFrame(()=>{
       Object.keys(VIEWS).forEach(other=>{
-        if(other===viewId) return;
+        if(keep.has(other)) return;
         if(frFlags[other] !== 'done') return;
         const ofr = document.getElementById('fr-'+other);
         if(ofr && ofr.src){
@@ -891,6 +910,7 @@ function go(viewId, el) {
           frFlags[other] = null; // força recarga limpa no próximo acesso
         }
       });
+      window.__atlasMru = window.__atlasMru.filter(v => keep.has(v));
     });
   }
 }
@@ -3744,6 +3764,20 @@ window.addEventListener('message', function(ev) {
     if (fid) sendTabPermsToFrame(fid);
   }
 });
+</script>
+<script src="atlas-performance.js"></script>
+<script>
+/* [PERF][ATLAS] Instrumentação opcional (ATLAS_PERF_DEBUG / ?perf=1). Só observa. */
+(function () {
+  if (!window.AtlasPerf) return;
+  AtlasPerf.mark('atlas:script:parsed');
+  ['go', 'atlasPreloadAllBases', 'atlasLoadBaseFromFirestoreShared']
+    .forEach(function (fn) { AtlasPerf.wrap(window, fn, 'atlas:' + fn); });
+  window.addEventListener('load', function () {
+    AtlasPerf.mark('atlas:load');
+    AtlasPerf.measure('atlas:parse→load', 'atlas:script:parsed', 'atlas:load');
+  });
+})();
 </script>
 </body>
 </html>
