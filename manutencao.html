@@ -5241,6 +5241,11 @@ function timelineOS(os) {
   if (os.reprovadoEm) {
     arr.push({ c:'rd', i:'✗', t:'OS Reprovada', m: dataHora(os.reprovadoEm) + ' · ' + escapeHtml(os.reprovadoPor || '—') + (os.motivoReprovacao ? ' · ' + os.motivoReprovacao : '') });
   }
+  // Edição (se resetou a aprovação, sinaliza — explica por que a OS voltou para 'Aberta')
+  if (os.editadoEm) {
+    const _resetouAprov = !os.aprovadoEm && !/conclu|reprov/i.test(String(os.status || ''));
+    arr.push({ c:'am', i:'✎', t:'OS editada', m: dataHora(os.editadoEm) + ' · ' + escapeHtml(os.editadoPor || '—') + (_resetouAprov ? ' · retornou para aprovação' : '') });
+  }
   // Finalização
   if (os.finalizadoEm) {
     arr.push({ c:'pu', i:'✅', t:'OS Finalizada', m: dataHora(os.finalizadoEm) + ' · ' + escapeHtml(os.finalizadoPor || '—') });
@@ -5487,9 +5492,27 @@ function openPanel(osId) {
   const nfFields   = document.getElementById('sp-nf-fields');
   const nfLocked   = document.getElementById('sp-nf-locked');
   const nfReadonly = document.getElementById('sp-nf-readonly');
-  const isConcluida  = String(os.status || '').toLowerCase().includes('conclu');
-  const isAguardando = os.status === 'Aguardando finalizar';
-  const isCriador    = !ATLAS_CURRENT_USER.email || (os.criadoPor === ATLAS_CURRENT_USER.email) || isAprovador();
+  // Status normalizado (sem acentos/caixa) — tolera variações gravadas no Firestore
+  // como 'aguardando finalizar', 'Aguardando Finalizar', 'Aprovada', 'Em execução'.
+  const statusNorm = String(os.status || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const nivelNorm  = String(os.nivel  || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const isConcluida = /conclu|finalizad[ao]/.test(statusNorm); // 'finalizada/o' sim; 'Aguardando finalizar' NÃO
+  const isReprovada = /reprov|cancel/.test(statusNorm);
+  // OS liberada para anexo de NF quando:
+  //  • status indica aprovação/execução (qualquer grafia), OU
+  //  • existe carimbo de aprovação (aprovadoEm), OU
+  //  • alçada é 'Automática' (< R$300 — não exige aprovação manual).
+  const isAprovada = !isReprovada && !isConcluida && (
+    /aguardando\s*finaliza/.test(statusNorm) ||
+    /aprovad/.test(statusNorm) ||
+    /em\s*execucao/.test(statusNorm) ||
+    !!os.aprovadoEm ||
+    /automatica/.test(nivelNorm)
+  );
+  // Comparação de e-mail tolerante a caixa/espaços.
+  const _emailUser    = String(ATLAS_CURRENT_USER.email || '').trim().toLowerCase();
+  const _emailCriador = String(os.criadoPor || '').trim().toLowerCase();
+  const isCriador = !_emailUser || (_emailCriador && _emailCriador === _emailUser) || isAprovador();
 
   if (nfSection) {
     nfSection.style.display = 'block';
@@ -5498,15 +5521,21 @@ function openPanel(osId) {
       if (nfLocked)   nfLocked.style.display = 'none';
       if (nfFields)   nfFields.style.display = 'none';
       if (nfReadonly) { nfReadonly.style.display = 'block'; renderNFsReadOnly(os); }
-    } else if (isAguardando && isCriador) {
-      // Aguardando finalização: permite anexar e concluir
+    } else if (isAprovada && isCriador) {
+      // OS aprovada/liberada: permite anexar e concluir
       if (nfLocked)   nfLocked.style.display = 'none';
       if (nfReadonly) nfReadonly.style.display = 'none';
       if (nfFields)   { nfFields.style.display = 'block'; preencherNFsExistentes(os); }
     } else {
       if (nfReadonly) nfReadonly.style.display = 'none';
       if (nfFields)   nfFields.style.display = 'none';
-      if (nfLocked)   nfLocked.style.display = 'block';
+      if (nfLocked) {
+        // Mensagem correta para cada bloqueio: falta de aprovação × falta de permissão.
+        nfLocked.innerHTML = (isAprovada && !isCriador)
+          ? '🔒 OS aprovada — somente o criador da O.S ou um aprovador pode anexar as notas fiscais.'
+          : '🔒 Aguardando aprovação para liberar anexo de notas fiscais.';
+        nfLocked.style.display = 'block';
+      }
     }
   }
 
@@ -5768,16 +5797,18 @@ async function salvarEdicaoOS() {
   const km = document.getElementById('edit-os-km').value || os.km || '';
   const prazo = document.getElementById('edit-os-prazo').value || os.prazo || '';
 
-  // Determinar novo status: retorna ao fluxo de aprovação se necessário
+  // Reavaliação de aprovação:
+  //  • Se o CUSTO TOTAL mudou → a aprovação anterior deixa de valer: volta para
+  //    'Aberta' e limpa os carimbos (comportamento antigo, agora só quando faz sentido).
+  //  • Se o custo NÃO mudou (edição de texto, prestador, km, prazo…) → preserva o
+  //    status e a aprovação existentes. Antes, QUALQUER edição zerava a aprovação e
+  //    devolvia a OS para 'Aberta' silenciosamente — travando o anexo de NF mesmo
+  //    com a OS já aprovada.
   const nivel = nivelAprovacao(valorTotal);
-  let novoStatus;
-  if (nivel === 'Automática') {
-    // Sem alçada: nasce Aberta diretamente
-    novoStatus = 'Aberta';
-  } else {
-    // Exige aprovação: volta ao fluxo
-    novoStatus = 'Aberta';
-  }
+  const valorAnterior = Number(os.valorTotal || 0);
+  const custoMudou = Math.abs(valorTotal - valorAnterior) > 0.005;
+  const jaAprovada = !!os.aprovadoEm || /aguardando\s*finaliza|aprovad/i.test(String(os.status || ''));
+  const resetarAprovacao = custoMudou || !jaAprovada;
 
   const agora = new Date();
   const editadoPor = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || 'Admin';
@@ -5790,16 +5821,18 @@ async function salvarEdicaoOS() {
     km,
     prazo,
     nivel,
-    status: novoStatus,
     atualizadoEm: agora,
     editadoEm: agora,
     editadoPor,
-    // Limpar aprovações anteriores para forçar reavaliação
-    aprovadoEm: null,
-    aprovadoPor: null,
-    slaInicio: null,
-    slaFim: null,
   };
+  if (resetarAprovacao) {
+    updates.status = 'Aberta';
+    // Limpar aprovações anteriores para forçar reavaliação
+    updates.aprovadoEm = null;
+    updates.aprovadoPor = null;
+    updates.slaInicio = null;
+    updates.slaFim = null;
+  }
 
   const btn = document.getElementById('btn-salvar-edicao-os');
   if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
@@ -5816,7 +5849,13 @@ async function salvarEdicaoOS() {
     Object.assign(OS_DB[osId], updates);
     _editOsOrcamento = null;
     fecharModalEditarOS();
-    toast(`${osId} atualizada. ${nivel !== 'Automática' ? 'Retornou ao fluxo de aprovação.' : 'Status: Aberta.'}`, 'gn');
+    if (resetarAprovacao && jaAprovada) {
+      toast(`${osId} atualizada. Custo alterado — a OS retornou ao fluxo de aprovação e precisará ser aprovada novamente.`, 'am');
+    } else if (resetarAprovacao) {
+      toast(`${osId} atualizada. ${nivel !== 'Automática' ? 'Aguardando aprovação.' : 'Status: Aberta.'}`, 'gn');
+    } else {
+      toast(`${osId} atualizada. Aprovação preservada (custo inalterado).`, 'gn');
+    }
     await loadOrdensServico();
   } catch(err) {
     toast('Erro ao salvar edição: ' + err.message, 'rd');
