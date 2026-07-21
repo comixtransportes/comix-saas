@@ -965,19 +965,24 @@ function initMapa(){
   /* Provedores de tiles em ordem de preferência. CARTO (CDN robusto, sem o
      rate-limit do tile.osm.org cru) como primário; OSM oficial como fallback.
      Se um provedor falhar em vários tiles, troca automaticamente para o próximo. */
+  /* SEM crossOrigin: os CDNs de tile nem sempre devolvem Access-Control-Allow-Origin,
+     e marcar a <img> como crossorigin faz o navegador baixar e rejeitar o tile. */
   const _TILE_PROVS=[
-    {url:'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-     opt:{maxZoom:19,subdomains:'abcd',crossOrigin:true,attribution:'&copy; OpenStreetMap &copy; CARTO'}},
-    {url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-     opt:{maxZoom:19,crossOrigin:true,attribution:'&copy; OpenStreetMap'}}
+    {nome:'CARTO', url:'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+     opt:{maxZoom:19,subdomains:'abcd',attribution:'&copy; OpenStreetMap &copy; CARTO'}},
+    {nome:'OSM', url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+     opt:{maxZoom:19,attribution:'&copy; OpenStreetMap'}}
   ];
   let _tpi=0,_tileCamada=null;
   function _montarTiles(){
     if(_tileCamada){ _simMap.removeLayer(_tileCamada); }
-    const p=_TILE_PROVS[_tpi]; let erros=0;
+    const p=_TILE_PROVS[_tpi]; let erros=0, ok=0;
     _tileCamada=L.tileLayer(p.url,p.opt);
-    _tileCamada.on('tileerror',()=>{
-      if(++erros>=6 && _tpi<_TILE_PROVS.length-1){ _tpi++; _montarTiles(); }
+    _tileCamada.on('tileload',()=>{ if(++ok===1) console.info('[mapa] tiles OK via '+p.nome); });
+    _tileCamada.on('tileerror',ev=>{
+      erros++;
+      if(erros<=2) console.warn('[mapa] tileerror ('+p.nome+') — não carregou:', ev.tile && ev.tile.src);
+      if(erros>=6 && _tpi<_TILE_PROVS.length-1){ console.warn('[mapa] trocando '+p.nome+' → '+_TILE_PROVS[_tpi+1].nome); _tpi++; _montarTiles(); }
     });
     _tileCamada.addTo(_simMap);
   }
