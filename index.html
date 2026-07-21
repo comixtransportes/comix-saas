@@ -931,7 +931,18 @@ function go(viewId, el) {
   if (!frFlags[viewId]) {
     frFlags[viewId] = 'loading';
     const fr = document.getElementById('fr-'+viewId);
-    if (fr) fr.src = v.src;
+    if (fr) {
+      /* GUARD anti-aninhamento: um módulo nunca pode ser o próprio shell.
+         Se o src apontar para o index/shell (deploy trocado), aborta e avisa
+         em vez de renderizar topbar-dentro-de-topbar. */
+      const bad = /(^|\/)index\.html(\?|#|$)/i.test(v.src) || v.src === '' || v.src === location.pathname.split('/').pop();
+      if (bad) {
+        console.error('[Atlas] src invalido para "'+viewId+'": '+v.src+' — modulo nao carregado (evita shell aninhado).');
+        frFlags[viewId] = null;
+      } else {
+        fr.src = v.src;
+      }
+    }
   } else {
     dispatchNav(viewId, v.nav);
   }
