@@ -164,6 +164,24 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
 .alerta{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px;border:1px solid}
 .alerta.am{background:var(--am-bg);border-color:var(--am-bd);color:var(--am)}
 .alerta.rd{background:var(--rd-bg);border-color:var(--rd-bd);color:var(--rd)}
+
+/* Condições ANTT do simulador */
+.sim-conditions{margin-top:12px;border-top:1px solid var(--bd2);padding-top:12px}
+.sim-conditions-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:9px;flex-wrap:wrap}
+.sim-conditions-head strong{font-size:12.5px}
+.sim-condition-grid{display:grid;grid-template-columns:repeat(3,minmax(190px,1fr));gap:10px}
+.sim-condition-card{border:1px solid var(--bd2);border-radius:8px;background:var(--sf);padding:10px 11px;display:flex;flex-direction:column;gap:7px;min-height:105px}
+.sim-condition-title{font-size:12px;font-weight:600;color:var(--tx)}
+.sim-condition-help{font-size:10.5px;color:var(--mu);line-height:1.35}
+.sim-toggle{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--bd);border-radius:7px;overflow:hidden;background:var(--wh)}
+.sim-toggle button{border:0;border-right:1px solid var(--bd);background:var(--wh);color:var(--mu);padding:7px 10px;font-family:var(--f);font-size:11.5px;font-weight:600;cursor:pointer}
+.sim-toggle button:last-child{border-right:0}
+.sim-toggle button:hover:not(.on){background:var(--ht);color:var(--tx)}
+.sim-toggle button.on[data-value="sim"]{background:var(--gn);color:#fff}
+.sim-toggle button.on[data-value="nao"]{background:var(--rd);color:#fff}
+.sim-calc-row{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:10px;flex-wrap:wrap}
+.sim-calc-note{font-size:11px;color:var(--mu);min-height:16px}
+@media(max-width:900px){.sim-condition-grid{grid-template-columns:1fr}.sim-condition-card{min-height:auto}}
 </style>
 </head>
 <body>
@@ -231,9 +249,46 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
       <label class="fld">Viagens/mês (aprox.)
         <input type="number" id="simViagens" step="1" min="1" value="10">
       </label>
-      <label class="fld">&nbsp;
+    </div>
+
+    <div class="sim-conditions">
+      <div class="sim-conditions-head">
+        <strong>Condições para o piso mínimo ANTT</strong>
+        <span id="simTabelaAplicavel" class="pill ac">Tabela A · padrão frota</span>
+      </div>
+      <div class="sim-condition-grid">
+        <div class="sim-condition-card">
+          <div class="sim-condition-title">É composição veicular?</div>
+          <div class="sim-toggle" data-target="simComposicao">
+            <button type="button" class="on" data-value="sim">Sim</button>
+            <button type="button" data-value="nao">Não</button>
+          </div>
+          <div class="sim-condition-help">Sim: composição veicular completa ou caminhão simples (Tabelas A/C). Não: contratação apenas da unidade de tração, com o implemento fornecido pelo contratante (Tabelas B/D). O número de eixos considerado continua sendo o da composição utilizada.</div>
+          <input type="hidden" id="simComposicao" value="sim">
+        </div>
+        <div class="sim-condition-card">
+          <div class="sim-condition-title">É alto desempenho?</div>
+          <div class="sim-toggle" data-target="simAltoDesempenho">
+            <button type="button" data-value="sim">Sim</button>
+            <button type="button" class="on" data-value="nao">Não</button>
+          </div>
+          <div class="sim-condition-help">Operação padrão: Tabela A com composição completa ou Tabela B somente com a unidade de tração. Alto desempenho: Tabela C com composição completa ou Tabela D somente com a unidade de tração.</div>
+          <input type="hidden" id="simAltoDesempenho" value="nao">
+        </div>
+        <div class="sim-condition-card">
+          <div class="sim-condition-title">Existe retorno vazio?</div>
+          <div class="sim-toggle" data-target="simRetornoVazio">
+            <button type="button" data-value="sim">Sim</button>
+            <button type="button" class="on" data-value="nao">Não</button>
+          </div>
+          <div class="sim-condition-help">Quando marcado, soma 92% do custo de deslocamento do retorno: 0,92 × distância × CCD.</div>
+          <input type="hidden" id="simRetornoVazio" value="nao">
+        </div>
+      </div>
+      <div class="sim-calc-row">
+        <div id="simCondAviso" class="sim-calc-note">Configuração ativa: composição veicular, Tabela A, sem retorno vazio.</div>
         <button class="btn pri" id="btnSimular">Calcular rota e piso</button>
-      </label>
+      </div>
     </div>
   </div>
 
@@ -323,7 +378,7 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
     <h3>Coeficientes ANTT vigentes (CCD / CC)
       <span style="margin-left:auto" id="anttAdminBtns"></span>
     </h3>
-    <div class="muted" style="margin-bottom:8px">Piso = (distância × CCD) + CC, por tabela e nº de eixos. Somente-leitura; edição restrita a admin. Coeficientes nunca ficam no código — sempre aqui, versionados por resolução.</div>
+    <div class="muted" style="margin-bottom:8px">Piso = (distância × CCD) + CC, por tabela e nº de eixos da composição utilizada. Regras: <b>A</b> = composição completa/caminhão simples, operação padrão; <b>B</b> = somente unidade de tração, operação padrão; <b>C</b> = composição completa/caminhão simples, alto desempenho; <b>D</b> = somente unidade de tração, alto desempenho. Somente-leitura; edição restrita a admin. Coeficientes nunca ficam no código — sempre aqui, versionados por resolução.</div>
     <div id="anttInfo" class="muted" style="margin-bottom:8px"></div>
     <table class="tb" id="tbAntt">
       <thead><tr><th>Tabela</th><th>Tipo de carga</th><th class="num">Eixos</th><th class="num">CCD (R$/km)</th><th class="num">CC (R$)</th></tr></thead>
@@ -374,8 +429,9 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
     <div class="muted" style="margin-bottom:8px">
       Uma linha por praça: coordenada + <b>tarifa por eixo</b> (dado público ANTT/concessionária).
       Quando a HERE não devolver <span class="mono">tolls</span> — cenário confirmado desta conta —, o Simulador
-      decodifica a polyline, casa com esta base (raio de captura <b>500&nbsp;m</b>) e calcula
-      <span class="mono">tarifa/eixo × eixos do veículo</span>. Se a HERE um dia trouxer pedágio, ela tem prioridade
+      decodifica a polyline e valida cada praça pela geometria da rota, rodovia e sentido, usando
+      raio estrito de até <b>120&nbsp;m</b>. O cálculo é <span class="mono">tarifa/eixo × eixos do veículo</span>.
+      Praças apenas próximas, em vias paralelas ou fora do trajeto são descartadas. Se a HERE trouxer pedágio, ela tem prioridade
       e esta base vira redundância. CSV: cabeçalho <span class="mono">nome,rodovia,lat,lng,tarifaEixo,sentido</span>.
       A base fica em <span class="mono">comercial_config/pracas</span> — sem mudança no firestore.rules.
     </div>
@@ -603,6 +659,7 @@ function cacheBust(key){ delete _cache[key]; }
 async function boot(){
   if(_booted) return; _booted=true;
   bindTabs();
+  bindSimCondicoes();
   await Promise.all([carregarConfig(), carregarAntt(), carregarVeiculos(), carregarPracas()]);
   await Promise.all([carregarClientesRotas(), carregarPremissas(), carregarDiesel()]);
   montarSelects();
@@ -847,6 +904,7 @@ async function hereRota(orig, dest, veic){
     origin:`${orig.lat},${orig.lng}`,
     destination:`${dest.lat},${dest.lng}`,
     'return':'polyline,summary,tolls',
+    spans:'names,routeNumbers',
     'truck[axleCount]': String(veic.eixos||5),
     'truck[grossWeight]': String(Math.round(((veic.tara||15)+(veic.capacidade||27))*1000)),
     'truck[height]': String(Math.round((veic.alt||4)*100)),
@@ -860,11 +918,15 @@ async function hereRota(orig, dest, veic){
   const j=await r.json();
   const rt=j.routes&&j.routes[0];
   if(!rt||!rt.sections||!rt.sections.length) throw new Error('HERE não retornou rota para este par O/D.');
-  let distM=0, durS=0, polys=[], pracas=[], pedagioTotal=0;
+  let distM=0, durS=0, polys=[], pracas=[], pedagioTotal=0, rotaDetalhada=[];
   rt.sections.forEach(sec=>{
     distM += sec.summary?.length||0;
     durS  += sec.summary?.duration||0;
-    if(sec.polyline) polys.push(sec.polyline);
+    if(sec.polyline){
+      polys.push(sec.polyline);
+      try{ rotaDetalhada.push({pontos:decodeFlexPolyline(sec.polyline),spans:Array.isArray(sec.spans)?sec.spans:[]}); }
+      catch(e){ console.warn('[Comercial] leitura da geometria da seção:',e.message); }
+    }
     (sec.tolls||[]).forEach(t=>{
       (t.fares||[]).forEach(f=>{
         const preco=(f.price&&f.price.value!=null)?Number(f.price.value):null;
@@ -875,13 +937,14 @@ async function hereRota(orig, dest, veic){
   });
   let pedagioFonte = pracas.length ? 'here' : null;
   /* ── Fallback: HERE sem tolls (entitlement desta conta) → matcher local ── */
-  if(pedagioTotal===0 && !pracas.length && polys.length && ST.pracas.length){
-    let rotaPts=[];
-    polys.forEach(p=>{ try{ rotaPts=rotaPts.concat(decodeFlexPolyline(p)); }catch(e){ console.warn('[Comercial] fallback polyline:', e.message); } });
-    const hits=matchPracas(rotaPts, ST.pracas, PRACAS_RAIO_M);
+  if(pedagioTotal===0 && !pracas.length && rotaDetalhada.length && ST.pracas.length){
+    const hits=matchPracas(rotaDetalhada, ST.pracas, PRACAS_RAIO_M);
     if(hits.length){
       pedagioTotal=calcularPedagioLocal(hits, veic.eixos||5);
-      pracas=hits.map(h=>({nome:h.nome||'Praça', rodovia:h.rodovia||'—', valor:h._valor, fonte:'base local'}));
+      pracas=hits.map(h=>({
+        nome:h.nome||'Praça', rodovia:h.rodovia||'—', valor:h._valor, fonte:'base local',
+        lat:Number(h.lat), lng:Number(h.lng), distRotaM:Math.round(h._dist||0), sentido:h.sentido||''
+      }));
       pedagioFonte='base local';
     }
   }
@@ -913,13 +976,13 @@ function decodeFlexPolyline(encoded){
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   MATCHER DE PEDÁGIO — casa a polyline HERE com a base própria de
-   praças (ST.pracas) quando a HERE não devolve tolls (entitlement).
-   Geometria pura: distância ponto→segmento em metros; praça dentro
-   do raio conta uma vez, em ordem de percurso. Pedágio = R$/eixo ×
-   eixos do veículo. Custo de API: zero.
+   MATCHER DE PEDÁGIO — usa a geometria real devolvida pela HERE e
+   cruza cada praça com a rodovia e o sentido do trecho mais próximo.
+   O raio é deliberadamente estrito para não capturar praças apenas
+   próximas, em acessos laterais ou em rodovias paralelas.
    ══════════════════════════════════════════════════════════════════ */
-const PRACAS_RAIO_M = 500; // raio de captura praça→rota
+const PRACAS_RAIO_M = 120;
+const PRACAS_RAIO_SEM_VIA_M = 80;
 
 function _prMetros(a,b){ const R=6371000,r=Math.PI/180,la=(a[0]+b[0])/2*r;
   return Math.hypot((b[1]-a[1])*r*Math.cos(la),(b[0]-a[0])*r)*R; }
@@ -930,28 +993,90 @@ function _prPontoSeg(p,a,b){ const R=6371000,r=Math.PI/180,cl=Math.cos(a[0]*r);
   const l2=bx*bx+by*by; let t=l2>0?(px*bx+py*by)/l2:0; t=Math.max(0,Math.min(1,t));
   return { dist:Math.hypot(px-t*bx,py-t*by), t }; }
 
-function matchPracas(rota, pracas, raioM){
-  if(!rota||rota.length<2||!pracas||!pracas.length) return [];
-  const mg=raioM/111000+0.02; // margem da bbox em graus
+function _prNorm(v){ return String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim(); }
+function _prCodigosRodovia(v){
+  const s=_prNorm(v).replace(/\s+/g,'-');
+  const re=/(?:^|-)(BR|SP|PR|SC|RS|MG|RJ|ES|GO|DF|BA|PE|CE|MT|MS|PA|AM|RO|AC|AP|RR|TO|MA|PI|RN|PB|AL|SE)-(\d{2,4})(?=-|$)/g;
+  const out=[]; let m; while((m=re.exec(s))) out.push(m[1]+'-'+m[2]); return out;
+}
+function _prSpanVias(span){
+  const vals=[];
+  [...(span?.routeNumbers||[]),...(span?.names||[])].forEach(x=>{
+    const v=typeof x==='string'?x:(x?.value||x?.text||x?.name||''); if(v) vals.push(String(v));
+  });
+  return vals;
+}
+function _prRodoviaCompativel(rodoviaPraca, viasTrecho){
+  const codPr=_prCodigosRodovia(rodoviaPraca), codRt=[];
+  (viasTrecho||[]).forEach(v=>_prCodigosRodovia(v).forEach(c=>codRt.push(c)));
+  if(codPr.length && codRt.length) return codPr.some(c=>codRt.includes(c));
+  return true; // sem código explícito dos dois lados: a geometria estrita decide
+}
+function _prBearing(a,b){
+  const r=Math.PI/180, y=Math.sin((b[1]-a[1])*r)*Math.cos(b[0]*r);
+  const x=Math.cos(a[0]*r)*Math.sin(b[0]*r)-Math.sin(a[0]*r)*Math.cos(b[0]*r)*Math.cos((b[1]-a[1])*r);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+function _prSentidoCompativel(sentido,bearing){
+  const s=_prNorm(sentido);
+  if(!s||/AMBOS|DUPLO|BIDIRECIONAL|TODOS/.test(s)) return true;
+  const dirs=[];
+  if(/(^| )N( |$)|NORTE/.test(s)) dirs.push(0);
+  if(/(^| )L( |$)|LESTE/.test(s)) dirs.push(90);
+  if(/(^| )S( |$)|SUL/.test(s)) dirs.push(180);
+  if(/(^| )O( |$)|OESTE/.test(s)) dirs.push(270);
+  if(!dirs.length) return true;
+  return dirs.some(d=>{ const dif=Math.abs(((bearing-d+540)%360)-180); return dif<=70; });
+}
+function _prMontarSegmentos(secoes){
+  const segmentos=[]; let along=0;
+  for(const sec of (secoes||[])){
+    const pts=sec?.pontos||[]; const spans=[...(sec?.spans||[])].sort((a,b)=>(a.offset||0)-(b.offset||0));
+    let si=0;
+    for(let i=0;i<pts.length-1;i++){
+      while(si+1<spans.length && Number(spans[si+1].offset||0)<=i) si++;
+      const span=spans[si]||{}; const len=_prMetros(pts[i],pts[i+1]);
+      segmentos.push({a:pts[i],b:pts[i+1],along,len,vias:_prSpanVias(span),bearing:_prBearing(pts[i],pts[i+1])});
+      along+=len;
+    }
+  }
+  return segmentos;
+}
+function matchPracas(secoes, pracas, raioM){
+  const segs=_prMontarSegmentos(secoes);
+  if(!segs.length||!pracas||!pracas.length) return [];
   let mnLa=1e9,mxLa=-1e9,mnLn=1e9,mxLn=-1e9;
-  for(const pt of rota){ const la=pt[0],ln=pt[1];
-    if(la<mnLa)mnLa=la; if(la>mxLa)mxLa=la; if(ln<mnLn)mnLn=ln; if(ln>mxLn)mxLn=ln; }
-  const cum=[0];
-  for(let s=0;s<rota.length-1;s++) cum.push(cum[s]+_prMetros(rota[s],rota[s+1]));
+  segs.forEach(s=>[s.a,s.b].forEach(pt=>{ const la=pt[0],ln=pt[1];
+    if(la<mnLa)mnLa=la; if(la>mxLa)mxLa=la; if(ln<mnLn)mnLn=ln; if(ln>mxLn)mxLn=ln; }));
+  const mg=raioM/111000+0.002;
   const out=[];
   for(const pr of pracas){
-    const la=Number(pr.lat), ln=Number(pr.lng);
-    if(isNaN(la)||isNaN(ln)) continue;
-    if(la<mnLa-mg||la>mxLa+mg||ln<mnLn-mg||ln>mxLn+mg) continue; // fora da bbox → nem varre
-    let best=Infinity,seg=-1,bt=0;
-    for(let s=0;s<rota.length-1;s++){
-      const r=_prPontoSeg([la,ln],rota[s],rota[s+1]);
-      if(r.dist<best){ best=r.dist; seg=s; bt=r.t; }
+    const la=Number(pr.lat),ln=Number(pr.lng); if(isNaN(la)||isNaN(ln)) continue;
+    if(la<mnLa-mg||la>mxLa+mg||ln<mnLn-mg||ln>mxLn+mg) continue;
+    let best=null;
+    for(const seg of segs){
+      const r=_prPontoSeg([la,ln],seg.a,seg.b);
+      if(!best||r.dist<best.dist) best={dist:r.dist,t:r.t,seg};
     }
-    if(best<=raioM) out.push(Object.assign({},pr,{_dist:best,_along:cum[seg]+bt*_prMetros(rota[seg],rota[seg+1])}));
+    if(!best) continue;
+    const temVia=best.seg.vias.length>0;
+    const limite=temVia?raioM:Math.min(raioM,PRACAS_RAIO_SEM_VIA_M);
+    if(best.dist>limite) continue;
+    if(!_prRodoviaCompativel(pr.rodovia,best.seg.vias)) continue;
+    if(!_prSentidoCompativel(pr.sentido,best.seg.bearing)) continue;
+    out.push(Object.assign({},pr,{_dist:best.dist,_along:best.seg.along+best.t*best.seg.len,_vias:best.seg.vias}));
   }
   out.sort((a,b)=>a._along-b._along);
-  return out;
+  /* Evita contar duas coordenadas da mesma praça (pistas paralelas/sentidos opostos).
+     Como o total de ida é duplicado no simulador, uma praça física entra uma vez na ida. */
+  const dedup=[];
+  for(const x of out){
+    const chave=_prNorm(x.nome)+'|'+_prNorm(x.rodovia);
+    const i=dedup.findIndex(d=>d._chave===chave&&Math.abs(d._along-x._along)<350);
+    if(i<0){ x._chave=chave; dedup.push(x); }
+    else if(x._dist<dedup[i]._dist){ x._chave=chave; dedup[i]=x; }
+  }
+  return dedup.sort((a,b)=>a._along-b._along);
 }
 
 function calcularPedagioLocal(matched, eixos){
@@ -999,6 +1124,12 @@ function desenharRota(polylines, orig, dest, pracas){
   polylines.forEach(p=>{ try{ const pts=decodeFlexPolyline(p); all=all.concat(pts); grp.addLayer(L.polyline(pts,{color:'#1a56db',weight:4,opacity:.85})); }catch(e){ console.warn('polyline decode',e); } });
   grp.addLayer(L.marker([orig.lat,orig.lng]).bindPopup('Origem: '+esc(orig.label)));
   grp.addLayer(L.marker([dest.lat,dest.lng]).bindPopup('Destino: '+esc(dest.label)));
+  (pracas||[]).forEach(p=>{
+    if(Number.isFinite(Number(p.lat))&&Number.isFinite(Number(p.lng))){
+      grp.addLayer(L.circleMarker([Number(p.lat),Number(p.lng)],{radius:6,weight:2,fillOpacity:.9})
+        .bindPopup('<b>'+esc(p.nome||'Praça')+'</b><br>'+esc(p.rodovia||'')+(p.distRotaM!=null?'<br>'+esc(p.distRotaM)+' m do eixo da rota':'')));
+    }
+  });
   grp.addTo(_simMap); _simLayer=grp;
   if(all.length) _simMap.fitBounds(L.latLngBounds(all),{padding:[24,24]});
 
@@ -1016,19 +1147,52 @@ function desenharRota(polylines, orig, dest, pracas){
    MOTOR ANTT — piso = (distância × CCD) + CC
    Coeficientes SEMPRE do Firestore (comercial_antt_coeficientes).
    Pedágio NUNCA compõe o piso (Lei 13.703).
+
+   Regras de enquadramento:
+   A = composição veicular/caminhão simples, operação padrão
+   B = somente unidade de tração, operação padrão
+   C = composição veicular/caminhão simples, alto desempenho
+   D = somente unidade de tração, alto desempenho
    ══════════════════════════════════════════════════════════════════ */
-function pisoAntt(distKm, eixos, categoria, tabelaPreferida){
-  /* A tabela aplicável (A/B/C/D — carga lote, contratação do veículo, com/alto desempenho)
-     é definida pelo admin ao carregar a resolução; aqui apenas buscamos a preferida
-     e caímos para qualquer coeficiente compatível de eixos+categoria se não existir. */
-  const tab = String(tabelaPreferida||'A').toUpperCase();
-  const alvo = ST.antt.coef.find(c =>
+const TABELA_ANTT_REGRAS={
+  A:{composicao:true, alto:false, rotulo:'composição completa · operação padrão', contratacao:'composição veicular ou caminhão simples'},
+  B:{composicao:false,alto:false, rotulo:'somente unidade de tração · operação padrão', contratacao:'apenas a unidade de tração'},
+  C:{composicao:true, alto:true,  rotulo:'composição completa · alto desempenho', contratacao:'composição veicular ou caminhão simples'},
+  D:{composicao:false,alto:true,  rotulo:'somente unidade de tração · alto desempenho', contratacao:'apenas a unidade de tração'}
+};
+function tabelaAnttAplicavel(composicao,altoDesempenho){
+  if(composicao) return altoDesempenho?'C':'A';
+  return altoDesempenho?'D':'B';
+}
+function pisoAntt(distKm, eixos, categoria, tabelaPreferida, opcoes={}){
+  const tab=String(tabelaPreferida||'A').toUpperCase();
+  const eixosSolicitados=Number(eixos);
+  const candidatos=ST.antt.coef.filter(c=>
     String(c.tabela).toUpperCase()===tab &&
     String(c.categoria)===String(categoria) &&
-    Number(c.eixos)===Number(eixos));
-  const alt = alvo || ST.antt.coef.find(c => String(c.categoria)===String(categoria) && Number(c.eixos)===Number(eixos));
-  if(!alt) return null;
-  return { valor: distKm*Number(alt.ccd) + Number(alt.cc), ccd:Number(alt.ccd), cc:Number(alt.cc), tabela:alt.tabela, eixos:alt.eixos, categoria:alt.categoria };
+    c.eixos!=='' && c.eixos!=null && c.ccd!=='' && c.ccd!=null && c.cc!=='' && c.cc!=null &&
+    Number.isFinite(Number(c.eixos)) &&
+    Number.isFinite(Number(c.ccd)) &&
+    Number.isFinite(Number(c.cc)));
+  if(!candidatos.length) return null;
+
+  /* Regra ANTT para quantidade de eixos não prevista: usa a quantidade
+     imediatamente inferior; se não existir inferior, usa a superior. */
+  let coef=candidatos.find(c=>Number(c.eixos)===eixosSolicitados);
+  if(!coef){
+    const inferiores=candidatos.filter(c=>Number(c.eixos)<eixosSolicitados).sort((a,b)=>Number(b.eixos)-Number(a.eixos));
+    const superiores=candidatos.filter(c=>Number(c.eixos)>eixosSolicitados).sort((a,b)=>Number(a.eixos)-Number(b.eixos));
+    coef=inferiores[0]||superiores[0]||null;
+  }
+  if(!coef) return null;
+  const ccd=Number(coef.ccd),cc=Number(coef.cc),eixosAplicados=Number(coef.eixos);
+  const valorIda=Number(distKm)*ccd+cc;
+  const retornoVazio=opcoes.retornoVazio?0.92*Number(distKm)*ccd:0;
+  return {
+    valor:valorIda+retornoVazio,valorIda,retornoVazio,ccd,cc,tabela:tab,
+    eixos:eixosAplicados,eixosSolicitados,eixosAjustados:eixosAplicados!==eixosSolicitados,
+    categoria:coef.categoria,regra:TABELA_ANTT_REGRAS[tab]||null
+  };
 }
 
 /* Premissas efetivas: rota específica > default filial+veículo > default geral */
@@ -1167,6 +1331,30 @@ function calcularFinanceiro(inp){
 /* ══════════════════════════════════════════════════════════════════
    FLUXO DO SIMULADOR — cálculo, semáforo, liberação com auditoria
    ══════════════════════════════════════════════════════════════════ */
+function bindSimCondicoes(){
+  document.querySelectorAll('.sim-toggle[data-target]').forEach(grupo=>{
+    grupo.querySelectorAll('button[data-value]').forEach(btn=>{
+      btn.addEventListener('click',()=>{
+        const alvo=$(grupo.dataset.target); if(!alvo) return;
+        alvo.value=btn.dataset.value;
+        grupo.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===btn));
+        atualizarCondicoesAntt();
+      });
+    });
+  });
+  atualizarCondicoesAntt();
+}
+function atualizarCondicoesAntt(){
+  const composicao=$('simComposicao')?.value!=='nao';
+  const alto=$('simAltoDesempenho')?.value==='sim';
+  const retorno=$('simRetornoVazio')?.value==='sim';
+  const pill=$('simTabelaAplicavel'),aviso=$('simCondAviso');
+  if(!pill||!aviso) return;
+  const tabela=tabelaAnttAplicavel(composicao,alto);
+  const regra=TABELA_ANTT_REGRAS[tabela];
+  pill.textContent=`Tabela ${tabela} · ${regra.rotulo}`; pill.className='pill ac';
+  aviso.textContent=`Configuração ativa: ${regra.contratacao}, Tabela ${tabela}${retorno?', com retorno vazio de 92% do deslocamento':', sem retorno vazio'}. Para B/D, os eixos continuam sendo os da composição veicular utilizada.`;
+}
 $('btnSimular').onclick = simular;
 async function simular(){
   const orig=$('simOrigem').value.trim(), dest=$('simDestino').value.trim();
@@ -1175,6 +1363,13 @@ async function simular(){
   if(!ST.antt.coef.length){ toast('Sem coeficientes ANTT — gate inoperante. Peça a um admin para carregar a tabela.','rd'); return; }
   const veic = ST.veiculos.find(v=>v.id===$('simVeiculo').value);
   if(!veic){ toast('Selecione um perfil de veículo.','am'); return; }
+  const composicao=$('simComposicao').value==='sim';
+  const altoDesempenho=$('simAltoDesempenho').value==='sim';
+  const retornoVazio=$('simRetornoVazio').value==='sim';
+  const tabelaAntt=tabelaAnttAplicavel(composicao,altoDesempenho);
+  const regraTabelaAntt=TABELA_ANTT_REGRAS[tabelaAntt];
+  const categoriaAntt=({granel_pressurizado:'granel_pressurizada',granel:'granel_solido',geral:'carga_geral'})[$('simCarga').value]
+    || veic.data.categoriaAntt || 'granel_solido';
   const filial=$('simFilial').value;
   const btn=$('btnSimular'); btn.disabled=true; btn.textContent='Consultando HERE…';
   try{
@@ -1191,9 +1386,9 @@ async function simular(){
 
     const tb=$('tbPedagios').querySelector('tbody');
     tb.innerHTML = rota.pracas.length
-      ? rota.pracas.map(p=>`<tr><td>${esc(p.nome)}</td><td>${esc(p.rodovia)}</td><td class="num">${p.valor!=null?brl(p.valor):'—'}</td></tr>`).join('')
+      ? rota.pracas.map(p=>`<tr><td>${esc(p.nome)}${p.distRotaM!=null?`<div class="muted" style="font-size:10px">${num(p.distRotaM,0)} m do eixo da rota</div>`:''}</td><td>${esc(p.rodovia)}</td><td class="num">${p.valor!=null?brl(p.valor):'—'}</td></tr>`).join('')
         + `<tr class="tot"><td colspan="2">Total ida (×2 = ida-volta) · fonte: ${esc(rota.pedagioFonte==='base local'?'base local de praças':'HERE')}</td><td class="num">${brl(rota.pedagioIda)}</td></tr>`
-      : '<tr><td colspan="3" class="empty">Sem pedágio: HERE não retornou tolls e nenhuma praça da base caiu na rota — confira a Base de praças na aba Pedágio &amp; Rota.</td></tr>';
+      : '<tr><td colspan="3" class="empty">Sem pedágio: HERE não retornou tolls e nenhuma praça da base passou pela validação da rota — confira a Base de praças na aba Pedágio &amp; Rota.</td></tr>';
 
     /* Conferência contra distância validada da rota cadastrada */
     const rotaCad = ST.rotas.find(r=>r.id===$('simRota').value);
@@ -1205,8 +1400,11 @@ async function simular(){
     }
 
     /* Piso ANTT — sobre a distância de IDA (operação com carga); pedágio fora */
-    const piso = pisoAntt(distIda, veic.data.eixos, veic.data.categoriaAntt||'granel_solido', veic.data.tabelaAntt||'A');
-    if(!piso){ toast('Sem coeficiente ANTT para '+veic.data.eixos+' eixos / categoria '+(veic.data.categoriaAntt||'—')+'.','rd'); btn.disabled=false; btn.textContent='Calcular rota e piso'; return; }
+    const piso = pisoAntt(distIda, veic.data.eixos, categoriaAntt, tabelaAntt, {retornoVazio});
+    if(!piso){ toast('Sem coeficiente ANTT da Tabela '+tabelaAntt+' ('+regraTabelaAntt.rotulo+') para '+veic.data.eixos+' eixos / categoria '+categoriaAntt+'.','rd'); btn.disabled=false; btn.textContent='Calcular rota e piso'; return; }
+    if(piso.eixosAjustados){
+      toast('A Tabela '+tabelaAntt+' não possui '+piso.eixosSolicitados+' eixos nesta categoria; aplicado o coeficiente de '+piso.eixos+' eixos conforme a regra ANTT.','am');
+    }
 
     const prem = premissasEfetivas($('simRota').value||null, filial, veic.id);
     const dsl = dieselVigente(filial);
@@ -1229,7 +1427,11 @@ async function simular(){
     $('kTarifa').innerHTML = receitaViagem>0? brl(receitaViagem)+' <small>('+brl(tarifa)+'/t)</small>':'—';
     $('kDelta').textContent = receitaViagem>0? (receitaViagem>=piso.valor?'+':'')+brl(receitaViagem-piso.valor):'—';
     $('kDelta').style.color = receitaViagem>=piso.valor?'var(--gn)':'var(--rd)';
-    $('kPisoDetalhe').textContent=`Fórmula: ${num(distIda,1)} km × R$ ${num(piso.ccd,4)} (CCD) + R$ ${num(piso.cc,2)} (CC) · Tabela ${piso.tabela} · ${piso.eixos} eixos · ${piso.categoria} · ${ST.antt.resolucao}`;
+    $('kPisoDetalhe').textContent=`Ida: ${num(distIda,1)} km × R$ ${num(piso.ccd,4)} (CCD) + R$ ${num(piso.cc,2)} (CC) = ${brl(piso.valorIda)}`+
+      (retornoVazio?` · Retorno vazio: 0,92 × ${num(distIda,1)} km × R$ ${num(piso.ccd,4)} = ${brl(piso.retornoVazio)}`:'')+
+      ` · Total: ${brl(piso.valor)} · Tabela ${piso.tabela} (${regraTabelaAntt.rotulo}) · ${piso.eixos} eixos`+
+      (piso.eixosAjustados?` aplicados para solicitação de ${piso.eixosSolicitados} eixos`:``)+
+      ` · ${piso.categoria} · ${ST.antt.resolucao}`;
     $('kCpk').textContent = prem&&prem.cpk_ref? 'R$ '+num(prem.cpk_ref,2)+'/km':'—';
 
     renderFinanceiro(fin, $('simModal').value);
@@ -1240,10 +1442,17 @@ async function simular(){
       filial, cliente_id: $('simCliente').value||null,
       cliente_nome: (ST.clientes.find(c=>c.id===$('simCliente').value)||{data:{}}).data.nome||null,
       rota_id: $('simRota').value||null, origem: gO.label, destino: gD.label, carga: $('simCarga').value,
-      veiculo_id: veic.id, veiculo_nome: veic.data.nome, eixos: veic.data.eixos, categoria_antt: veic.data.categoriaAntt||'granel_solido',
+      veiculo_id: veic.id, veiculo_nome: veic.data.nome, eixos: veic.data.eixos, categoria_antt: categoriaAntt,
       dist_ida_km:+distIda.toFixed(2), dist_iv_km:+distIV.toFixed(2), pedagio_iv:+pedagioIV.toFixed(2),
       pracas: rota.pracas.map(p=>({n:p.nome,r:p.rodovia,v:p.valor})),
-      piso_antt:+piso.valor.toFixed(2), ccd:piso.ccd, cc:piso.cc, tabela_antt:piso.tabela, resolucao:ST.antt.resolucao, antt_doc:ST.antt.docId,
+      piso_antt:+piso.valor.toFixed(2), piso_ida:+piso.valorIda.toFixed(2), retorno_vazio_valor:+piso.retornoVazio.toFixed(2),
+      composicao_veicular:composicao,
+      tipo_contratacao_antt:composicao?'composicao_veicular_ou_caminhao_simples':'apenas_unidade_tracao',
+      alto_desempenho:altoDesempenho, retorno_vazio:retornoVazio,
+      ccd:piso.ccd, cc:piso.cc, tabela_antt:piso.tabela,
+      eixos_solicitados_antt:piso.eixosSolicitados, eixos_aplicados_antt:piso.eixos,
+      regra_ajuste_eixos_antt:piso.eixosAjustados?'imediatamente_inferior_ou_superior_se_nao_houver_inferior':'exato',
+      resolucao:ST.antt.resolucao, antt_doc:ST.antt.docId,
       tarifa_ton:tarifa, receita_viagem:+receitaViagem.toFixed(2), tipo_carreta:tipoCarreta,
       ton, viagens_mes:viagens, diesel_rs:dsl, premissas_id:prem?prem.id:null,
       ebit_pct_frota: fin.frota.ebitPct, ebit_viagem:+(fin.frota.ebit.viagem).toFixed(2),
@@ -1622,9 +1831,9 @@ const ANTT_CATEGORIAS = [
 ];
 const ANTT_TABELAS = [
   {t:'A', nome:'Carga lotação'},
-  {t:'B', nome:'Só veículo automotor'},
+  {t:'B', nome:'Somente unidade de tração — operação padrão'},
   {t:'C', nome:'Lotação — alto desempenho'},
-  {t:'D', nome:'Só veículo automotor — alto desempenho'}
+  {t:'D', nome:'Somente unidade de tração — alto desempenho'}
 ];
 /* eixos que a RESOLUÇÃO efetivamente preenche por (tabela, categoria).
    Usado só pelo IMPORTADOR, para saber onde ESPERAR um número lido do PDF. */
