@@ -522,6 +522,7 @@ function hoje(){ return new Date().toISOString().slice(0,10); }
 function agoraISO(){ return new Date().toISOString(); }
 function dtBR(v){ if(!v)return '—'; const d=(v.toDate?v.toDate():new Date(v)); return isNaN(d)?'—':d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
 function nVal(id){ const v=parseFloat($(id)?.value); return isNaN(v)?0:v; }
+function dtSimplesBR(iso){ if(!iso) return ''; const m=String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/); return m?`${m[3]}/${m[2]}/${m[1]}`:String(iso); }
 
 /* ══ Permissões ══
    editar premissas: admin, gestor, lu_*  ·  simular: todos  ·
@@ -540,14 +541,16 @@ function applyPerm(){
   $('btnNovoCliente').style.display  = podeEditarPremissas()?'':'none';
   $('btnNovaRota').style.display     = podeEditarPremissas()?'':'none';
   $('anttAdminBtns').innerHTML = isAdmin()
-    ? '<button class="btn sm pri" onclick="anttAbrirEdicao()">Nova versão de coeficientes</button>' : '';
+    ? '<button class="btn sm pri" onclick="anttImportarPDF()">📥 Importar resolução (PDF)</button> <button class="btn sm" onclick="anttAbrirEdicao()">Editar manualmente</button>' : '';
   const api = $('v-api');
   api.querySelectorAll('input,button').forEach(el=>{ el.disabled = !isAdmin(); });
 }
 
 /* ══ Estado + cache SWR simples (TTL) — evita repetir a crise de leituras ══ */
 const ST = {
-  antt:{ coef:[], vigencia:null, resolucao:null, docId:null },
+  antt:{ coef:[], vigencia:null, resolucao:null, docId:null,
+         numero:null, publicacao:null, edicao:null, secao:null, pagina:null,
+         altera:null, via:null, arquivo:null, criadoEm:null, criadoPor:null },
   veiculos:[], premissas:[], clientes:[], rotas:[], diesel:[],
   hereKey:'', hereChamadasMes:0,
   sim:null   // última simulação calculada (snapshot pronto p/ gravar)
@@ -597,8 +600,11 @@ async function carregarConfig(){
 async function carregarAntt(){
   const docs = await cachedGet('antt', ()=>fsGetCollection(COL.antt,{orderBy:'vigencia_inicio',orderDir:'desc',limit:1}));
   if(docs.length){
-    const d=docs[0];
-    ST.antt = { coef:d.data.coeficientes||[], vigencia:d.data.vigencia_inicio||null, resolucao:d.data.resolucao||'—', docId:d.id };
+    const d=docs[0], x=d.data||{};
+    ST.antt = { coef:x.coeficientes||[], vigencia:x.vigencia_inicio||null, resolucao:x.resolucao||'—', docId:d.id,
+      numero:x.numero_resolucao||null, publicacao:x.data_publicacao||null, edicao:x.edicao_dou||null,
+      secao:x.secao_dou||null, pagina:x.pagina_dou||null, altera:x.altera||null,
+      via:x.importado_via||null, arquivo:x.fonte_arquivo||null, criadoEm:x.criado_em||null, criadoPor:x.criado_por||null };
   }
 }
 async function carregarVeiculos(){
@@ -663,7 +669,7 @@ function checarVigenciaAntt(){
     el.innerHTML='<div class="alerta rd"><b>⚠️ Sem coeficientes ANTT cadastrados.</b> O gate de compliance está inoperante — um admin precisa carregar a resolução vigente na aba Tabela ANTT.</div>';
     return;
   }
-  pill.textContent='ANTT: '+(ST.antt.resolucao||'—');
+  pill.textContent='ANTT: '+(ST.antt.numero?('nº '+ST.antt.numero):(ST.antt.resolucao||'—'));
   const vig = ST.antt.vigencia? new Date(ST.antt.vigencia): null;
   const meses = vig ? (Date.now()-vig.getTime())/(30.44*24*3600*1000) : 99;
   if(meses>6){
@@ -1254,9 +1260,19 @@ async function veicSalvar(id){
 
 /* — Tabela ANTT — */
 function renderAntt(){
-  $('anttInfo').innerHTML = ST.antt.coef.length
-    ? `Resolução: <b>${esc(ST.antt.resolucao||'—')}</b> · vigência desde <b>${esc(ST.antt.vigencia||'—')}</b> · ${ST.antt.coef.length} coeficientes carregados.`
-    : '';
+  if(ST.antt.coef.length){
+    const a=ST.antt, dou=[a.edicao&&('Ed. '+a.edicao), a.secao&&('Seção '+a.secao), a.pagina&&('p. '+a.pagina)].filter(Boolean).join(' · ');
+    const via = a.via==='pdf_texto'?'📄 PDF (texto)' : a.via==='pdf_ocr'?'🔍 PDF (OCR)' : a.via==='manual'?'✍️ manual' : '';
+    $('anttInfo').innerHTML =
+      `<b>${esc(a.resolucao||'—')}</b>${a.altera?' — altera '+esc(a.altera):''}<br>`+
+      `Vigência desde <b>${esc(dtSimplesBR(a.vigencia)||a.vigencia||'—')}</b>`+
+      (a.publicacao?` · publicada no DOU em <b>${esc(dtSimplesBR(a.publicacao))}</b>`:'')+
+      (dou?` · ${esc(dou)}`:'')+
+      ` · <b>${a.coef.length}</b> coeficientes`+
+      (via?` · importada via ${via}`:'')+
+      (a.arquivo?` · arquivo <span class="mono">${esc(a.arquivo)}</span>`:'')+
+      (a.criadoEm?`<br><span class="muted">Carregada em ${dtBR(a.criadoEm)}${a.criadoPor?' por '+esc(a.criadoPor):''}.</span>`:'');
+  } else $('anttInfo').innerHTML='';
   const tb=$('tbAntt').querySelector('tbody');
   const rows=[...ST.antt.coef].sort((a,b)=> String(a.tabela).localeCompare(String(b.tabela))||String(a.categoria).localeCompare(String(b.categoria))||a.eixos-b.eixos);
   tb.innerHTML = rows.length? rows.map(c=>
@@ -1315,6 +1331,325 @@ async function anttSalvar(){
   await fsAddDoc(COL.antt,{ resolucao:res, vigencia_inicio:$('aVig').value||hoje(), coeficientes:coef,
     criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email });
   cacheBust('antt'); await carregarAntt(); renderAntt(); checarVigenciaAntt(); mdFechar(); toast('Nova versão da tabela ANTT gravada.','gn');
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   IMPORTADOR DE RESOLUÇÃO ANTT (PDF → texto ou OCR → verificação → versão)
+   Lê a resolução publicada no DOU, extrai metadados (nº, datas, edição/
+   seção/página, norma alterada) e os coeficientes das Tabelas A/B/C/D,
+   apresenta tudo em tela editável para conferência e grava uma NOVA versão
+   em comercial_antt_coeficientes (a mais recente vira a vigente).
+   Coeficientes NUNCA são embutidos no código — só a ESTRUTURA das tabelas
+   (categorias e eixos da metodologia PNPM-TRC) é conhecida, para alinhar
+   corretamente as células (inclusive as colunas em branco).
+   ══════════════════════════════════════════════════════════════════════ */
+const ANTT_CATEGORIAS = [
+  {n:1,  slug:'granel_solido',            nome:'Granel sólido'},
+  {n:2,  slug:'granel_liquido',           nome:'Granel líquido'},
+  {n:3,  slug:'frigorificada',            nome:'Frigorificada ou Aquecida'},
+  {n:4,  slug:'conteinerizada',           nome:'Conteinerizada'},
+  {n:5,  slug:'carga_geral',              nome:'Carga Geral'},
+  {n:6,  slug:'neogranel',                nome:'Neogranel'},
+  {n:7,  slug:'perigosa_granel_solido',   nome:'Perigosa (granel sólido)'},
+  {n:8,  slug:'perigosa_granel_liquido',  nome:'Perigosa (granel líquido)'},
+  {n:9,  slug:'perigosa_frigorificada',   nome:'Perigosa (frigorificada ou aquecida)'},
+  {n:10, slug:'perigosa_conteinerizada',  nome:'Perigosa (conteinerizada)'},
+  {n:11, slug:'perigosa_carga_geral',     nome:'Perigosa (carga geral)'},
+  {n:12, slug:'granel_pressurizada',      nome:'Carga Granel Pressurizada'}
+];
+const ANTT_TABELAS = [
+  {t:'A', nome:'Carga lotação'},
+  {t:'B', nome:'Só veículo automotor'},
+  {t:'C', nome:'Lotação — alto desempenho'},
+  {t:'D', nome:'Só veículo automotor — alto desempenho'}
+];
+/* eixos com valor por (tabela, categoria) — colunas em branco ficam de fora */
+function eixosEsperados(tabela, slug){
+  const T=String(tabela).toUpperCase();
+  if(slug==='granel_pressurizada') return [5,6,9];
+  if(T==='A'||T==='C'){
+    if(slug==='conteinerizada'||slug==='perigosa_conteinerizada') return [3,4,5,6,7,9];
+    return [2,3,4,5,6,7,9];
+  }
+  return [4,5,6,7,9]; /* B e D: colunas 2 e 3 vazias */
+}
+const _MESES={janeiro:1,fevereiro:2,marco:3,'março':3,abril:4,maio:5,junho:6,julho:7,agosto:8,setembro:9,outubro:10,novembro:11,dezembro:12};
+function _mesNum(m){ const k=String(m||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); return _MESES[k]||_MESES[m?.toLowerCase()]||0; }
+function _pad2(n){ return String(n).padStart(2,'0'); }
+
+/* — carregamento sob demanda das libs (mesmo padrão CDN do módulo) — */
+function _loadScript(src){ return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.async=true; s.onload=()=>res(true); s.onerror=()=>rej(new Error('Falha ao carregar '+src)); document.head.appendChild(s); }); }
+let _pdfjsReady=null;
+function ensurePdfJs(){
+  if(window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if(_pdfjsReady) return _pdfjsReady;
+  _pdfjsReady=_loadScript('https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js').then(()=>{
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+    return window.pdfjsLib;
+  });
+  return _pdfjsReady;
+}
+let _tessReady=null;
+function ensureTesseract(){
+  if(window.Tesseract) return Promise.resolve(window.Tesseract);
+  if(_tessReady) return _tessReady;
+  _tessReady=_loadScript('https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js').then(()=>window.Tesseract);
+  return _tessReady;
+}
+
+/* — números BR: "1.067,06" → 1067.06 ; "9,2231" → 9.2231 — */
+function parseNumBR(t){ if(t==null) return NaN; let s=String(t).trim(); if(!s) return NaN; s=s.replace(/\./g,'').replace(',', '.'); const v=parseFloat(s); return isNaN(v)?NaN:v; }
+function tokensNumBR(str){ return (String(str).match(/\d{1,3}(?:\.\d{3})+,\d{1,4}|\d+,\d{1,4}/g)||[]); }
+
+/* — extração da camada de texto do PDF (agrupa por linha via posição) — */
+async function extrairTextoPDF(file){
+  const pdfjs=await ensurePdfJs();
+  const buf=await file.arrayBuffer();
+  const pdf=await pdfjs.getDocument({data:buf}).promise;
+  let full=''; let itens=0;
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p); const tc=await page.getTextContent(); itens+=tc.items.length;
+    const linhas={};
+    tc.items.forEach(it=>{ const y=Math.round(it.transform[5]); (linhas[y]=linhas[y]||[]).push([it.transform[4], it.str]); });
+    Object.keys(linhas).map(Number).sort((a,b)=>b-a).forEach(y=>{
+      const l=linhas[y].sort((a,b)=>a[0]-b[0]).map(x=>x[1]).join(' '); if(l.trim()) full+=l+'\n';
+    });
+  }
+  return {texto:full, temTexto:itens>20, numPages:pdf.numPages, _pdf:pdf};
+}
+/* — OCR de cada página (fallback p/ PDF só-imagem, como este DOU) — */
+async function ocrPDF(pdf, onProg){
+  const Tess=await ensureTesseract();
+  const worker=await Tess.createWorker('por',1,{ logger:m=>{ if(m.status==='recognizing text' && onProg) onProg({pct:Math.round((m.progress||0)*100)}); } });
+  let full='';
+  for(let p=1;p<=pdf.numPages;p++){
+    onProg&&onProg({page:p, total:pdf.numPages, pct:0});
+    const page=await pdf.getPage(p); const vp=page.getViewport({scale:2.6});
+    const cv=document.createElement('canvas'); cv.width=vp.width; cv.height=vp.height;
+    await page.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
+    const {data}=await worker.recognize(cv); full+='\n'+data.text;
+    onProg&&onProg({page:p, total:pdf.numPages, pct:100});
+  }
+  await worker.terminate(); return full;
+}
+
+/* — metadados da resolução — */
+function parseMetadata(txt){
+  const m={}; let x;
+  if(x=txt.match(/RESOLU\S{0,3}O\s+ANTT\s+N[º°o.]*\s*([\d.]+)[\s,]*DE\s+(\d{1,2})\s+DE\s+([A-Za-zçÇãÃéÉêÊ]+)\s+DE\s+(\d{4})/i)){
+    m.numero=x[1]; const mn=_mesNum(x[3]); m.data_resolucao=mn?`${x[4]}-${_pad2(mn)}-${_pad2(x[2])}`:'';
+    m.resolucao='Resolução ANTT nº '+x[1]+'/'+x[4];
+  }
+  if(x=txt.match(/Publicad[oa]\s+em:?\s*(\d{2})\/(\d{2})\/(\d{4})/i)) m.data_publicacao=`${x[3]}-${x[2]}-${x[1]}`;
+  if(x=txt.match(/Edi[^:\n]{0,6}o:?\s*(\d+)/i)) m.edicao=x[1];
+  if(x=txt.match(/Se[^:\n]{0,5}o:?\s*(\d+)/i)) m.secao=x[1];
+  if(x=txt.match(/P[áa]gina:?\s*(\d+)/i)) m.pagina=x[1];
+  if(x=txt.match(/Altera o Anexo\s+([IVXLil]{1,4})\s+da\s+Resolu\S{0,3}o\s+ANTT\s+n[º°o.]*\s*([\d.]+)[\s\S]{0,60}?de\s+(\d{4})/i)){
+    const anexo=x[1].toUpperCase().replace(/L/g,'I');
+    m.altera=`Resolução ANTT nº ${x[2]}/${x[3]} (Anexo ${anexo})`;
+  }
+  if(x=txt.match(/[ÓO]rg[ãa]o:?\s*([^\n]+)/i)) m.orgao=x[1].trim();
+  return m;
+}
+
+/* — separa o texto nas 4 regiões de tabela — */
+function splitTabelas(txt){
+  const re=/TABELA\s*([ABCD])\b/gi, marks=[]; let m;
+  while(m=re.exec(txt)) marks.push({t:m[1].toUpperCase(), i:m.index});
+  const out={};
+  for(let k=0;k<marks.length;k++){ const c=marks[k]; if(out[c.t]==null) out[c.t]=txt.slice(c.i, marks[k+1]?marks[k+1].i:txt.length); }
+  return out;
+}
+/* — coeficientes: consome os números na ordem da estrutura conhecida — */
+function parseCoeficientes(txt){
+  const reg=splitTabelas(txt); const coef=[]; const avisos=[];
+  ANTT_TABELAS.forEach(({t})=>{
+    const bloco=reg[t];
+    let esperado=0; ANTT_CATEGORIAS.forEach(c=>esperado+=eixosEsperados(t,c.slug).length*2);
+    if(!bloco){ avisos.push(`Tabela ${t} não localizada — preencha manualmente.`); }
+    const nums=bloco?tokensNumBR(bloco).map(parseNumBR):[];
+    const okCont = bloco && nums.length===esperado;
+    if(bloco && !okCont) avisos.push(`Tabela ${t}: ${nums.length} números lidos ≠ ${esperado} esperados. Confira as células destacadas.`);
+    let idx=0;
+    ANTT_CATEGORIAS.forEach(cat=>{
+      const eixos=eixosEsperados(t,cat.slug), K=eixos.length;
+      const ccdArr=nums.slice(idx,idx+K); idx+=K;
+      const ccArr =nums.slice(idx,idx+K); idx+=K;
+      eixos.forEach((e,i)=>{
+        const ccd=ccdArr[i], cc=ccArr[i];
+        const flag = !okCont || isNaN(ccd)||isNaN(cc) || ccd<2.5||ccd>13 || cc<80||cc>1800;
+        coef.push({tabela:t, categoria:cat.slug, categoria_nome:cat.nome, eixos:e,
+          ccd:isNaN(ccd)?'':+ccd.toFixed(4), cc:isNaN(cc)?'':+cc.toFixed(2), _flag:flag});
+      });
+    });
+  });
+  return {coef, avisos};
+}
+
+/* — estado do import em andamento — */
+let _impANTT=null;
+function _impStatus(html, tipo){ const el=$('impStatus'); if(el){ el.innerHTML=html; el.className='alerta '+(tipo||'am'); el.style.display='block'; } }
+function _impBar(pct){ const b=$('impBarFill'); if(b) b.style.width=Math.max(0,Math.min(100,pct||0))+'%'; }
+
+function anttImportarPDF(){
+  if(!isAdmin()){ toast('Apenas admin pode importar a resolução.','am'); return; }
+  _injImpCss();
+  mdAbrir('Importar resolução ANTT (PDF do DOU)',
+    `<div class="muted" style="margin-bottom:8px">Selecione o PDF da resolução publicada no Diário Oficial da União. O importador lê a <b>camada de texto</b> quando existe (PDF oficial do imprensanacional.gov.br) e usa <b>OCR</b> automaticamente quando o arquivo é apenas imagem. Metadados e coeficientes vêm sempre para uma <b>tela de conferência</b> antes de gravar — nada entra no piso de compliance sem seu aval.</div>
+     <div id="impDrop" class="imp-drop">
+       <div style="font-size:26px">📄⬆️</div>
+       <div><b>Arraste o PDF aqui</b> ou clique para selecionar</div>
+       <div class="muted" style="font-size:12px">Ex.: Resolução ANTT nº 6.084/2026 (Anexo II — coeficientes PNPM-TRC)</div>
+       <input type="file" id="impFile" accept="application/pdf,.pdf" style="display:none">
+     </div>
+     <div id="impStatus" class="alerta am" style="display:none"></div>
+     <div id="impBar" class="imp-bar" style="display:none"><div id="impBarFill" class="imp-bar-fill"></div></div>
+     <div id="impArea"></div>`,
+    `<button class="btn" onclick="mdFechar()">Fechar</button>
+     <span id="impFooter"></span>`);
+  const drop=$('impDrop'), inp=$('impFile');
+  drop.onclick=()=>inp.click();
+  inp.onchange=e=>{ const f=e.target.files[0]; if(f) _impProcessar(f); };
+  ['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over');}));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over');}));
+  drop.addEventListener('drop',e=>{ const f=e.dataTransfer.files[0]; if(f&&/pdf$/i.test(f.name||f.type)) _impProcessar(f); else toast('Envie um arquivo PDF.','am'); });
+}
+
+async function _impProcessar(file){
+  try{
+    $('impBar').style.display='block'; _impBar(4);
+    _impStatus('Abrindo <span class="mono">'+esc(file.name)+'</span> e lendo a camada de texto…','ac');
+    const {texto, temTexto, numPages, _pdf}=await extrairTextoPDF(file);
+    _impBar(30);
+    let usarOCR = !temTexto || tokensNumBR(texto).length<80 || !/TABELA/i.test(texto);
+    let ocrTxt='';
+    if(usarOCR){
+      _impStatus('Sem camada de texto útil — aplicando <b>OCR</b> nas '+numPages+' páginas (pode levar alguns segundos)…','am');
+      ocrTxt=await ocrPDF(_pdf, ({page,total,pct})=>{
+        if(page) _impStatus(`OCR — página <b>${page}/${total}</b>…`,'am');
+        _impBar(30 + Math.round(((page?page-1:0)/(total||1))*60 + (pct||0)*0.6/(total||1)));
+      });
+    }
+    _impBar(94);
+    const metodo=usarOCR?'pdf_ocr':'pdf_texto';
+    const fonteMeta=usarOCR?(texto+'\n'+ocrTxt):texto;
+    const fonteCoef=usarOCR?ocrTxt:texto;
+    const meta=parseMetadata(fonteMeta);
+    const {coef,avisos}=parseCoeficientes(fonteCoef);
+    _impANTT={ file, metodo, meta, coef, avisos };
+    _impBar(100);
+    _impRenderVerificacao();
+  }catch(e){
+    console.error('[Import ANTT]',e);
+    _impStatus('❌ Falha ao processar o PDF: '+esc(e.message||e)+'. Você ainda pode usar “Editar manualmente”.','rd');
+    $('impBar').style.display='none';
+  }
+}
+
+function _impRenderVerificacao(){
+  const {metodo, meta, coef, avisos}=_impANTT;
+  $('impDrop').style.display='none'; $('impBar').style.display='none';
+  const lidos=coef.filter(c=>c.ccd!==''&&c.cc!=='').length, flags=coef.filter(c=>c._flag).length;
+  _impStatus(`${metodo==='pdf_ocr'?'🔍 Lido via OCR':'📄 Lido da camada de texto'} — <b>${lidos}</b> coeficientes preenchidos`+
+    (flags?`, <b>${flags}</b> célula(s) marcadas para conferir (destaque amarelo)`:', tudo dentro do esperado')+'.',
+    flags?'am':'gn');
+
+  const campo=(id,lb,val,ph,tipo)=>`<label class="fld">${lb}<input type="${tipo||'text'}" id="${id}" value="${esc(val||'')}" placeholder="${esc(ph||'')}"></label>`;
+  const vig = meta.data_publicacao || meta.data_resolucao || hoje();
+
+  let grids='';
+  ANTT_TABELAS.forEach(({t,nome})=>{
+    const rows=coef.map((c,k)=>({c,k})).filter(o=>o.c.tabela===t);
+    const nf=rows.filter(o=>o.c._flag).length;
+    grids+=`<div class="imp-tblhead">Tabela ${t} <span class="muted">— ${esc(nome)}</span> ${nf?`<span class="pill rd" style="margin-left:6px">${nf} p/ conferir</span>`:`<span class="pill gn" style="margin-left:6px">ok</span>`}</div>
+      <table class="tb imp-grid"><thead><tr><th>Tipo de carga</th><th class="num">Eixos</th><th class="num">CCD (R$/km)</th><th class="num">CC (R$)</th></tr></thead><tbody>`;
+    let lastCat='';
+    rows.forEach(({c,k})=>{
+      const catCell = c.categoria_nome!==lastCat ? esc(c.categoria_nome) : '';
+      lastCat=c.categoria_nome;
+      grids+=`<tr>
+        <td>${catCell}<span class="mono muted" style="font-size:11px"> ${catCell?esc(c.categoria):''}</span></td>
+        <td class="num">${c.eixos}</td>
+        <td><input type="number" step="0.0001" class="imp-in${c._flag?' flag':''}" id="im_ccd_${k}" value="${c.ccd}"></td>
+        <td><input type="number" step="0.01" class="imp-in${c._flag?' flag':''}" id="im_cc_${k}" value="${c.cc}"></td>
+      </tr>`;
+    });
+    grids+='</tbody></table>';
+  });
+
+  $('impArea').innerHTML=`
+    <div class="imp-sec">1 · Dados da resolução (confira e ajuste)</div>
+    <div class="fields">
+      ${campo('imRes','Resolução (rótulo exibido)',meta.resolucao,'Resolução ANTT nº 6.084/2026')}
+      ${campo('imNum','Número',meta.numero,'6.084')}
+      ${campo('imDataRes','Data da resolução',meta.data_resolucao,'aaaa-mm-dd','date')}
+      ${campo('imPub','Publicação no DOU',meta.data_publicacao,'aaaa-mm-dd','date')}
+      ${campo('imEd','Edição DOU',meta.edicao,'133')}
+      ${campo('imSec','Seção DOU',meta.secao,'1')}
+      ${campo('imPag','Página DOU',meta.pagina,'168')}
+      ${campo('imVig','Vigência a partir de',vig,'aaaa-mm-dd','date')}
+    </div>
+    <label class="fld" style="margin-top:8px">Norma alterada${''}<input type="text" id="imAltera" value="${esc(meta.altera||'')}" placeholder="Resolução ANTT nº 5.867/2020 (Anexo II)"></label>
+    ${avisos.length?`<div class="alerta am" style="margin-top:8px"><b>Avisos de leitura:</b><br>${avisos.map(esc).join('<br>')}</div>`:''}
+    <div class="imp-sec" style="margin-top:12px">2 · Coeficientes (${coef.length} linhas · A/B/C/D) — edite o que precisar</div>
+    <div class="muted" style="margin-bottom:6px;font-size:12px">Células amarelas foram lidas com baixa confiança ou fora da faixa típica (CCD ~R$/km, CC ~centenas). Deixe uma célula vazia para não gravar aquele eixo.</div>
+    ${grids}`;
+  $('impFooter').innerHTML=`<button class="btn pri" onclick="anttGravarImportado()">✅ Gravar versão importada</button>`;
+}
+
+async function anttGravarImportado(){
+  if(!_impANTT){ return; }
+  const res=$('imRes').value.trim() || ('Resolução ANTT nº '+($('imNum').value.trim()||'—'));
+  const coef=[];
+  _impANTT.coef.forEach((c,k)=>{
+    const ccd=parseFloat($('im_ccd_'+k)?.value), cc=parseFloat($('im_cc_'+k)?.value);
+    if(!isNaN(ccd)&&!isNaN(cc)) coef.push({tabela:c.tabela, categoria:c.categoria, categoria_nome:c.categoria_nome, eixos:c.eixos, ccd:+ccd, cc:+cc});
+  });
+  if(!coef.length){ toast('Nenhum coeficiente válido para gravar.','am'); return; }
+  const vig=$('imVig').value || $('imPub').value || hoje();
+  const doc={
+    resolucao:res,
+    numero_resolucao:$('imNum').value.trim()||null,
+    data_resolucao:$('imDataRes').value||null,
+    data_publicacao:$('imPub').value||null,
+    edicao_dou:$('imEd').value.trim()||null,
+    secao_dou:$('imSec').value.trim()||null,
+    pagina_dou:$('imPag').value.trim()||null,
+    altera:$('imAltera').value.trim()||null,
+    orgao:_impANTT.meta.orgao||null,
+    vigencia_inicio:vig,
+    coeficientes:coef,
+    total_coeficientes:coef.length,
+    importado_via:_impANTT.metodo,
+    fonte_arquivo:_impANTT.file?.name||null,
+    criado_em:agoraISO(),
+    criado_por:ATLAS_CURRENT_USER.email
+  };
+  const btn=$('impFooter').querySelector('button'); if(btn){ btn.disabled=true; btn.textContent='Gravando…'; }
+  try{
+    await fsAddDoc(COL.antt, doc);
+    cacheBust('antt'); await carregarAntt(); renderAntt(); checarVigenciaAntt();
+    _impANTT=null; mdFechar(); toast(`Versão importada gravada — ${coef.length} coeficientes vigentes.`,'gn');
+  }catch(e){
+    console.error(e); if(btn){ btn.disabled=false; btn.textContent='✅ Gravar versão importada'; }
+    toast('Falha ao gravar: '+(e.message||e),'rd');
+  }
+}
+
+function _injImpCss(){
+  if($('impCss')) return;
+  const s=document.createElement('style'); s.id='impCss';
+  s.textContent=`
+   .imp-drop{border:2px dashed var(--bd,#c9d4e5);border-radius:10px;padding:22px;text-align:center;cursor:pointer;display:flex;flex-direction:column;gap:6px;align-items:center;transition:.15s;background:#fafbff}
+   .imp-drop:hover,.imp-drop.over{border-color:#3b6fd6;background:#f0f5ff}
+   .imp-bar{height:8px;background:#e7edf6;border-radius:6px;overflow:hidden;margin:10px 0}
+   .imp-bar-fill{height:100%;width:0;background:linear-gradient(90deg,#3b6fd6,#6ea0ff);transition:width .3s}
+   .imp-sec{font-weight:600;font-size:13px;margin:6px 0;padding-bottom:4px;border-bottom:1px solid var(--bd2,#eef2f8)}
+   .imp-tblhead{font-weight:600;font-size:13px;margin:12px 0 4px}
+   .imp-grid td,.imp-grid th{padding:3px 6px}
+   .imp-in{width:104px;padding:3px 6px;border:1px solid var(--bd,#c9d4e5);border-radius:5px;font-family:var(--fm,monospace);font-size:12px}
+   .imp-in.flag{background:#fff7d6;border-color:#e2b400}`;
+  document.head.appendChild(s);
 }
 
 /* — Pedágio & Rota (API) — */
