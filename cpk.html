@@ -2058,6 +2058,31 @@ function cpkUnidadePlaca(placa, opSZB, frotaSZB){
   return cpkUnidadeSZB(opSZB,frotaSZB,placa);
 }
 // ════════════════════════════════════════════════════════════════════
+//  CLASSIFICAÇÃO HISTÓRICA DA RECEITA — no nível do CT-e (linha do SZB)
+//  Regra do módulo: "Receita = CTRC de frota própria no SZB." Logo, para a
+//  RECEITA histórica o VÍNCULO vem da coluna Frota e a UNIDADE vem da coluna
+//  Operacao DA PRÓPRIA LINHA do SZB — não do cadastro atual da placa. O
+//  cadastro só é usado como FALLBACK técnico quando o SZB não traz o dado, e
+//  como COMPARAÇÃO na auditoria; nunca sobrescreve o histórico. Isso impede:
+//    · que uma placa hoje AGREGADA exclua CT-es que eram PRÓPRIOS na emissão
+//      (ex.: QHS5523 — dois CTRC próprios em jun/2026 estavam sendo dropados);
+//    · que uma placa transferida de filial leve CT-es antigos para a filial
+//      nova (reclassificação PR↔SC de receita histórica).
+//  (Diferente de cpkVinculoPlaca/cpkUnidadePlaca, que são cadastro-first e
+//   permanecem para o lado de CUSTO/KM, onde a placa física é a referência.)
+function cpkVinculoReceitaSZB(frotaSZB, placa){
+  const t=String(frotaSZB||'').trim().toLowerCase();
+  if(t.startsWith('propri'))return'proprio';
+  if(t.startsWith('agreg'))return'agregado';
+  const v=cpkVeic(placa); if(v&&v.vinculo)return v.vinculo;   // fallback: SZB sem Frota legível
+  return'indefinido';
+}
+function cpkUnidadeReceitaSZB(opSZB, frotaSZB, placa){
+  // cpkUnidadeSZB já prioriza a Operacao da linha (17→SC, 18→PR, 03→SP); o
+  // cadastro só entra quando a Operacao é ilegível — fallback, nunca override.
+  return cpkUnidadeSZB(opSZB, frotaSZB, placa);
+}
+// ════════════════════════════════════════════════════════════════════
 //  ESPELHO DE CUSTO DO MAPINHA (DRE) — custo da FROTA por filial/mês
 //  Lê as MESMAS coleções do mapinha.html e reconstrói o custo de frota.
 //  Tudo cacheado por mês; cada coleção é lida UMA vez (evita leituras extra).
@@ -2381,7 +2406,10 @@ function cpkBuildDerivIndex(){
       nomeDest:r=>cpkStr(r['Nome Destina']||r['nome_destina']||''),
       nomeRemet:r=>cpkStr(r['Nome Remeten']||r['nome_remeten']||''),
       nomeCliDev:r=>cpkStr(r['Nome Cli Dev']||r['nome_cli_dev']||''),
-      cancel:r=>cpkStr(r['Dt Cancel']||r['dt_cancel']||'')
+      cancel:r=>cpkStr(r['Dt Cancel']||r['dt_cancel']||''),
+      serie:r=>cpkStr(r['Serie']||r['serie']||''),
+      ctrc:r=>cpkStr(r['Numero CTRC']||r['numero_ctrc']||''),
+      filSZB:r=>cpkStr(r['Filial']||r['filial']||'')
     };
     for(const r of CPK.szb){
       const cancel=SF.cancel(r); if(cancel&&cancel!==''&&cancel!=='0'&&cancel!=='undefined')continue;
@@ -2389,15 +2417,23 @@ function cpkBuildDerivIndex(){
       const placa=SF.placa(r); if(!placa)continue;
       if(cpkPlacaIgnorada(placa)) continue;
       if(cpkPlacaReceitaCompl(placa)){
-        rows.push({ k:0, placa, uniC:cpkUnidadePlaca(placa,SF.op(r),SF.frota(r)), fat:SF.fat(r) });
+        // FSC0000 (Carta Frete Complementar): unidade pela Operacao da linha do SZB.
+        rows.push({ k:0, placa, uniC:cpkUnidadeReceitaSZB(SF.op(r),SF.frota(r),placa), fat:SF.fat(r) });
         continue;
       }
       const frotaSZB=SF.frota(r);
-      const vinc=cpkVinculoPlaca(placa,frotaSZB);
-      const unidade=cpkUnidadePlaca(placa,SF.op(r),frotaSZB);
-      const uPre=cpkFilialDe({placa,unidade},null); // filial-estável SEM escopo (equivalente p/ skip)
+      const opSZB=SF.op(r);
+      // HISTÓRICO (define a receita): vínculo e unidade vêm da LINHA do SZB.
+      const vinc=cpkVinculoReceitaSZB(frotaSZB,placa);            // Frota da linha
+      const unidade=cpkUnidadeReceitaSZB(opSZB,frotaSZB,placa);   // Operacao da linha
+      // CADASTRO ATUAL (só auditoria/comparação — nunca sobrescreve a receita):
+      const _cad=cpkVeic(placa);
+      const vincCad=(_cad&&_cad.vinculo)||'';
+      const uniCad=(_cad&&_cad.unidade)||'';
+      const uPre=cpkFilialDe({placa,unidade},null); // filial-estável pela unidade HISTÓRICA do CT-e
       const kmv=cpkKmViagem(r);
-      rows.push({ k:1, placa, frotaSZB, motorista:SF.motorista(r), unidade, uPre, vinc,
+      rows.push({ k:1, placa, frotaSZB, opSZB, motorista:SF.motorista(r), unidade, uPre, vinc,
+        vincCad, uniCad, ctrc:SF.ctrc(r), serie:SF.serie(r), filSZB:SF.filSZB(r), dtEmis:SF.dt(r),
         fat:SF.fat(r), rota:cpkPadRota(SF.rota(r)), rota_resolvida:kmv.rota||'',
         cliente:SF.nomeDest(r)||SF.nomeCliDev(r)||SF.nomeRemet(r)||'S/N',
         localColeta:SF.localColeta(r), ufO:SF.ufO(r), localEntreg:SF.localEntreg(r), ufD:SF.ufD(r),
@@ -2499,6 +2535,14 @@ function cpkCalculate(){
   //      (placa/cliente/rota) e agregamos — exatamente como antes.
   const derivRows = cpkBuildDerivIndex();
   const aggP={}, viagens=[];
+  // Receita da frota própria POR FILIAL, somada no nível do CT-e pela unidade
+  // HISTÓRICA (Operacao do SZB) — fonte autoritativa da coluna Receita por filial
+  // (Auditoria/Visão Geral). Necessária porque uma placa pode ter CT-es próprios
+  // em mais de uma operação no mesmo mês (ex.: QTL6904, SXA0A46) e o rateio por
+  // placa colapsaria tudo numa única filial.
+  const recFilProp={};
+  // Divergências cadastro × SZB (só informativo — NÃO altera a receita):
+  const recDiverg=[];
   for(const d of derivRows){
     if(d.k===0){ // FSC0000 — Carta Frete Complementar
       if(f.placa) continue;
@@ -2510,24 +2554,43 @@ function cpkCalculate(){
     const placa=d.placa;
     if(f.placa&&placa!==cpkNormPlaca(f.placa))continue;
     if(scope.size&&d.uPre&&!scope.has(d.uPre))continue;
+    // Divergência cadastro × SZB no CT-e (registrada ANTES do filtro de vínculo,
+    // p/ capturar também os CT-es próprios de placa hoje agregada — que sem a
+    // correção seriam silenciosamente excluídos). Não altera a receita.
+    if((d.vincCad && d.vincCad!==d.vinc) || (d.uniCad && d.uniCad!==d.unidade)){
+      recDiverg.push({ placa, ctrc:d.ctrc||'', serie:d.serie||'', filSZB:d.filSZB||'', dt:d.dtEmis||'',
+        vincSZB:d.vinc, vincCad:d.vincCad, uniSZB:d.unidade, uniCad:d.uniCad, valor:+d.fat||0,
+        tipo:(d.vincCad&&d.vincCad!==d.vinc)?'vinculo':'unidade' });
+    }
     if(d.vinc!=='proprio'){ if(d.vinc==='indefinido'&&!CPK.diag.indefinidas.includes(placa))CPK.diag.indefinidas.push(placa); continue; }
 
     const fat=d.fat, rota=d.rota, cliente=d.cliente;
     if(f.cliente&&!cpkNormStr(cliente).includes(cpkNormStr(f.cliente)))continue;
     if(f.rota&&!(rota.includes(cpkPadRota(f.rota))||cpkNormStr(d.localEntreg).includes(cpkNormStr(f.rota))))continue;
 
+    // Receita por filial no nível do CT-e (unidade HISTÓRICA do SZB).
+    const _fRev=d.uPre||cpkFilialDe({placa,unidade:d.unidade},scopeArr)||'';
+    if(_fRev) recFilProp[_fRev]=(recFilProp[_fRev]||0)+fat;
+
     viagens.push({ placa, frotaSZB:d.frotaSZB, motorista:d.motorista, unidade:d.unidade, filial:d.uPre||'', fat, rota, rotaResolved:d.rota_resolvida||'',
       localColeta:d.localColeta, ufO:d.ufO, localEntreg:d.localEntreg, ufD:d.ufD,
       cliente, tipoFrete:d.tipoFrete, km:d.km, fonte_km:d.fonte_km });
 
-    if(!aggP[placa]) aggP[placa]={ placa, frota:cpkVeic(placa)?.frota||d.frotaSZB, motorista:d.motorista, unidade:d.unidade,
+    // unidade FÍSICA da placa (cadastro) p/ roteio de KM/contagem na tabela por
+    // placa — preserva a regra de KM. A receita por filial NÃO depende disto
+    // (vem de recFilProp, no nível do CT-e).
+    const _uFis=d.uniCad||d.unidade;
+    if(!aggP[placa]) aggP[placa]={ placa, frota:cpkVeic(placa)?.frota||d.frotaSZB, motorista:d.motorista, unidade:_uFis, unidadeReceita:d.unidade,
       tipo:cpkVeic(placa)?.tipo||'', viagens:0, faturamento:0, km_szb:0, clientes:{}, rotas:{} };
     const pa=aggP[placa];
     pa.viagens++; pa.faturamento+=fat; pa.km_szb+=d.km;
-    if(!pa.unidade&&d.unidade)pa.unidade=d.unidade; if(!pa.motorista&&d.motorista)pa.motorista=d.motorista;
+    if(!pa.unidade&&_uFis)pa.unidade=_uFis; if(!pa.motorista&&d.motorista)pa.motorista=d.motorista;
     pa.clientes[cliente]=(pa.clientes[cliente]||0)+fat;
     if(rota)pa.rotas[rota]=(pa.rotas[rota]||0)+1;
   }
+  // Publica a receita por filial (CT-e level) e as divergências para a Auditoria.
+  CPK.recFilPropria=recFilProp;
+  CPK.diag.recDiverg=recDiverg;
 
   // 4) KM por placa: se há importação no mês, ela é a fonte AUTORITATIVA (= aba Dados).
   //    Sem importação, cai no derivado SZB×SZY. Placa com receita e sem KM importado fica flagada.
@@ -2998,7 +3061,7 @@ function cpkAggFilial(scopeOnly){
     // Placa órfã real (sem unidade/cadastro/apontamento) cai na 1ª filial do escopo,
     // garantindo que a soma do KM dos cards = KM Total do headline (sem placa perdida).
     let u=cpkFilialDe(p,scopeFils); if(!u)u=scopeFils[0]; if(!map[u])return;
-    const m=map[u]; m.km+=p.km_total||0; m.rec+=p.faturamento||0;
+    const m=map[u]; m.km+=p.km_total||0;   // receita NÃO vem daqui (ver recFilPropria abaixo)
     if(p.ehCarreta) return;   // carreta não roda km próprio → não entra na contagem de placas por status
     m.placas++;
     if(p.status==='saudavel')m.saud++; else if(p.status==='atencao')m.aten++; else if(p.status==='critico')m.crit++; else m.semkm++;
@@ -3021,6 +3084,12 @@ function cpkAggFilial(scopeOnly){
     const cap = _modoDep ? dep : (cf?(+cf.ce||0):0);
     map[f].custo = base + cap;
   });
+  // RECEITA da frota própria por filial = soma dos CT-es pela unidade HISTÓRICA
+  // (Operacao do SZB), no nível do documento. Fonte: CPK.recFilPropria (motor).
+  // Substitui o antigo rateio por placa, que colapsava placas com CT-es em mais
+  // de uma operação numa única filial (reclassificação indevida PR↔SC).
+  const _recProp=CPK.recFilPropria||{};
+  Object.keys(_recProp).forEach(f=>{ if(map[f]) map[f].rec+=(+_recProp[f]||0); });
   // RECEITA — soma a Carta Frete Complementar (FSC0000) na filial do CT-e (uniC),
   // receita real sem placa/KM. Sem filial no CT-e, cai na 1ª do escopo (mesma
   // regra da placa órfã). Sem isso, a receita/margem do card por filial ficava
@@ -5411,6 +5480,22 @@ function cpkAudInconsList(){
   (CPK.diag.semCadastro||[]).forEach(p=>out.push({tipo:'Placa sem cadastro', fil:'—', placa:p, descricao:'Placa com receita/custo e sem cadastro na frota.', valor:null}));
   (CPK.diag.indefinidas||[]).forEach(p=>out.push({tipo:'Placa sem tipo (frota/agregado)', fil:'—', placa:p, descricao:'Vínculo indefinido — não classificada como própria nem agregada.', valor:null}));
   (CPK.diag.semKm||[]).forEach(p=>out.push({tipo:'KM ausente/zerado', fil:'—', placa:p, descricao:'Placa própria sem KM importado no mês.', valor:null}));
+  // Divergências de receita cadastro × SZB (informativo — a receita histórica já
+  // foi calculada pela linha do SZB, sem sobrescrita pelo cadastro).
+  (CPK.diag.recDiverg||[]).forEach(d=>{
+    if(d.tipo==='vinculo'){
+      const propNoSzb=(d.vincSZB==='proprio');
+      out.push({tipo:'Receita: vínculo cadastro × SZB', fil:d.uniSZB||'—', placa:d.placa,
+        descricao:'CTRC '+(d.ctrc||'—')+(d.serie?('/'+d.serie):'')+' — SZB='+(d.vincSZB||'?')+', cadastro='+(d.vincCad||'?')+'. '+
+          (propNoSzb?'Receita PRÓPRIA mantida pela linha do SZB (cadastro atual não exclui o histórico).'
+                    :'Linha agregada no SZB — fora da receita própria, apesar do cadastro.'),
+        valor:d.valor});
+    } else {
+      out.push({tipo:'Receita: unidade cadastro × SZB', fil:d.uniSZB||'—', placa:d.placa,
+        descricao:'CTRC '+(d.ctrc||'—')+(d.serie?('/'+d.serie):'')+' — receita alocada na filial '+(d.uniSZB||'?')+' pela Operacao do SZB (cadastro atual: '+(d.uniCad||'?')+').',
+        valor:d.valor});
+    }
+  });
   (CPK.aggRota||[]).filter(r=>!(r.km_total>0)).forEach(r=>out.push({tipo:'Rota sem KM', fil:r.filial||'—', placa:r.rota_cod||'—', descricao:'Rota sem KM (SZY/SZB) — custo não atribuído por km.', valor:null}));
   return out;
 }
