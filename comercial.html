@@ -350,6 +350,30 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
       <label class="fld">&nbsp;<button class="btn sm" id="btnApiTeste">Consultar</button></label>
     </div>
     <pre id="apiRaw" class="mono" style="background:var(--sf);border:1px solid var(--bd2);border-radius:8px;padding:10px;font-size:11px;max-height:340px;overflow:auto">—</pre>
+    <div id="apiMatch" class="muted" style="margin-top:8px"></div>
+  </div>
+  <div class="card">
+    <h3>Base de praças de pedágio
+      <span style="margin-left:auto;display:flex;gap:8px" id="pracasAcoes">
+        <button class="btn sm" id="btnPracaAdd">+ Praça</button>
+        <button class="btn sm" id="btnPracaCsv">Importar CSV</button>
+        <button class="btn sm" id="btnPracaCsvOut">Exportar CSV</button>
+        <button class="btn sm pri" id="btnPracasSalvar">Salvar base</button>
+      </span>
+    </h3>
+    <div class="muted" style="margin-bottom:8px">
+      Uma linha por praça: coordenada + <b>tarifa por eixo</b> (dado público ANTT/concessionária).
+      Quando a HERE não devolver <span class="mono">tolls</span> — cenário confirmado desta conta —, o Simulador
+      decodifica a polyline, casa com esta base (raio de captura <b>500&nbsp;m</b>) e calcula
+      <span class="mono">tarifa/eixo × eixos do veículo</span>. Se a HERE um dia trouxer pedágio, ela tem prioridade
+      e esta base vira redundância. CSV: cabeçalho <span class="mono">nome,rodovia,lat,lng,tarifaEixo,sentido</span>.
+      A base fica em <span class="mono">comercial_config/pracas</span> — sem mudança no firestore.rules.
+    </div>
+    <table class="tb" id="tbPracas">
+      <thead><tr><th>Praça</th><th>Rodovia</th><th class="num">Lat</th><th class="num">Lng</th><th class="num">R$/eixo</th><th>Sentido</th><th></th></tr></thead>
+      <tbody><tr><td colspan="7" class="empty">Sem praças cadastradas.</td></tr></tbody>
+    </table>
+    <input type="file" id="filePracasCsv" accept=".csv" style="display:none">
   </div>
 </div>
 
@@ -553,6 +577,7 @@ const ST = {
          altera:null, via:null, arquivo:null, criadoEm:null, criadoPor:null },
   veiculos:[], premissas:[], clientes:[], rotas:[], diesel:[],
   hereKey:'', hereChamadasMes:0,
+  pracas:[],  // base local de praças de pedágio (comercial_config/pracas)
   sim:null   // última simulação calculada (snapshot pronto p/ gravar)
 };
 const CacheTTL = 5*60*1000;
@@ -568,7 +593,7 @@ function cacheBust(key){ delete _cache[key]; }
 async function boot(){
   if(_booted) return; _booted=true;
   bindTabs();
-  await Promise.all([carregarConfig(), carregarAntt(), carregarVeiculos()]);
+  await Promise.all([carregarConfig(), carregarAntt(), carregarVeiculos(), carregarPracas()]);
   await Promise.all([carregarClientesRotas(), carregarPremissas(), carregarDiesel()]);
   montarSelects();
   renderAntt(); renderVeiculos(); renderClientes(); renderRotas(); renderDiesel(); renderPremissas();
@@ -596,6 +621,11 @@ async function carregarConfig(){
   $('apiHereKey').value = ST.hereKey ? '••••'+ST.hereKey.slice(-4) : '';
   $('apiConsumo').textContent = ST.hereChamadasMes;
   if(ST.hereKey){ $('apiStatus').textContent='chave carregada'; $('apiStatus').className='pill ac'; }
+}
+async function carregarPracas(){
+  const doc = await fsGetDoc(COL.config,'pracas');
+  ST.pracas = (doc && Array.isArray(doc.data.itens)) ? doc.data.itens : [];
+  renderPracas();
 }
 async function carregarAntt(){
   const docs = await cachedGet('antt', ()=>fsGetCollection(COL.antt,{orderBy:'vigencia_inicio',orderDir:'desc',limit:1}));
@@ -734,7 +764,19 @@ async function hereRota(orig, dest, veic){
       });
     });
   });
-  return { distKm:distM/1000, durMin:durS/60, polylines:polys, pracas, pedagioIda:pedagioTotal, raw:j };
+  let pedagioFonte = pracas.length ? 'here' : null;
+  /* ── Fallback: HERE sem tolls (entitlement desta conta) → matcher local ── */
+  if(pedagioTotal===0 && !pracas.length && polys.length && ST.pracas.length){
+    let rotaPts=[];
+    polys.forEach(p=>{ try{ rotaPts=rotaPts.concat(decodeFlexPolyline(p)); }catch(e){ console.warn('[Comercial] fallback polyline:', e.message); } });
+    const hits=matchPracas(rotaPts, ST.pracas, PRACAS_RAIO_M);
+    if(hits.length){
+      pedagioTotal=calcularPedagioLocal(hits, veic.eixos||5);
+      pracas=hits.map(h=>({nome:h.nome||'Praça', rodovia:h.rodovia||'—', valor:h._valor, fonte:'base local'}));
+      pedagioFonte='base local';
+    }
+  }
+  return { distKm:distM/1000, durMin:durS/60, polylines:polys, pracas, pedagioIda:pedagioTotal, pedagioFonte, raw:j };
 }
 
 /* Decodificador do HERE Flexible Polyline (algoritmo oficial, port JS enxuto) */
@@ -759,6 +801,54 @@ function decodeFlexPolyline(encoded){
     pts.push([lat/factor, lng/factor]);
   }
   return pts;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   MATCHER DE PEDÁGIO — casa a polyline HERE com a base própria de
+   praças (ST.pracas) quando a HERE não devolve tolls (entitlement).
+   Geometria pura: distância ponto→segmento em metros; praça dentro
+   do raio conta uma vez, em ordem de percurso. Pedágio = R$/eixo ×
+   eixos do veículo. Custo de API: zero.
+   ══════════════════════════════════════════════════════════════════ */
+const PRACAS_RAIO_M = 500; // raio de captura praça→rota
+
+function _prMetros(a,b){ const R=6371000,r=Math.PI/180,la=(a[0]+b[0])/2*r;
+  return Math.hypot((b[1]-a[1])*r*Math.cos(la),(b[0]-a[0])*r)*R; }
+
+function _prPontoSeg(p,a,b){ const R=6371000,r=Math.PI/180,cl=Math.cos(a[0]*r);
+  const bx=(b[1]-a[1])*r*cl*R, by=(b[0]-a[0])*r*R;
+  const px=(p[1]-a[1])*r*cl*R, py=(p[0]-a[0])*r*R;
+  const l2=bx*bx+by*by; let t=l2>0?(px*bx+py*by)/l2:0; t=Math.max(0,Math.min(1,t));
+  return { dist:Math.hypot(px-t*bx,py-t*by), t }; }
+
+function matchPracas(rota, pracas, raioM){
+  if(!rota||rota.length<2||!pracas||!pracas.length) return [];
+  const mg=raioM/111000+0.02; // margem da bbox em graus
+  let mnLa=1e9,mxLa=-1e9,mnLn=1e9,mxLn=-1e9;
+  for(const pt of rota){ const la=pt[0],ln=pt[1];
+    if(la<mnLa)mnLa=la; if(la>mxLa)mxLa=la; if(ln<mnLn)mnLn=ln; if(ln>mxLn)mxLn=ln; }
+  const cum=[0];
+  for(let s=0;s<rota.length-1;s++) cum.push(cum[s]+_prMetros(rota[s],rota[s+1]));
+  const out=[];
+  for(const pr of pracas){
+    const la=Number(pr.lat), ln=Number(pr.lng);
+    if(isNaN(la)||isNaN(ln)) continue;
+    if(la<mnLa-mg||la>mxLa+mg||ln<mnLn-mg||ln>mxLn+mg) continue; // fora da bbox → nem varre
+    let best=Infinity,seg=-1,bt=0;
+    for(let s=0;s<rota.length-1;s++){
+      const r=_prPontoSeg([la,ln],rota[s],rota[s+1]);
+      if(r.dist<best){ best=r.dist; seg=s; bt=r.t; }
+    }
+    if(best<=raioM) out.push(Object.assign({},pr,{_dist:best,_along:cum[seg]+bt*_prMetros(rota[seg],rota[seg+1])}));
+  }
+  out.sort((a,b)=>a._along-b._along);
+  return out;
+}
+
+function calcularPedagioLocal(matched, eixos){
+  let total=0;
+  for(const m of matched){ m._valor=(Number(m.tarifaEixo)||0)*(Number(eixos)||5); total+=m._valor; }
+  return total;
 }
 
 /* ══ Mapa (Leaflet + OSM) ══ */
@@ -960,8 +1050,8 @@ async function simular(){
     const tb=$('tbPedagios').querySelector('tbody');
     tb.innerHTML = rota.pracas.length
       ? rota.pracas.map(p=>`<tr><td>${esc(p.nome)}</td><td>${esc(p.rodovia)}</td><td class="num">${p.valor!=null?brl(p.valor):'—'}</td></tr>`).join('')
-        + `<tr class="tot"><td colspan="2">Total ida (×2 = ida-volta)</td><td class="num">${brl(rota.pedagioIda)}</td></tr>`
-      : '<tr><td colspan="3" class="empty">HERE não retornou praças (rota sem pedágio ou dado indisponível — confira no teste manual).</td></tr>';
+        + `<tr class="tot"><td colspan="2">Total ida (×2 = ida-volta) · fonte: ${esc(rota.pedagioFonte==='base local'?'base local de praças':'HERE')}</td><td class="num">${brl(rota.pedagioIda)}</td></tr>`
+      : '<tr><td colspan="3" class="empty">Sem pedágio: HERE não retornou tolls e nenhuma praça da base caiu na rota — confira a Base de praças na aba Pedágio &amp; Rota.</td></tr>';
 
     /* Conferência contra distância validada da rota cadastrada */
     const rotaCad = ST.rotas.find(r=>r.id===$('simRota').value);
@@ -1397,40 +1487,88 @@ function ensureTesseract(){
   return _tessReady;
 }
 
-/* — números BR: "1.067,06" → 1067.06 ; "9,2231" → 9.2231 — */
-function parseNumBR(t){ if(t==null) return NaN; let s=String(t).trim(); if(!s) return NaN; s=s.replace(/\./g,'').replace(',', '.'); const v=parseFloat(s); return isNaN(v)?NaN:v; }
-function tokensNumBR(str){ return (String(str).match(/\d{1,3}(?:\.\d{3})+,\d{1,4}|\d+,\d{1,4}/g)||[]); }
+/* — números BR: aceita vírgula OU ponto como decimal (o OCR troca os dois).
+   O separador MAIS À DIREITA é o decimal; os demais são milhar e caem fora.
+   "4,0144"→4.0144 · "4.0144"→4.0144 · "1.067,06"→1067.06 · "597.00"→597.00 — */
+function parseNumBR(t){
+  if(t==null) return NaN;
+  let s=String(t).replace(/[^\d.,]/g,''); if(!s) return NaN;
+  const dec=Math.max(s.lastIndexOf(','), s.lastIndexOf('.'));
+  if(dec>=0) s=s.slice(0,dec).replace(/[.,]/g,'')+'.'+s.slice(dec+1).replace(/[.,]/g,'');
+  else s=s.replace(/[.,]/g,'');
+  const v=parseFloat(s); return isNaN(v)?NaN:v;
+}
+/* extrai o 1º número (com separador decimal) de dentro de uma palavra do OCR,
+   mesmo colada a bordas de tabela: "|5,1355" → "5,1355" */
+function _extractNum(text){ const m=String(text).match(/\d[\d.,]*[.,]\d+/); return m?m[0]:null; }
+function tokensNumBR(str){ return (String(str).match(/\d[\d.,]*[.,]\d+/g)||[]); }   /* fallback textual */
+function _median(a){ if(!a.length) return NaN; const s=a.slice().sort((x,y)=>x-y); const m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; }
+/* clusteriza posições X em k colunas cortando nos k-1 maiores intervalos */
+function _gapCols(xs,k){
+  xs=xs.slice().sort((a,b)=>a-b);
+  if(xs.length<=k) return xs.slice();
+  const gaps=[]; for(let i=0;i<xs.length-1;i++) gaps.push([xs[i+1]-xs[i], i]);
+  gaps.sort((a,b)=>b[0]-a[0]);
+  const cuts=gaps.slice(0,k-1).map(g=>g[1]).sort((a,b)=>a-b);
+  const cen=[]; let s=0;
+  cuts.concat([xs.length-1]).forEach(c=>{ const seg=xs.slice(s,c+1); cen.push(seg.reduce((a,b)=>a+b,0)/seg.length); s=c+1; });
+  return cen.sort((a,b)=>a-b);
+}
 
-/* — extração da camada de texto do PDF (agrupa por linha via posição) — */
-async function extrairTextoPDF(file){
+/* Junta tokens {page,cx,x0,y,h,text} numa string de texto (por linha) — p/ metadados */
+function tokensParaTexto(tokens){
+  const byPage={}; tokens.forEach(t=>{ (byPage[t.page]=byPage[t.page]||[]).push(t); });
+  let full='';
+  Object.keys(byPage).map(Number).sort((a,b)=>a-b).forEach(p=>{
+    const ts=byPage[p].slice().sort((a,b)=> (a.y-b.y)||(a.x0-b.x0));
+    let lastY=null;
+    ts.forEach(t=>{ if(lastY!=null && (t.y-lastY)>Math.max(6,(t.h||10)*0.6)) full+='\n'; else if(lastY!=null) full+=' '; full+=t.text; lastY=t.y; });
+    full+='\n';
+  });
+  return full;
+}
+/* — TOKENS da camada de texto (posição real de cada palavra) — */
+async function extrairTokensPDF(file){
   const pdfjs=await ensurePdfJs();
-  const buf=await file.arrayBuffer();
-  const pdf=await pdfjs.getDocument({data:buf}).promise;
-  let full=''; let itens=0;
+  const pdf=await pdfjs.getDocument({data:await file.arrayBuffer()}).promise;
+  const tokens=[]; let itens=0;
   for(let p=1;p<=pdf.numPages;p++){
-    const page=await pdf.getPage(p); const tc=await page.getTextContent(); itens+=tc.items.length;
-    const linhas={};
-    tc.items.forEach(it=>{ const y=Math.round(it.transform[5]); (linhas[y]=linhas[y]||[]).push([it.transform[4], it.str]); });
-    Object.keys(linhas).map(Number).sort((a,b)=>b-a).forEach(y=>{
-      const l=linhas[y].sort((a,b)=>a[0]-b[0]).map(x=>x[1]).join(' '); if(l.trim()) full+=l+'\n';
+    const page=await pdf.getPage(p); const vp=page.getViewport({scale:1});
+    const tc=await page.getTextContent(); itens+=tc.items.length;
+    tc.items.forEach(it=>{
+      const s=(it.str||''); if(!s.trim()) return;
+      const x=it.transform[4], yf=it.transform[5], w=it.width||0, h=it.height||10;
+      tokens.push({page:p, cx:x+w/2, x0:x, y:vp.height-yf, h, text:s});  /* y: cresce p/ baixo */
     });
   }
-  return {texto:full, temTexto:itens>20, numPages:pdf.numPages, _pdf:pdf};
+  return {tokens, temTexto:itens>20, numPages:pdf.numPages, _pdf:pdf};
 }
-/* — OCR de cada página (fallback p/ PDF só-imagem, como este DOU) — */
-async function ocrPDF(pdf, onProg){
+/* junta palavras (com bbox) de um resultado do Tesseract.js, tolerando formatos */
+function _collectWords(data){
+  const out=[]; const push=w=>{ if(w&&w.text&&w.bbox) out.push({text:w.text, x0:w.bbox.x0, y0:w.bbox.y0, x1:w.bbox.x1, y1:w.bbox.y1}); };
+  if(Array.isArray(data&&data.words)&&data.words.length) data.words.forEach(push);
+  else if(Array.isArray(data&&data.blocks)) data.blocks.forEach(b=>(b.paragraphs||[]).forEach(pa=>(pa.lines||[]).forEach(ln=>(ln.words||[]).forEach(push))));
+  return out;
+}
+/* — OCR por página, devolvendo TOKENS com posição (bbox) + texto bruto — */
+async function ocrTokens(pdf, onProg){
   const Tess=await ensureTesseract();
   const worker=await Tess.createWorker('por',1,{ logger:m=>{ if(m.status==='recognizing text' && onProg) onProg({pct:Math.round((m.progress||0)*100)}); } });
-  let full='';
+  const tokens=[]; let full='';
   for(let p=1;p<=pdf.numPages;p++){
     onProg&&onProg({page:p, total:pdf.numPages, pct:0});
     const page=await pdf.getPage(p); const vp=page.getViewport({scale:2.6});
     const cv=document.createElement('canvas'); cv.width=vp.width; cv.height=vp.height;
     await page.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
-    const {data}=await worker.recognize(cv); full+='\n'+data.text;
+    let data;
+    try{ ({data}=await worker.recognize(cv,{},{blocks:true})); }
+    catch(_){ ({data}=await worker.recognize(cv)); }
+    full+='\n'+((data&&data.text)||'');
+    _collectWords(data).forEach(w=>tokens.push({page:p, cx:(w.x0+w.x1)/2, x0:w.x0, y:(w.y0+w.y1)/2, h:(w.y1-w.y0)||10, text:w.text}));
     onProg&&onProg({page:p, total:pdf.numPages, pct:100});
   }
-  await worker.terminate(); return full;
+  await worker.terminate();
+  return {tokens, texto:full};
 }
 
 /* — metadados da resolução — */
@@ -1452,35 +1590,95 @@ function parseMetadata(txt){
   return m;
 }
 
-/* — separa o texto nas 4 regiões de tabela — */
-function splitTabelas(txt){
+/* ── COEFICIENTES por GEOMETRIA ──────────────────────────────────────────
+   Cada número é posicionado pela COLUNA (posição X) e LINHA (posição Y), não
+   pela ordem. Um número que o OCR perde deixa só a célula dele vazia — nunca
+   desloca a fila. As colunas em branco (ex.: conteinerizada sem eixo 2) são
+   respeitadas porque nenhum número cai naquele X. Linhas são CCD (R$/km, valores
+   ~2,5–15) ou CC (R$, ~80–1800), classificadas por magnitude, e casadas com as
+   12 categorias na ordem fixa da resolução. ─────────────────────────────── */
+function _colEixos(t){ return (t==='A'||t==='C')?[2,3,4,5,6,7,9]:[4,5,6,7,9]; }
+function parseCoeficientesGeo(tokens){
+  const coef=[], avisos=[];
+  const nums=[];
+  tokens.forEach(t=>{ const ns=_extractNum(t.text); if(!ns) return; const v=parseNumBR(ns);
+    if(isNaN(v)||v<2||v>1800) return; nums.push({page:t.page,cx:t.cx,y:t.y,h:t.h||10,val:v}); });
+  const ordered=tokens.slice().sort((a,b)=> (a.page-b.page)||(a.y-b.y)||(a.x0-b.x0));
+  const seen={}, order=[];
+  for(let i=0;i<ordered.length;i++){
+    if(/^TABELA/i.test(ordered[i].text||'')){
+      for(let j=i+1;j<Math.min(i+4,ordered.length);j++){
+        const c=(ordered[j].text||'').toUpperCase().replace(/[.\-]/g,'').trim();
+        if(/^[ABCD]$/.test(c) && seen[c]==null){ seen[c]={page:ordered[i].page,y:ordered[i].y}; order.push(c); break; }
+      }
+    }
+  }
+  const emitVazia=(t)=>ANTT_CATEGORIAS.forEach(cat=>eixosEsperados(t,cat.slug).forEach(e=>
+    coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,ccd:'',cc:'',_flag:true})));
+  ['A','B','C','D'].forEach(t=>{
+    if(seen[t]==null){ avisos.push(`Tabela ${t} não localizada no PDF — preencha manualmente.`); emitVazia(t); return; }
+    const oi=order.indexOf(t), nx=order[oi+1], start=seen[t], end=nx?seen[nx]:{page:99,y:1e12};
+    const reg=nums.filter(n=>{
+      if(n.page<start.page||n.page>end.page) return false;
+      if(n.page===start.page && n.y<start.y) return false;
+      if(n.page===end.page && n.y>=end.y) return false;
+      return true;
+    });
+    const colEixos=_colEixos(t), K=colEixos.length;
+    if(reg.length<K){ avisos.push(`Tabela ${t}: poucos números legíveis — revise ou use o PDF oficial.`); emitVazia(t); return; }
+    const cen=_gapCols(reg.map(n=>n.cx), K);
+    reg.sort((a,b)=> (a.page-b.page)||(a.y-b.y));
+    const rowT=Math.max(6, 0.6*_median(reg.map(n=>n.h)));
+    const rows=[]; let cur=[];
+    reg.forEach(n=>{ if(cur.length && (n.page!==cur[cur.length-1].page || (n.y-cur[cur.length-1].y)>rowT)){ rows.push(cur); cur=[]; } cur.push(n); });
+    if(cur.length) rows.push(cur);
+    const ccdRows=[], ccRows=[];
+    rows.forEach(row=>{
+      const med=_median(row.map(n=>n.val)), a={};
+      row.forEach(n=>{ let bi=0,bd=1e12; for(let i=0;i<cen.length;i++){const d=Math.abs(n.cx-cen[i]); if(d<bd){bd=d;bi=i;}} const e=colEixos[bi]; if(a[e]==null) a[e]=n.val; });
+      if(med<=15) ccdRows.push(a); else if(med>=80) ccRows.push(a);
+    });
+    if(ccdRows.length!==12||ccRows.length!==12)
+      avisos.push(`Tabela ${t}: ${ccdRows.length} linha(s) de CCD e ${ccRows.length} de CC lidas (esperado 12/12). Revise as células destacadas.`);
+    ANTT_CATEGORIAS.forEach((cat,ci)=>{
+      const ex=eixosEsperados(t,cat.slug), cd=ccdRows[ci]||{}, ck=ccRows[ci]||{};
+      ex.forEach(e=>{
+        const ccd=cd[e], cc=ck[e], flag=(ccd==null)||(cc==null);
+        coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,
+          ccd:(ccd==null)?'':+Number(ccd).toFixed(4), cc:(cc==null)?'':+Number(cc).toFixed(2), _flag:flag});
+      });
+    });
+  });
+  return {coef, avisos};
+}
+/* fallback textual (sem posições): classifica cada LINHA por magnitude.
+   Usado só se a extração por posição não trouxer tokens. */
+function parseCoeficientesTexto(txt){
   const re=/TABELA\s*([ABCD])\b/gi, marks=[]; let m;
   while(m=re.exec(txt)) marks.push({t:m[1].toUpperCase(), i:m.index});
-  const out={};
-  for(let k=0;k<marks.length;k++){ const c=marks[k]; if(out[c.t]==null) out[c.t]=txt.slice(c.i, marks[k+1]?marks[k+1].i:txt.length); }
-  return out;
-}
-/* — coeficientes: consome os números na ordem da estrutura conhecida — */
-function parseCoeficientes(txt){
-  const reg=splitTabelas(txt); const coef=[]; const avisos=[];
-  ANTT_TABELAS.forEach(({t})=>{
+  const reg={}; for(let k=0;k<marks.length;k++){ const c=marks[k]; if(reg[c.t]==null) reg[c.t]=txt.slice(c.i, marks[k+1]?marks[k+1].i:txt.length); }
+  const coef=[], avisos=[];
+  const emitVazia=(t)=>ANTT_CATEGORIAS.forEach(cat=>eixosEsperados(t,cat.slug).forEach(e=>
+    coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,ccd:'',cc:'',_flag:true})));
+  ['A','B','C','D'].forEach(t=>{
     const bloco=reg[t];
-    let esperado=0; ANTT_CATEGORIAS.forEach(c=>esperado+=eixosEsperados(t,c.slug).length*2);
-    if(!bloco){ avisos.push(`Tabela ${t} não localizada — preencha manualmente.`); }
-    const nums=bloco?tokensNumBR(bloco).map(parseNumBR):[];
-    const okCont = bloco && nums.length===esperado;
-    if(bloco && !okCont) avisos.push(`Tabela ${t}: ${nums.length} números lidos ≠ ${esperado} esperados. Confira as células destacadas.`);
-    let idx=0;
-    ANTT_CATEGORIAS.forEach(cat=>{
-      const eixos=eixosEsperados(t,cat.slug), K=eixos.length;
-      const ccdArr=nums.slice(idx,idx+K); idx+=K;
-      const ccArr =nums.slice(idx,idx+K); idx+=K;
-      eixos.forEach((e,i)=>{
-        const ccd=ccdArr[i], cc=ccArr[i];
-        const flag = !okCont || isNaN(ccd)||isNaN(cc) || ccd<2.5||ccd>13 || cc<80||cc>1800;
-        coef.push({tabela:t, categoria:cat.slug, categoria_nome:cat.nome, eixos:e,
-          ccd:isNaN(ccd)?'':+ccd.toFixed(4), cc:isNaN(cc)?'':+cc.toFixed(2), _flag:flag});
-      });
+    if(!bloco){ avisos.push(`Tabela ${t} não localizada.`); emitVazia(t); return; }
+    const ccdRows=[], ccRows=[];
+    bloco.split(/\r?\n/).forEach(line=>{
+      const vals=tokensNumBR(line).map(parseNumBR).filter(v=>!isNaN(v));
+      if(vals.length<2) return;
+      const ccd=vals.filter(v=>v>=2.5&&v<=15), cc=vals.filter(v=>v>=80&&v<=1800);
+      if(ccd.length>=2 && ccd.length>=cc.length) ccdRows.push(ccd);
+      else if(cc.length>=2) ccRows.push(cc);
+    });
+    if(ccdRows.length!==12||ccRows.length!==12)
+      avisos.push(`Tabela ${t}: ${ccdRows.length} linha(s) de CCD e ${ccRows.length} de CC (esperado 12/12). Revise as células destacadas.`);
+    ANTT_CATEGORIAS.forEach((cat,ci)=>{
+      const ex=eixosEsperados(t,cat.slug), cd=ccdRows[ci]||[], ck=ccRows[ci]||[];
+      const okCcd=cd.length===ex.length, okCc=ck.length===ex.length;
+      ex.forEach((e,i)=>{ const ccd=cd[i], cc=ck[i], flag=!okCcd||!okCc||ccd==null||cc==null;
+        coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,
+          ccd:(ccd==null||isNaN(ccd))?'':+ccd.toFixed(4), cc:(cc==null||isNaN(cc))?'':+cc.toFixed(2), _flag:flag}); });
     });
   });
   return {coef, avisos};
@@ -1519,24 +1717,29 @@ async function _impProcessar(file){
   try{
     $('impBar').style.display='block'; _impBar(4);
     _impStatus('Abrindo <span class="mono">'+esc(file.name)+'</span> e lendo a camada de texto…','ac');
-    const {texto, temTexto, numPages, _pdf}=await extrairTextoPDF(file);
+    const t0=await extrairTokensPDF(file);          /* tokens da camada de texto */
+    let tokens=t0.tokens, textoMeta=tokensParaTexto(tokens);
     _impBar(30);
-    let usarOCR = !temTexto || tokensNumBR(texto).length<80 || !/TABELA/i.test(texto);
-    let ocrTxt='';
+    /* PDF sem texto útil (ex.: DOU só-imagem) → OCR com posição das palavras */
+    const usarOCR = !t0.temTexto || tokens.filter(x=>_extractNum(x.text)).length<80 || !/TABELA/i.test(textoMeta);
     if(usarOCR){
-      _impStatus('Sem camada de texto útil — aplicando <b>OCR</b> nas '+numPages+' páginas (pode levar alguns segundos)…','am');
-      ocrTxt=await ocrPDF(_pdf, ({page,total,pct})=>{
+      _impStatus('Sem camada de texto útil — aplicando <b>OCR</b> nas '+t0.numPages+' páginas (pode levar alguns segundos)…','am');
+      const o=await ocrTokens(t0._pdf, ({page,total,pct})=>{
         if(page) _impStatus(`OCR — página <b>${page}/${total}</b>…`,'am');
         _impBar(30 + Math.round(((page?page-1:0)/(total||1))*60 + (pct||0)*0.6/(total||1)));
       });
+      tokens=o.tokens; textoMeta=(o.texto||'')+'\n'+textoMeta;
     }
     _impBar(94);
     const metodo=usarOCR?'pdf_ocr':'pdf_texto';
-    const fonteMeta=usarOCR?(texto+'\n'+ocrTxt):texto;
-    const fonteCoef=usarOCR?ocrTxt:texto;
-    const meta=parseMetadata(fonteMeta);
-    const {coef,avisos}=parseCoeficientes(fonteCoef);
-    _impANTT={ file, metodo, meta, coef, avisos };
+    const meta=parseMetadata(textoMeta);
+    /* geometria primeiro; se não vier token útil, cai p/ leitura textual por linha */
+    let r=parseCoeficientesGeo(tokens);
+    if(r.coef.filter(c=>c.ccd!==''&&c.cc!=='').length < 20){
+      const rt=parseCoeficientesTexto(textoMeta);
+      if(rt.coef.filter(c=>c.ccd!==''&&c.cc!=='').length > r.coef.filter(c=>c.ccd!==''&&c.cc!=='').length) r=rt;
+    }
+    _impANTT={ file, metodo, meta, coef:r.coef, avisos:r.avisos };
     _impBar(100);
     _impRenderVerificacao();
   }catch(e){
@@ -1670,7 +1873,86 @@ $('btnApiTeste').onclick = async ()=>{
     const [o,d]=await Promise.all([hereGeocode($('apiTOrig').value||'Itajaí, SC'), hereGeocode($('apiTDest').value||'Capinzal, SC')]);
     const r=await hereRota(o,d,veic);
     $('apiRaw').textContent=JSON.stringify(r.raw,null,2).slice(0,20000);
-  }catch(e){ $('apiRaw').textContent='ERRO: '+e.message; }
+    if(r.pracas.length){
+      $('apiMatch').innerHTML = '<b>Pedágio ('+esc(r.pedagioFonte||'—')+', '+(veic.eixos||5)+' eixos):</b> '+brl(r.pedagioIda)
+        +' · '+r.pracas.map(p=>esc(p.nome)+' ('+brl(p.valor)+')').join(' · ');
+    }else{
+      $('apiMatch').innerHTML = ST.pracas.length
+        ? 'Nenhuma praça da base caiu nesta rota (raio '+PRACAS_RAIO_M+' m) e a HERE não trouxe tolls.'
+        : 'HERE não trouxe tolls e a base de praças está vazia — cadastre praças abaixo para o cálculo local.';
+    }
+  }catch(e){ $('apiRaw').textContent='ERRO: '+e.message; $('apiMatch').textContent=''; }
+};
+
+/* — Base de praças de pedágio (matcher local) — */
+function renderPracas(){
+  const tb=$('tbPracas').querySelector('tbody');
+  const dis = isAdmin() ? '' : 'disabled';
+  tb.innerHTML = ST.pracas.length ? ST.pracas.map((p,i)=>`<tr>
+    <td><input value="${esc(p.nome||'')}" data-i="${i}" data-k="nome" ${dis} style="width:100%;min-width:140px"></td>
+    <td><input value="${esc(p.rodovia||'')}" data-i="${i}" data-k="rodovia" ${dis} style="width:84px"></td>
+    <td><input class="mono" value="${esc(p.lat||'')}" data-i="${i}" data-k="lat" ${dis} style="width:88px"></td>
+    <td><input class="mono" value="${esc(p.lng||'')}" data-i="${i}" data-k="lng" ${dis} style="width:88px"></td>
+    <td><input class="mono" value="${esc(p.tarifaEixo||'')}" data-i="${i}" data-k="tarifaEixo" ${dis} style="width:64px"></td>
+    <td><select data-i="${i}" data-k="sentido" ${dis}>
+      <option ${(p.sentido||'ambos')==='ambos'?'selected':''}>ambos</option>
+      <option value="cresc" ${p.sentido==='cresc'?'selected':''}>cresc</option>
+      <option value="decr" ${p.sentido==='decr'?'selected':''}>decr</option></select></td>
+    <td>${isAdmin()?`<button class="btn sm" data-del="${i}" title="Remover" style="color:var(--rd,#b42318)">✕</button>`:''}</td>
+  </tr>`).join('') : '<tr><td colspan="7" class="empty">Sem praças cadastradas.</td></tr>';
+  tb.querySelectorAll('input,select').forEach(el=>el.addEventListener('change',e=>{
+    ST.pracas[Number(e.target.dataset.i)][e.target.dataset.k]=e.target.value; }));
+  tb.querySelectorAll('[data-del]').forEach(el=>el.addEventListener('click',e=>{
+    ST.pracas.splice(Number(e.currentTarget.dataset.del),1); renderPracas(); }));
+}
+async function salvarPracas(){
+  if(!isAdmin()){ toast('Apenas admin pode salvar a base de praças.','am'); return; }
+  const limpo = ST.pracas.map(({_dist,_along,_valor,...p})=>p)
+    .filter(p=>String(p.nome||'').trim() && !isNaN(Number(p.lat)) && !isNaN(Number(p.lng)));
+  await fsSetDoc(COL.config,'pracas',{ itens:limpo, atualizado_em:agoraISO(), atualizado_por:ATLAS_CURRENT_USER.email },true);
+  ST.pracas=limpo; renderPracas();
+  toast('Base de praças salva ('+limpo.length+' praças).','gn');
+}
+function _pracasCsvParse(txt){
+  const ls=String(txt).split(/\r?\n/).filter(l=>l.trim());
+  if(!ls.length) throw new Error('arquivo vazio');
+  const hd=ls.shift().split(',').map(h=>h.replace(/"/g,'').trim().toLowerCase());
+  const ix=k=>hd.indexOf(k);
+  if(ix('nome')<0||ix('lat')<0||ix('lng')<0||ix('tarifaeixo')<0) throw new Error('cabeçalho esperado: nome,rodovia,lat,lng,tarifaEixo,sentido');
+  return ls.map(l=>{
+    const c=l.match(/("([^"]|"")*"|[^,]*)(,|$)/g).map(s=>s.replace(/,$/,'').replace(/^"|"$/g,'').replace(/""/g,'"'));
+    return { nome:c[ix('nome')]||'', rodovia:ix('rodovia')>=0?(c[ix('rodovia')]||''):'',
+             lat:c[ix('lat')]||'', lng:c[ix('lng')]||'',
+             tarifaEixo:String(c[ix('tarifaeixo')]||'').replace(',','.'),
+             sentido:ix('sentido')>=0?(c[ix('sentido')]||'ambos'):'ambos' };
+  });
+}
+function _pracasCsv(){
+  const head='nome,rodovia,lat,lng,tarifaEixo,sentido';
+  return [head,...ST.pracas.map(p=>[p.nome,p.rodovia,p.lat,p.lng,p.tarifaEixo,p.sentido]
+    .map(v=>`"${String(v??'').replace(/"/g,'""')}"`).join(','))].join('\n');
+}
+$('btnPracaAdd').onclick = ()=>{
+  if(!isAdmin()){ toast('Apenas admin pode editar a base de praças.','am'); return; }
+  ST.pracas.push({nome:'Nova praça',rodovia:'',lat:'',lng:'',tarifaEixo:'',sentido:'ambos'}); renderPracas();
+};
+$('btnPracasSalvar').onclick = salvarPracas;
+$('btnPracaCsv').onclick = ()=>{
+  if(!isAdmin()){ toast('Apenas admin pode importar praças.','am'); return; }
+  $('filePracasCsv').click();
+};
+$('filePracasCsv').onchange = e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const rd=new FileReader();
+  rd.onload=()=>{ try{ ST.pracas=_pracasCsvParse(rd.result); renderPracas();
+      toast('CSV importado: '+ST.pracas.length+' praças. Confira e clique em Salvar base.','ac'); }
+    catch(err){ toast('CSV inválido: '+err.message,'rd'); } };
+  rd.readAsText(f); e.target.value='';
+};
+$('btnPracaCsvOut').onclick = ()=>{
+  const b=new Blob([_pracasCsv()],{type:'text/csv;charset=utf-8'});
+  const u=URL.createObjectURL(b); const a=document.createElement('a');
+  a.href=u; a.download='pracas_pedagio_comix.csv'; a.click(); URL.revokeObjectURL(u);
 };
 
 /* — Combustível — */
