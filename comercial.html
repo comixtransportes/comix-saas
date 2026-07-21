@@ -1,0 +1,1466 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=0.5">
+<title>COMIX Atlas — Comercial (Precificação & Compliance ANTT)</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Firebase SDK — mesma versão/config do index.html / mapinha.html -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<!-- Leaflet para o mapa do Simulador (tiles OSM; rota vem da HERE Routing v8) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ══ FIREBASE — Atlas Comercial ══ */
+(function(){
+  const cfg = {
+    apiKey:            "AIzaSyCWYK_fvjKu6YkUjONfr6Ope9w_6iz_6yo",
+    authDomain:        "comix-relatorios.firebaseapp.com",
+    projectId:         "comix-relatorios",
+    storageBucket:     "comix-relatorios.firebasestorage.app",
+    messagingSenderId: "586258388438",
+    appId:             "1:586258388438:web:3b9da22e650e88ddcf4077"
+  };
+  if (!firebase.apps.length) firebase.initializeApp(cfg);
+  window._comDB = firebase.firestore();
+})();
+</script>
+<style>
+/* ══ TOKENS — espelho do index.html / mapinha.html ══ */
+:root{
+  --bg:#f0f2f5;--wh:#fff;--sf:#f7f8fa;--bd:#d1d9e6;--bd2:#e4e9f2;--tx:#192135;--mu:#6b7a96;
+  --ac:#1a56db;--ac-h:#1746b8;--ac-bg:#eff4ff;
+  --gn:#057a55;--gn-bg:#ecfdf5;--gn-bd:#a7f3d0;
+  --am:#b45309;--am-bg:#fffbeb;--am-bd:#fcd34d;
+  --rd:#c81e1e;--rd-bg:#fee2e2;--rd-bd:#fca5a5;
+  --pu:#6d28d9;--pu-bg:#ede9fe;--pu-bd:#c4b5fd;
+  --cy:#0e7490;--cy-bg:#ecfeff;--cy-bd:#a5f3fc;
+  --hd:#1e2d45;--ht:#e8edf5;
+  --f:'IBM Plex Sans',sans-serif;--m:'IBM Plex Mono',monospace;
+  --shd:0 1px 3px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.06);
+  --shd-l:0 8px 40px rgba(0,0,0,.14);--r:6px;--rs:4px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--f);background:var(--bg);color:var(--tx);font-size:13px;line-height:1.45;padding:14px}
+h1,h2,h3{font-weight:600;letter-spacing:-.01em}
+.mono{font-family:var(--m)}
+.muted{color:var(--mu)}
+.right{text-align:right}
+.nowrap{white-space:nowrap}
+
+/* Topbar */
+.top{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-bottom:12px}
+.top h1{font-size:18px}
+.top h1 small{font-weight:400;color:var(--mu);font-size:12px;margin-left:6px}
+.ctrls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+select,input[type=text],input[type=number],input[type=date],textarea{
+  font-family:var(--f);font-size:12.5px;color:var(--tx);background:var(--wh);
+  border:1px solid var(--bd);border-radius:var(--r);padding:6px 9px;outline:none}
+select:focus,input:focus,textarea:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac-bg)}
+label.fld{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--mu);font-weight:500}
+input[type=number]{font-family:var(--m)}
+
+/* Pills */
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid transparent}
+.pill.gn{background:var(--gn-bg);color:var(--gn);border-color:var(--gn-bd)}
+.pill.am{background:var(--am-bg);color:var(--am);border-color:var(--am-bd)}
+.pill.rd{background:var(--rd-bg);color:var(--rd);border-color:var(--rd-bd)}
+.pill.ac{background:var(--ac-bg);color:var(--ac);border-color:var(--ac)}
+.pill.mu{background:var(--sf);color:var(--mu);border-color:var(--bd2)}
+
+/* Tabs (barra unificada — abas à esquerda, filtros à direita, padrão PD/Mapinha) */
+.tabs{display:flex;align-items:center;gap:2px;border-bottom:1px solid var(--bd);margin-bottom:14px;flex-wrap:wrap}
+.tab{padding:9px 14px;font-size:13px;font-weight:500;color:var(--mu);cursor:pointer;border-bottom:2px solid transparent;background:none;border-top:none;border-left:none;border-right:none}
+.tab.on{color:var(--ac);border-bottom-color:var(--ac)}
+.tab:hover:not(.on){color:var(--tx)}
+.view{display:none}.view.on{display:block}
+.tabs-r{margin-left:auto;display:flex;align-items:center;gap:8px}
+
+/* Buttons */
+.btn{font-family:var(--f);font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:var(--r);border:1px solid var(--bd);background:var(--wh);color:var(--tx);cursor:pointer;transition:.12s}
+.btn:hover{background:var(--ht)}
+.btn.pri{background:var(--ac);border-color:var(--ac);color:#fff}.btn.pri:hover{background:var(--ac-h)}
+.btn.ok{background:var(--gn);border-color:var(--gn);color:#fff}.btn.ok:hover{filter:brightness(.95)}
+.btn.warn{background:var(--am);border-color:var(--am);color:#fff}
+.btn.danger{background:var(--rd);border-color:var(--rd);color:#fff}
+.btn.sm{padding:5px 9px;font-size:11px;font-weight:500}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.icon-btn{width:24px;height:24px;border:1px solid var(--bd2);border-radius:6px;background:var(--wh);color:var(--mu);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;transition:.12s;padding:0}
+.icon-btn:hover:not(:disabled){border-color:var(--ac);background:var(--ac-bg);color:var(--ac)}
+.icon-btn.danger:hover:not(:disabled){border-color:var(--rd-bd);background:var(--rd-bg);color:var(--rd)}
+
+/* Cards / grids */
+.card{background:var(--wh);border:1px solid var(--bd2);border-radius:10px;box-shadow:var(--shd);padding:14px;margin-bottom:14px}
+.card h3{font-size:13px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+@media(max-width:1000px){.grid2,.grid3{grid-template-columns:1fr}}
+
+/* Tabelas */
+table.tb{width:100%;border-collapse:collapse;font-size:12px}
+.tb th{background:var(--sf);color:var(--mu);font-weight:600;text-align:left;padding:7px 9px;border-bottom:1px solid var(--bd);font-size:11px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+.tb td{padding:7px 9px;border-bottom:1px solid var(--bd2);vertical-align:middle}
+.tb tr:hover td{background:var(--sf)}
+.tb td.num,.tb th.num{text-align:right;font-family:var(--m)}
+.tb tr.tot td{font-weight:700;background:var(--sf);border-top:2px solid var(--bd)}
+.tb tr.grp td{background:var(--ht);font-weight:600;color:var(--hd)}
+
+/* Semáforo */
+.semaforo{display:flex;align-items:center;gap:14px;padding:14px;border-radius:10px;border:1px solid var(--bd2)}
+.semaforo.gn{background:var(--gn-bg);border-color:var(--gn-bd)}
+.semaforo.am{background:var(--am-bg);border-color:var(--am-bd)}
+.semaforo.rd{background:var(--rd-bg);border-color:var(--rd-bd)}
+.semaforo .dot{width:26px;height:26px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 5px rgba(0,0,0,.05)}
+.semaforo.gn .dot{background:var(--gn)}
+.semaforo.am .dot{background:var(--am)}
+.semaforo.rd .dot{background:var(--rd)}
+.semaforo .tit{font-weight:700;font-size:14px}
+.semaforo .sub{font-size:12px;color:var(--mu)}
+
+/* Mapa */
+#simMapa{height:340px;border-radius:10px;border:1px solid var(--bd2);z-index:1}
+.leaflet-container{font-family:var(--f)}
+
+/* KPI mini */
+.kpi{background:var(--sf);border:1px solid var(--bd2);border-radius:8px;padding:9px 11px}
+.kpi .lb{font-size:10.5px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.kpi .vl{font-family:var(--m);font-size:16px;font-weight:600;margin-top:2px}
+.kpi .vl small{font-size:11px;color:var(--mu);font-weight:400}
+
+/* Modal */
+.modal-bk{position:fixed;inset:0;background:rgba(25,33,53,.38);display:none;align-items:center;justify-content:center;z-index:9998;padding:16px}
+.modal-bk.on{display:flex}
+.modal{width:min(680px,100%);max-height:92vh;overflow:auto;background:var(--wh);border:1px solid var(--bd);border-radius:10px;box-shadow:var(--shd-l)}
+.modal-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 14px;border-bottom:1px solid var(--bd2);background:#fafbfc;position:sticky;top:0}
+.modal-h h3{font-size:14px}
+.modal-b{padding:14px}
+.modal-f{padding:12px 14px;border-top:1px solid var(--bd2);display:flex;justify-content:flex-end;gap:8px;background:#fafbfc;position:sticky;bottom:0}
+
+/* Toast */
+.toast{position:fixed;bottom:18px;left:50%;transform:translate(-50%,20px);background:var(--hd);color:#fff;padding:10px 18px;border-radius:8px;font-size:12.5px;opacity:0;pointer-events:none;transition:.25s;z-index:99999;max-width:88vw}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+.toast.gn{background:var(--gn)}.toast.rd{background:var(--rd)}.toast.am{background:var(--am)}
+
+/* Skeleton / vazio */
+.empty{padding:26px;text-align:center;color:var(--mu);font-size:12.5px}
+.skel{background:linear-gradient(90deg,var(--bd2) 25%,var(--sf) 50%,var(--bd2) 75%);background-size:200% 100%;animation:sk 1.2s infinite;border-radius:6px;height:14px}
+@keyframes sk{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* Aviso resolução desatualizada */
+.alerta{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px;border:1px solid}
+.alerta.am{background:var(--am-bg);border-color:var(--am-bd);color:var(--am)}
+.alerta.rd{background:var(--rd-bg);border-color:var(--rd-bd);color:var(--rd)}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <h1>Comercial <small>Precificação de rotas · Gate de compliance ANTT · Lei 13.703</small></h1>
+  <div class="ctrls">
+    <span id="pillUser" class="pill mu">…</span>
+    <span id="pillAntt" class="pill mu" title="Vigência da tabela ANTT carregada">ANTT: —</span>
+  </div>
+</div>
+
+<div id="alertaAntt"></div>
+
+<div class="tabs" id="tabsBar">
+  <button class="tab on" data-v="sim">Simulador</button>
+  <button class="tab" data-v="prem">Premissas</button>
+  <button class="tab" data-v="veic">Veículos &amp; Eixos</button>
+  <button class="tab" data-v="antt">Tabela ANTT</button>
+  <button class="tab" data-v="api">Pedágio &amp; Rota</button>
+  <button class="tab" data-v="comb">Combustível</button>
+  <button class="tab" data-v="cli">Clientes &amp; Rotas</button>
+  <button class="tab" data-v="aud">Auditoria</button>
+</div>
+
+<!-- ═══════════ 1) SIMULADOR ═══════════ -->
+<div class="view on" id="v-sim">
+  <div class="card">
+    <h3>Parâmetros da simulação</h3>
+    <div class="fields">
+      <label class="fld">Filial
+        <select id="simFilial"><option value="SC">SC (op 17)</option><option value="PR">PR (op 18)</option><option value="SP">SP (op 03)</option></select>
+      </label>
+      <label class="fld">Cliente
+        <select id="simCliente"><option value="">— avulso —</option></select>
+      </label>
+      <label class="fld">Rota cadastrada
+        <select id="simRota"><option value="">— nova / manual —</option></select>
+      </label>
+      <label class="fld">Origem (cidade, UF ou endereço)
+        <input type="text" id="simOrigem" placeholder="ex.: Itajaí, SC">
+      </label>
+      <label class="fld">Destino
+        <input type="text" id="simDestino" placeholder="ex.: Capinzal, SC">
+      </label>
+      <label class="fld">Tipo de carga
+        <select id="simCarga">
+          <option value="granel_pressurizado">Granel sólido pressurizado</option>
+          <option value="granel">Granel sólido</option>
+          <option value="geral">Carga geral</option>
+        </select>
+      </label>
+      <label class="fld">Conjunto / veículo
+        <select id="simVeiculo"></select>
+      </label>
+      <label class="fld">Modalidade
+        <select id="simModal"><option value="propria">Frota Própria</option><option value="agregado">Agregado</option><option value="ambas">Comparar ambas</option></select>
+      </label>
+      <label class="fld">Tarifa bruta (R$/tonelada) [E5]
+        <input type="number" id="simTarifa" step="0.01" min="0" placeholder="0,00">
+      </label>
+      <label class="fld">Toneladas/viagem (aprox.)
+        <input type="number" id="simTon" step="0.1" min="0" placeholder="BT 37 · LS 32">
+      </label>
+      <label class="fld">Viagens/mês (aprox.)
+        <input type="number" id="simViagens" step="1" min="1" value="10">
+      </label>
+      <label class="fld">&nbsp;
+        <button class="btn pri" id="btnSimular">Calcular rota e piso</button>
+      </label>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>Trajeto <span id="simRotaInfo" class="muted" style="font-weight:400"></span></h3>
+      <div id="simMapa"></div>
+      <div class="grid4" style="margin-top:10px">
+        <div class="kpi"><div class="lb">Distância (ida)</div><div class="vl" id="kDistIda">—</div></div>
+        <div class="kpi"><div class="lb">Ida-volta</div><div class="vl" id="kDistIV">—</div></div>
+        <div class="kpi"><div class="lb">Tempo est. (ida)</div><div class="vl" id="kTempo">—</div></div>
+        <div class="kpi"><div class="lb">Pedágio ida-volta</div><div class="vl" id="kPedagio">—</div></div>
+      </div>
+      <div style="margin-top:10px">
+        <table class="tb" id="tbPedagios">
+          <thead><tr><th>Praça de pedágio</th><th>Rodovia</th><th class="num">Valor (categoria)</th></tr></thead>
+          <tbody><tr><td colspan="3" class="empty">Calcule uma rota para listar as praças.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Compliance ANTT</h3>
+      <div id="simSemaforo" class="semaforo">
+        <div class="dot" style="background:var(--bd)"></div>
+        <div><div class="tit">Aguardando simulação</div><div class="sub">Informe a rota, o veículo e a tarifa proposta.</div></div>
+      </div>
+      <div class="grid4" style="margin-top:10px">
+        <div class="kpi"><div class="lb">Piso ANTT / viagem</div><div class="vl" id="kPiso">—</div></div>
+        <div class="kpi"><div class="lb">Receita/viagem (tarifa×ton)</div><div class="vl" id="kTarifa">—</div></div>
+        <div class="kpi"><div class="lb">Δ vs. piso</div><div class="vl" id="kDelta">—</div></div>
+        <div class="kpi"><div class="lb">CPK interno (ref.)</div><div class="vl" id="kCpk" title="Custo/km do módulo CPK, se disponível">—</div></div>
+      </div>
+      <div class="muted" style="margin-top:8px;font-size:11.5px" id="kPisoDetalhe"></div>
+      <div class="muted" style="font-size:11.5px">Pedágio é obrigação do contratante e <b>não compõe</b> o piso (Lei 13.703) — tratado à parte.</div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn ok" id="btnLiberar" disabled>Liberar rota</button>
+        <button class="btn" id="btnSalvarSim" disabled>Salvar simulação (rascunho)</button>
+      </div>
+      <div style="margin-top:14px">
+        <h3 style="margin-bottom:6px">Histórico desta rota</h3>
+        <table class="tb" id="tbHistRota">
+          <thead><tr><th>Data</th><th>Usuário</th><th class="num">Tarifa</th><th class="num">Piso</th><th>Status</th></tr></thead>
+          <tbody><tr><td colspan="5" class="empty">Sem simulações anteriores para esta rota.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Resultado financeiro <span class="muted" style="font-weight:400">(estrutura do Simulador_de_rotas_COMIX)</span></h3>
+    <div id="simFinanceiro"><div class="empty">Calcule uma rota para gerar o DRE da simulação.</div></div>
+  </div>
+</div>
+
+<!-- ═══════════ 2) PREMISSAS ═══════════ -->
+<div class="view" id="v-prem">
+  <div class="card">
+    <h3>Premissas de custo por rota/cliente
+      <span style="margin-left:auto;display:flex;gap:8px">
+        <select id="premEscopo" class="sm"></select>
+        <button class="btn sm pri" id="btnNovaPremissa">Nova versão de premissas</button>
+      </span>
+    </h3>
+    <div class="muted" style="margin-bottom:8px">Premissas são versionadas com data de vigência — nunca sobrescritas. Defaults por tipo de veículo e por filial (ICMS/diesel diferem entre SC, PR e SP). Distância, pedágio e piso ANTT vêm do motor de cálculo, não daqui.</div>
+    <div id="premLista"><div class="empty">Carregando premissas…</div></div>
+  </div>
+</div>
+
+<!-- ═══════════ 3) VEÍCULOS & EIXOS ═══════════ -->
+<div class="view" id="v-veic">
+  <div class="card">
+    <h3>Perfis de veículo/conjunto
+      <span style="margin-left:auto"><button class="btn sm pri" id="btnNovoVeiculo">Novo perfil</button></span>
+    </h3>
+    <div class="muted" style="margin-bottom:8px">Cada perfil aponta para a categoria ANTT correta (evita o erro de categoria trocada). Dimensões físicas alimentam o motor HERE (restrições de via).</div>
+    <table class="tb" id="tbVeiculos">
+      <thead><tr><th>Perfil</th><th class="num">Eixos</th><th class="num">Tara (t)</th><th class="num">Cap. útil (t)</th><th>Dimensões (C×L×A m)</th><th>Categoria ANTT</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════ 4) TABELA ANTT ═══════════ -->
+<div class="view" id="v-antt">
+  <div class="card">
+    <h3>Coeficientes ANTT vigentes (CCD / CC)
+      <span style="margin-left:auto" id="anttAdminBtns"></span>
+    </h3>
+    <div class="muted" style="margin-bottom:8px">Piso = (distância × CCD) + CC, por tabela e nº de eixos. Somente-leitura; edição restrita a admin. Coeficientes nunca ficam no código — sempre aqui, versionados por resolução.</div>
+    <div id="anttInfo" class="muted" style="margin-bottom:8px"></div>
+    <table class="tb" id="tbAntt">
+      <thead><tr><th>Tabela</th><th>Tipo de carga</th><th class="num">Eixos</th><th class="num">CCD (R$/km)</th><th class="num">CC (R$)</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">Nenhum coeficiente cadastrado. Um admin precisa carregar a resolução vigente.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════ 5) PEDÁGIO & ROTA (API) ═══════════ -->
+<div class="view" id="v-api">
+  <div class="card">
+    <h3>Integração HERE Routing v8</h3>
+    <div class="fields" style="margin-bottom:10px">
+      <label class="fld">API key (HERE)
+        <input type="text" id="apiHereKey" placeholder="chave da HERE Platform" autocomplete="off">
+      </label>
+      <label class="fld">Status
+        <span id="apiStatus" class="pill mu" style="align-self:flex-start;margin-top:4px">não testada</span>
+      </label>
+      <label class="fld">&nbsp;
+        <span style="display:flex;gap:8px">
+          <button class="btn sm pri" id="btnSalvarKey">Salvar chave</button>
+          <button class="btn sm" id="btnTestarApi">Testar</button>
+        </span>
+      </label>
+    </div>
+    <div class="muted">Free tier ~30k transações/mês. A chave fica no Firestore (<span class="mono">comercial_config</span>) — nunca no código. Consumo estimado do mês: <b id="apiConsumo" class="mono">—</b> chamadas registradas pelo módulo.</div>
+  </div>
+  <div class="card">
+    <h3>Teste manual de rota (resposta bruta)</h3>
+    <div class="fields" style="margin-bottom:10px">
+      <label class="fld">Origem<input type="text" id="apiTOrig" placeholder="Itajaí, SC"></label>
+      <label class="fld">Destino<input type="text" id="apiTDest" placeholder="Capinzal, SC"></label>
+      <label class="fld">&nbsp;<button class="btn sm" id="btnApiTeste">Consultar</button></label>
+    </div>
+    <pre id="apiRaw" class="mono" style="background:var(--sf);border:1px solid var(--bd2);border-radius:8px;padding:10px;font-size:11px;max-height:340px;overflow:auto">—</pre>
+  </div>
+</div>
+
+<!-- ═══════════ 6) COMBUSTÍVEL ═══════════ -->
+<div class="view" id="v-comb">
+  <div class="card">
+    <h3>Diesel vigente por filial
+      <span style="margin-left:auto"><button class="btn sm pri" id="btnNovoDiesel">Atualizar preço</button></span>
+    </h3>
+    <div class="muted" style="margin-bottom:8px">Alimentado semanalmente (ANP ou ShellBox/Gobrax — mesmo dado do CPK). O Simulador consome automaticamente o preço vigente da filial; sem digitação manual na simulação.</div>
+    <table class="tb" id="tbDiesel">
+      <thead><tr><th>Filial</th><th class="num">R$/L vigente</th><th>Fonte</th><th>Vigência desde</th><th>Atualizado por</th></tr></thead>
+      <tbody><tr><td colspan="5" class="empty">Sem preços cadastrados.</td></tr></tbody>
+    </table>
+    <h3 style="margin-top:16px;margin-bottom:6px">Histórico</h3>
+    <table class="tb" id="tbDieselHist">
+      <thead><tr><th>Filial</th><th class="num">R$/L</th><th>Fonte</th><th>Vigência</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════ 7) CLIENTES & ROTAS ═══════════ -->
+<div class="view" id="v-cli">
+  <div class="grid2">
+    <div class="card">
+      <h3>Clientes <span style="margin-left:auto"><button class="btn sm pri" id="btnNovoCliente">Novo cliente</button></span></h3>
+      <table class="tb" id="tbClientes">
+        <thead><tr><th>Cliente</th><th>Filial</th><th>CNPJ</th><th></th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty">Sem clientes cadastrados.</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Rotas recorrentes <span style="margin-left:auto"><button class="btn sm pri" id="btnNovaRota">Nova rota</button></span></h3>
+      <div class="muted" style="margin-bottom:8px">A distância validada aqui serve de camada de conferência contra a API — divergência &gt; 8% gera alerta na simulação.</div>
+      <table class="tb" id="tbRotas">
+        <thead><tr><th>Rota</th><th>Cliente</th><th class="num">Dist. validada (km)</th><th></th></tr></thead>
+        <tbody><tr><td colspan="4" class="empty">Sem rotas cadastradas.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 8) AUDITORIA ═══════════ -->
+<div class="view" id="v-aud">
+  <div class="card">
+    <h3>Histórico de liberações
+      <span class="tabs-r">
+        <select id="audFilial"><option value="">Todas as filiais</option><option>SC</option><option>PR</option><option>SP</option></select>
+        <select id="audStatus"><option value="">Todos os status</option><option value="verde">🟢 Verde</option><option value="amarelo">🟡 Amarelo</option><option value="vermelho">🔴 Vermelho (exceção)</option></select>
+        <input type="text" id="audBusca" placeholder="cliente / rota…" style="height:30px">
+      </span>
+    </h3>
+    <table class="tb" id="tbAud">
+      <thead><tr><th>Data</th><th>Filial</th><th>Rota</th><th>Cliente</th><th class="num">Tarifa</th><th class="num">Piso ANTT</th><th>Status</th><th>Liberado por</th><th></th></tr></thead>
+      <tbody><tr><td colspan="9" class="empty">Sem liberações registradas.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════ MODAIS ═══════════ -->
+<div class="modal-bk" id="mdBk">
+  <div class="modal">
+    <div class="modal-h"><h3 id="mdTitulo">—</h3><button class="icon-btn" onclick="mdFechar()">✕</button></div>
+    <div class="modal-b" id="mdCorpo"></div>
+    <div class="modal-f" id="mdRodape"></div>
+  </div>
+</div>
+
+<div id="toast-el" class="toast"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   PONTE FIRESTORE (mesmo contrato do mapinha.html / index.html)
+   ══════════════════════════════════════════════════════════════════ */
+let ATLAS_CURRENT_USER = { email:'', uid:'', nome:'', perfil:'admin', filiais:[] };
+let _userReadyResolve; const _userReady = new Promise(r => { _userReadyResolve = r; });
+let _booted = false;
+const _fsPending = {}; let _fsSeq = 0;
+
+/* Coleções do módulo — REGRA DOS TRÊS PONTOS:
+   (1) constantes aqui · (2) allowlist Set no index.html · (3) firestore.rules */
+const COL = {
+  rotas:      'comercial_rotas',
+  premissas:  'comercial_premissas',
+  antt:       'comercial_antt_coeficientes',
+  simulacoes: 'comercial_simulacoes',
+  veiculos:   'comercial_veiculos_perfis',
+  config:     'comercial_config'      // chave HERE, diesel vigente, clientes
+};
+
+function atlasHasParentBridge(){ return !!(window.parent && window.parent !== window); }
+window.addEventListener('message', ev => {
+  const m = ev.data || {};
+  if (m.type === 'ATLAS_USER'){
+    ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...m };
+    _userReadyResolve && _userReadyResolve();
+    applyPerm();
+    if (!_booted) boot();
+  }
+  if (m.type === 'ATLAS_FIRESTORE_RESPONSE' && m.requestId){
+    const p = _fsPending[m.requestId]; if(!p) return;
+    clearTimeout(p.timer); delete _fsPending[m.requestId];
+    m.ok ? p.resolve(m.result||{}) : p.reject(new Error(m.error||'Falha na ponte'));
+  }
+});
+function atlasParent(action, payload={}, timeout=9000){
+  if(!atlasHasParentBridge()) return Promise.reject(new Error('Ponte indisponível'));
+  const requestId = 'comfs-'+Date.now()+'-'+(_fsSeq++);
+  return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{ delete _fsPending[requestId]; reject(new Error('Timeout na ponte')); },timeout);
+    _fsPending[requestId]={resolve,reject,timer};
+    window.parent.postMessage({type:'ATLAS_FIRESTORE_REQUEST',requestId,action,...payload},'*');
+  });
+}
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
+async function _bridgeRead(action, payload, tries = 4){
+  let lastErr;
+  for (let i = 1; i <= tries; i++){
+    try { return await atlasParent(action, payload, 12000); }
+    catch(e){ lastErr = e; if (i < tries) await _sleep(350 * i); }
+  }
+  throw lastErr || new Error('Falha na ponte');
+}
+async function fsGetCollection(collection,opts={}){
+  if(atlasHasParentBridge()){
+    try{ const r=await _bridgeRead('getCollection',{collection,...opts}); return r.docs||[]; }
+    catch(e){ console.warn('[Comercial] getCollection '+collection+':', e.message); return []; }
+  }
+  try{ const db=window._comDB;
+    if(db){ let ref=db.collection(collection);
+      if(Array.isArray(opts.where)) opts.where.forEach(w=>{ if(Array.isArray(w)&&w.length>=3) ref=ref.where(String(w[0]),String(w[1]||'=='),w[2]); });
+      if(opts.orderBy)ref=ref.orderBy(opts.orderBy,opts.orderDir||'asc'); if(opts.limit)ref=ref.limit(+opts.limit);
+      const s=await ref.get(); return s.docs.map(d=>({id:d.id,data:d.data()})); } }
+  catch(e){ console.warn('[Comercial] getCollection direto '+collection+':', e.message); }
+  return [];
+}
+async function fsGetDoc(collection,docId){
+  if(atlasHasParentBridge()){
+    try{ const r=await _bridgeRead('getDoc',{collection,docId}); return r.exists?{id:docId,data:r.data}:null; }
+    catch(e){ console.warn('[Comercial] getDoc:', e.message); return null; }
+  }
+  try{ const s=await window._comDB.collection(collection).doc(docId).get(); return s.exists?{id:s.id,data:s.data()}:null; }
+  catch(e){ return null; }
+}
+async function fsSetDoc(collection,docId,data,merge=true){
+  if(atlasHasParentBridge()) return atlasParent('setDoc',{collection,docId,data,merge});
+  return window._comDB.collection(collection).doc(docId).set(data,{merge});
+}
+async function fsAddDoc(collection,data){
+  if(atlasHasParentBridge()){ const r=await atlasParent('addDoc',{collection,data}); return r.id||null; }
+  const ref=await window._comDB.collection(collection).add(data); return ref.id;
+}
+async function fsDeleteDoc(collection,docId){
+  if(atlasHasParentBridge()) return atlasParent('deleteDoc',{collection,docId});
+  return window._comDB.collection(collection).doc(docId).delete();
+}
+
+/* ══ Helpers ══ */
+function toast(msg,type='ac'){ const t=document.getElementById('toast-el'); t.textContent=msg; t.className='toast '+type+' on'; setTimeout(()=>t.classList.remove('on'),3400); }
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function brl(v){ return (v==null||isNaN(v))?'—':Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'}); }
+function num(v,d=2){ return (v==null||isNaN(v))?'—':Number(v).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d}); }
+function pct(v,d=1){ return (v==null||isNaN(v))?'—':num(v*100,d)+'%'; }
+function hoje(){ return new Date().toISOString().slice(0,10); }
+function agoraISO(){ return new Date().toISOString(); }
+function dtBR(v){ if(!v)return '—'; const d=(v.toDate?v.toDate():new Date(v)); return isNaN(d)?'—':d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); }
+function nVal(id){ const v=parseFloat($(id)?.value); return isNaN(v)?0:v; }
+
+/* ══ Permissões ══
+   editar premissas: admin, gestor, lu_*  ·  simular: todos  ·
+   aprovar exceção 🔴 abaixo do piso: apenas gestor/admin */
+function perfil(){ return String(ATLAS_CURRENT_USER.perfil||'').toLowerCase(); }
+function isAdmin(){ return perfil()==='admin'; }
+function isGestorOuAdmin(){ return ['admin','gestor'].includes(perfil()); }
+function podeEditarPremissas(){ return isGestorOuAdmin() || perfil().startsWith('lu_'); }
+function podeAprovarExcecao(){ return isGestorOuAdmin(); }
+function applyPerm(){
+  $('pillUser').textContent = (ATLAS_CURRENT_USER.nome||ATLAS_CURRENT_USER.email||'usuário')+' · '+(perfil()||'—');
+  $('pillUser').className = 'pill '+(isGestorOuAdmin()?'ac':'mu');
+  $('btnNovaPremissa').style.display = podeEditarPremissas()?'':'none';
+  $('btnNovoVeiculo').style.display  = podeEditarPremissas()?'':'none';
+  $('btnNovoDiesel').style.display   = podeEditarPremissas()?'':'none';
+  $('btnNovoCliente').style.display  = podeEditarPremissas()?'':'none';
+  $('btnNovaRota').style.display     = podeEditarPremissas()?'':'none';
+  $('anttAdminBtns').innerHTML = isAdmin()
+    ? '<button class="btn sm pri" onclick="anttAbrirEdicao()">Nova versão de coeficientes</button>' : '';
+  const api = $('v-api');
+  api.querySelectorAll('input,button').forEach(el=>{ el.disabled = !isAdmin(); });
+}
+
+/* ══ Estado + cache SWR simples (TTL) — evita repetir a crise de leituras ══ */
+const ST = {
+  antt:{ coef:[], vigencia:null, resolucao:null, docId:null },
+  veiculos:[], premissas:[], clientes:[], rotas:[], diesel:[],
+  hereKey:'', hereChamadasMes:0,
+  sim:null   // última simulação calculada (snapshot pronto p/ gravar)
+};
+const CacheTTL = 5*60*1000;
+const _cache = {};
+async function cachedGet(key, loader){
+  const c=_cache[key];
+  if(c && (Date.now()-c.t)<CacheTTL) return c.v;
+  const v=await loader(); _cache[key]={t:Date.now(),v}; return v;
+}
+function cacheBust(key){ delete _cache[key]; }
+
+/* ══ Boot ══ */
+async function boot(){
+  if(_booted) return; _booted=true;
+  bindTabs();
+  await Promise.all([carregarConfig(), carregarAntt(), carregarVeiculos()]);
+  await Promise.all([carregarClientesRotas(), carregarPremissas(), carregarDiesel()]);
+  montarSelects();
+  renderAntt(); renderVeiculos(); renderClientes(); renderRotas(); renderDiesel(); renderPremissas();
+  carregarAuditoria();
+  initMapa();
+  checarVigenciaAntt();
+}
+setTimeout(()=>{ if(!_booted && !atlasHasParentBridge()) boot(); }, 800); // dev fora do shell
+
+function bindTabs(){
+  document.querySelectorAll('#tabsBar .tab').forEach(b=>{
+    b.onclick=()=>{
+      document.querySelectorAll('#tabsBar .tab').forEach(x=>x.classList.remove('on'));
+      document.querySelectorAll('.view').forEach(x=>x.classList.remove('on'));
+      b.classList.add('on'); $('v-'+b.dataset.v).classList.add('on');
+      if(b.dataset.v==='sim' && window._simMap) setTimeout(()=>window._simMap.invalidateSize(),60);
+    };
+  });
+}
+
+/* ══ Carregadores ══ */
+async function carregarConfig(){
+  const doc = await fsGetDoc(COL.config,'geral');
+  if(doc){ ST.hereKey = doc.data.hereKey||''; ST.hereChamadasMes = doc.data['chamadas_'+hoje().slice(0,7)]||0; }
+  $('apiHereKey').value = ST.hereKey ? '••••'+ST.hereKey.slice(-4) : '';
+  $('apiConsumo').textContent = ST.hereChamadasMes;
+  if(ST.hereKey){ $('apiStatus').textContent='chave carregada'; $('apiStatus').className='pill ac'; }
+}
+async function carregarAntt(){
+  const docs = await cachedGet('antt', ()=>fsGetCollection(COL.antt,{orderBy:'vigencia_inicio',orderDir:'desc',limit:1}));
+  if(docs.length){
+    const d=docs[0];
+    ST.antt = { coef:d.data.coeficientes||[], vigencia:d.data.vigencia_inicio||null, resolucao:d.data.resolucao||'—', docId:d.id };
+  }
+}
+async function carregarVeiculos(){
+  ST.veiculos = await cachedGet('veic', ()=>fsGetCollection(COL.veiculos,{orderBy:'nome'}));
+  if(!ST.veiculos.length){ await seedVeiculos(); ST.veiculos = await fsGetCollection(COL.veiculos,{orderBy:'nome'}); cacheBust('veic'); }
+}
+async function carregarClientesRotas(){
+  /* Clientes moram DENTRO de comercial_rotas com tipo:'cliente' —
+     evita uma 7ª coleção e mantém a regra dos três pontos enxuta. */
+  const todos = await cachedGet('rotas', ()=>fsGetCollection(COL.rotas));
+  ST.clientes = todos.filter(d=>d.data.tipo==='cliente');
+  ST.rotas    = todos.filter(d=>d.data.tipo!=='cliente');
+}
+async function carregarPremissas(){
+  ST.premissas = await cachedGet('prem', ()=>fsGetCollection(COL.premissas,{orderBy:'vigencia_inicio',orderDir:'desc'}));
+}
+async function carregarDiesel(){
+  const doc = await fsGetDoc(COL.config,'diesel');
+  ST.diesel = (doc && Array.isArray(doc.data.historico)) ? doc.data.historico : [];
+}
+async function carregarAuditoria(){
+  const sims = await fsGetCollection(COL.simulacoes,{orderBy:'ts',orderDir:'desc',limit:200});
+  ST.sims = sims; renderAuditoria();
+}
+
+/* Seeds mínimos de perfis de veículo (frota real Comix: bitrem/LS + demais) */
+async function seedVeiculos(){
+  const seeds = [
+    {nome:'Bitrem 7 eixos', eixos:7, tara:21, capacidade:37, tabelaAntt:'A', comp:19.8, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'LS (Carreta 5 eixos)', eixos:5, tara:15, capacidade:32, tabelaAntt:'A', comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Vanderléia 6 eixos', eixos:6, tara:18, capacidade:33, comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Rodotrem 9 eixos', eixos:9, tara:27, capacidade:48, comp:30.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Carreta Simples 3 eixos', eixos:3, tara:12, capacidade:16, comp:14.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'}
+  ];
+  for(const s of seeds){ await fsAddDoc(COL.veiculos, {...s, criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email}); }
+}
+
+function montarSelects(){
+  const sv=$('simVeiculo');
+  sv.innerHTML = ST.veiculos.map(v=>`<option value="${v.id}">${esc(v.data.nome)} · ${v.data.eixos} eixos</option>`).join('');
+  const sc=$('simCliente');
+  sc.innerHTML = '<option value="">— avulso —</option>'+ST.clientes.map(c=>`<option value="${c.id}">${esc(c.data.nome)}</option>`).join('');
+  const sr=$('simRota');
+  sr.innerHTML = '<option value="">— nova / manual —</option>'+ST.rotas.map(r=>`<option value="${r.id}">${esc(r.data.nome||((r.data.origem||'')+' → '+(r.data.destino||'')))}</option>`).join('');
+  sr.onchange = ()=>{
+    const r=ST.rotas.find(x=>x.id===sr.value); if(!r) return;
+    $('simOrigem').value=r.data.origem||''; $('simDestino').value=r.data.destino||'';
+    if(r.data.cliente_id) $('simCliente').value=r.data.cliente_id;
+    if(r.data.filial) $('simFilial').value=r.data.filial;
+  };
+  const pe=$('premEscopo');
+  pe.innerHTML = '<option value="default">Defaults (por veículo/filial)</option>'+
+    ST.rotas.map(r=>`<option value="${r.id}">${esc(r.data.nome||((r.data.origem||'')+' → '+(r.data.destino||'')))}</option>`).join('');
+  pe.onchange = renderPremissas;
+}
+
+function checarVigenciaAntt(){
+  const el=$('alertaAntt'); el.innerHTML='';
+  const pill=$('pillAntt');
+  if(!ST.antt.coef.length){
+    pill.textContent='ANTT: sem tabela'; pill.className='pill rd';
+    el.innerHTML='<div class="alerta rd"><b>⚠️ Sem coeficientes ANTT cadastrados.</b> O gate de compliance está inoperante — um admin precisa carregar a resolução vigente na aba Tabela ANTT.</div>';
+    return;
+  }
+  pill.textContent='ANTT: '+(ST.antt.resolucao||'—');
+  const vig = ST.antt.vigencia? new Date(ST.antt.vigencia): null;
+  const meses = vig ? (Date.now()-vig.getTime())/(30.44*24*3600*1000) : 99;
+  if(meses>6){
+    pill.className='pill am';
+    el.innerHTML=`<div class="alerta am"><b>Tabela ANTT possivelmente desatualizada</b> — vigência carregada em ${vig?vig.toLocaleDateString('pt-BR'):'—'} (${Math.floor(meses)} meses). Verifique se há resolução ANTT mais recente publicada.</div>`;
+  } else pill.className='pill gn';
+}
+</script>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   HERE ROUTING v8 — geocodificação, rota por perfil de caminhão, tolls
+   ══════════════════════════════════════════════════════════════════ */
+async function hereContarChamada(){
+  try{
+    ST.hereChamadasMes++;
+    const campo='chamadas_'+hoje().slice(0,7);
+    await fsSetDoc(COL.config,'geral',{[campo]:ST.hereChamadasMes},true);
+    $('apiConsumo').textContent=ST.hereChamadasMes;
+  }catch(_){}
+}
+async function hereGeocode(q){
+  if(!ST.hereKey) throw new Error('Chave HERE não configurada (aba Pedágio & Rota).');
+  const url=`https://geocode.search.hereapi.com/v1/geocode?q=${encodeURIComponent(q+', Brasil')}&in=countryCode:BRA&limit=1&apiKey=${ST.hereKey}`;
+  const r=await fetch(url); hereContarChamada();
+  if(!r.ok) throw new Error('Geocode falhou: HTTP '+r.status);
+  const j=await r.json();
+  const it=j.items&&j.items[0];
+  if(!it) throw new Error('Endereço não encontrado: '+q);
+  return { lat:it.position.lat, lng:it.position.lng, label:it.address?.label||q };
+}
+async function hereRota(orig, dest, veic){
+  if(!ST.hereKey) throw new Error('Chave HERE não configurada (aba Pedágio & Rota).');
+  const p = new URLSearchParams({
+    transportMode:'truck',
+    origin:`${orig.lat},${orig.lng}`,
+    destination:`${dest.lat},${dest.lng}`,
+    'return':'polyline,summary,tolls',
+    'truck[axleCount]': String(veic.eixos||5),
+    'truck[grossWeight]': String(Math.round(((veic.tara||15)+(veic.capacidade||27))*1000)),
+    'truck[height]': String(Math.round((veic.alt||4)*100)),
+    'truck[width]': String(Math.round((veic.larg||2.6)*100)),
+    'truck[length]': String(Math.round((veic.comp||18.6)*100)),
+    currency:'BRL',
+    apiKey: ST.hereKey
+  });
+  const r=await fetch('https://router.hereapi.com/v8/routes?'+p.toString()); hereContarChamada();
+  if(!r.ok){ const t=await r.text().catch(()=>' '); throw new Error('Routing falhou: HTTP '+r.status+' '+t.slice(0,180)); }
+  const j=await r.json();
+  const rt=j.routes&&j.routes[0];
+  if(!rt||!rt.sections||!rt.sections.length) throw new Error('HERE não retornou rota para este par O/D.');
+  let distM=0, durS=0, polys=[], pracas=[], pedagioTotal=0;
+  rt.sections.forEach(sec=>{
+    distM += sec.summary?.length||0;
+    durS  += sec.summary?.duration||0;
+    if(sec.polyline) polys.push(sec.polyline);
+    (sec.tolls||[]).forEach(t=>{
+      (t.fares||[]).forEach(f=>{
+        const preco=(f.price&&f.price.value!=null)?Number(f.price.value):null;
+        if(preco!=null) pedagioTotal+=preco;
+        pracas.push({ nome:(t.tollSystem||t.countryCode||'Praça'), rodovia:(f.name||t.tollSystemRef||'—'), valor:preco });
+      });
+    });
+  });
+  return { distKm:distM/1000, durMin:durS/60, polylines:polys, pracas, pedagioIda:pedagioTotal, raw:j };
+}
+
+/* Decodificador do HERE Flexible Polyline (algoritmo oficial, port JS enxuto) */
+function decodeFlexPolyline(encoded){
+  const DEC='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+  const tbl={}; for(let i=0;i<DEC.length;i++) tbl[DEC[i]]=i;
+  let idx=0;
+  function readUInt(){ let res=0,shift=0,b;
+    do{ b=tbl[encoded[idx++]]; res|=(b&0x1F)<<shift; shift+=5; }while(b>=0x20);
+    return res>>>0; }
+  function readInt(){ const u=readUInt(); return (u&1)? ~(u>>>1) : (u>>>1); }
+  const header=readUInt(); // versão
+  const meta=readUInt();
+  const precision=meta&15;
+  const thirdDim=(meta>>4)&7;
+  const thirdPrec=(meta>>7)&15;
+  const factor=Math.pow(10,precision);
+  let lat=0,lng=0,z=0; const pts=[];
+  while(idx<encoded.length){
+    lat+=readInt(); lng+=readInt();
+    if(thirdDim) z+=readInt();
+    pts.push([lat/factor, lng/factor]);
+  }
+  return pts;
+}
+
+/* ══ Mapa (Leaflet + OSM) ══ */
+let _simMap=null,_simLayer=null;
+function initMapa(){
+  if(_simMap) return;
+  _simMap=L.map('simMapa',{scrollWheelZoom:false}).setView([-27.1,-50.5],6);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; OpenStreetMap'}).addTo(_simMap);
+  window._simMap=_simMap;
+}
+function desenharRota(polylines, orig, dest, pracas){
+  if(_simLayer){ _simMap.removeLayer(_simLayer); _simLayer=null; }
+  const grp=L.layerGroup();
+  let all=[];
+  polylines.forEach(p=>{ try{ const pts=decodeFlexPolyline(p); all=all.concat(pts); grp.addLayer(L.polyline(pts,{color:'#1a56db',weight:4,opacity:.85})); }catch(e){ console.warn('polyline decode',e); } });
+  grp.addLayer(L.marker([orig.lat,orig.lng]).bindPopup('Origem: '+esc(orig.label)));
+  grp.addLayer(L.marker([dest.lat,dest.lng]).bindPopup('Destino: '+esc(dest.label)));
+  grp.addTo(_simMap); _simLayer=grp;
+  if(all.length) _simMap.fitBounds(L.latLngBounds(all),{padding:[24,24]});
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   MOTOR ANTT — piso = (distância × CCD) + CC
+   Coeficientes SEMPRE do Firestore (comercial_antt_coeficientes).
+   Pedágio NUNCA compõe o piso (Lei 13.703).
+   ══════════════════════════════════════════════════════════════════ */
+function pisoAntt(distKm, eixos, categoria, tabelaPreferida){
+  /* A tabela aplicável (A/B/C/D — carga lote, contratação do veículo, com/alto desempenho)
+     é definida pelo admin ao carregar a resolução; aqui apenas buscamos a preferida
+     e caímos para qualquer coeficiente compatível de eixos+categoria se não existir. */
+  const tab = String(tabelaPreferida||'A').toUpperCase();
+  const alvo = ST.antt.coef.find(c =>
+    String(c.tabela).toUpperCase()===tab &&
+    String(c.categoria)===String(categoria) &&
+    Number(c.eixos)===Number(eixos));
+  const alt = alvo || ST.antt.coef.find(c => String(c.categoria)===String(categoria) && Number(c.eixos)===Number(eixos));
+  if(!alt) return null;
+  return { valor: distKm*Number(alt.ccd) + Number(alt.cc), ccd:Number(alt.ccd), cc:Number(alt.cc), tabela:alt.tabela, eixos:alt.eixos, categoria:alt.categoria };
+}
+
+/* Premissas efetivas: rota específica > default filial+veículo > default geral */
+function premissasEfetivas(rotaId, filial, veiculoId){
+  const vivas = ST.premissas.filter(p=>!p.data.encerrada);
+  const byScore = p => (p.data.rota_id===rotaId?4:0)+(p.data.filial===filial?2:0)+(p.data.veiculo_id===veiculoId?1:0);
+  const cand = vivas.filter(p=>(!p.data.rota_id||p.data.rota_id===rotaId)&&(!p.data.filial||p.data.filial===filial)&&(!p.data.veiculo_id||p.data.veiculo_id===veiculoId));
+  cand.sort((a,b)=>byScore(b)-byScore(a)||String(b.data.vigencia_inicio||'').localeCompare(String(a.data.vigencia_inicio||'')));
+  return cand[0]?{id:cand[0].id, ...cand[0].data}:null;
+}
+function dieselVigente(filial){
+  const h=[...ST.diesel].filter(d=>d.filial===filial).sort((a,b)=>String(b.vigencia||'').localeCompare(String(a.vigencia||'')));
+  return h[0]?Number(h[0].preco):null;
+}
+
+/* ══ Simulador financeiro — RÉPLICA EXATA do Simulador_de_rotas_COMIX.xlsm ══
+   Estrutura da aba de rota (ex.: "RBS - Capinzal LS"):
+   · Tarifa bruta é R$/TONELADA → Receita Bruta/viagem = tarifa × toneladas (J5=E5*E10)
+   · Custo Direto = apenas Diesel + Pedágio (J11)
+   · Outros Custos = Custo Operacional (lubrif, peças, pneus, doc/seguros) + Custo Pessoal
+   · Depreciação separa Cavalo (vida 10a) e Carreta (vida 15a)
+   · 3 blocos: Resultado Frota · Resultado COMIX por Agregados · Resultado Agregados */
+function calcularFinanceiro(inp){
+  /* inp: {tarifaTon, ton, viagensMes, distIVKm, pedagioIV, premissas P, dieselRS, tipoCarreta} */
+  const P=inp.premissas||{};
+  const g=(k,def)=>{ const v=Number(P[k]); return isNaN(v)?def:v; };
+  const V=Math.max(inp.viagensMes,1);
+  const linhas=(v)=>({viagem:v, mes:v*V, ano:v*V*12});
+
+  /* — Premissas (nomes/defaults espelham as células E da planilha) — */
+  const pisCofins = g('pis_cofins',0.0965);                       // E6 (lançado combinado na planilha)
+  const icms      = g('icms',0.12);                               // E8 — varia por rota (12%–17%)
+  const aliq      = pisCofins+icms;
+  const consumo   = Math.max(g('consumo_kml',2.2),.1);            // E17
+  const diesel    = (inp.dieselRS!=null?inp.dieselRS:g('diesel_rs',5.6)); // E16 (vem da aba Combustível)
+  const lubMes    = g('lubrificante_mes',1500);                   // E18
+  const lubRend   = Math.max(g('lubrificante_rend_km',30000),1);  // E19
+  const pecasMes  = g('pecas_mes',1000);                          // E20
+  /* Pneus lisos por tipo de carreta — fórmula E21: LS=18, Bitrem=22, senão 30 (override via premissa) */
+  const qtdLisoAuto = inp.tipoCarreta==='LS'?18: inp.tipoCarreta==='Bitrem'?22:30;
+  const qLiso    = P.pneus_qtd_liso!=null? Number(P.pneus_qtd_liso): qtdLisoAuto;
+  const qBorr    = g('pneus_qtd_borr',4);                         // E22
+  const vLiso    = g('pneus_valor_liso',1700);                    // E23
+  const vBorr    = g('pneus_valor_borr',2800);                    // E24
+  const pneuRend = Math.max(g('pneus_rendimento_km',120000),1);   // E25
+  const docAno   = g('licenciamento_ano',4500)+g('seguro_ano',11400)+g('laudos_ano',420); // E26:E28
+  const salario  = g('salario_motorista',2364.09);                // E29
+  const comisPct = g('comissao_pct',0.05);                        // E30 (sobre fat. líquido)
+  const encFator = g('fator_encargos',1.9);                       // E31
+  const alimMes  = g('alimentacao_mes',325);                      // E32
+  const cvCusto  = g('custo_cavalo',350000), cvVida=Math.max(g('vida_cavalo_anos',10),1);   // E33/E35
+  const crCusto  = g('custo_carreta',150000), crVida=Math.max(g('vida_carreta_anos',15),1); // E34/E36
+  /* Premissas Agregados (células S) */
+  const agImpPct   = g('ag_impostos',0.0165);        // S5 = 1-0.9835
+  const agComixPct = g('ag_comissao_comix',0.26);    // S6 — COMIX retém 26%, repassa 74%
+  const agDeprecMes= g('ag_deprec_mensal',500);      // S7 (R$/mês)
+  const agSalPct   = g('ag_salario_pct',0.10);       // S8 (% do faturamento)
+
+  /* ═ Bloco 1 — RESULTADO FROTA (colunas J/K/L) ═ */
+  const RB   = inp.tarifaTon*inp.ton;                          // J5 = E5*E10
+  const IMP  = -aliq*RB;                                       // J7
+  const RL   = RB+IMP;                                         // J9
+  const cDiesel  = -inp.distIVKm/consumo*diesel;               // J12 = -E13/E17*E16
+  const cPedagio = -inp.pedagioIV;                             // J13 = -E15
+  const CD   = cDiesel+cPedagio;                               // J11
+  const LB   = RL+CD;                                          // J14 = RL + Custo Direto
+  const cLub   = -lubMes/lubRend*inp.distIVKm;                 // J19 = -E18/E19*E13
+  const cPecas = -pecasMes/V;                                  // J20
+  const cPneus = -(qLiso*vLiso+qBorr*vBorr)/pneuRend*inp.distIVKm; // J21
+  const cDoc   = -docAno/12/V;                                 // J22
+  const CO   = cLub+cPecas+cPneus+cDoc;                        // J18
+  /* J23 — réplica fiel, incluindo a peculiaridade da planilha: a comissão de UMA viagem
+     entra no pacote (salário) que é multiplicado pelos encargos e diluído pelas viagens.
+     Possível fonte de incongruência histórica — mantida por fidelidade; revisar depois. */
+  const CP   = (-salario - RL*comisPct)*encFator/V - alimMes/V;
+  const OUT  = CO+CP;                                          // J17
+  const RO   = LB+OUT;                                         // J24
+  const dCav = -(cvCusto/cvVida)/12/V;                         // J27
+  const dCar = -(crCusto/crVida)/12/V;                         // J28
+  const EBIT = RO+dCav+dCar;                                   // J29
+
+  const frota = {
+    receitaBruta:linhas(RB), impostos:linhas(IMP), receitaLiq:linhas(RL),
+    custoDireto:linhas(CD), diesel:linhas(cDiesel), pedagio:linhas(cPedagio),
+    lucroBruto:linhas(LB), lucroBrutoPct: RL?LB/RL:null,
+    outros:linhas(OUT), co:linhas(CO), lubrificante:linhas(cLub), pecas:linhas(cPecas),
+    pneus:linhas(cPneus), docSeguros:linhas(cDoc), pessoal:linhas(CP),
+    resultadoOper:linhas(RO), resultadoOperPct: RL?RO/RL:null,
+    deprecCavalo:linhas(dCav), deprecCarreta:linhas(dCar),
+    ebit:linhas(EBIT), ebitPct: RL?EBIT/RL:null,
+    resultadoTon: inp.ton? EBIT/inp.ton:null
+  };
+
+  /* ═ Bloco 2 — RESULTADO COMIX POR AGREGADOS (colunas X/Y/Z) ═ */
+  const xRB=RB, xIMP=-aliq*xRB, xRL=xRB+xIMP;
+  const xPed=cPedagio;
+  const xAluguel = -(xRL+xPed)*(1-agComixPct);                 // X14 — repasse de 74%
+  const xCD = 0+xPed+xAluguel;                                 // X11 (diesel do agregado = 0 p/ COMIX)
+  const xLB = xRL+xCD;                                         // X15
+  const xCP = 0;                                               // X24 (=-S8*S9/E14; S9 vazio na planilha)
+  const xRO = xLB+xCP;                                         // X25
+  const xEBIT = xRO;                                           // X30 (sem depreciação COMIX)
+  const comixAgregado = {
+    receitaBruta:linhas(xRB), impostos:linhas(xIMP), receitaLiq:linhas(xRL),
+    pedagio:linhas(xPed), taxaAluguel:linhas(xAluguel), custoDireto:linhas(xCD),
+    lucroBruto:linhas(xLB), resultadoOper:linhas(xRO), ebit:linhas(xEBIT),
+    ebitPct: xRL?xEBIT/xRL:null, resultadoTon: inp.ton? xEBIT/inp.ton:null
+  };
+
+  /* ═ Bloco 3 — RESULTADO AGREGADOS (colunas AF/AG/AH — visão do parceiro) ═ */
+  const afRB = (xRL + cPedagio)*(1-agComixPct);                // AF5 = (X9+J13)*(1-S6)
+  const afIMP = 0;                                             // AF7 vazio na planilha
+  const afRL = afRB+afIMP;                                     // AF9
+  const afCD = cDiesel+0;                                      // AF11 = diesel (AF12=J12) + pedágio 0
+  const afLB = afRL+afCD;                                      // AF15
+  const afCO = cLub+cPecas+cPneus+cDoc;                        // AF19..23 = J19..J22
+  const afCP = -xRB*agSalPct;                                  // AF24 = -X5*S8
+  const afOUT= afCO+afCP;                                      // AF18
+  const afRO = afLB+afOUT;                                     // AF25
+  const afDep= -agDeprecMes/V;                                 // AF29 = -S7/E14
+  const afEBIT = afRO+afDep;                                   // AF30
+  const agregado = {
+    receitaBruta:linhas(afRB), receitaLiq:linhas(afRL),
+    custoDireto:linhas(afCD), diesel:linhas(cDiesel),
+    lucroBruto:linhas(afLB), co:linhas(afCO), pessoal:linhas(afCP), outros:linhas(afOUT),
+    resultadoOper:linhas(afRO), deprec:linhas(afDep),
+    ebit:linhas(afEBIT), ebitPct: afRL?afEBIT/afRL:null,
+    resultadoTon: inp.ton? afEBIT/inp.ton:null
+  };
+
+  return { aliq, receitaViagem:RB, frota, comixAgregado, agregado };
+}
+</script>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   FLUXO DO SIMULADOR — cálculo, semáforo, liberação com auditoria
+   ══════════════════════════════════════════════════════════════════ */
+$('btnSimular').onclick = simular;
+async function simular(){
+  const orig=$('simOrigem').value.trim(), dest=$('simDestino').value.trim();
+  const tarifa=nVal('simTarifa'), ton=nVal('simTon'), viagens=Math.max(nVal('simViagens'),1);
+  if(!orig||!dest){ toast('Informe origem e destino.','am'); return; }
+  if(!ST.antt.coef.length){ toast('Sem coeficientes ANTT — gate inoperante. Peça a um admin para carregar a tabela.','rd'); return; }
+  const veic = ST.veiculos.find(v=>v.id===$('simVeiculo').value);
+  if(!veic){ toast('Selecione um perfil de veículo.','am'); return; }
+  const filial=$('simFilial').value;
+  const btn=$('btnSimular'); btn.disabled=true; btn.textContent='Consultando HERE…';
+  try{
+    const [gO,gD] = await Promise.all([hereGeocode(orig), hereGeocode(dest)]);
+    const rota = await hereRota(gO,gD,veic.data);
+    desenharRota(rota.polylines,gO,gD,rota.pracas);
+
+    const distIda=rota.distKm, distIV=distIda*2, pedagioIV=rota.pedagioIda*2;
+    $('kDistIda').textContent=num(distIda,1)+' km';
+    $('kDistIV').textContent=num(distIV,1)+' km';
+    $('kTempo').textContent=Math.floor(rota.durMin/60)+'h'+String(Math.round(rota.durMin%60)).padStart(2,'0');
+    $('kPedagio').textContent=brl(pedagioIV);
+    $('simRotaInfo').textContent='· '+gO.label+' → '+gD.label;
+
+    const tb=$('tbPedagios').querySelector('tbody');
+    tb.innerHTML = rota.pracas.length
+      ? rota.pracas.map(p=>`<tr><td>${esc(p.nome)}</td><td>${esc(p.rodovia)}</td><td class="num">${p.valor!=null?brl(p.valor):'—'}</td></tr>`).join('')
+        + `<tr class="tot"><td colspan="2">Total ida (×2 = ida-volta)</td><td class="num">${brl(rota.pedagioIda)}</td></tr>`
+      : '<tr><td colspan="3" class="empty">HERE não retornou praças (rota sem pedágio ou dado indisponível — confira no teste manual).</td></tr>';
+
+    /* Conferência contra distância validada da rota cadastrada */
+    const rotaCad = ST.rotas.find(r=>r.id===$('simRota').value);
+    let alertaDist='';
+    if(rotaCad && Number(rotaCad.data.dist_validada_km)>0){
+      const dv=Number(rotaCad.data.dist_validada_km);
+      const desvio=Math.abs(distIda-dv)/dv;
+      if(desvio>0.08){ alertaDist=` ⚠️ divergência de ${pct(desvio)} vs. distância validada (${num(dv,0)} km)`; toast('Distância da API diverge '+pct(desvio)+' da validada — investigar.','am'); }
+    }
+
+    /* Piso ANTT — sobre a distância de IDA (operação com carga); pedágio fora */
+    const piso = pisoAntt(distIda, veic.data.eixos, veic.data.categoriaAntt||'granel_solido', veic.data.tabelaAntt||'A');
+    if(!piso){ toast('Sem coeficiente ANTT para '+veic.data.eixos+' eixos / categoria '+(veic.data.categoriaAntt||'—')+'.','rd'); btn.disabled=false; btn.textContent='Calcular rota e piso'; return; }
+
+    const prem = premissasEfetivas($('simRota').value||null, filial, veic.id);
+    const dsl = dieselVigente(filial);
+    /* tarifa é R$/TONELADA (E5 da planilha); receita por viagem = tarifa × ton (J5) */
+    const tipoCarreta = /bitrem/i.test(veic.data.nome)?'Bitrem': /(^|\s)LS(\s|$)/i.test(veic.data.nome)?'LS':'Outro';
+    const fin = calcularFinanceiro({ tarifaTon:tarifa, ton, viagensMes:viagens, distIVKm:distIV, pedagioIV, premissas:prem, dieselRS:dsl, tipoCarreta });
+    const receitaViagem = fin.receitaViagem;
+
+    /* Semáforo */
+    const margemAlvo = prem&&prem.margem_alvo!=null? Number(prem.margem_alvo): 0.12;
+    let status, cor, tit, sub;
+    if(tarifa<=0||ton<=0){ status='sem_tarifa'; cor=''; tit='Informe tarifa (R$/ton) e toneladas'; sub='O piso ANTT desta rota é '+brl(piso.valor)+' por viagem.'; }
+    else if(receitaViagem < piso.valor){ status='vermelho'; cor='rd'; tit='🔴 Abaixo do piso ANTT'; sub='Receita/viagem '+brl(receitaViagem)+' ('+brl(tarifa)+'/t × '+num(ton,1)+'t) < piso. Liberação exige justificativa + gestor/admin.'; }
+    else if(fin.frota.ebitPct!=null && fin.frota.ebitPct < margemAlvo){ status='amarelo'; cor='am'; tit='🟡 Acima do piso, abaixo da margem-alvo'; sub='EBIT '+pct(fin.frota.ebitPct)+' < alvo '+pct(margemAlvo)+'. Liberável, mas atenção.'; }
+    else { status='verde'; cor='gn'; tit='🟢 Conforme'; sub='Receita/viagem ≥ piso ANTT e EBIT dentro do alvo.'; }
+
+    const sem=$('simSemaforo'); sem.className='semaforo '+cor;
+    sem.innerHTML=`<div class="dot"></div><div><div class="tit">${tit}</div><div class="sub">${esc(sub)}${alertaDist}</div></div>`;
+    $('kPiso').textContent=brl(piso.valor);
+    $('kTarifa').innerHTML = receitaViagem>0? brl(receitaViagem)+' <small>('+brl(tarifa)+'/t)</small>':'—';
+    $('kDelta').textContent = receitaViagem>0? (receitaViagem>=piso.valor?'+':'')+brl(receitaViagem-piso.valor):'—';
+    $('kDelta').style.color = receitaViagem>=piso.valor?'var(--gn)':'var(--rd)';
+    $('kPisoDetalhe').textContent=`Fórmula: ${num(distIda,1)} km × R$ ${num(piso.ccd,4)} (CCD) + R$ ${num(piso.cc,2)} (CC) · Tabela ${piso.tabela} · ${piso.eixos} eixos · ${piso.categoria} · ${ST.antt.resolucao}`;
+    $('kCpk').textContent = prem&&prem.cpk_ref? 'R$ '+num(prem.cpk_ref,2)+'/km':'—';
+
+    renderFinanceiro(fin, $('simModal').value);
+
+    /* Snapshot completo p/ auditoria */
+    ST.sim = {
+      ts: agoraISO(), usuario: ATLAS_CURRENT_USER.email, usuario_nome: ATLAS_CURRENT_USER.nome||'',
+      filial, cliente_id: $('simCliente').value||null,
+      cliente_nome: (ST.clientes.find(c=>c.id===$('simCliente').value)||{data:{}}).data.nome||null,
+      rota_id: $('simRota').value||null, origem: gO.label, destino: gD.label, carga: $('simCarga').value,
+      veiculo_id: veic.id, veiculo_nome: veic.data.nome, eixos: veic.data.eixos, categoria_antt: veic.data.categoriaAntt||'granel_solido',
+      dist_ida_km:+distIda.toFixed(2), dist_iv_km:+distIV.toFixed(2), pedagio_iv:+pedagioIV.toFixed(2),
+      pracas: rota.pracas.map(p=>({n:p.nome,r:p.rodovia,v:p.valor})),
+      piso_antt:+piso.valor.toFixed(2), ccd:piso.ccd, cc:piso.cc, tabela_antt:piso.tabela, resolucao:ST.antt.resolucao, antt_doc:ST.antt.docId,
+      tarifa_ton:tarifa, receita_viagem:+receitaViagem.toFixed(2), tipo_carreta:tipoCarreta,
+      ton, viagens_mes:viagens, diesel_rs:dsl, premissas_id:prem?prem.id:null,
+      ebit_pct_frota: fin.frota.ebitPct, ebit_viagem:+(fin.frota.ebit.viagem).toFixed(2),
+      ebit_comix_agregado:+(fin.comixAgregado.ebit.viagem).toFixed(2),
+      status, estado:'simulada'
+    };
+    $('btnLiberar').disabled = !(status==='verde'||status==='amarelo'||status==='vermelho');
+    $('btnSalvarSim').disabled = false;
+    carregarHistRota();
+  }catch(e){
+    console.error(e); toast(e.message,'rd');
+  }finally{ btn.disabled=false; btn.textContent='Calcular rota e piso'; }
+}
+
+function renderFinanceiro(fin, modal){
+  const av=(v,base)=> (base&&v!=null)? `<span class="muted" style="font-size:10.5px">(${pct(Math.abs(v/base))})</span>`:'';
+  const row=(lb,l,base,cls='')=>`<tr class="${cls}"><td>${lb}</td><td class="num">${brl(l.viagem)} ${av(l.viagem,base?.viagem)}</td><td class="num">${brl(l.mes)}</td><td class="num">${brl(l.ano)}</td></tr>`;
+  const rowPct=(lb,v)=>`<tr><td>${lb}</td><td class="num" colspan="3">${pct(v)}</td></tr>`;
+  const F=fin.frota, X=fin.comixAgregado, A=fin.agregado;
+
+  const tbF=`<table class="tb">
+    <thead><tr><th>Resultado Frota</th><th class="num">Por viagem (AV%)</th><th class="num">Por mês</th><th class="num">Anual</th></tr></thead>
+    <tbody>
+      ${row('Receita Bruta (tarifa × ton)',F.receitaBruta,null,'grp')}
+      ${row('Impostos (PIS/COFINS + ICMS)',F.impostos,F.receitaBruta)}
+      ${row('Receita Líquida',F.receitaLiq,F.receitaBruta,'tot')}
+      ${row('Custo Direto',F.custoDireto,F.receitaBruta,'grp')}
+      ${row('· Diesel',F.diesel,F.receitaBruta)}
+      ${row('· Pedágio',F.pedagio,F.receitaBruta)}
+      ${row('Lucro Bruto',F.lucroBruto,F.receitaBruta,'tot')}
+      ${rowPct('Lucro Bruto (%)',F.lucroBrutoPct)}
+      ${row('Custo Operacional',F.co,F.receitaBruta,'grp')}
+      ${row('· Lubrificante',F.lubrificante,F.receitaBruta)}
+      ${row('· Peças e Serviço',F.pecas,F.receitaBruta)}
+      ${row('· Pneus',F.pneus,F.receitaBruta)}
+      ${row('· Documentação/Seguros',F.docSeguros,F.receitaBruta)}
+      ${row('Custo Pessoal',F.pessoal,F.receitaBruta)}
+      ${row('Resultado Operacional',F.resultadoOper,F.receitaBruta,'tot')}
+      ${rowPct('Resultado Operacional (%)',F.resultadoOperPct)}
+      ${row('Depreciação Cavalo',F.deprecCavalo,F.receitaBruta)}
+      ${row('Depreciação Carreta',F.deprecCarreta,F.receitaBruta)}
+      ${row('EBIT',F.ebit,F.receitaBruta,'tot')}
+      ${rowPct('EBIT (%)',F.ebitPct)}
+      <tr><td>Resultado por Tonelada</td><td class="num" colspan="3">${F.resultadoTon!=null?brl(F.resultadoTon)+'/t':'—'}</td></tr>
+    </tbody></table>`;
+
+  const tbX=`<table class="tb">
+    <thead><tr><th>Resultado COMIX por Agregados</th><th class="num">Por viagem</th><th class="num">Por mês</th><th class="num">Anual</th></tr></thead>
+    <tbody>
+      ${row('Receita Bruta',X.receitaBruta,null,'grp')}
+      ${row('Impostos',X.impostos,X.receitaBruta)}
+      ${row('Receita Líquida',X.receitaLiq,X.receitaBruta,'tot')}
+      ${row('Pedágio',X.pedagio,X.receitaBruta)}
+      ${row('Taxa Aluguel Agregado (repasse)',X.taxaAluguel,X.receitaBruta)}
+      ${row('Lucro Bruto',X.lucroBruto,X.receitaBruta,'tot')}
+      ${row('EBIT COMIX',X.ebit,X.receitaBruta,'tot')}
+      ${rowPct('EBIT COMIX (%)',X.ebitPct)}
+      <tr><td>Resultado por Tonelada</td><td class="num" colspan="3">${X.resultadoTon!=null?brl(X.resultadoTon)+'/t':'—'}</td></tr>
+    </tbody></table>`;
+
+  const tbA=`<table class="tb">
+    <thead><tr><th>Resultado Agregados (visão do parceiro)</th><th class="num">Por viagem</th><th class="num">Por mês</th><th class="num">Anual</th></tr></thead>
+    <tbody>
+      ${row('Receita Bruta (74% do repasse)',A.receitaBruta,null,'grp')}
+      ${row('· Diesel',A.diesel,A.receitaBruta)}
+      ${row('Lucro Bruto',A.lucroBruto,A.receitaBruta,'tot')}
+      ${row('Custo Operacional',A.co,A.receitaBruta)}
+      ${row('Custo Pessoal (% faturamento)',A.pessoal,A.receitaBruta)}
+      ${row('Depreciação',A.deprec,A.receitaBruta)}
+      ${row('EBIT do Agregado',A.ebit,A.receitaBruta,'tot')}
+      ${rowPct('EBIT (%)',A.ebitPct)}
+      <tr><td>Resultado por Tonelada</td><td class="num" colspan="3">${A.resultadoTon!=null?brl(A.resultadoTon)+'/t':'—'}</td></tr>
+    </tbody></table>`;
+
+  $('simFinanceiro').innerHTML =
+    modal==='propria' ? tbF :
+    modal==='agregado'? `<div class="grid2">${tbX}${tbA}</div>` :
+    `<div class="grid2">${tbF}${tbX}</div><div style="margin-top:14px">${tbA}</div>`;
+}
+
+/* ══ Liberação / gravação ══ */
+$('btnSalvarSim').onclick = async ()=>{
+  if(!ST.sim) return;
+  await fsAddDoc(COL.simulacoes,{...ST.sim, estado:'simulada'});
+  toast('Simulação salva (rascunho).','gn'); carregarAuditoria(); carregarHistRota();
+};
+$('btnLiberar').onclick = ()=>{
+  if(!ST.sim) return;
+  if(ST.sim.status==='vermelho'){
+    if(!podeAprovarExcecao()){ toast('🔴 abaixo do piso: somente gestor/admin pode aprovar exceção.','rd'); return; }
+    mdAbrir('Aprovar exceção — tarifa abaixo do piso ANTT',
+      `<div class="alerta rd" style="margin-bottom:10px"><b>Receita/viagem ${brl(ST.sim.receita_viagem)} (${brl(ST.sim.tarifa_ton)}/t) &lt; piso ${brl(ST.sim.piso_antt)}.</b> A liberação será registrada como exceção, com seu usuário e justificativa, em trilha de auditoria permanente.</div>
+       <label class="fld">Justificativa (obrigatória)<textarea id="mdJust" rows="4" style="width:100%" placeholder="ex.: contrato de retorno garantido; frete casado; decisão comercial estratégica…"></textarea></label>`,
+      `<button class="btn" onclick="mdFechar()">Cancelar</button>
+       <button class="btn danger" onclick="confirmarLiberacao(true)">Aprovar exceção e liberar</button>`);
+  } else {
+    mdAbrir('Liberar rota',
+      `<p>Confirma a liberação da rota <b>${esc(ST.sim.origem)} → ${esc(ST.sim.destino)}</b> com receita/viagem <b>${brl(ST.sim.receita_viagem)}</b> (${brl(ST.sim.tarifa_ton)}/t) (piso ANTT ${brl(ST.sim.piso_antt)}, status ${ST.sim.status==='verde'?'🟢':'🟡'})?</p>
+       <p class="muted" style="margin-top:6px">O snapshot completo do cálculo (distância, coeficientes, eixos, pedágios) será gravado para auditoria.</p>`,
+      `<button class="btn" onclick="mdFechar()">Cancelar</button>
+       <button class="btn ok" onclick="confirmarLiberacao(false)">Liberar</button>`);
+  }
+};
+async function confirmarLiberacao(excecao){
+  const just = excecao? ($('mdJust')?.value||'').trim():'';
+  if(excecao && just.length<10){ toast('Justificativa obrigatória (mín. 10 caracteres).','am'); return; }
+  const doc={...ST.sim, estado:'liberada', liberado_em:agoraISO(), liberado_por:ATLAS_CURRENT_USER.email,
+             liberado_por_nome:ATLAS_CURRENT_USER.nome||'', excecao:!!excecao, justificativa:just||null};
+  await fsAddDoc(COL.simulacoes,doc);
+  mdFechar(); toast(excecao?'Exceção aprovada e rota liberada (auditada).':'Rota liberada.','gn');
+  carregarAuditoria(); carregarHistRota();
+}
+async function carregarHistRota(){
+  if(!ST.sim) return;
+  const sims=(ST.sims||[]).filter(s=>{
+    const d=s.data;
+    return (ST.sim.rota_id && d.rota_id===ST.sim.rota_id) || (d.origem===ST.sim.origem && d.destino===ST.sim.destino);
+  }).slice(0,8);
+  const tb=$('tbHistRota').querySelector('tbody');
+  tb.innerHTML = sims.length? sims.map(s=>{
+    const d=s.data, ic=d.status==='verde'?'🟢':d.status==='amarelo'?'🟡':'🔴';
+    return `<tr><td>${dtBR(d.ts)}</td><td>${esc(d.usuario_nome||d.usuario||'—')}</td><td class="num">${brl(d.receita_viagem!=null?d.receita_viagem:d.tarifa)}</td><td class="num">${brl(d.piso_antt)}</td><td>${ic} ${esc(d.estado||'')}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty">Sem simulações anteriores para esta rota.</td></tr>';
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   RENDERS + CRUD DAS DEMAIS ABAS
+   ══════════════════════════════════════════════════════════════════ */
+function mdAbrir(titulo,corpo,rodape){ $('mdTitulo').textContent=titulo; $('mdCorpo').innerHTML=corpo; $('mdRodape').innerHTML=rodape; $('mdBk').classList.add('on'); }
+function mdFechar(){ $('mdBk').classList.remove('on'); }
+
+/* — Premissas — */
+const PREM_CAMPOS = [
+  ['— Receita (células E5–E10) —'],
+  ['pis_cofins','PIS+COFINS (%) [E6]',.0965,true],['icms','ICMS (%) [E8]',.12,true],['margem_alvo','Margem-alvo EBIT (%)',.12,true],
+  ['— Custo Direto (E13–E17) —'],
+  ['consumo_kml','Consumo caminhão (km/L) [E17]',2.2],
+  ['— Custo Operacional (E18–E28) —'],
+  ['lubrificante_mes','Lubrificante (R$) [E18]',1500],['lubrificante_rend_km','Rendimento lubrif. (km) [E19]',30000],
+  ['pecas_mes','Peças-Serviços/mês (R$) [E20]',1000],
+  ['pneus_qtd_liso','Pneus lisos (qtde) [E21 — vazio = auto por carreta]',null],
+  ['pneus_qtd_borr','Pneus borrachudos (qtde) [E22]',4],
+  ['pneus_valor_liso','Valor pneu liso (R$) [E23]',1700],['pneus_valor_borr','Valor borrachudo (R$) [E24]',2800],
+  ['pneus_rendimento_km','Rendimento pneus (km) [E25]',120000],
+  ['licenciamento_ano','Licenciamento anual (R$) [E26]',4500],['seguro_ano','Seguro anual (R$) [E27]',11400],['laudos_ano','Laudos anual (R$) [E28]',420],
+  ['— Custo Pessoal (E29–E32) —'],
+  ['salario_motorista','Salário motorista (R$) [E29]',2364.09],['comissao_pct','Comissão s/ fat. líquido (%) [E30]',.05,true],
+  ['fator_encargos','Conversão encargos+provisões [E31]',1.9],['alimentacao_mes','Alimentação mensal (R$) [E32]',325],
+  ['— Custo Equipamento (E33–E36) —'],
+  ['custo_cavalo','Custo cavalo (R$) [E33]',350000],['custo_carreta','Custo carreta (R$) [E34]',150000],
+  ['vida_cavalo_anos','Vida útil cavalo (anos) [E35]',10],['vida_carreta_anos','Vida útil carreta (anos) [E36]',15],
+  ['cpk_ref','CPK interno ref. (R$/km, do módulo CPK)',null],
+  ['— Premissas Agregados (S5–S8) —'],
+  ['ag_impostos','Impostos (%) [S5]',.0165,true],['ag_comissao_comix','Taxa comissão COMIX (%) [S6]',.26,true],
+  ['ag_deprec_mensal','Taxa mensal depreciação (R$) [S7]',500],['ag_salario_pct','Salário motorista (% fat.) [S8]',.10,true]
+];
+function renderPremissas(){
+  const escopo=$('premEscopo').value||'default';
+  const rotaId = escopo==='default'?null:escopo;
+  const lista = ST.premissas.filter(p=> rotaId? p.data.rota_id===rotaId : !p.data.rota_id);
+  $('premLista').innerHTML = lista.length? lista.map(p=>{
+    const d=p.data;
+    const alvo=[d.filial?('Filial '+d.filial):null, d.veiculo_id?('Veículo '+esc((ST.veiculos.find(v=>v.id===d.veiculo_id)||{data:{}}).data.nome||d.veiculo_id)):null].filter(Boolean).join(' · ')||'Geral';
+    return `<div class="card" style="margin-bottom:10px">
+      <h3>${esc(alvo)} <span class="pill ${d.encerrada?'mu':'gn'}">${d.encerrada?'encerrada':'vigente'}</span>
+        <span class="muted" style="font-weight:400;margin-left:6px">desde ${esc(d.vigencia_inicio||'—')} · por ${esc(d.criado_por||'—')}</span>
+        ${podeEditarPremissas()&&!d.encerrada?`<span style="margin-left:auto"><button class="btn sm" onclick="premEditar('${p.id}')">Nova versão a partir desta</button></span>`:''}
+      </h3>
+      <div class="fields">${PREM_CAMPOS.filter(c=>c.length>1).map(([k,lb,def,isPct])=>{
+        const v=d[k]; if(v==null) return '';
+        return `<div class="kpi"><div class="lb">${esc(lb)}</div><div class="vl" style="font-size:13px">${isPct?pct(Number(v)):num(Number(v),k.includes('qtd')||k.includes('anos')||k.includes('rendimento')?0:2)}</div></div>`;
+      }).join('')}</div>
+    </div>`;
+  }).join('') : '<div class="empty">Sem premissas neste escopo. Crie a primeira versão.</div>';
+}
+$('btnNovaPremissa').onclick = ()=>premEditar(null);
+function premEditar(baseId){
+  const base = baseId? (ST.premissas.find(p=>p.id===baseId)||{data:{}}).data : {};
+  const escopo=$('premEscopo').value||'default';
+  const campos = PREM_CAMPOS.map(c=>{
+    if(c.length===1) return `<div style="grid-column:1/-1;font-weight:600;color:var(--hd);margin-top:4px">${esc(c[0])}</div>`;
+    const [k,lb,def,isPct]=c;
+    const cur = base[k]!=null? base[k] : def;
+    const shown = cur==null? '' : (isPct? (Number(cur)*100) : cur);
+    return `<label class="fld">${esc(lb)}<input type="number" step="any" data-k="${k}" data-pct="${isPct?1:0}" value="${shown}"></label>`;
+  }).join('');
+  mdAbrir('Nova versão de premissas — '+(escopo==='default'?'defaults':'rota específica'),
+    `<div class="fields" style="margin-bottom:10px">
+       <label class="fld">Filial (opcional)<select id="premFil"><option value="">Todas</option><option>SC</option><option>PR</option><option>SP</option></select></label>
+       <label class="fld">Veículo (opcional)<select id="premVeic"><option value="">Todos</option>${ST.veiculos.map(v=>`<option value="${v.id}" ${base.veiculo_id===v.id?'selected':''}>${esc(v.data.nome)}</option>`).join('')}</select></label>
+       <label class="fld">Vigência a partir de<input type="date" id="premVig" value="${hoje()}"></label>
+     </div>
+     <div class="fields" id="premForm">${campos}</div>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="premSalvar('${escopo==='default'?'':escopo}','${baseId||''}')">Salvar nova versão</button>`);
+  if(base.filial) $('premFil').value=base.filial;
+}
+async function premSalvar(rotaId, baseId){
+  const data={ rota_id:rotaId||null, filial:$('premFil').value||null, veiculo_id:$('premVeic').value||null,
+    vigencia_inicio:$('premVig').value||hoje(), criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email, encerrada:false };
+  document.querySelectorAll('#premForm input[data-k]').forEach(inp=>{
+    const v=parseFloat(inp.value); if(isNaN(v)) return;
+    data[inp.dataset.k] = inp.dataset.pct==='1'? v/100 : v;
+  });
+  await fsAddDoc(COL.premissas, data);               /* nova versão — nunca sobrescreve */
+  if(baseId) await fsSetDoc(COL.premissas, baseId, {encerrada:true, encerrada_em:agoraISO()}, true);
+  cacheBust('prem'); await carregarPremissas(); renderPremissas(); mdFechar(); toast('Nova versão de premissas registrada.','gn');
+}
+
+/* — Veículos — */
+function renderVeiculos(){
+  const tb=$('tbVeiculos').querySelector('tbody');
+  tb.innerHTML = ST.veiculos.map(v=>{ const d=v.data;
+    return `<tr><td>${esc(d.nome)}</td><td class="num">${d.eixos}</td><td class="num">${num(d.tara,1)}</td><td class="num">${num(d.capacidade,1)}</td>
+      <td class="mono">${num(d.comp,1)}×${num(d.larg,1)}×${num(d.alt,1)}</td><td>${esc(d.categoriaAntt||'granel_solido')}</td>
+      <td>${podeEditarPremissas()?`<button class="icon-btn" title="Editar" onclick="veicEditar('${v.id}')">✎</button>`:''}</td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="empty">Sem perfis.</td></tr>';
+}
+$('btnNovoVeiculo').onclick=()=>veicEditar(null);
+function veicEditar(id){
+  const d = id? (ST.veiculos.find(v=>v.id===id)||{data:{}}).data : {};
+  const cats=['granel_solido','carga_geral','neogranel','granel_liquido','frigorificada','conteineirizada','perigosa_granel_solido'];
+  mdAbrir(id?'Editar perfil de veículo':'Novo perfil de veículo',
+    `<div class="fields">
+      <label class="fld">Nome<input type="text" id="vNome" value="${esc(d.nome||'')}"></label>
+      <label class="fld">Eixos<input type="number" id="vEixos" value="${d.eixos||5}" min="2" max="11"></label>
+      <label class="fld">Tara (t)<input type="number" id="vTara" step="0.1" value="${d.tara||15}"></label>
+      <label class="fld">Cap. útil (t)<input type="number" id="vCap" step="0.1" value="${d.capacidade||27}"></label>
+      <label class="fld">Comprimento (m)<input type="number" id="vComp" step="0.1" value="${d.comp||18.6}"></label>
+      <label class="fld">Largura (m)<input type="number" id="vLarg" step="0.1" value="${d.larg||2.6}"></label>
+      <label class="fld">Altura (m)<input type="number" id="vAlt" step="0.1" value="${d.alt||4.0}"></label>
+      <label class="fld">Categoria ANTT<select id="vCat">${cats.map(c=>`<option ${d.categoriaAntt===c?'selected':''}>${c}</option>`).join('')}</select></label>
+      <label class="fld">Tabela ANTT aplicável<select id="vTab">${['A','B','C','D'].map(t=>`<option ${(d.tabelaAntt||'A')===t?'selected':''}>${t}</option>`).join('')}</select></label>
+    </div>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="veicSalvar('${id||''}')">Salvar</button>`);
+}
+async function veicSalvar(id){
+  const data={nome:$('vNome').value.trim(),eixos:+$('vEixos').value,tara:+$('vTara').value,capacidade:+$('vCap').value,
+    comp:+$('vComp').value,larg:+$('vLarg').value,alt:+$('vAlt').value,categoriaAntt:$('vCat').value,tabelaAntt:$('vTab').value,
+    atualizado_em:agoraISO(),atualizado_por:ATLAS_CURRENT_USER.email};
+  if(!data.nome){ toast('Nome obrigatório.','am'); return; }
+  if(id) await fsSetDoc(COL.veiculos,id,data,true); else await fsAddDoc(COL.veiculos,{...data,criado_em:agoraISO()});
+  cacheBust('veic'); await carregarVeiculos(); renderVeiculos(); montarSelects(); mdFechar(); toast('Perfil salvo.','gn');
+}
+
+/* — Tabela ANTT — */
+function renderAntt(){
+  $('anttInfo').innerHTML = ST.antt.coef.length
+    ? `Resolução: <b>${esc(ST.antt.resolucao||'—')}</b> · vigência desde <b>${esc(ST.antt.vigencia||'—')}</b> · ${ST.antt.coef.length} coeficientes carregados.`
+    : '';
+  const tb=$('tbAntt').querySelector('tbody');
+  const rows=[...ST.antt.coef].sort((a,b)=> String(a.tabela).localeCompare(String(b.tabela))||String(a.categoria).localeCompare(String(b.categoria))||a.eixos-b.eixos);
+  tb.innerHTML = rows.length? rows.map(c=>
+    `<tr><td>${esc(c.tabela)}</td><td>${esc(c.categoria)}</td><td class="num">${c.eixos}</td><td class="num">${num(Number(c.ccd),4)}</td><td class="num">${num(Number(c.cc),2)}</td></tr>`
+  ).join('') : '<tr><td colspan="5" class="empty">Nenhum coeficiente cadastrado. Um admin precisa carregar a resolução vigente.</td></tr>';
+}
+function anttAbrirEdicao(){
+  const linhas = ST.antt.coef.length? ST.antt.coef : [
+    {tabela:'A',categoria:'granel_solido',eixos:5,ccd:'',cc:''},
+    {tabela:'A',categoria:'granel_solido',eixos:6,ccd:'',cc:''},
+    {tabela:'A',categoria:'granel_solido',eixos:7,ccd:'',cc:''},
+    {tabela:'A',categoria:'granel_solido',eixos:9,ccd:'',cc:''},
+    {tabela:'B',categoria:'granel_solido',eixos:5,ccd:'',cc:''},
+    {tabela:'B',categoria:'granel_solido',eixos:6,ccd:'',cc:''},
+    {tabela:'B',categoria:'granel_solido',eixos:7,ccd:'',cc:''},
+    {tabela:'B',categoria:'granel_solido',eixos:9,ccd:'',cc:''}
+  ];
+  const grid = linhas.map((c,i)=>`
+    <tr>
+      <td><input type="text" style="width:44px" id="aT${i}" value="${esc(c.tabela)}"></td>
+      <td><input type="text" style="width:150px" id="aC${i}" value="${esc(c.categoria)}"></td>
+      <td><input type="number" style="width:60px" id="aE${i}" value="${c.eixos}"></td>
+      <td><input type="number" step="0.0001" style="width:110px" id="aD${i}" value="${c.ccd}"></td>
+      <td><input type="number" step="0.01" style="width:110px" id="aCC${i}" value="${c.cc}"></td>
+    </tr>`).join('');
+  mdAbrir('Nova versão da tabela ANTT (grava versão nova; a anterior fica no histórico)',
+    `<div class="fields" style="margin-bottom:10px">
+       <label class="fld">Nº da resolução ANTT<input type="text" id="aRes" placeholder="ex.: Resolução ANTT nº 6.xxx/20xx" value="${esc(ST.antt.resolucao&&ST.antt.resolucao!=='—'?ST.antt.resolucao:'')}"></label>
+       <label class="fld">Vigência a partir de<input type="date" id="aVig" value="${hoje()}"></label>
+     </div>
+     <div class="alerta am">Preencha os coeficientes conforme a resolução publicada no DOU — o módulo nunca traz valores embutidos no código. Identifique cada linha com a tabela da resolução (A/B/C/D) e a categoria de carga correspondente.</div>
+     <table class="tb"><thead><tr><th>Tabela</th><th>Categoria</th><th>Eixos</th><th>CCD (R$/km)</th><th>CC (R$)</th></tr></thead>
+     <tbody id="aTb">${grid}</tbody></table>
+     <button class="btn sm" style="margin-top:8px" onclick="anttAddLinha()">+ linha</button>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="anttSalvar()">Gravar nova versão</button>`);
+}
+function anttAddLinha(){
+  const tb=$('aTb'); const i=tb.children.length;
+  tb.insertAdjacentHTML('beforeend',`<tr>
+    <td><input type="text" style="width:44px" id="aT${i}" value="A"></td>
+    <td><input type="text" style="width:150px" id="aC${i}" value="granel_solido"></td>
+    <td><input type="number" style="width:60px" id="aE${i}" value="6"></td>
+    <td><input type="number" step="0.0001" style="width:110px" id="aD${i}"></td>
+    <td><input type="number" step="0.01" style="width:110px" id="aCC${i}"></td></tr>`);
+}
+async function anttSalvar(){
+  const res=$('aRes').value.trim(); if(!res){ toast('Informe o nº da resolução.','am'); return; }
+  const coef=[]; const tb=$('aTb');
+  for(let i=0;i<tb.children.length;i++){
+    const t=$('aT'+i)?.value.trim(), c=$('aC'+i)?.value.trim();
+    const e=parseFloat($('aE'+i)?.value), d=parseFloat($('aD'+i)?.value), cc=parseFloat($('aCC'+i)?.value);
+    if(t&&c&&!isNaN(e)&&!isNaN(d)&&!isNaN(cc)) coef.push({tabela:t.toUpperCase(),categoria:c,eixos:e,ccd:d,cc:cc});
+  }
+  if(!coef.length){ toast('Nenhuma linha válida.','am'); return; }
+  await fsAddDoc(COL.antt,{ resolucao:res, vigencia_inicio:$('aVig').value||hoje(), coeficientes:coef,
+    criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email });
+  cacheBust('antt'); await carregarAntt(); renderAntt(); checarVigenciaAntt(); mdFechar(); toast('Nova versão da tabela ANTT gravada.','gn');
+}
+
+/* — Pedágio & Rota (API) — */
+$('btnSalvarKey').onclick = async ()=>{
+  const k=$('apiHereKey').value.trim();
+  if(!k||k.startsWith('••••')){ toast('Cole a chave completa.','am'); return; }
+  await fsSetDoc(COL.config,'geral',{hereKey:k, hereKey_atualizada_em:agoraISO(), hereKey_por:ATLAS_CURRENT_USER.email},true);
+  ST.hereKey=k; $('apiHereKey').value='••••'+k.slice(-4);
+  $('apiStatus').textContent='chave salva'; $('apiStatus').className='pill ac'; toast('Chave HERE salva no Firestore.','gn');
+};
+$('btnTestarApi').onclick = async ()=>{
+  try{ const g=await hereGeocode('Itajaí, SC'); $('apiStatus').textContent='OK ('+g.label.slice(0,30)+'…)'; $('apiStatus').className='pill gn'; toast('API respondendo.','gn'); }
+  catch(e){ $('apiStatus').textContent='falha'; $('apiStatus').className='pill rd'; toast(e.message,'rd'); }
+};
+$('btnApiTeste').onclick = async ()=>{
+  try{
+    const veic=ST.veiculos[0]?.data||{eixos:6};
+    const [o,d]=await Promise.all([hereGeocode($('apiTOrig').value||'Itajaí, SC'), hereGeocode($('apiTDest').value||'Capinzal, SC')]);
+    const r=await hereRota(o,d,veic);
+    $('apiRaw').textContent=JSON.stringify(r.raw,null,2).slice(0,20000);
+  }catch(e){ $('apiRaw').textContent='ERRO: '+e.message; }
+};
+
+/* — Combustível — */
+function renderDiesel(){
+  const filiais=['SC','PR','SP'];
+  const tb=$('tbDiesel').querySelector('tbody');
+  const vigentes=filiais.map(f=>{
+    const h=[...ST.diesel].filter(d=>d.filial===f).sort((a,b)=>String(b.vigencia||'').localeCompare(String(a.vigencia||'')));
+    return h[0]?{...h[0]}:null;
+  }).filter(Boolean);
+  tb.innerHTML = vigentes.length? vigentes.map(d=>
+    `<tr><td>${esc(d.filial)}</td><td class="num">${num(Number(d.preco),3)}</td><td>${esc(d.fonte||'—')}</td><td>${esc(d.vigencia||'—')}</td><td>${esc(d.por||'—')}</td></tr>`
+  ).join('') : '<tr><td colspan="5" class="empty">Sem preços cadastrados.</td></tr>';
+  const th=$('tbDieselHist').querySelector('tbody');
+  th.innerHTML=[...ST.diesel].sort((a,b)=>String(b.vigencia||'').localeCompare(String(a.vigencia||''))).slice(0,30)
+    .map(d=>`<tr><td>${esc(d.filial)}</td><td class="num">${num(Number(d.preco),3)}</td><td>${esc(d.fonte||'—')}</td><td>${esc(d.vigencia||'—')}</td></tr>`).join('');
+}
+$('btnNovoDiesel').onclick=()=>{
+  mdAbrir('Atualizar preço do diesel',
+    `<div class="fields">
+      <label class="fld">Filial<select id="dFil"><option>SC</option><option>PR</option><option>SP</option></select></label>
+      <label class="fld">R$/L<input type="number" id="dPreco" step="0.001"></label>
+      <label class="fld">Fonte<select id="dFonte"><option>ANP</option><option>ShellBox</option><option>Gobrax</option><option>Manual</option></select></label>
+      <label class="fld">Vigência<input type="date" id="dVig" value="${hoje()}"></label>
+    </div>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="dieselSalvar()">Salvar</button>`);
+};
+async function dieselSalvar(){
+  const preco=parseFloat($('dPreco').value);
+  if(isNaN(preco)||preco<=0){ toast('Preço inválido.','am'); return; }
+  ST.diesel.push({filial:$('dFil').value,preco,fonte:$('dFonte').value,vigencia:$('dVig').value||hoje(),por:ATLAS_CURRENT_USER.email});
+  await fsSetDoc(COL.config,'diesel',{historico:ST.diesel},true);
+  renderDiesel(); mdFechar(); toast('Diesel atualizado — o Simulador passa a usar este valor.','gn');
+}
+
+/* — Clientes & Rotas — */
+function renderClientes(){
+  const tb=$('tbClientes').querySelector('tbody');
+  tb.innerHTML = ST.clientes.length? ST.clientes.map(c=>{const d=c.data;
+    return `<tr><td>${esc(d.nome)}</td><td>${esc(d.filial||'—')}</td><td class="mono">${esc(d.cnpj||'—')}</td>
+      <td>${podeEditarPremissas()?`<button class="icon-btn" onclick="cliEditar('${c.id}')">✎</button>`:''}</td></tr>`;
+  }).join(''):'<tr><td colspan="4" class="empty">Sem clientes cadastrados.</td></tr>';
+}
+$('btnNovoCliente').onclick=()=>cliEditar(null);
+function cliEditar(id){
+  const d=id?(ST.clientes.find(c=>c.id===id)||{data:{}}).data:{};
+  mdAbrir(id?'Editar cliente':'Novo cliente',
+    `<div class="fields">
+      <label class="fld">Nome<input type="text" id="cNome" value="${esc(d.nome||'')}"></label>
+      <label class="fld">Filial<select id="cFil"><option ${d.filial==='SC'?'selected':''}>SC</option><option ${d.filial==='PR'?'selected':''}>PR</option><option ${d.filial==='SP'?'selected':''}>SP</option></select></label>
+      <label class="fld">CNPJ<input type="text" id="cCnpj" value="${esc(d.cnpj||'')}" placeholder="00.000.000/0000-00"></label>
+    </div>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="cliSalvar('${id||''}')">Salvar</button>`);
+}
+async function cliSalvar(id){
+  const data={tipo:'cliente',nome:$('cNome').value.trim(),filial:$('cFil').value,cnpj:$('cCnpj').value.trim(),
+    atualizado_em:agoraISO(),atualizado_por:ATLAS_CURRENT_USER.email};
+  if(!data.nome){ toast('Nome obrigatório.','am'); return; }
+  if(id) await fsSetDoc(COL.rotas,id,data,true); else await fsAddDoc(COL.rotas,{...data,criado_em:agoraISO()});
+  cacheBust('rotas'); await carregarClientesRotas(); renderClientes(); montarSelects(); mdFechar(); toast('Cliente salvo.','gn');
+}
+function renderRotas(){
+  const tb=$('tbRotas').querySelector('tbody');
+  tb.innerHTML = ST.rotas.length? ST.rotas.map(r=>{const d=r.data;
+    const cli=(ST.clientes.find(c=>c.id===d.cliente_id)||{data:{}}).data.nome||'—';
+    return `<tr><td>${esc(d.nome||((d.origem||'')+' → '+(d.destino||'')))}</td><td>${esc(cli)}</td>
+      <td class="num">${d.dist_validada_km?num(Number(d.dist_validada_km),0):'—'}</td>
+      <td>${podeEditarPremissas()?`<button class="icon-btn" onclick="rotaEditar('${r.id}')">✎</button>`:''}</td></tr>`;
+  }).join(''):'<tr><td colspan="4" class="empty">Sem rotas cadastradas.</td></tr>';
+}
+$('btnNovaRota').onclick=()=>rotaEditar(null);
+function rotaEditar(id){
+  const d=id?(ST.rotas.find(r=>r.id===id)||{data:{}}).data:{};
+  mdAbrir(id?'Editar rota':'Nova rota',
+    `<div class="fields">
+      <label class="fld">Nome (ex.: VIMB - Araranguá BT)<input type="text" id="rNome" value="${esc(d.nome||'')}"></label>
+      <label class="fld">Cliente<select id="rCli"><option value="">—</option>${ST.clientes.map(c=>`<option value="${c.id}" ${d.cliente_id===c.id?'selected':''}>${esc(c.data.nome)}</option>`).join('')}</select></label>
+      <label class="fld">Filial<select id="rFil"><option ${d.filial==='SC'?'selected':''}>SC</option><option ${d.filial==='PR'?'selected':''}>PR</option><option ${d.filial==='SP'?'selected':''}>SP</option></select></label>
+      <label class="fld">Origem<input type="text" id="rOrig" value="${esc(d.origem||'')}"></label>
+      <label class="fld">Destino<input type="text" id="rDest" value="${esc(d.destino||'')}"></label>
+      <label class="fld">Distância validada ida (km)<input type="number" id="rDist" step="0.1" value="${d.dist_validada_km||''}"></label>
+      <label class="fld">Tipo de carga<select id="rCarga"><option value="granel_pressurizado" ${d.carga==='granel_pressurizado'?'selected':''}>Granel pressurizado</option><option value="granel" ${d.carga==='granel'?'selected':''}>Granel sólido</option><option value="geral" ${d.carga==='geral'?'selected':''}>Carga geral</option></select></label>
+    </div>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="rotaSalvar('${id||''}')">Salvar</button>`);
+}
+async function rotaSalvar(id){
+  const data={tipo:'rota',nome:$('rNome').value.trim(),cliente_id:$('rCli').value||null,filial:$('rFil').value,
+    origem:$('rOrig').value.trim(),destino:$('rDest').value.trim(),
+    dist_validada_km:parseFloat($('rDist').value)||null,carga:$('rCarga').value,
+    atualizado_em:agoraISO(),atualizado_por:ATLAS_CURRENT_USER.email};
+  if(!data.origem||!data.destino){ toast('Origem e destino obrigatórios.','am'); return; }
+  if(id) await fsSetDoc(COL.rotas,id,data,true); else await fsAddDoc(COL.rotas,{...data,criado_em:agoraISO()});
+  cacheBust('rotas'); await carregarClientesRotas(); renderRotas(); montarSelects(); mdFechar(); toast('Rota salva.','gn');
+}
+
+/* — Auditoria — */
+['audFilial','audStatus','audBusca'].forEach(id=>{ $(id).oninput=renderAuditoria; $(id).onchange=renderAuditoria; });
+function renderAuditoria(){
+  const f=$('audFilial').value, s=$('audStatus').value, q=$('audBusca').value.toLowerCase();
+  const tb=$('tbAud').querySelector('tbody');
+  const rows=(ST.sims||[]).filter(x=>{
+    const d=x.data;
+    if(d.estado!=='liberada') return false;
+    if(f&&d.filial!==f) return false;
+    if(s&&d.status!==s) return false;
+    if(q && !((d.cliente_nome||'')+(d.origem||'')+(d.destino||'')).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  tb.innerHTML = rows.length? rows.map(x=>{
+    const d=x.data, ic=d.status==='verde'?'🟢':d.status==='amarelo'?'🟡':'🔴';
+    return `<tr><td>${dtBR(d.liberado_em||d.ts)}</td><td>${esc(d.filial)}</td>
+      <td>${esc((d.origem||'').split(',')[0])} → ${esc((d.destino||'').split(',')[0])}</td>
+      <td>${esc(d.cliente_nome||'—')}</td><td class="num">${brl(d.receita_viagem!=null?d.receita_viagem:d.tarifa)}</td><td class="num">${brl(d.piso_antt)}</td>
+      <td>${ic}${d.excecao?' <span class="pill rd">exceção</span>':''}</td>
+      <td>${esc(d.liberado_por_nome||d.liberado_por||'—')}</td>
+      <td><button class="icon-btn" title="Snapshot" onclick="audDetalhe('${x.id}')">🔍</button></td></tr>`;
+  }).join(''):'<tr><td colspan="9" class="empty">Sem liberações no filtro atual.</td></tr>';
+}
+function audDetalhe(id){
+  const x=(ST.sims||[]).find(s=>s.id===id); if(!x) return;
+  const d=x.data;
+  mdAbrir('Snapshot da liberação — auditoria',
+    `<pre class="mono" style="background:var(--sf);border:1px solid var(--bd2);border-radius:8px;padding:10px;font-size:11px;max-height:60vh;overflow:auto">${esc(JSON.stringify(d,null,2))}</pre>`,
+    `<button class="btn" onclick="mdFechar()">Fechar</button>`);
+}
+</script>
+</body>
+</html>
