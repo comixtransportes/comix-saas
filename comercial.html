@@ -962,7 +962,26 @@ let _simMap=null,_simLayer=null;
 function initMapa(){
   if(_simMap) return;
   _simMap=L.map('simMapa',{scrollWheelZoom:false}).setView([-27.1,-50.5],6);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'&copy; OpenStreetMap'}).addTo(_simMap);
+  /* Provedores de tiles em ordem de preferência. CARTO (CDN robusto, sem o
+     rate-limit do tile.osm.org cru) como primário; OSM oficial como fallback.
+     Se um provedor falhar em vários tiles, troca automaticamente para o próximo. */
+  const _TILE_PROVS=[
+    {url:'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+     opt:{maxZoom:19,subdomains:'abcd',crossOrigin:true,attribution:'&copy; OpenStreetMap &copy; CARTO'}},
+    {url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+     opt:{maxZoom:19,crossOrigin:true,attribution:'&copy; OpenStreetMap'}}
+  ];
+  let _tpi=0,_tileCamada=null;
+  function _montarTiles(){
+    if(_tileCamada){ _simMap.removeLayer(_tileCamada); }
+    const p=_TILE_PROVS[_tpi]; let erros=0;
+    _tileCamada=L.tileLayer(p.url,p.opt);
+    _tileCamada.on('tileerror',()=>{
+      if(++erros>=6 && _tpi<_TILE_PROVS.length-1){ _tpi++; _montarTiles(); }
+    });
+    _tileCamada.addTo(_simMap);
+  }
+  _montarTiles();
   window._simMap=_simMap;
 }
 function desenharRota(polylines, orig, dest, pracas){
