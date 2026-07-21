@@ -1557,7 +1557,7 @@ async function ocrTokens(pdf, onProg){
   const tokens=[]; let full='';
   for(let p=1;p<=pdf.numPages;p++){
     onProg&&onProg({page:p, total:pdf.numPages, pct:0});
-    const page=await pdf.getPage(p); const vp=page.getViewport({scale:2.6});
+    const page=await pdf.getPage(p); const vp=page.getViewport({scale:3.3}); /* ~240dpi: a 2.6 o OCR perdia vírgulas decimais */
     const cv=document.createElement('canvas'); cv.width=vp.width; cv.height=vp.height;
     await page.render({canvasContext:cv.getContext('2d'), viewport:vp}).promise;
     let data;
@@ -1590,60 +1590,208 @@ function parseMetadata(txt){
   return m;
 }
 
-/* ── COEFICIENTES por GEOMETRIA ──────────────────────────────────────────
-   Cada número é posicionado pela COLUNA (posição X) e LINHA (posição Y), não
-   pela ordem. Um número que o OCR perde deixa só a célula dele vazia — nunca
-   desloca a fila. As colunas em branco (ex.: conteinerizada sem eixo 2) são
-   respeitadas porque nenhum número cai naquele X. Linhas são CCD (R$/km, valores
-   ~2,5–15) ou CC (R$, ~80–1800), classificadas por magnitude, e casadas com as
-   12 categorias na ordem fixa da resolução. ─────────────────────────────── */
+/* ── COEFICIENTES por GEOMETRIA (v2 — validado contra a Res. 6.084/2026) ──
+   O PDF do DOU "impresso" costuma ser 100% vetorial (sem camada de texto), então
+   a leitura vem do OCR — que comete erros previsíveis, todos tratados aqui:
+   · dois números fundidos num token ("4,0884/5,2311") → extração de TODOS os
+     números do token, com posição X estimada por proporção;
+   · vírgula decimal perdida ("54475") → reinterpretado pela escala da linha
+     (CCD ÷10.000, CC ÷100) e marcado p/ conferência;
+   · borda "|" lida como dígito 1 ("|7,7652"→"177652") → tenta sem o 1º dígito;
+   · COLUNAS ancoradas no cabeçalho de eixos ("2 3 4 5 6 7 9") com ajuste
+     linear — âncoras que o OCR perder são reconstruídas pela grade uniforme;
+   · LINHAS pareadas CCD→CC em sequência (cada par = 1 categoria); se a contagem
+     não fechar em 12, realinha pelos números 1–12 da coluna nº;
+   · validação final: CCD tem 4 casas decimais, CC tem 2, e ambos crescem com o
+     nº de eixos — qualquer violação marca a célula em amarelo p/ conferir. */
 function _colEixos(t){ return (t==='A'||t==='C')?[2,3,4,5,6,7,9]:[4,5,6,7,9]; }
+const _EIXOS_SEQ=[2,3,4,5,6,7,9];
+function _leiturasDoToken(tk){
+  const out=[], txt=String(tk.text||''), L=Math.max(1,txt.length);
+  const re=/\d[\d.,]*[.,]\d+/g; let m;
+  while(m=re.exec(txt)){
+    const v=parseNumBR(m[0]); if(isNaN(v)) continue;
+    const frac=(m.index+m[0].length/2)/L;
+    const decLen=m[0].length-1-Math.max(m[0].lastIndexOf(','),m[0].lastIndexOf('.'));
+    out.push({page:tk.page,cx:tk.x0+(tk.w||0)*frac, y:tk.y,h:tk.h||18,val:v,kind:'dec',raw:m[0],decLen});
+  }
+  if(!out.length){
+    const mi=txt.match(/^\D{0,2}(\d{5,7})\D{0,2}$/);
+    if(mi) out.push({page:tk.page,cx:tk.cx,y:tk.y,h:tk.h||18,val:null,kind:'int',digits:mi[1]});
+  }
+  return out;
+}
 function parseCoeficientesGeo(tokens){
   const coef=[], avisos=[];
-  const nums=[];
-  tokens.forEach(t=>{ const ns=_extractNum(t.text); if(!ns) return; const v=parseNumBR(ns);
-    if(isNaN(v)||v<2||v>1800) return; nums.push({page:t.page,cx:t.cx,y:t.y,h:t.h||10,val:v}); });
-  const ordered=tokens.slice().sort((a,b)=> (a.page-b.page)||(a.y-b.y)||(a.x0-b.x0));
+  /* garante x0/w para o cálculo proporcional (tokens do pdf.js têm x0; do OCR têm cx e h) */
+  tokens=tokens.map(t=>({...t, x0:(t.x0!=null?t.x0:(t.cx-((t.w||0)/2))), w:(t.w!=null?t.w:((t.cx-(t.x0||t.cx))*2)||0)}));
+  const reads=[]; tokens.forEach(t=>{ _leiturasDoToken(t).forEach(r=>reads.push(r)); });
+
+  /* — marcadores TABELA A/B/C/D (letra no mesmo token ou em até 3 seguintes) — */
+  const ordered=tokens.slice().sort((a,b)=>(a.page-b.page)||(a.y-b.y)||(a.x0-b.x0));
   const seen={}, order=[];
   for(let i=0;i<ordered.length;i++){
-    if(/^TABELA/i.test(ordered[i].text||'')){
+    const tx=String(ordered[i].text||'');
+    let letter=null;
+    const m1=tx.match(/^TABELA\s*[.\-]?\s*([ABCD])\b/i);
+    if(m1) letter=m1[1].toUpperCase();
+    else if(/^TABELA/i.test(tx)){
       for(let j=i+1;j<Math.min(i+4,ordered.length);j++){
-        const c=(ordered[j].text||'').toUpperCase().replace(/[.\-]/g,'').trim();
-        if(/^[ABCD]$/.test(c) && seen[c]==null){ seen[c]={page:ordered[i].page,y:ordered[i].y}; order.push(c); break; }
+        const c=String(ordered[j].text||'').toUpperCase().replace(/[.\-]/g,'').trim();
+        if(/^[ABCD]$/.test(c)){ letter=c; break; }
       }
     }
+    if(letter && seen[letter]==null){ seen[letter]={page:ordered[i].page,y:ordered[i].y}; order.push(letter); }
   }
+  const posKey=(pg,y)=>pg*1e9+y;
   const emitVazia=(t)=>ANTT_CATEGORIAS.forEach(cat=>eixosEsperados(t,cat.slug).forEach(e=>
     coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,ccd:'',cc:'',_flag:true})));
+
   ['A','B','C','D'].forEach(t=>{
     if(seen[t]==null){ avisos.push(`Tabela ${t} não localizada no PDF — preencha manualmente.`); emitVazia(t); return; }
     const oi=order.indexOf(t), nx=order[oi+1], start=seen[t], end=nx?seen[nx]:{page:99,y:1e12};
-    const reg=nums.filter(n=>{
-      if(n.page<start.page||n.page>end.page) return false;
-      if(n.page===start.page && n.y<start.y) return false;
-      if(n.page===end.page && n.y>=end.y) return false;
-      return true;
-    });
-    const colEixos=_colEixos(t), K=colEixos.length;
-    if(reg.length<K){ avisos.push(`Tabela ${t}: poucos números legíveis — revise ou use o PDF oficial.`); emitVazia(t); return; }
-    const cen=_gapCols(reg.map(n=>n.cx), K);
-    reg.sort((a,b)=> (a.page-b.page)||(a.y-b.y));
-    const rowT=Math.max(6, 0.6*_median(reg.map(n=>n.h)));
+    const dentro=o=>{ const k=posKey(o.page,o.y); return k>=posKey(start.page,start.y) && k<posKey(end.page,end.y); };
+    const reg=reads.filter(dentro), toks=tokens.filter(dentro);
+    const dataEixos=_colEixos(t), K=dataEixos.length;
+    if(!reg.length){ avisos.push(`Tabela ${t}: nenhum número legível — revise ou use o PDF oficial.`); emitVazia(t); return; }
+
+    /* — âncoras de coluna: linha do cabeçalho de eixos + ajuste linear na grade — */
+    let anchors=null, spacing=null;
+    {
+      const ints=toks.filter(x=>/^[2345679]$/.test(String(x.text||'').trim()))
+                     .sort((a,b)=>(a.page-b.page)||(a.y-b.y));
+      let line=[], header=null;
+      for(const x of ints){
+        if(line.length && (x.page!==line[line.length-1].page || (x.y-line[line.length-1].y)>Math.max(8,(x.h||18)*0.6))){
+          if(line.length>=3) { header=line; break; } line=[];
+        }
+        line.push(x);
+      }
+      if(!header && line.length>=3) header=line;
+      if(header){
+        header.sort((a,b)=>a.cx-b.cx);
+        const vals=header.map(x=>+x.text);
+        const cresc=vals.every((v,i)=>i===0||v>vals[i-1]);
+        if(cresc && vals.every(v=>_EIXOS_SEQ.includes(v))){
+          const pts=header.map(x=>[_EIXOS_SEQ.indexOf(+x.text), x.cx]);
+          const n=pts.length, sx=pts.reduce((a,p)=>a+p[0],0), sy=pts.reduce((a,p)=>a+p[1],0);
+          const sxx=pts.reduce((a,p)=>a+p[0]*p[0],0), sxy=pts.reduce((a,p)=>a+p[0]*p[1],0);
+          const den=n*sxx-sx*sx;
+          if(den){
+            const b=(n*sxy-sx*sy)/den, a0=(sy-b*sx)/n;
+            if(b>10){ anchors={}; dataEixos.forEach(e=>anchors[e]=a0+b*_EIXOS_SEQ.indexOf(e)); spacing=b; }
+          }
+        }
+      }
+    }
+    let assignEixo;
+    if(anchors){
+      const entries=Object.entries(anchors).map(([e,ax])=>[+e,ax]);
+      assignEixo=cx=>{ let be=null,bd=1e12; entries.forEach(([e,ax])=>{ const d=Math.abs(cx-ax); if(d<bd){bd=d;be=e;} });
+        const ax=anchors[be]; const off=cx-ax;
+        return (off>-0.55*spacing && off<0.85*spacing)?be:null; };
+    }else{
+      const cen=_gapCols(reg.filter(r=>r.kind==='dec').map(n=>n.cx), K);
+      assignEixo=cx=>{ let bi=0,bd=1e12; for(let i=0;i<cen.length;i++){ const d=Math.abs(cx-cen[i]); if(d<bd){bd=d;bi=i;} } return dataEixos[bi]; };
+      avisos.push(`Tabela ${t}: cabeçalho de eixos não localizado — colunas estimadas por agrupamento (confira).`);
+    }
+
+    /* — âncoras de categoria: nº 1..12 na coluna esquerda (sequência crescente) — */
+    const leftLim = anchors ? (Math.min(...Object.values(anchors))-2.2*(spacing||120)) : (Math.min(...reg.map(n=>n.cx))-50);
+    const catAnchor={};
+    {
+      const cints=toks.filter(x=>/^(1[0-2]|[1-9])$/.test(String(x.text||'').trim()) && x.cx<leftLim)
+                      .sort((a,b)=>(a.page-b.page)||(a.y-b.y));
+      let lastv=0;
+      cints.forEach(x=>{ const v=+x.text; if(v===lastv+1 && v<=12){ catAnchor[v]=[x.page,x.y]; lastv=v; } });
+    }
+
+    /* — linhas de valores — */
+    reg.sort((a,b)=>(a.page-b.page)||(a.y-b.y));
+    const hs=reg.filter(r=>r.kind==='dec').map(r=>r.h);
+    const rowT=Math.max(8, 0.7*(_median(hs)||18));
     const rows=[]; let cur=[];
     reg.forEach(n=>{ if(cur.length && (n.page!==cur[cur.length-1].page || (n.y-cur[cur.length-1].y)>rowT)){ rows.push(cur); cur=[]; } cur.push(n); });
     if(cur.length) rows.push(cur);
-    const ccdRows=[], ccRows=[];
+    const vrows=[];
     rows.forEach(row=>{
-      const med=_median(row.map(n=>n.val)), a={};
-      row.forEach(n=>{ let bi=0,bd=1e12; for(let i=0;i<cen.length;i++){const d=Math.abs(n.cx-cen[i]); if(d<bd){bd=d;bi=i;}} const e=colEixos[bi]; if(a[e]==null) a[e]=n.val; });
-      if(med<=15) ccdRows.push(a); else if(med>=80) ccRows.push(a);
+      const decs=row.filter(n=>n.kind==='dec').map(n=>n.val);
+      let typ='unk';
+      if(decs.length){ const med=_median(decs); if(med<=15) typ='ccd'; else if(med>=80) typ='cc'; else return; }
+      vrows.push({page:row[0].page, y:_median(row.map(n=>n.y)), typ, items:row});
     });
-    if(ccdRows.length!==12||ccRows.length!==12)
-      avisos.push(`Tabela ${t}: ${ccdRows.length} linha(s) de CCD e ${ccRows.length} de CC lidas (esperado 12/12). Revise as células destacadas.`);
-    ANTT_CATEGORIAS.forEach((cat,ci)=>{
-      const ex=eixosEsperados(t,cat.slug), cd=ccdRows[ci]||{}, ck=ccRows[ci]||{};
+    vrows.forEach((r,i)=>{ if(r.typ==='unk') r.typ=(i>0&&vrows[i-1].typ==='ccd')?'cc':'ccd'; });
+
+    /* — pareamento CCD→CC; realinhamento por âncoras se a contagem não fechar — */
+    let catrows={}, ci=1, i=0;
+    while(i<vrows.length && ci<=12){
+      const r=vrows[i];
+      if(r.typ==='ccd'){
+        (catrows[ci]=catrows[ci]||[]).push(r);
+        if(i+1<vrows.length && vrows[i+1].typ==='cc'){ catrows[ci].push(vrows[i+1]); i++; }
+        ci++;
+      }else{ (catrows[ci]=catrows[ci]||[]).push(r); ci++; }
+      i++;
+    }
+    const pares=ci-1;
+    if(pares!==12 && Object.keys(catAnchor).length>=9){
+      const avs=Object.entries(catAnchor).map(([v,p])=>[+v,p]).sort((a,b)=>a[0]-b[0]);
+      catrows={};
+      vrows.forEach(r=>{
+        const key=posKey(r.page,r.y); let cat=null;
+        avs.forEach(([v,[pg,ay]],idx)=>{
+          const nxt=idx+1<avs.length?avs[idx+1][1]:[99,1e12];
+          if(key>=posKey(pg,ay-1.2*rowT) && key<posKey(nxt[0],nxt[1]-1.2*rowT)) cat=v;
+        });
+        if(cat) (catrows[cat]=catrows[cat]||[]).push(r);
+      });
+    }
+    if(pares!==12) avisos.push(`Tabela ${t}: ${pares} categoria(s) pareadas (esperado 12) — células realinhadas; confira os destaques.`);
+
+    /* — montagem das células + validações — */
+    ANTT_CATEGORIAS.forEach((cat,cidx)=>{
+      const ex=eixosEsperados(t,cat.slug);
+      const cd={}, ck={}, fl={};
+      (catrows[cidx+1]||[]).forEach(r=>{
+        const tgt=(r.typ==='ccd')?cd:ck;
+        const lo=(r.typ==='ccd')?2:80, hi=(r.typ==='ccd')?15:1800;
+        const reinterp=d=>{
+          const tries=(d.length>=6 && d[0]==='1')?[d,d.slice(1)]:[d];
+          for(const dd of tries){ if(!dd) continue;
+            const v=(r.typ==='ccd')?(+dd)/10000:(+dd)/100;
+            if(v>=lo&&v<=hi) return v; }
+          return null;
+        };
+        r.items.forEach(n=>{
+          let v, flagged=false, decLen=n.decLen;
+          if(n.kind==='dec'){
+            v=n.val;
+            if(!(v>=lo&&v<=hi)){
+              const d=String(n.raw||'').replace(/\D/g,'');
+              v=reinterp(d); if(v==null) return;
+              flagged=true; decLen=(r.typ==='ccd')?4:2;
+            }
+          }else{
+            v=reinterp(n.digits); if(v==null) return;
+            flagged=true; decLen=(r.typ==='ccd')?4:2;
+          }
+          const e=assignEixo(n.cx);
+          if(e==null || ex.indexOf(e)<0 || tgt[e]!=null) return;
+          tgt[e]=v;
+          const expDec=(r.typ==='ccd')?4:2;
+          if(flagged || (decLen!=null && decLen!==expDec)) fl[r.typ+e]=true;
+        });
+      });
+      /* monotonicidade: CCD e CC crescem com o nº de eixos */
+      [['ccd',cd],['cc',ck]].forEach(([k,obj])=>{
+        for(let j=1;j<ex.length;j++){
+          const a=obj[ex[j-1]], b=obj[ex[j]];
+          if(a!=null&&b!=null&&b<=a){ fl[k+ex[j-1]]=true; fl[k+ex[j]]=true; }
+        }
+      });
       ex.forEach(e=>{
-        const ccd=cd[e], cc=ck[e], flag=(ccd==null)||(cc==null);
+        const ccd=cd[e], cc=ck[e];
+        const flag=(ccd==null)||(cc==null)||!!fl['ccd'+e]||!!fl['cc'+e];
         coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,
           ccd:(ccd==null)?'':+Number(ccd).toFixed(4), cc:(cc==null)?'':+Number(cc).toFixed(2), _flag:flag});
       });
