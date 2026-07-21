@@ -108,6 +108,7 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
 .tb td.num,.tb th.num{text-align:right;font-family:var(--m)}
 .tb tr.tot td{font-weight:700;background:var(--sf);border-top:2px solid var(--bd)}
 .tb tr.grp td{background:var(--ht);font-weight:600;color:var(--hd)}
+.tb tr.antt-vazio td{opacity:.5}
 
 /* Semáforo */
 .semaforo{display:flex;align-items:center;gap:14px;padding:14px;border-radius:10px;border:1px solid var(--bd2)}
@@ -1364,47 +1365,78 @@ function renderAntt(){
       (a.criadoEm?`<br><span class="muted">Carregada em ${dtBR(a.criadoEm)}${a.criadoPor?' por '+esc(a.criadoPor):''}.</span>`:'');
   } else $('anttInfo').innerHTML='';
   const tb=$('tbAntt').querySelector('tbody');
-  const rows=[...ST.antt.coef].sort((a,b)=> String(a.tabela).localeCompare(String(b.tabela))||String(a.categoria).localeCompare(String(b.categoria))||a.eixos-b.eixos);
-  tb.innerHTML = rows.length? rows.map(c=>
-    `<tr><td>${esc(c.tabela)}</td><td>${esc(c.categoria)}</td><td class="num">${c.eixos}</td><td class="num">${num(Number(c.ccd),4)}</td><td class="num">${num(Number(c.cc),2)}</td></tr>`
-  ).join('') : '<tr><td colspan="5" class="empty">Nenhum coeficiente cadastrado. Um admin precisa carregar a resolução vigente.</td></tr>';
+  if(!ST.antt.coef.length){
+    tb.innerHTML='<tr><td colspan="5" class="empty">Nenhum coeficiente cadastrado. Um admin precisa carregar a resolução vigente.</td></tr>';
+    return;
+  }
+  /* índice dos coeficientes gravados por (tabela|categoria|eixos) */
+  const idx={};
+  ST.antt.coef.forEach(c=>{ idx[`${String(c.tabela).toUpperCase()}|${c.categoria}|${c.eixos}`]=c; });
+  const catNome={}; ANTT_CATEGORIAS.forEach(cat=>catNome[cat.slug]=cat.nome);
+  /* monta a GRADE COMPLETA: toda categoria mostra todos os eixos possíveis,
+     mesmo os que a resolução deixa em branco (aparecem como "—"). */
+  let html='';
+  ANTT_TABELAS.forEach(({t})=>{
+    ANTT_CATEGORIAS.forEach(cat=>{
+      eixosGrade(t,cat.slug).forEach(e=>{
+        const c=idx[`${t}|${cat.slug}|${e}`];
+        const temCcd=c&&c.ccd!==''&&c.ccd!=null, temCc=c&&c.cc!==''&&c.cc!=null;
+        const vazio=(!temCcd&&!temCc);
+        html+=`<tr${vazio?' class="antt-vazio"':''}>`
+          +`<td>${t}</td><td>${esc(catNome[cat.slug]||cat.slug)}</td>`
+          +`<td class="num">${e}</td>`
+          +`<td class="num">${temCcd?num(Number(c.ccd),4):'<span class="muted">—</span>'}</td>`
+          +`<td class="num">${temCc?num(Number(c.cc),2):'<span class="muted">—</span>'}</td></tr>`;
+      });
+    });
+  });
+  tb.innerHTML=html;
 }
 function anttAbrirEdicao(){
-  const linhas = ST.antt.coef.length? ST.antt.coef : [
-    {tabela:'A',categoria:'granel_solido',eixos:5,ccd:'',cc:''},
-    {tabela:'A',categoria:'granel_solido',eixos:6,ccd:'',cc:''},
-    {tabela:'A',categoria:'granel_solido',eixos:7,ccd:'',cc:''},
-    {tabela:'A',categoria:'granel_solido',eixos:9,ccd:'',cc:''},
-    {tabela:'B',categoria:'granel_solido',eixos:5,ccd:'',cc:''},
-    {tabela:'B',categoria:'granel_solido',eixos:6,ccd:'',cc:''},
-    {tabela:'B',categoria:'granel_solido',eixos:7,ccd:'',cc:''},
-    {tabela:'B',categoria:'granel_solido',eixos:9,ccd:'',cc:''}
-  ];
-  const grid = linhas.map((c,i)=>`
-    <tr>
-      <td><input type="text" style="width:44px" id="aT${i}" value="${esc(c.tabela)}"></td>
-      <td><input type="text" style="width:150px" id="aC${i}" value="${esc(c.categoria)}"></td>
-      <td><input type="number" style="width:60px" id="aE${i}" value="${c.eixos}"></td>
-      <td><input type="number" step="0.0001" style="width:110px" id="aD${i}" value="${c.ccd}"></td>
-      <td><input type="number" step="0.01" style="width:110px" id="aCC${i}" value="${c.cc}"></td>
-    </tr>`).join('');
+  /* índice do que já está gravado, para mesclar com a grade completa */
+  const idx={};
+  ST.antt.coef.forEach(c=>{ idx[`${String(c.tabela).toUpperCase()}|${c.categoria}|${c.eixos}`]=c; });
+  const catNome={}; ANTT_CATEGORIAS.forEach(cat=>catNome[cat.slug]=cat.nome);
+  /* GRADE COMPLETA: todas as células (2–9) de todas as categorias e tabelas,
+     preenchidas onde há valor e vazias onde a resolução ainda não trouxe —
+     prontas para preenchimento futuro sem mexer no código. */
+  const linhas=[];
+  ANTT_TABELAS.forEach(({t})=>ANTT_CATEGORIAS.forEach(cat=>eixosGrade(t,cat.slug).forEach(e=>{
+    const c=idx[`${t}|${cat.slug}|${e}`];
+    linhas.push({tabela:t,categoria:cat.slug,categoria_nome:catNome[cat.slug]||cat.slug,eixos:e,
+      ccd:(c&&c.ccd!=null)?c.ccd:'', cc:(c&&c.cc!=null)?c.cc:''});
+  })));
+  let lastKey='';
+  const grid = linhas.map((c,i)=>{
+    const key=c.tabela+'|'+c.categoria;
+    const primeira = key!==lastKey; lastKey=key;
+    const catCell = primeira?`<b>${esc(c.categoria_nome)}</b><br><span class="mono muted" style="font-size:11px">${esc(c.categoria)}</span>`:'';
+    return `
+    <tr${primeira?' style="border-top:2px solid var(--bd,#3a3a3a)"':''}>
+      <td>${primeira?`<b>${esc(c.tabela)}</b>`:''}<input type="hidden" id="aT${i}" value="${esc(c.tabela)}"></td>
+      <td style="min-width:150px">${catCell}<input type="hidden" id="aC${i}" value="${esc(c.categoria)}"></td>
+      <td class="num">${c.eixos}<input type="hidden" id="aE${i}" value="${c.eixos}"></td>
+      <td><input type="number" step="0.0001" style="width:110px" id="aD${i}" value="${c.ccd}" placeholder="—"></td>
+      <td><input type="number" step="0.01" style="width:110px" id="aCC${i}" value="${c.cc}" placeholder="—"></td>
+    </tr>`;
+  }).join('');
   mdAbrir('Nova versão da tabela ANTT (grava versão nova; a anterior fica no histórico)',
     `<div class="fields" style="margin-bottom:10px">
        <label class="fld">Nº da resolução ANTT<input type="text" id="aRes" placeholder="ex.: Resolução ANTT nº 6.xxx/20xx" value="${esc(ST.antt.resolucao&&ST.antt.resolucao!=='—'?ST.antt.resolucao:'')}"></label>
        <label class="fld">Vigência a partir de<input type="date" id="aVig" value="${hoje()}"></label>
      </div>
-     <div class="alerta am">Preencha os coeficientes conforme a resolução publicada no DOU — o módulo nunca traz valores embutidos no código. Identifique cada linha com a tabela da resolução (A/B/C/D) e a categoria de carga correspondente.</div>
-     <table class="tb"><thead><tr><th>Tabela</th><th>Categoria</th><th>Eixos</th><th>CCD (R$/km)</th><th>CC (R$)</th></tr></thead>
+     <div class="alerta am">Todas as células de eixos (2 a 9) já aparecem por categoria. Preencha conforme a resolução publicada no DOU; deixe em branco os eixos que a resolução não define — eles ficam prontos para uso futuro sem alterar o sistema. Só as células com CCD <b>e</b> CC preenchidos são gravadas.</div>
+     <table class="tb"><thead><tr><th>Tabela</th><th>Categoria</th><th class="num">Eixos</th><th>CCD (R$/km)</th><th>CC (R$)</th></tr></thead>
      <tbody id="aTb">${grid}</tbody></table>
-     <button class="btn sm" style="margin-top:8px" onclick="anttAddLinha()">+ linha</button>`,
+     <button class="btn sm" style="margin-top:8px" onclick="anttAddLinha()">+ linha avulsa</button>`,
     `<button class="btn" onclick="mdFechar()">Cancelar</button>
      <button class="btn pri" onclick="anttSalvar()">Gravar nova versão</button>`);
 }
 function anttAddLinha(){
   const tb=$('aTb'); const i=tb.children.length;
-  tb.insertAdjacentHTML('beforeend',`<tr>
-    <td><input type="text" style="width:44px" id="aT${i}" value="A"></td>
-    <td><input type="text" style="width:150px" id="aC${i}" value="granel_solido"></td>
+  tb.insertAdjacentHTML('beforeend',`<tr style="background:rgba(255,200,0,.06)">
+    <td><input type="text" style="width:44px" id="aT${i}" value="A" title="Tabela A/B/C/D"></td>
+    <td><input type="text" style="width:150px" id="aC${i}" value="granel_solido" title="slug da categoria"></td>
     <td><input type="number" style="width:60px" id="aE${i}" value="6"></td>
     <td><input type="number" step="0.0001" style="width:110px" id="aD${i}"></td>
     <td><input type="number" step="0.01" style="width:110px" id="aCC${i}"></td></tr>`);
@@ -1453,7 +1485,8 @@ const ANTT_TABELAS = [
   {t:'C', nome:'Lotação — alto desempenho'},
   {t:'D', nome:'Só veículo automotor — alto desempenho'}
 ];
-/* eixos com valor por (tabela, categoria) — colunas em branco ficam de fora */
+/* eixos que a RESOLUÇÃO efetivamente preenche por (tabela, categoria).
+   Usado só pelo IMPORTADOR, para saber onde ESPERAR um número lido do PDF. */
 function eixosEsperados(tabela, slug){
   const T=String(tabela).toUpperCase();
   if(slug==='granel_pressurizada') return [5,6,9];
@@ -1461,7 +1494,20 @@ function eixosEsperados(tabela, slug){
     if(slug==='conteinerizada'||slug==='perigosa_conteinerizada') return [3,4,5,6,7,9];
     return [2,3,4,5,6,7,9];
   }
-  return [4,5,6,7,9]; /* B e D: colunas 2 e 3 vazias */
+  return [4,5,6,7,9]; /* B e D: colunas 2 e 3 hoje vazias na resolução */
+}
+/* GRADE COMPLETA de eixos possíveis por categoria (2 a 9 — o 8 não existe em
+   CVC, então fica de fora). Sempre exibimos/oferecemos TODAS estas células,
+   mesmo as que a resolução vigente deixa em branco: assim, quando a ANTT
+   publicar um coeficiente novo para um eixo hoje inexistente, basta preencher
+   o campo — sem alterar o código. A pressurizada segue fisicamente restrita a
+   5/6/9. Para importar, a ausência de valor numa célula fora de eixosEsperados
+   é NORMAL (não gera flag); só falta de leitura no que a resolução preenche é
+   que fica marcado. */
+const _EIXOS_GRADE_PADRAO=[2,3,4,5,6,7,9];
+function eixosGrade(tabela, slug){
+  if(slug==='granel_pressurizada') return [5,6,9];
+  return _EIXOS_GRADE_PADRAO.slice();
 }
 const _MESES={janeiro:1,fevereiro:2,marco:3,'março':3,abril:4,maio:5,junho:6,julho:7,agosto:8,setembro:9,outubro:10,novembro:11,dezembro:12};
 function _mesNum(m){ const k=String(m||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''); return _MESES[k]||_MESES[m?.toLowerCase()]||0; }
@@ -1644,8 +1690,13 @@ function parseCoeficientesGeo(tokens){
     if(letter && seen[letter]==null){ seen[letter]={page:ordered[i].page,y:ordered[i].y}; order.push(letter); }
   }
   const posKey=(pg,y)=>pg*1e9+y;
-  const emitVazia=(t)=>ANTT_CATEGORIAS.forEach(cat=>eixosEsperados(t,cat.slug).forEach(e=>
-    coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,ccd:'',cc:'',_flag:true})));
+  const emitVazia=(t)=>ANTT_CATEGORIAS.forEach(cat=>{
+    const ex=eixosEsperados(t,cat.slug);
+    eixosGrade(t,cat.slug).forEach(e=>{
+      const naResolucao=ex.indexOf(e)>=0;
+      coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,ccd:'',cc:'',_flag:naResolucao,_opcional:!naResolucao});
+    });
+  });
 
   ['A','B','C','D'].forEach(t=>{
     if(seen[t]==null){ avisos.push(`Tabela ${t} não localizada no PDF — preencha manualmente.`); emitVazia(t); return; }
@@ -1789,11 +1840,16 @@ function parseCoeficientesGeo(tokens){
           if(a!=null&&b!=null&&b<=a){ fl[k+ex[j-1]]=true; fl[k+ex[j]]=true; }
         }
       });
-      ex.forEach(e=>{
+      /* emite a GRADE COMPLETA: eixos que a resolução preenche seguem a lógica
+         de flag por ausência; eixos extras (hoje em branco) saem vazios e SEM
+         flag — ficam prontos para preenchimento manual quando a ANTT publicar. */
+      eixosGrade(t,cat.slug).forEach(e=>{
+        const naResolucao=ex.indexOf(e)>=0;
         const ccd=cd[e], cc=ck[e];
-        const flag=(ccd==null)||(cc==null)||!!fl['ccd'+e]||!!fl['cc'+e];
+        const flag=naResolucao && ((ccd==null)||(cc==null)||!!fl['ccd'+e]||!!fl['cc'+e]);
         coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,
-          ccd:(ccd==null)?'':+Number(ccd).toFixed(4), cc:(cc==null)?'':+Number(cc).toFixed(2), _flag:flag});
+          ccd:(ccd==null)?'':+Number(ccd).toFixed(4), cc:(cc==null)?'':+Number(cc).toFixed(2),
+          _flag:flag, _opcional:!naResolucao});
       });
     });
   });
@@ -1806,8 +1862,13 @@ function parseCoeficientesTexto(txt){
   while(m=re.exec(txt)) marks.push({t:m[1].toUpperCase(), i:m.index});
   const reg={}; for(let k=0;k<marks.length;k++){ const c=marks[k]; if(reg[c.t]==null) reg[c.t]=txt.slice(c.i, marks[k+1]?marks[k+1].i:txt.length); }
   const coef=[], avisos=[];
-  const emitVazia=(t)=>ANTT_CATEGORIAS.forEach(cat=>eixosEsperados(t,cat.slug).forEach(e=>
-    coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,ccd:'',cc:'',_flag:true})));
+  const emitVazia=(t)=>ANTT_CATEGORIAS.forEach(cat=>{
+    const ex=eixosEsperados(t,cat.slug);
+    eixosGrade(t,cat.slug).forEach(e=>{
+      const naResolucao=ex.indexOf(e)>=0;
+      coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,ccd:'',cc:'',_flag:naResolucao,_opcional:!naResolucao});
+    });
+  });
   ['A','B','C','D'].forEach(t=>{
     const bloco=reg[t];
     if(!bloco){ avisos.push(`Tabela ${t} não localizada.`); emitVazia(t); return; }
@@ -1824,9 +1885,16 @@ function parseCoeficientesTexto(txt){
     ANTT_CATEGORIAS.forEach((cat,ci)=>{
       const ex=eixosEsperados(t,cat.slug), cd=ccdRows[ci]||[], ck=ccRows[ci]||[];
       const okCcd=cd.length===ex.length, okCc=ck.length===ex.length;
-      ex.forEach((e,i)=>{ const ccd=cd[i], cc=ck[i], flag=!okCcd||!okCc||ccd==null||cc==null;
+      /* mapeia os valores lidos (na ordem da resolução) para o eixo correspondente */
+      const cdBy={}, ckBy={};
+      ex.forEach((e,i)=>{ cdBy[e]=cd[i]; ckBy[e]=ck[i]; });
+      eixosGrade(t,cat.slug).forEach(e=>{
+        const naResolucao=ex.indexOf(e)>=0;
+        const ccd=cdBy[e], cc=ckBy[e];
+        const flag=naResolucao && (!okCcd||!okCc||ccd==null||cc==null);
         coef.push({tabela:t,categoria:cat.slug,categoria_nome:cat.nome,eixos:e,
-          ccd:(ccd==null||isNaN(ccd))?'':+ccd.toFixed(4), cc:(cc==null||isNaN(cc))?'':+cc.toFixed(2), _flag:flag}); });
+          ccd:(ccd==null||isNaN(ccd))?'':+ccd.toFixed(4), cc:(cc==null||isNaN(cc))?'':+cc.toFixed(2),
+          _flag:flag, _opcional:!naResolucao}); });
     });
   });
   return {coef, avisos};
@@ -1918,11 +1986,13 @@ function _impRenderVerificacao(){
     rows.forEach(({c,k})=>{
       const catCell = c.categoria_nome!==lastCat ? esc(c.categoria_nome) : '';
       lastCat=c.categoria_nome;
-      grids+=`<tr>
+      const opc=c._opcional?' imp-opc':'';
+      const eixoCell=c._opcional?`${c.eixos} <span class="muted" style="font-size:10px">(opcional)</span>`:c.eixos;
+      grids+=`<tr class="${opc.trim()}">
         <td>${catCell}<span class="mono muted" style="font-size:11px"> ${catCell?esc(c.categoria):''}</span></td>
-        <td class="num">${c.eixos}</td>
-        <td><input type="number" step="0.0001" class="imp-in${c._flag?' flag':''}" id="im_ccd_${k}" value="${c.ccd}"></td>
-        <td><input type="number" step="0.01" class="imp-in${c._flag?' flag':''}" id="im_cc_${k}" value="${c.cc}"></td>
+        <td class="num">${eixoCell}</td>
+        <td><input type="number" step="0.0001" class="imp-in${c._flag?' flag':''}" id="im_ccd_${k}" value="${c.ccd}" placeholder="${c._opcional?'—':''}"></td>
+        <td><input type="number" step="0.01" class="imp-in${c._flag?' flag':''}" id="im_cc_${k}" value="${c.cc}" placeholder="${c._opcional?'—':''}"></td>
       </tr>`;
     });
     grids+='</tbody></table>';
@@ -1999,7 +2069,9 @@ function _injImpCss(){
    .imp-tblhead{font-weight:600;font-size:13px;margin:12px 0 4px}
    .imp-grid td,.imp-grid th{padding:3px 6px}
    .imp-in{width:104px;padding:3px 6px;border:1px solid var(--bd,#c9d4e5);border-radius:5px;font-family:var(--fm,monospace);font-size:12px}
-   .imp-in.flag{background:#fff7d6;border-color:#e2b400}`;
+   .imp-in.flag{background:#fff7d6;border-color:#e2b400}
+   .imp-grid tr.imp-opc{opacity:.62}
+   .imp-grid tr.imp-opc .imp-in{background:#f4f6fa;border-style:dashed}`;
   document.head.appendChild(s);
 }
 
