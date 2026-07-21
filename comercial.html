@@ -109,6 +109,12 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
 .tb tr.tot td{font-weight:700;background:var(--sf);border-top:2px solid var(--bd)}
 .tb tr.grp td{background:var(--ht);font-weight:600;color:var(--hd)}
 .tb tr.antt-vazio td{opacity:.5}
+.ac-box{position:absolute;left:0;right:0;top:100%;z-index:60;background:var(--bg,#fff);border:1px solid var(--bd,#c9d4e5);border-top:none;border-radius:0 0 8px 8px;box-shadow:0 8px 22px rgba(0,0,0,.16);max-height:240px;overflow-y:auto}
+.ac-item{display:flex;align-items:center;gap:8px;padding:7px 11px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--bd2,#eef2f8)}
+.ac-item:last-child{border-bottom:none}
+.ac-item.sel,.ac-item:hover{background:var(--ht,#eaf1ff)}
+.ac-city{font-weight:500;color:var(--tx,#1a2233)}
+.ac-uf{margin-left:auto;font-size:11px;font-weight:600;color:var(--mu,#64748b);background:var(--sf,#f1f5f9);padding:1px 7px;border-radius:10px}
 
 /* Semáforo */
 .semaforo{display:flex;align-items:center;gap:14px;padding:14px;border-radius:10px;border:1px solid var(--bd2)}
@@ -601,6 +607,7 @@ async function boot(){
   carregarAuditoria();
   initMapa();
   checarVigenciaAntt();
+  ativarAutocompleteCidades();  /* Simulador e Pedágio & Rota (campos estáticos) */
 }
 setTimeout(()=>{ if(!_booted && !atlasHasParentBridge()) boot(); }, 800); // dev fora do shell
 
@@ -718,7 +725,11 @@ async function hereContarChamada(){
   try{
     ST.hereChamadasMes++;
     const campo='chamadas_'+hoje().slice(0,7);
-    await fsSetDoc(COL.config,'geral',{[campo]:ST.hereChamadasMes},true);
+    const patch={[campo]:ST.hereChamadasMes};
+    /* reafirma a chave em toda gravação: se a ponte do Atlas não respeitar o
+       merge, o documento não fica sem a hereKey (bug do "tive que recarregar"). */
+    if(ST.hereKey) patch.hereKey=ST.hereKey;
+    await fsSetDoc(COL.config,'geral',patch,true);
     $('apiConsumo').textContent=ST.hereChamadasMes;
   }catch(_){}
 }
@@ -731,6 +742,100 @@ async function hereGeocode(q){
   const it=j.items&&j.items[0];
   if(!it) throw new Error('Endereço não encontrado: '+q);
   return { lat:it.position.lat, lng:it.position.lng, label:it.address?.label||q };
+}
+
+/* ── Autocomplete de cidades (HERE Autosuggest) ─────────────────────────────
+   Sugere municípios brasileiros conforme o usuário digita. Usa a MESMA chave
+   HERE já configurada. Cache por termo + debounce para poupar chamadas. */
+const _cityCache=new Map();
+async function hereCidades(q){
+  q=String(q||'').trim();
+  if(q.length<2) return [];
+  const key=q.toLowerCase();
+  if(_cityCache.has(key)) return _cityCache.get(key);
+  if(!ST.hereKey) return [];  /* sem chave: silencioso, campo segue como texto livre */
+  /* centro aproximado do Brasil como viés de proximidade (melhora ranqueamento) */
+  const url=`https://autosuggest.search.hereapi.com/v1/autosuggest`
+    +`?q=${encodeURIComponent(q)}`
+    +`&at=-15.79,-47.88`
+    +`&in=countryCode:BRA`
+    +`&limit=7&lang=pt-BR&apiKey=${ST.hereKey}`;
+  let out=[];
+  try{
+    const r=await fetch(url); hereContarChamada();
+    if(r.ok){
+      const j=await r.json();
+      const vistos=new Set();
+      (j.items||[]).forEach(it=>{
+        const a=it.address||{};
+        const cidade=a.city||a.county||it.title;
+        if(!cidade) return;
+        const uf=a.stateCode||a.state||'';
+        const label = uf ? `${cidade}, ${uf}` : cidade;
+        if(vistos.has(label)) return; vistos.add(label);
+        out.push({label, cidade, uf, tipo:it.resultType||''});
+      });
+    }
+  }catch(_){}
+  _cityCache.set(key,out);
+  return out;
+}
+
+/* liga um <input> a um dropdown de sugestões de cidade. Idempotente. */
+function attachCityAutocomplete(input){
+  if(!input || input._acReady) return; input._acReady=true;
+  input.setAttribute('autocomplete','off');
+  const box=document.createElement('div'); box.className='ac-box'; box.style.display='none';
+  /* o dropdown é posicionado de forma absoluta relativo ao container do input */
+  const host=input.closest('.fld')||input.parentElement;
+  if(getComputedStyle(host).position==='static') host.style.position='relative';
+  host.appendChild(box);
+  let items=[], sel=-1, tmr=null, lastQ='';
+
+  function fechar(){ box.style.display='none'; sel=-1; }
+  function render(){
+    if(!items.length){ fechar(); return; }
+    box.innerHTML=items.map((it,i)=>
+      `<div class="ac-item${i===sel?' sel':''}" data-i="${i}">`
+      +`<span class="ac-city">${esc(it.cidade)}</span>${it.uf?`<span class="ac-uf">${esc(it.uf)}</span>`:''}</div>`
+    ).join('');
+    box.style.display='block';
+  }
+  function escolher(i){
+    const it=items[i]; if(!it) return;
+    input.value=it.label; input.dispatchEvent(new Event('change',{bubbles:true}));
+    fechar(); input.focus();
+  }
+  box.addEventListener('mousedown',e=>{ const el=e.target.closest('.ac-item'); if(el){ e.preventDefault(); escolher(+el.dataset.i); } });
+
+  input.addEventListener('input',()=>{
+    const q=input.value.trim();
+    clearTimeout(tmr);
+    if(q.length<2 || q===lastQ){ if(q.length<2) fechar(); return; }
+    tmr=setTimeout(async ()=>{
+      lastQ=q;
+      const res=await hereCidades(q);
+      /* ignora resposta atrasada se o usuário já mudou o texto */
+      if(input.value.trim()!==q) return;
+      items=res; sel=-1; render();
+    },220);
+  });
+  input.addEventListener('keydown',e=>{
+    if(box.style.display==='none') return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); sel=Math.min(sel+1,items.length-1); render(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); sel=Math.max(sel-1,0); render(); }
+    else if(e.key==='Enter'){ if(sel>=0){ e.preventDefault(); escolher(sel); } }
+    else if(e.key==='Escape'){ fechar(); }
+  });
+  input.addEventListener('blur',()=>setTimeout(fechar,120));
+}
+/* aplica o autocomplete a todos os campos de cidade conhecidos + qualquer um
+   marcado com [data-cidade]. Chamado após render de telas que criam inputs. */
+function ativarAutocompleteCidades(scope){
+  const root=scope||document;
+  const ids=['simOrigem','simDestino','apiTOrig','apiTDest','rOrig','rDest'];
+  ids.forEach(id=>{ const el=root.getElementById?root.getElementById(id):document.getElementById(id); if(el) attachCityAutocomplete(el); });
+  root.querySelectorAll?.('[data-cidade]').forEach(attachCityAutocomplete);
 }
 async function hereRota(orig, dest, veic){
   if(!ST.hereKey) throw new Error('Chave HERE não configurada (aba Pedágio & Rota).');
@@ -1500,13 +1605,12 @@ function eixosEsperados(tabela, slug){
    CVC, então fica de fora). Sempre exibimos/oferecemos TODAS estas células,
    mesmo as que a resolução vigente deixa em branco: assim, quando a ANTT
    publicar um coeficiente novo para um eixo hoje inexistente, basta preencher
-   o campo — sem alterar o código. A pressurizada segue fisicamente restrita a
-   5/6/9. Para importar, a ausência de valor numa célula fora de eixosEsperados
-   é NORMAL (não gera flag); só falta de leitura no que a resolução preenche é
-   que fica marcado. */
+   o campo — sem alterar o código. Isso vale para TODAS as categorias, inclusive
+   a granel pressurizada. Para importar, a ausência de valor numa célula fora de
+   eixosEsperados é NORMAL (não gera flag); só falta de leitura no que a
+   resolução preenche é que fica marcado. */
 const _EIXOS_GRADE_PADRAO=[2,3,4,5,6,7,9];
 function eixosGrade(tabela, slug){
-  if(slug==='granel_pressurizada') return [5,6,9];
   return _EIXOS_GRADE_PADRAO.slice();
 }
 const _MESES={janeiro:1,fevereiro:2,marco:3,'março':3,abril:4,maio:5,junho:6,julho:7,agosto:8,setembro:9,outubro:10,novembro:11,dezembro:12};
@@ -2079,9 +2183,19 @@ function _injImpCss(){
 $('btnSalvarKey').onclick = async ()=>{
   const k=$('apiHereKey').value.trim();
   if(!k||k.startsWith('••••')){ toast('Cole a chave completa.','am'); return; }
-  await fsSetDoc(COL.config,'geral',{hereKey:k, hereKey_atualizada_em:agoraISO(), hereKey_por:ATLAS_CURRENT_USER.email},true);
-  ST.hereKey=k; $('apiHereKey').value='••••'+k.slice(-4);
-  $('apiStatus').textContent='chave salva'; $('apiStatus').className='pill ac'; toast('Chave HERE salva no Firestore.','gn');
+  const btn=$('btnSalvarKey'); const txt=btn.textContent; btn.disabled=true; btn.textContent='Salvando…';
+  try{
+    await fsSetDoc(COL.config,'geral',{hereKey:k, hereKey_atualizada_em:agoraISO(), hereKey_por:ATLAS_CURRENT_USER.email},true);
+    /* confirma que persistiu de fato (lê de volta) antes de dizer que salvou */
+    const chk=await fsGetDoc(COL.config,'geral');
+    if(!chk || (chk.data.hereKey||'')!==k) throw new Error('a chave não persistiu no banco — verifique permissões do Firestore.');
+    ST.hereKey=k; $('apiHereKey').value='••••'+k.slice(-4);
+    $('apiStatus').textContent='chave salva'; $('apiStatus').className='pill gn';
+    toast('Chave HERE salva e confirmada no banco.','gn');
+  }catch(e){
+    $('apiStatus').textContent='falha ao salvar'; $('apiStatus').className='pill rd';
+    toast('Não foi possível salvar a chave: '+(e.message||e),'rd');
+  }finally{ btn.disabled=false; btn.textContent=txt; }
 };
 $('btnTestarApi').onclick = async ()=>{
   try{ const g=await hereGeocode('Itajaí, SC'); $('apiStatus').textContent='OK ('+g.label.slice(0,30)+'…)'; $('apiStatus').className='pill gn'; toast('API respondendo.','gn'); }
@@ -2222,18 +2336,92 @@ function cliEditar(id){
   const d=id?(ST.clientes.find(c=>c.id===id)||{data:{}}).data:{};
   mdAbrir(id?'Editar cliente':'Novo cliente',
     `<div class="fields">
-      <label class="fld">Nome<input type="text" id="cNome" value="${esc(d.nome||'')}"></label>
+      <label class="fld">CNPJ<div style="display:flex;gap:6px">
+        <input type="text" id="cCnpj" value="${esc(d.cnpj||'')}" placeholder="00.000.000/0000-00" style="flex:1" inputmode="numeric">
+        <button type="button" class="btn sm" id="cCnpjBtn" title="Buscar dados na Receita">🔍 Buscar</button>
+      </div><span id="cCnpjMsg" class="muted" style="font-size:11px"></span></label>
+      <label class="fld">Nome (fantasia)<input type="text" id="cNome" value="${esc(d.nome||'')}"></label>
+      <label class="fld">Razão social<input type="text" id="cRazao" value="${esc(d.razao_social||'')}"></label>
       <label class="fld">Filial<select id="cFil"><option ${d.filial==='SC'?'selected':''}>SC</option><option ${d.filial==='PR'?'selected':''}>PR</option><option ${d.filial==='SP'?'selected':''}>SP</option></select></label>
-      <label class="fld">CNPJ<input type="text" id="cCnpj" value="${esc(d.cnpj||'')}" placeholder="00.000.000/0000-00"></label>
+      <label class="fld">Município / UF<input type="text" id="cCidade" value="${esc(d.municipio||'')}" data-cidade></label>
+      <label class="fld">Endereço<input type="text" id="cEnd" value="${esc(d.endereco||'')}"></label>
+      <label class="fld">Telefone<input type="text" id="cTel" value="${esc(d.telefone||'')}"></label>
+      <label class="fld">E-mail<input type="text" id="cEmail" value="${esc(d.email||'')}"></label>
+      <label class="fld">Situação cadastral<input type="text" id="cSit" value="${esc(d.situacao||'')}" readonly style="opacity:.8"></label>
     </div>`,
     `<button class="btn" onclick="mdFechar()">Cancelar</button>
      <button class="btn pri" onclick="cliSalvar('${id||''}')">Salvar</button>`);
+  const inp=$('cCnpj');
+  inp.addEventListener('input',()=>{ inp.value=_mascaraCnpj(inp.value); const dig=inp.value.replace(/\D/g,''); if(dig.length===14) cnpjPreencher(); });
+  $('cCnpjBtn').onclick=cnpjPreencher;
+  attachCityAutocomplete($('cCidade'));
 }
+function _mascaraCnpj(v){
+  v=String(v||'').replace(/\D/g,'').slice(0,14);
+  return v.replace(/^(\d{2})(\d)/,'$1.$2').replace(/^(\d{2})\.(\d{3})(\d)/,'$1.$2.$3')
+          .replace(/\.(\d{3})(\d)/,'.$1/$2').replace(/(\d{4})(\d)/,'$1-$2');
+}
+let _cnpjBuscando=false;
+async function cnpjPreencher(){
+  const dig=($('cCnpj')?.value||'').replace(/\D/g,'');
+  const msg=$('cCnpjMsg');
+  if(dig.length!==14){ if(msg){msg.textContent='CNPJ deve ter 14 dígitos.'; msg.className='muted';} return; }
+  if(_cnpjBuscando) return; _cnpjBuscando=true;
+  const btn=$('cCnpjBtn'); const bt=btn?btn.textContent:''; if(btn){btn.disabled=true;btn.textContent='Buscando…';}
+  if(msg){ msg.textContent='Consultando Receita Federal…'; msg.className='muted'; }
+  try{
+    const r=await fetch('https://brasilapi.com.br/api/cnpj/v1/'+dig);
+    if(!r.ok){ throw new Error(r.status===404?'CNPJ não encontrado.':'Falha na consulta (HTTP '+r.status+').'); }
+    const j=await r.json();
+    const set=(id,v)=>{ const el=$(id); if(el && v!=null && v!=='') el.value=v; };
+    /* nome fantasia cai para razão social se vazio */
+    set('cNome', j.nome_fantasia || j.razao_social || '');
+    set('cRazao', j.razao_social || '');
+    const uf=j.uf||''; const mun=j.municipio||'';
+    set('cCidade', mun ? (uf?`${_titulo(mun)}, ${uf}`:_titulo(mun)) : '');
+    const endereco=[j.descricao_tipo_de_logradouro, j.logradouro, j.numero&&('nº '+j.numero), j.complemento, j.bairro, j.cep&&('CEP '+_mascaraCep(j.cep))]
+      .filter(Boolean).map(s=>String(s).trim()).join(', ');
+    set('cEnd', endereco);
+    const tel=(j.ddd_telefone_1||'').trim(); set('cTel', tel);
+    set('cEmail', (j.email||'').toLowerCase());
+    set('cSit', j.descricao_situacao_cadastral || j.situacao_cadastral || '');
+    /* auto-preenche a filial pela UF, se bater com SC/PR/SP */
+    if(['SC','PR','SP'].includes(uf) && $('cFil')) $('cFil').value=uf;
+    _cnpjUltimo=j;  /* guarda o retorno bruto para gravar junto */
+    if(msg){
+      const ativa=/ATIVA/i.test(j.descricao_situacao_cadastral||'');
+      msg.textContent='✓ '+(j.razao_social||'dados carregados')+(j.descricao_situacao_cadastral?` · ${j.descricao_situacao_cadastral}`:'');
+      msg.className=ativa?'':'muted'; msg.style.color=ativa?'#1a7f37':'#b9770b';
+    }
+  }catch(e){
+    if(msg){ msg.textContent='⚠️ '+(e.message||'Não foi possível consultar.')+' Preencha manualmente.'; msg.style.color='#b42318'; }
+  }finally{ _cnpjBuscando=false; if(btn){btn.disabled=false;btn.textContent=bt;} }
+}
+function _titulo(s){ return String(s||'').toLowerCase().replace(/\b\w/g,c=>c.toUpperCase()); }
+function _mascaraCep(c){ c=String(c||'').replace(/\D/g,''); return c.length===8?c.replace(/(\d{5})(\d{3})/,'$1-$2'):c; }
+let _cnpjUltimo=null;
 async function cliSalvar(id){
-  const data={tipo:'cliente',nome:$('cNome').value.trim(),filial:$('cFil').value,cnpj:$('cCnpj').value.trim(),
+  const cnpjDig=($('cCnpj')?.value||'').replace(/\D/g,'');
+  const data={tipo:'cliente',
+    nome:$('cNome').value.trim(),
+    razao_social:$('cRazao')?.value.trim()||null,
+    filial:$('cFil').value,
+    cnpj:$('cCnpj').value.trim(),
+    municipio:$('cCidade')?.value.trim()||null,
+    endereco:$('cEnd')?.value.trim()||null,
+    telefone:$('cTel')?.value.trim()||null,
+    email:$('cEmail')?.value.trim()||null,
+    situacao:$('cSit')?.value.trim()||null,
     atualizado_em:agoraISO(),atualizado_por:ATLAS_CURRENT_USER.email};
   if(!data.nome){ toast('Nome obrigatório.','am'); return; }
+  /* anexa o snapshot da Receita se a busca correspondeu ao CNPJ digitado */
+  if(_cnpjUltimo && String(_cnpjUltimo.cnpj||'').replace(/\D/g,'')===cnpjDig){
+    data.receita_snapshot={ razao_social:_cnpjUltimo.razao_social||null, cnae_fiscal:_cnpjUltimo.cnae_fiscal||null,
+      cnae_fiscal_descricao:_cnpjUltimo.cnae_fiscal_descricao||null, porte:_cnpjUltimo.porte||null,
+      consultado_em:agoraISO() };
+  }
   if(id) await fsSetDoc(COL.rotas,id,data,true); else await fsAddDoc(COL.rotas,{...data,criado_em:agoraISO()});
+  _cnpjUltimo=null;
   cacheBust('rotas'); await carregarClientesRotas(); renderClientes(); montarSelects(); mdFechar(); toast('Cliente salvo.','gn');
 }
 function renderRotas(){
@@ -2260,6 +2448,7 @@ function rotaEditar(id){
     </div>`,
     `<button class="btn" onclick="mdFechar()">Cancelar</button>
      <button class="btn pri" onclick="rotaSalvar('${id||''}')">Salvar</button>`);
+  attachCityAutocomplete($('rOrig')); attachCityAutocomplete($('rDest'));
 }
 async function rotaSalvar(id){
   const data={tipo:'rota',nome:$('rNome').value.trim(),cliente_id:$('rCli').value||null,filial:$('rFil').value,
