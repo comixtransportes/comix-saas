@@ -677,6 +677,16 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
       <label class="fld">Filial
         <select id="rtFilial"><option value="">Todas</option><option value="SC">SC (17)</option><option value="PR">PR (18)</option><option value="SP">SP (03)</option></select>
       </label>
+      <label class="fld">Complexidade
+        <select id="rtIcr">
+          <option value="">Todas</option>
+          <option value="Favorável">Favorável</option>
+          <option value="Moderada">Moderada</option>
+          <option value="Exigente">Exigente</option>
+          <option value="Crítica">Crítica</option>
+          <option value="prov">Só provisórias</option>
+          <option value="sem">Sem índice</option>
+        </select></label>
       <label class="fld">Classificação
         <select id="rtClasse">
           <option value="">Todas</option>
@@ -3833,6 +3843,13 @@ function rtFiltradas(){
   let out=RT.rotas.filter(r=>{
     if(f && r.op!==f) return false;
     if(c && r.status!==c) return false;
+    const fi=$('rtIcr')?.value||'';
+    if(fi){
+      const i=r.icr;
+      if(fi==='sem'){ if(i&&i.nota!=null) return false; }
+      else if(fi==='prov'){ if(!i||!i.provisoria||i.nota==null) return false; }
+      else if(!i||i.classe!==fi) return false;
+    }
     if(!c && r.status==='semf' && !verSemFat) return false;
     if(q){
       const hay=(r.codigoRaw+' '+r.descricao+' '+r.origem+' '+r.destino+' '+r.op+' '+r.ufO+' '+r.ufD+' '+r.remetente+' '+r.destinatario).toLowerCase();
@@ -3853,6 +3870,7 @@ function rtFiltradas(){
       case 'ciclo':  return r.cicloH==null?-1:r.cicloH;
       case 'custoV': return r.custoViagem==null?-1:r.custoViagem;
       case 'custoT': return r.custoTon==null?-1:r.custoTon;
+      case 'icr':    return r.icrNota==null?-1:r.icrNota;
       default: return r.receita;
     }
   };
@@ -3881,6 +3899,7 @@ const RT_COLS=[
   {k:'ciclo',   t:'Ciclo (h)',   cls:'num'},
   {k:'custoV',  t:'Custo/viagem',cls:'num'},
   {k:'custoT',  t:'Custo/t',     cls:'num'},
+  {k:'icr',     t:'ICR',          cls:'num'},
   {k:null,      t:'',            cls:''}
 ];
 function rtRenderHead(){
@@ -3937,6 +3956,7 @@ function rtRender(){
         <td class="num">${r.cicloH!=null?num(r.cicloH,1):'—'}</td>
         <td class="num">${r.custoViagem!=null?brl(r.custoViagem):'—'}</td>
         <td class="num">${r.custoTon!=null?brl(r.custoTon):'—'}</td>
+        <td class="num">${rtIcrChip(r)}</td>
         <td><button class="icon-btn" title="Analisar" onclick="rtAnalisar(${ini+i})">🔍</button></td>
       </tr>`;
     }).join('');
@@ -4020,13 +4040,16 @@ function rtAnalisar(i){
     ${rtBlocoRelevo(r)}
     <h3 style="font-size:12px;margin:16px 0 8px;border-top:1px solid var(--bd2);padding-top:12px">Custos</h3>
     ${rtBlocoCustos(r)}
+    <h3 style="font-size:12px;margin:16px 0 8px;border-top:1px solid var(--bd2);padding-top:12px">Índice de Complexidade</h3>
+    ${rtBlocoICR(r)}
+    ${r.viagens>0?`<h3 style="font-size:12px;margin:16px 0 8px;border-top:1px solid var(--bd2);padding-top:12px">Histórico realizado</h3>${rtBlocoHistorico(r)}`:''}
     <h3 style="font-size:12px;margin:16px 0 8px;border-top:1px solid var(--bd2);padding-top:12px">Memória de cálculo</h3>
     ${rtBlocoMemoria(r)}
     ${ctes.length?`<h3 style="font-size:12px;margin:14px 0 8px">CT-e do período <span class="muted" style="font-weight:400">(${num(r.ctes.length,0)} associados${r.ctes.length>12?' · 12 primeiros':''})</span></h3>
       <table class="tb"><thead><tr><th>Data</th><th>CTRC</th><th>Placa</th><th class="num">Ton</th><th class="num">Valor</th></tr></thead>
       <tbody>${ctes.map(c=>`<tr><td>${esc(dtSimplesBR(c.data))}</td><td class="mono">${esc(c.ctrc||c.cte.slice(-8)||'—')}</td><td class="mono">${esc(c.placa||'—')}</td><td class="num">${num(c.ton,1)}</td><td class="num">${brl(c.valor)}</td></tr>`).join('')}</tbody></table>`:''}
     <div class="muted" style="margin-top:12px;font-size:11px">
-      O Índice de Complexidade entra na próxima onda. Nada aqui é estimado: campo sem dado aparece como “—”.
+      Nada aqui é estimado: campo sem dado aparece como “—” e sai da conta do índice em vez de virar zero.
     </div>`;
   mdAbrir('Rota '+(r.codigoRaw||'—')+' · '+r.origem+' → '+r.destino, corpo, '<button class="btn" onclick="mdFechar()">Fechar</button>');
 }
@@ -4106,6 +4129,13 @@ async function rtExportar(){
       'Dist. HERE (km)':r.hereKm, 'Δ km':dv?+dv.dif.toFixed(1):null, 'Δ %':dv?+(dv.pct*100).toFixed(2):null,
       'Viagens':r.viagens||null, 'Toneladas':r.ton?+r.ton.toFixed(2):null, 'Receita':r.receita?+r.receita.toFixed(2):null,
       'R$/t':r.ton?+(r.receita/r.ton).toFixed(2):null,
+      'Custo/viagem':r.custoViagem!=null?+r.custoViagem.toFixed(2):null,
+      'Custo/km':r.custoKm!=null?+r.custoKm.toFixed(3):null,
+      'ICR':r.icrNota!=null?+r.icrNota.toFixed(2):null,
+      'Complexidade':r.icr?r.icr.classe:'',
+      'Completude ICR':r.icr?+(r.icr.completude*100).toFixed(0):null,
+      'ICR provisório':r.icr&&r.icr.nota!=null?(r.icr.provisoria?'Sim':'Não'):'',
+      'Impacto mecânico':r.mec?r.mec.classe:'',
       'Período':per
     };};
     const wb=XLSX.utils.book_new();
@@ -4189,6 +4219,28 @@ async function rtExportar(){
       'Item':m.o, 'Como foi calculado':m.f, 'Valor':m.v!=null?+Number(m.v).toFixed(2):null })));
     add('Memória de cálculo', memLinhas);
 
+    /* Memória da pontuação do ICR — uma linha por subitem (§23) */
+    const SUBN={topografia:'Topografia',sinuosidade:'Sinuosidade e geometria',pavimento:'Pavimento e conservação',
+      velocidade:'Deslocamento e velocidade',ciclo:'Tempo de ciclo',aproveitamento:'Aproveitamento da viagem',
+      cpk:'Custo por km',despesas:'Despesas específicas',descarga:'Descarga pressurizada',
+      restricoes:'Restrições da composição',criticidade:'Criticidade viária e ambiental',apoio:'Apoio e comunicação',
+      variacao:'Variação do tempo',filas:'Congestionamentos e filas',espera:'Espera e reprogramação'};
+    const icrLinhas=[];
+    RT.rotas.filter(r=>r.icr&&r.icr.nota!=null).forEach(r=>{
+      for(const dk in r.icr.dims){ const d=r.icr.dims[dk];
+        for(const sk in d.subs){ const sb=d.subs[sk];
+          icrLinhas.push({ 'Filial':r.op, 'Rota':r.codigoRaw, 'Trecho':r.origem+' → '+r.destino,
+            'Dimensão':d.nome, 'Peso da dimensão':+(d.peso*100).toFixed(0),
+            'Subitem':SUBN[sk]||sk, 'Peso do subitem':+(RT_CFG.icrSub[dk][sk]*100).toFixed(0),
+            'Origem':sb.fonte==='humano'?'Avaliado':'Calculado',
+            'Base da nota':sb.como, 'Nota':sb.disp?+sb.nota.toFixed(2):null,
+            'Nota da dimensão':d.nota!=null?+d.nota.toFixed(2):null,
+            'ICR':+r.icr.nota.toFixed(2), 'Classificação':r.icr.classe,
+            'Completude':+(r.icr.completude*100).toFixed(0) });
+        } }
+    });
+    add('Memória do índice', icrLinhas);
+
     add('Premissas',[
       {Premissa:'Limite “Compatível”',Valor:(RT_CFG.divAtencao*100)+'%'},
       {Premissa:'Limite “Atenção”',Valor:(RT_CFG.divRelevante*100)+'%'},
@@ -4212,7 +4264,12 @@ async function rtExportar(){
       {Premissa:'Taxa de descarga (t/h)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compTaxaTh},
       {Premissa:'Consumo do compressor (l/h)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compConsumoLh},
       {Premissa:'Fonte de energia do compressor',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compFonte==='tdf'?'tomada de força do cavalo':'motor independente'},
-      {Premissa:'Rotas com premissa própria',Valor:RT.custoOv.size}
+      {Premissa:'Rotas com premissa própria',Valor:RT.custoOv.size},
+      {Premissa:'Rotas com avaliação humana',Valor:RT.aval.size},
+      {Premissa:'Pesos do ICR',Valor:Object.keys(RT_CFG.icrPesos).map(k=>`${k} ${(RT_CFG.icrPesos[k]*100).toFixed(0)}%`).join(' · ')},
+      {Premissa:'Faixas do ICR',Valor:`até ${RT_CFG.icrFaixas.favoravel} Favorável · até ${RT_CFG.icrFaixas.moderada} Moderada · até ${RT_CFG.icrFaixas.exigente} Exigente · acima Crítica`},
+      {Premissa:'Completude mínima',Valor:`${(RT_CFG.icrCompletudeMin*100).toFixed(0)}% — abaixo disso a classificação sai como Provisória`},
+      {Premissa:'Item sem dado',Valor:'sai da conta e o peso é redistribuído — nunca vira nota zero'}
     ]);
     XLSX.writeFile(wb,`Analise_de_Rotas_${per}.xlsx`);
     toast('Excel gerado.','gn');
@@ -4225,7 +4282,7 @@ function rtAtualizar(){
   if(!RT.carregado) return;
   RT.periodo.a=+($('rtAno')?.value||RT.periodo.a);
   RT.periodo.m=+($('rtMes')?.value||RT.periodo.m);
-  rtMontar(); rtCalcularCustos(); RT.pag=1; rtRender();
+  rtMontar(); rtCalcularCustos(); rtCalcularICR(); RT.pag=1; rtRender();
   const m=[];
   m.push(RT.szyMeta?`<span class="pill mu">SZY · ${num(RT.szy.length,0)} linhas · ${esc(dtBR(RT.szyMeta.ts))}${RT.szyMeta.user?' · '+esc(RT.szyMeta.user):''}</span>`
                    :'<span class="pill rd">SZY não encontrada em bases_cloud/szy</span>');
@@ -4258,7 +4315,7 @@ async function rtInit(force){
     /* perfil e caches entram antes do primeiro render para que as colunas da
        HERE já apareçam preenchidas sem nenhuma chamada de rede à API. */
     await Promise.all([rtCarregarPerfil(), rtCarregarCacheHere(), rtCarregarCacheGeo(),
-                       rtCarregarCusto(), rtCarregarSZC(force)]);
+                       rtCarregarCusto(), rtCarregarSZC(force), rtCarregarAval()]);
     rtRenderMapa();
     simSincronizarRotasSZY();   /* o seletor do Simulador acompanha a recarga */
   }
@@ -5443,6 +5500,438 @@ function rtPrecoEfetivo(tipo, P, r){
   return {valor:null, fonte:'indisponível'};
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ANÁLISE DE ROTAS — Onda 4 · Índice de Complexidade da Rota
+   ──────────────────────────────────────────────────────────────────────────
+   Cinco dimensões, pesos e cortes todos em configuração central (RT_CFG).
+   Cada subitem recebe nota de 0 a 5 e diz de onde veio: CALCULADO (topografia,
+   sinuosidade, velocidade, ciclo, custo, trânsito) ou AVALIADO (pavimento,
+   criticidade viária, apoio) — este último preenchido por pessoa, por exceção.
+
+   Regra que sustenta o índice desde o primeiro dia: subitem sem dado NÃO vira
+   nota zero. Ele sai da conta e o peso é redistribuído entre os que existem.
+   O que fica registrado é a COMPLETUDE — quanto do peso total foi de fato
+   avaliado. Abaixo do mínimo, a classificação sai marcada como Provisória.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+Object.assign(RT_CFG,{
+  icrPesos:{ esforco:0.20, eficiencia:0.25, custo:0.25, seguranca:0.20, previsibilidade:0.10 },
+  icrSub:{
+    esforco:        { topografia:0.40, sinuosidade:0.30, pavimento:0.30 },
+    eficiencia:     { velocidade:0.35, ciclo:0.35, aproveitamento:0.30 },
+    custo:          { cpk:0.50, despesas:0.20, descarga:0.30 },
+    seguranca:      { restricoes:0.40, criticidade:0.40, apoio:0.20 },
+    previsibilidade:{ variacao:0.40, filas:0.30, espera:0.30 }
+  },
+  icrFaixas:{ favoravel:1.25, moderada:2.50, exigente:3.75 },
+  icrCompletudeMin:0.70,
+  /* Cortes de cada subitem — o valor cai na primeira faixa que ele não atinge.
+     Listas crescentes: quanto maior o valor, pior a nota. */
+  icrCortes:{
+    rampaPor100km:[1,3,6,10,16],      /* km em rampas >5% a cada 100 km       */
+    curvasPorKm:  [0.3,0.8,1.5,2.5,4],
+    cicloH:       [8,12,18,24,36],
+    descargaPct:  [0.05,0.10,0.18,0.28,0.40],  /* peso da descarga no custo   */
+    razaoCusto:   [0.80,0.95,1.10,1.30,1.60],  /* CPK ÷ mediana das rotas     */
+    razaoDespesa: [0.80,0.95,1.10,1.30,1.60],
+    atrasoPct:    [0.02,0.06,0.12,0.20,0.30],  /* trânsito sobre tempo livre  */
+    esperaH:      [0.5,1,2,3,5],
+    restricoes:   [1,2,3,5,8]                  /* avisos da HERE              */
+  },
+  /* Listas decrescentes: quanto maior o valor, MELHOR a nota. */
+  icrCortesInv:{
+    velocidadeKmh:[70,60,50,40,30],
+    aproveitamento:[0.48,0.42,0.35,0.28,0.20]  /* ton·km úteis ÷ possíveis    */
+  },
+  /* Avaliação humana consolidada → nota. */
+  icrPavimento:{ bom:0.5, regular:2, ruim:3.5, critico:5 },
+  icrCriticidade:{ baixa:0.5, moderada:2, alta:3.5, critica:5 },
+  icrApoio:{ boa:0.5, razoavel:2, dificil:3.5, critica:5 },
+  icrFilas:{ raras:0.5, ocasionais:2, frequentes:3.5, constantes:5 }
+});
+
+Object.assign(RT,{ aval:new Map(), avalCarregado:false, icrCtx:null });
+
+/* ══ Avaliação humana — por exceção, uma rota de cada vez ══ */
+const RT_AVAL_DOC='rotas_aval_';
+async function rtCarregarAval(){
+  if(RT.avalCarregado) return;
+  RT.avalCarregado=true;
+  for(let n=0;n<8;n++){
+    let d=null;
+    try{ d=await fsGetDoc(COL.config,RT_AVAL_DOC+n); }catch(_){ break; }
+    if(!d||!d.data||!d.data.itens) break;
+    const it=d.data.itens;
+    Object.keys(it).forEach(k=>RT.aval.set(k,it[k]));
+    if(Object.keys(it).length<300) break;
+  }
+}
+async function rtGravarAval(){
+  const ch=[...RT.aval.keys()], docs=[];
+  for(let i=0;i<ch.length;i+=300){
+    const b={}; ch.slice(i,i+300).forEach(k=>b[k]=RT.aval.get(k)); docs.push(b);
+  }
+  if(!docs.length) docs.push({});
+  for(let n=0;n<docs.length;n++)
+    await fsSetDoc(COL.config,RT_AVAL_DOC+n,{itens:docs[n],salvo_em:agoraISO(),salvo_por:ATLAS_CURRENT_USER.email||'—'},true);
+}
+
+/* ══ Escalas ══ */
+function rtEscala(v,cortes){
+  if(v==null||!isFinite(v)) return null;
+  for(let i=0;i<cortes.length;i++) if(v<cortes[i]) return i;
+  return 5;
+}
+function rtEscalaInv(v,cortes){
+  if(v==null||!isFinite(v)) return null;
+  for(let i=0;i<cortes.length;i++) if(v>=cortes[i]) return i;
+  return 5;
+}
+function _sub(nota,fonte,como){ return nota==null?{nota:null,fonte,como,disp:false}:{nota,fonte,como,disp:true}; }
+
+/* ══ Contexto: medianas do conjunto, usadas nas notas relativas de custo ══ */
+function rtContextoICR(){
+  const cpks=[], desps=[];
+  RT.rotas.forEach(r=>{
+    const c=r.custo; if(!c||c.erro) return;
+    if(c.cpk>0) cpks.push(c.cpk);
+    const d=(c.linhas.pedagio||0)+(c.linhas.alimentacao||0)+(c.linhas.limpeza||0)+(c.linhas.tempo||0);
+    if(c.km.total>0) desps.push(d/c.km.total);
+  });
+  const med=a=>{ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y);
+    const m=Math.floor(s.length/2); return s.length%2?s[m]:(s[m-1]+s[m])/2; };
+  return { cpkMediana:med(cpks), despMediana:med(desps), n:cpks.length };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ÍNDICE DE COMPLEXIDADE (§23)
+   ══════════════════════════════════════════════════════════════════════════ */
+function rtICR(r, ctx){
+  ctx = ctx || RT.icrCtx || rtContextoICR();
+  const C=RT_CFG.icrCortes, CI=RT_CFG.icrCortesInv;
+  const c=r.custo, h=(r.here&&!r.here.erro)?r.here:null;
+  const ida=h?h.ida:null, volta=h?h.volta:null;
+  const a=RT.aval.get(r.k3)||{};
+  const perfil=rtPerfilAtivo();
+
+  /* ── 1) Esforço físico ── */
+  const topo=ida?ida.topo:null;
+  let nTopo=null, comoTopo='sem perfil de elevação';
+  if(topo && r.kmTotalHere>0){
+    const por100=(topo.km5+ (volta&&volta.topo?volta.topo.km5:0))/ (r.kmTotalHere/100);
+    nTopo=rtEscala(por100,C.rampaPor100km);
+    comoTopo=`${num(por100,1)} km em rampas >5% a cada 100 km`;
+    if(topo.serrano && nTopo!=null && nTopo<5) nTopo=Math.min(5,nTopo+1), comoTopo+=' · trecho serrano';
+  }
+  const sinu=ida?ida.sinu:null;
+  const nSinu=sinu?rtEscala(sinu.curvasPorKm,C.curvasPorKm):null;
+  const nPav = a.pavimento ? RT_CFG.icrPavimento[a.pavimento] ?? null : null;
+
+  /* ── 2) Eficiência operacional ── */
+  let nVel=null, comoVel='sem simulação da HERE';
+  if(h && r.cicloMin>0 && r.kmTotalHere>0){
+    const kmh=r.kmTotalHere/(r.cicloMin/60);
+    nVel=rtEscalaInv(kmh,CI.velocidadeKmh); comoVel=`${num(kmh,1)} km/h de média no deslocamento`;
+  }
+  const cicloH=c&&!c.erro?c.prod.cicloH:null;
+  const nCiclo=rtEscala(cicloH,C.cicloH);
+  let nAprov=null, comoAprov='sem peso por viagem';
+  if(c&&!c.erro&&c.tonViagem>0&&perfil.cargaT>0&&c.km.total>0){
+    const util=(c.tonViagem/perfil.cargaT)*(c.km.carregado/c.km.total);
+    nAprov=rtEscalaInv(util,CI.aproveitamento);
+    comoAprov=`${pct(util,0)} de aproveitamento (${num(c.tonViagem,1)} t de ${num(perfil.cargaT,1)} t · ${pct(c.km.carregado/c.km.total,0)} carregado)`;
+  }
+
+  /* ── 3) Custo total ── */
+  let nCpk=null, comoCpk='sem custo calculado';
+  if(c&&!c.erro&&c.cpk>0&&ctx.cpkMediana>0){
+    const rz=c.cpk/ctx.cpkMediana;
+    nCpk=rtEscala(rz,C.razaoCusto);
+    comoCpk=`${brl(c.cpk)}/km · ${num(rz,2)}× a mediana de ${brl(ctx.cpkMediana)}`;
+  }
+  let nDesp=null, comoDesp='sem despesas apuradas';
+  if(c&&!c.erro&&c.km.total>0&&ctx.despMediana>0){
+    const d=((c.linhas.pedagio||0)+(c.linhas.alimentacao||0)+(c.linhas.limpeza||0)+(c.linhas.tempo||0))/c.km.total;
+    const rz=ctx.despMediana>0?d/ctx.despMediana:null;
+    nDesp=rtEscala(rz,C.razaoDespesa);
+    comoDesp=`${brl(d)}/km de pedágio, alimentação, limpeza e tempo · ${num(rz,2)}× a mediana`;
+  }
+  let nDesc=null, comoDesc='sem custo de descarga';
+  if(c&&!c.erro&&c.compressor&&c.total>0){
+    const p=c.compressor.total/c.total;
+    nDesc=rtEscala(p,C.descargaPct);
+    comoDesc=`descarga é ${pct(p,0)} do custo da viagem (${num(c.compressor.tempoH,1)} h)`;
+  }
+
+  /* ── 4) Segurança e restrições ── */
+  let nRestr=null, comoRestr='sem simulação da HERE';
+  if(ida&&ida.restr){
+    const tot=(ida.restr.total||0)+(volta&&volta.restr?volta.restr.total:0);
+    nRestr=rtEscala(tot,C.restricoes);
+    if(/Alta/.test(ida.restr.classe)) nRestr=Math.max(nRestr||0,4);
+    comoRestr=tot?`${tot} aviso(s) de restrição para o perfil do caminhão`:'nenhuma restrição sinalizada para o perfil';
+  }
+  const nCrit = a.criticidade ? RT_CFG.icrCriticidade[a.criticidade] ?? null : null;
+  const nApoio= a.apoio ? RT_CFG.icrApoio[a.apoio] ?? null : null;
+
+  /* ── 5) Previsibilidade ── */
+  let nVar=null, comoVar='sem tempos da HERE';
+  if(ida&&ida.min>0&&ida.minBase>0){
+    const at=(ida.min-ida.minBase)/ida.minBase;
+    nVar=rtEscala(Math.max(at,0),C.atrasoPct);
+    comoVar=`${pct(Math.max(at,0),0)} de acréscimo do trânsito sobre o tempo livre`;
+  }
+  let nFilas=null, comoFilas='não avaliado';
+  if(a.filas){ nFilas=RT_CFG.icrFilas[a.filas] ?? null; comoFilas=`filas ${a.filas} (avaliação)`; }
+  else if(nVar!=null){ nFilas=nVar; comoFilas='estimado pelo atraso de trânsito — sem avaliação de filas'; }
+  const espH=c&&!c.erro?(c.premissas.esperaClienteH||0):null;
+  const nEsp=espH!=null?rtEscala(espH,C.esperaH):null;
+
+  /* ── consolidação ── */
+  const dims={
+    esforco:{ nome:'Esforço físico da rota', subs:{
+      topografia:  _sub(nTopo,'calc',comoTopo),
+      sinuosidade: _sub(nSinu,'calc',sinu?`${num(sinu.curvasPorKm,2)} curvas relevantes por km · ${sinu.classe}`:'sem geometria'),
+      pavimento:   _sub(nPav,'humano',a.pavimento?`pavimento ${a.pavimento} (avaliação)`:'não avaliado') }},
+    eficiencia:{ nome:'Eficiência operacional', subs:{
+      velocidade:    _sub(nVel,'calc',comoVel),
+      ciclo:         _sub(nCiclo,'calc',cicloH!=null?`${num(cicloH,1)} h de ciclo completo`:'sem tempo de ciclo'),
+      aproveitamento:_sub(nAprov,'calc',comoAprov) }},
+    custo:{ nome:'Custo total', subs:{
+      cpk:     _sub(nCpk,'calc',comoCpk),
+      despesas:_sub(nDesp,'calc',comoDesp),
+      descarga:_sub(nDesc,'calc',comoDesc) }},
+    seguranca:{ nome:'Segurança e restrições', subs:{
+      restricoes: _sub(nRestr,'calc',comoRestr),
+      criticidade:_sub(nCrit,'humano',a.criticidade?`criticidade ${a.criticidade} (avaliação)`:'não avaliado'),
+      apoio:      _sub(nApoio,'humano',a.apoio?`apoio ${a.apoio} (avaliação)`:'não avaliado') }},
+    previsibilidade:{ nome:'Previsibilidade', subs:{
+      variacao:_sub(nVar,'calc',comoVar),
+      filas:   _sub(nFilas,a.filas?'humano':'calc',comoFilas),
+      espera:  _sub(nEsp,'calc',espH!=null?`${num(espH,1)} h de espera no cliente (premissa)`:'sem premissa de espera') }}
+  };
+
+  let somaPeso=0, somaNota=0, pesoTotal=0, pesoCoberto=0;
+  const fatores=[];
+  for(const dk in dims){
+    const pesoDim=RT_CFG.icrPesos[dk], subPesos=RT_CFG.icrSub[dk];
+    let sp=0, sn=0;
+    for(const sk in dims[dk].subs){
+      const s=dims[dk].subs[sk], w=subPesos[sk];
+      pesoTotal+=pesoDim*w;
+      if(s.disp){ sp+=w; sn+=s.nota*w; pesoCoberto+=pesoDim*w;
+        fatores.push({dim:dims[dk].nome, sub:sk, nota:s.nota, peso:pesoDim*w, como:s.como, fonte:s.fonte}); }
+    }
+    if(sp>0){
+      dims[dk].nota=sn/sp; dims[dk].cobertura=sp;
+      somaPeso+=pesoDim; somaNota+=dims[dk].nota*pesoDim;
+    } else { dims[dk].nota=null; dims[dk].cobertura=0; }
+    dims[dk].peso=pesoDim;
+  }
+  const nota = somaPeso>0 ? somaNota/somaPeso : null;
+  const completude = pesoTotal>0 ? pesoCoberto/pesoTotal : 0;
+  const F=RT_CFG.icrFaixas;
+  const classe = nota==null ? 'Dados insuficientes'
+    : nota<=F.favoravel ? 'Favorável'
+    : nota<=F.moderada  ? 'Moderada'
+    : nota<=F.exigente  ? 'Exigente' : 'Crítica';
+
+  /* contribuição relativa à média da escala — é o que explica a nota */
+  const ordenados=[...fatores].sort((x,y)=>((y.nota-2.5)*y.peso)-((x.nota-2.5)*x.peso));
+  return {
+    nota, classe, provisoria: completude<RT_CFG.icrCompletudeMin,
+    completude, pesoCoberto, pesoTotal, dims,
+    elevaram: ordenados.filter(f=>f.nota>2.5).slice(0,3),
+    reduziram: ordenados.filter(f=>f.nota<2.5).reverse().slice(0,3),
+    faltando: (()=>{ const out=[]; for(const dk in dims) for(const sk in dims[dk].subs)
+        if(!dims[dk].subs[sk].disp) out.push({dim:dims[dk].nome, sub:sk, fonte:dims[dk].subs[sk].fonte}); return out; })(),
+    fatores
+  };
+}
+
+/* ══ Impacto mecânico (§22) — classificação consolidada, sem falsa precisão ══ */
+function rtImpactoMecanico(r){
+  const i=r.icr; if(!i) return null;
+  const peso=[], nota=v=>{ if(v!=null) peso.push(v); };
+  nota(i.dims.esforco.subs.topografia.nota);
+  nota(i.dims.esforco.subs.sinuosidade.nota);
+  nota(i.dims.esforco.subs.pavimento.nota);
+  nota(i.dims.previsibilidade.subs.filas.nota);
+  nota(i.dims.custo.subs.descarga.nota);
+  if(!peso.length) return {classe:'Dados insuficientes', media:null, base:0};
+  const m=peso.reduce((a,b)=>a+b,0)/peso.length;
+  return {
+    classe: m<=1.25?'Baixo' : m<=2.5?'Moderado' : m<=3.75?'Alto' : 'Crítico',
+    media:m, base:peso.length,
+    nota:'Consolidado de relevo, sinuosidade, pavimento, filas e uso do compressor. Sem telemetria, não estimamos temperatura de motor ou freio.'
+  };
+}
+
+function rtCalcularICR(){
+  RT.icrCtx=rtContextoICR();
+  RT.rotas.forEach(r=>{
+    r.icr=rtICR(r,RT.icrCtx);
+    r.icrNota=r.icr.nota;
+    r.mec=rtImpactoMecanico(r);
+  });
+}
+
+/* ══ Interface da Onda 4 — bloco do ICR e avaliação humana ══ */
+
+const RT_AVAL_CAMPOS=[
+  ['pavimento','Pavimento e conservação','Estado geral da pista no trecho: buracos, ondulações, remendos, sinalização, drenagem.',
+   [['','Não avaliado'],['bom','Bom'],['regular','Regular'],['ruim','Ruim'],['critico','Crítico']]],
+  ['criticidade','Criticidade viária e ambiental','Acidentes, pontos de tombamento, curvas perigosas, neblina, travessias, quedas de barreira, alagamentos.',
+   [['','Não avaliado'],['baixa','Baixa'],['moderada','Moderada'],['alta','Alta'],['critica','Crítica']]],
+  ['apoio','Apoio e comunicação','Facilidade de apoio pela filial, sinal de celular, distância até atendimento, áreas seguras de parada.',
+   [['','Não avaliado'],['boa','Boa'],['razoavel','Razoável'],['dificil','Difícil'],['critica','Crítica']]],
+  ['filas','Filas recorrentes','Filas em pedágio, balança, fábrica, terminal ou cliente.',
+   [['','Não avaliado'],['raras','Raras'],['ocasionais','Ocasionais'],['frequentes','Frequentes'],['constantes','Constantes']]]
+];
+
+function rtAvalModal(r){
+  const a=RT.aval.get(r.k3)||{};
+  mdAbrir('Avaliação da rota · '+(r.codigoRaw||'—')+' · '+r.origem+' → '+r.destino,
+   `<div class="muted" style="margin-bottom:10px">
+      Quatro perguntas, uma resposta consolidada cada. São os únicos itens do Índice de Complexidade que nenhuma API fornece —
+      o resto do índice já é calculado sozinho. Deixar em <b>Não avaliado</b> não zera a nota: o item sai da conta e o peso é
+      redistribuído, ficando registrado na completude.
+    </div>
+    ${RT_AVAL_CAMPOS.map(([id,lbl,dica,ops])=>`
+      <div style="margin-bottom:12px">
+        <label class="fld"><span class="fl">${lbl}<i>${dica}</i></span>
+          <select id="ra_${id}">${ops.map(o=>`<option value="${o[0]}" ${o[0]===(a[id]||'')?'selected':''}>${o[1]}</option>`).join('')}</select>
+        </label>
+      </div>`).join('')}
+    <label class="fld"><span class="fl">Observação<i>o que motivou a avaliação — fica registrado junto</i></span>
+      <input type="text" id="ra_obs" value="${esc(a.obs||'')}"></label>
+    <label class="fld" style="margin-top:10px"><span class="fl">Fonte da avaliação<i>quem ou o que embasou: motorista, inspeção, histórico…</i></span>
+      <input type="text" id="ra_fonte" value="${esc(a.fonte||'')}"></label>
+    ${a.por?`<div class="muted" style="font-size:10.5px;margin-top:10px">Última avaliação por ${esc(a.por)} em ${esc(dtBR(a.em))}.</div>`:''}`,
+   `<button class="btn" onclick="mdFechar()">Cancelar</button>
+    ${RT.aval.has(r.k3)?`<button class="btn danger" onclick="rtAvalLimpar('${esc(r.k3)}')">Limpar avaliação</button>`:''}
+    <button class="btn pri" onclick="rtAvalSalvar('${esc(r.k3)}')">Salvar avaliação</button>`);
+}
+async function rtAvalSalvar(k3){
+  const a={};
+  RT_AVAL_CAMPOS.forEach(([id])=>{ const e=$('ra_'+id); if(e&&e.value) a[id]=e.value; });
+  const o=$('ra_obs'), f=$('ra_fonte');
+  if(o&&o.value.trim()) a.obs=o.value.trim();
+  if(f&&f.value.trim()) a.fonte=f.value.trim();
+  a.por=ATLAS_CURRENT_USER.email||'—'; a.em=agoraISO();
+  try{
+    if(Object.keys(a).length<=2) RT.aval.delete(k3); else RT.aval.set(k3,a);
+    await rtGravarAval();
+    toast('Avaliação salva.','gn'); mdFechar(); rtAtualizar();
+  }catch(e){ toast('Falha ao salvar: '+e.message,'rd'); }
+}
+async function rtAvalLimpar(k3){
+  RT.aval.delete(k3);
+  try{ await rtGravarAval(); toast('Avaliação removida.','gn'); }catch(e){ toast('Falha: '+e.message,'rd'); }
+  mdFechar(); rtAtualizar();
+}
+
+function rtIcrCor(classe){
+  return classe==='Favorável'?'gn' : classe==='Moderada'?'ac' : classe==='Exigente'?'am' : classe==='Crítica'?'rd' : 'mu';
+}
+function rtIcrChip(r){
+  const i=r.icr;
+  if(!i||i.nota==null) return '<span class="muted">—</span>';
+  return `<span class="pill ${rtIcrCor(i.classe)}" title="${esc(i.classe)}${i.provisoria?' · provisória':''}">${num(i.nota,2)}</span>${i.provisoria?'<span class="muted" style="font-size:9px"> prov.</span>':''}`;
+}
+
+/* ══ Bloco do Índice de Complexidade no painel (§23/§24) ══ */
+function rtBlocoICR(r){
+  const i=r.icr;
+  if(!i) return '<div class="muted">Índice não calculado.</div>';
+  const SUB={topografia:'Topografia',sinuosidade:'Sinuosidade e geometria',pavimento:'Pavimento e conservação',
+    velocidade:'Deslocamento e velocidade',ciclo:'Tempo de ciclo',aproveitamento:'Aproveitamento da viagem',
+    cpk:'Custo por km',despesas:'Despesas específicas',descarga:'Descarga pressurizada',
+    restricoes:'Restrições da composição',criticidade:'Criticidade viária e ambiental',apoio:'Apoio e comunicação',
+    variacao:'Variação do tempo',filas:'Congestionamentos e filas',espera:'Espera e reprogramação'};
+  const selo=s=> s.fonte==='humano'?'<span class="src prem">AVALIADO</span>':'<span class="src calc">CALCULADO</span>';
+  const notaCel=s=> s.disp
+    ? `<b>${num(s.nota,1)}</b>`
+    : `<span class="muted">sem dado</span>`;
+
+  const dimHtml=Object.keys(i.dims).map(dk=>{
+    const d=i.dims[dk];
+    return `<tr class="grp"><td colspan="4">${esc(d.nome)} <span class="muted" style="font-weight:400">peso ${pct(d.peso,0)}</span>
+        <span style="float:right">${d.nota!=null?`<b>${num(d.nota,2)}</b>`:'<span class="pill mu">Dados insuficientes</span>'}</span></td></tr>
+      ${Object.keys(d.subs).map(sk=>{ const s=d.subs[sk];
+        return `<tr><td class="muted" style="padding-left:18px">${esc(SUB[sk]||sk)} ${selo(s)}</td>
+          <td class="muted" style="font-size:11px">${esc(s.como)}</td>
+          <td class="num">${pct(RT_CFG.icrSub[dk][sk],0)}</td>
+          <td class="num">${notaCel(s)}</td></tr>`; }).join('')}`;
+  }).join('');
+
+  const fator=f=>`<li><b>${esc(SUB[f.sub]||f.sub)}</b> — nota ${num(f.nota,1)} <span class="muted">(${esc(f.como)})</span></li>`;
+
+  return `
+    <div class="grid2" style="align-items:start">
+      <div>
+        <div class="rt-kpi ${rtIcrCor(i.classe)}" style="padding:14px">
+          <div class="k-l">Índice de Complexidade da Rota</div>
+          <div class="k-v" style="font-size:30px">${i.nota!=null?num(i.nota,2):'—'}</div>
+          <div class="k-s"><span class="pill ${rtIcrCor(i.classe)}">${esc(i.classe)}</span>
+            ${i.provisoria?'<span class="pill am">Provisória</span>':''}</div>
+        </div>
+        <table class="tb" style="margin-top:10px">
+          <tr><td class="muted">Completude dos dados</td><td class="num"><b>${pct(i.completude,0)}</b> do peso avaliado</td></tr>
+          <tr><td class="muted">Itens sem dado</td><td class="num">${i.faltando.length}</td></tr>
+          <tr><td class="muted">Impacto mecânico</td><td class="num">${r.mec?`<span class="pill ${r.mec.classe==='Baixo'?'gn':r.mec.classe==='Moderado'?'ac':r.mec.classe==='Alto'?'am':r.mec.classe==='Crítico'?'rd':'mu'}">${esc(r.mec.classe)}</span>`:'—'}</td></tr>
+        </table>
+        ${i.provisoria?`<div class="alerta am" style="margin-top:10px"><div>
+          Classificação <b>provisória</b>: só ${pct(i.completude,0)} do peso do índice tem dado, abaixo do mínimo de ${pct(RT_CFG.icrCompletudeMin,0)}.
+          ${i.faltando.some(f=>f.fonte==='humano')?'Os itens de avaliação humana são o caminho mais rápido para fechar essa lacuna.':''}
+          <button class="btn sm" style="margin-left:8px" onclick="rtAvalModal(RT._analisando)">Avaliar rota</button>
+        </div></div>`:`<div style="margin-top:10px"><button class="btn sm" onclick="rtAvalModal(RT._analisando)">Editar avaliação</button></div>`}
+      </div>
+      <div>
+        ${i.elevaram.length?`<h3 style="font-size:12px;margin-bottom:6px">O que mais elevou a nota</h3>
+          <ul style="margin:0 0 12px 16px;font-size:11.5px;line-height:1.6">${i.elevaram.map(fator).join('')}</ul>`:''}
+        ${i.reduziram.length?`<h3 style="font-size:12px;margin-bottom:6px">O que puxou a nota para baixo</h3>
+          <ul style="margin:0 0 12px 16px;font-size:11.5px;line-height:1.6">${i.reduziram.map(fator).join('')}</ul>`:''}
+        ${i.faltando.length?`<h3 style="font-size:12px;margin-bottom:6px">Fora da conta por falta de dado</h3>
+          <ul style="margin:0 0 0 16px;font-size:11.5px;line-height:1.6;color:var(--mu)">
+            ${i.faltando.map(f=>`<li>${esc(SUB[f.sub]||f.sub)} <span class="src ${f.fonte==='humano'?'prem':'calc'}">${f.fonte==='humano'?'AVALIAÇÃO':'CÁLCULO'}</span></li>`).join('')}
+          </ul>`:''}
+      </div>
+    </div>
+
+    <h3 style="font-size:12px;margin:14px 0 8px">Memória da pontuação</h3>
+    <table class="tb"><thead><tr><th>Item</th><th>Base da nota</th><th class="num">Peso</th><th class="num">Nota</th></tr></thead>
+      <tbody>${dimHtml}
+      <tr class="tot"><td colspan="3">Índice de Complexidade${i.provisoria?' (provisório)':''}</td><td class="num">${i.nota!=null?num(i.nota,2):'—'}</td></tr>
+      </tbody></table>
+    <div class="muted" style="font-size:10.5px;margin-top:6px">
+      Escala 0 a 5 · 0 muito favorável, 5 condição crítica. Faixas: até ${num(RT_CFG.icrFaixas.favoravel,2)} Favorável ·
+      até ${num(RT_CFG.icrFaixas.moderada,2)} Moderada · até ${num(RT_CFG.icrFaixas.exigente,2)} Exigente · acima disso Crítica.
+      Item sem dado sai da conta e o peso é redistribuído — nenhum campo ausente vira nota zero.
+      ${r.mec?'<br>'+esc(r.mec.nota):''}
+    </div>`;
+}
+
+/* ══ Histórico realizado (§25) — referência secundária, não altera nota ══ */
+function rtBlocoHistorico(r){
+  if(!(r.viagens>0)) return '';
+  const c=r.custo;
+  return `<table class="tb">
+    <tr><td class="muted">Viagens no período <span class="src real">REALIZADO</span></td><td class="num">${num(r.viagens,0)}</td></tr>
+    <tr><td class="muted">Toneladas <span class="src real">REALIZADO</span></td><td class="num">${num(r.ton,1)}</td></tr>
+    <tr><td class="muted">Receita <span class="src real">REALIZADO</span></td><td class="num">${brl(r.receita)}</td></tr>
+    <tr><td class="muted">Receita por tonelada</td><td class="num">${r.ton>0?brl(r.receita/r.ton):'—'}</td></tr>
+    <tr><td class="muted">Peso médio por viagem</td><td class="num">${num(r.ton/r.viagens,1)} t</td></tr>
+    ${c&&!c.erro?`<tr><td class="muted">Custo estimado no período</td><td class="num">${brl(c.total*r.viagens)}</td></tr>
+    <tr><td class="muted">Diferença receita − custo estimado</td><td class="num">${brl(r.receita-c.total*r.viagens)}</td></tr>`:''}
+  </table>
+  <div class="muted" style="font-size:10.5px;margin-top:5px">
+    Dados realizados entram como referência: não alteram o Índice de Complexidade nem o custo estimado.
+    A diferença acima é receita menos custo operacional — não é margem, porque não inclui impostos nem comissão.
+  </div>`;
+}
+
 /* Handle de diagnóstico — mesmo padrão de window.__ATLAS_MODULE__ / window._simMap.
    Permite inspecionar o estado da aba pelo console sem expor nada gravável. */
 try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG; window.__ATLAS_ST__ = ST;
@@ -5452,7 +5941,7 @@ try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG; window.__
 (function rtBind(){
   const tab=document.querySelector('#tabsBar .tab[data-v="rot"]');
   if(tab) tab.addEventListener('click',()=>{ setTimeout(()=>rtInit(false),30); });
-  ['rtMes','rtAno','rtFilial','rtClasse'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>{ RT.pag=1; rtAtualizar(); }; });
+  ['rtMes','rtAno','rtFilial','rtClasse','rtIcr'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>{ RT.pag=1; rtAtualizar(); }; });
   const bs=$('rtBusca'); if(bs){ let t=null; bs.oninput=()=>{ clearTimeout(t); t=setTimeout(()=>{ RT.pag=1; rtRender(); },200); }; }
   const vs=$('rtVerSemFat'); if(vs) vs.onchange=()=>{ RT.pag=1; rtRender(); };
   const ba=$('rtBtnAtualizar'); if(ba) ba.onclick=()=>{ RT.carregado=false; rtInit(true); };
