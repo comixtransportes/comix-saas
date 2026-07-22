@@ -653,7 +653,8 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
       <span class="tabs-r">
         <button class="btn sm" id="rtBtnMapa" title="Mapeamento das colunas da SZY e do SZB">⚙ Colunas</button>
         <button class="btn sm" id="rtBtnAtualizar" title="Rebaixa SZY e faturamento da nuvem">↻ Atualizar dados</button>
-        <button class="btn sm" id="rtBtnHere" title="Simulação em lote na HERE — entra na Onda 2" disabled>🛣 Simular rotas na HERE</button>
+        <button class="btn sm" id="rtBtnPerfil" title="Perfil da composição usado na roteirização">🚛 Perfil</button>
+        <button class="btn sm pri" id="rtBtnHere" title="Simulação em lote na HERE (ida carregada + volta vazia)">🛣 Simular rotas na HERE</button>
         <button class="btn sm" id="rtBtnExport" title="Exportação executiva (.xlsx)">⬇ Excel</button>
       </span>
     </h3>
@@ -678,6 +679,9 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
     <div class="rt-meta" id="rtMeta"><span>Abra a aba para carregar as bases.</span></div>
     <div class="rt-prog" id="rtProg" style="display:none"><i></i></div>
   </div>
+
+  <!-- ── Progresso da fila de simulação ── -->
+  <div id="rtFila" style="display:none"></div>
 
   <!-- ── Cards executivos ── -->
   <div class="rt-kpis" id="rtKpis"></div>
@@ -1449,11 +1453,17 @@ function decodeFlexPolyline(encoded){
   const thirdDim=(meta>>4)&7;
   const thirdPrec=(meta>>7)&15;
   const factor=Math.pow(10,precision);
+  const zFactor=Math.pow(10,thirdPrec);
+  /* thirdDim: 0=ausente · 1=nível · 2=altitude · 3=elevação.
+     Quando houver altitude/elevação, o ponto sai como [lat,lng,z] — os
+     consumidores existentes (Leaflet e o matcher de praças) leem apenas os
+     índices 0 e 1, então a terceira posição é aditiva e não quebra nada. */
+  const temZ = (thirdDim===2||thirdDim===3);
   let lat=0,lng=0,z=0; const pts=[];
   while(idx<encoded.length){
     lat+=readInt(); lng+=readInt();
     if(thirdDim) z+=readInt();
-    pts.push([lat/factor, lng/factor]);
+    pts.push(temZ ? [lat/factor, lng/factor, z/zFactor] : [lat/factor, lng/factor]);
   }
   return pts;
 }
@@ -3661,7 +3671,8 @@ function rtInventarioSZY(){
       k1:k.k1, k2:k.k2, k3:k.k3,
       viagens:0, ton:0, receita:0, ctes:[],
       status:'semf', pendencia:null,
-      hereKm:null, hereMin:null, hereTs:null,
+      hereKm:null, hereMin:null, hereTs:null, here:null, hereErro:null,
+      hereObsoleto:false, kmTotalHere:null, cicloMin:null, usada2026:false,
       custoViagem:null, custoTon:null, icr:null
     };
     rotas.push(it);
@@ -3684,11 +3695,16 @@ function rtMontar(){
   for(let i=0;i<RT.szb.length;i++){
     const b=RT.szb[i];
     const iso=rtDataISO(rtGet(b,mB,'emissao'));
-    if(!iso || iso.slice(0,7)!==per) continue;
+    if(!iso) continue;
+    const noPeriodo = iso.slice(0,7)===per;
+    const em2026    = iso.slice(0,4)==='2026';
+    /* Percorremos também o restante de 2026 só para marcar quais rotas foram
+       de fato utilizadas no ano — é o escopo padrão da simulação na HERE. */
+    if(!noPeriodo && !em2026) continue;
     if(rtDataISO(rtGet(b,mB,'cancel'))) continue;            /* CT-e cancelado não conta */
     const op=rtSigla(rtGet(b,mB,'operacao')||rtGet(b,mB,'filial'));
     const rota=rtGet(b,mB,'rota');
-    if(!rota){ orfaos++; continue; }
+    if(!rota){ if(noPeriodo) orfaos++; continue; }
     const o=rtChaveOD(rtGet(b,mB,'codRegOrig'), rtGet(b,mB,'localColeta'), rtGet(b,mB,'ufOrigem'));
     const d=rtChaveOD(rtGet(b,mB,'codRegDest'), rtGet(b,mB,'localEntrega'),rtGet(b,mB,'ufDestino'));
     const k=rtChaves(op,rota,o,d,0);
@@ -3697,6 +3713,12 @@ function rtMontar(){
     const c3=iK3.get(k.k3); if(c3&&c3.length===1) alvo=c3[0];
     if(!alvo){ const c2=iK2.get(k.k2); if(c2&&c2.length===1) alvo=c2[0]; else if(c2&&c2.length>1) cand=c2; }
     if(!alvo&&!cand){ const c1=iK1.get(k.k1); if(c1&&c1.length===1) alvo=c1[0]; else if(c1&&c1.length>1) cand=c1; }
+
+    if(em2026){
+      if(alvo) alvo.usada2026=true;
+      else if(cand) cand.forEach(x=>x.usada2026=true);
+    }
+    if(!noPeriodo) continue;   /* fora do período: só marcava o uso em 2026 */
 
     if(alvo){
       alvo.viagens++;
@@ -3743,10 +3765,13 @@ function rtMontar(){
     if(r.viagens>0){ r.ticketTon = r.ton>0 ? r.receita/r.ton : null; }
   });
 
+  /* ── 4) anexa as simulações da HERE já em cache ── */
+  rtAplicarHere(rotas);
+
   RT.rotas=rotas; RT.orfaos=orfaos; RT.ctesUsados=usados; RT.ctesAmbiguos=ambiguos;
 }
 
-/* ══ Divergência SZY × HERE (§9) — populada na Onda 2 ══ */
+/* ══ Divergência SZY × HERE (§9) ══ */
 function rtDivergencia(r){
   if(r.hereKm==null||!(r.kmIda>0)) return null;
   const dif=r.hereKm-r.kmIda, pctv=dif/r.kmIda;
@@ -3931,11 +3956,13 @@ function rtAnalisar(i){
           ${(r.pendencia.envolvidos||[]).length?`<div class="mono" style="margin-top:6px;font-size:11px">`+r.pendencia.envolvidos.map(e=>`${esc(e.op)} · ${esc(e.codigo)} · ${esc(e.origem)} → ${esc(e.destino)} · ${num(e.km,0)} km`).join('<br>')+`</div>`:''}</div></div>`:''}
       </div>
     </div>
+    <h3 style="font-size:12px;margin:16px 0 8px;border-top:1px solid var(--bd2);padding-top:12px">Rota e relevo</h3>
+    ${rtBlocoRelevo(r)}
     ${ctes.length?`<h3 style="font-size:12px;margin:14px 0 8px">CT-e do período <span class="muted" style="font-weight:400">(${num(r.ctes.length,0)} associados${r.ctes.length>12?' · 12 primeiros':''})</span></h3>
       <table class="tb"><thead><tr><th>Data</th><th>CTRC</th><th>Placa</th><th class="num">Ton</th><th class="num">Valor</th></tr></thead>
       <tbody>${ctes.map(c=>`<tr><td>${esc(dtSimplesBR(c.data))}</td><td class="mono">${esc(c.ctrc||c.cte.slice(-8)||'—')}</td><td class="mono">${esc(c.placa||'—')}</td><td class="num">${num(c.ton,1)}</td><td class="num">${brl(c.valor)}</td></tr>`).join('')}</tbody></table>`:''}
     <div class="muted" style="margin-top:12px;font-size:11px">
-      Rota e relevo, custos e Índice de Complexidade entram nas ondas 2 a 4. Nada aqui é estimado: campo sem dado aparece como “—”.
+      Custos e Índice de Complexidade entram nas próximas ondas. Nada aqui é estimado: campo sem dado aparece como “—”.
     </div>`;
   mdAbrir('Rota '+(r.codigoRaw||'—')+' · '+r.origem+' → '+r.destino, corpo, '<button class="btn" onclick="mdFechar()">Fechar</button>');
 }
@@ -4042,14 +4069,39 @@ async function rtExportar(){
     add('Sem faturamento',semf.map(lin));
     add('Pendências',pend.map(r=>({...lin(r),'Motivo da pendência':r.pendencia?r.pendencia.motivo:'',
       'CT-e não atribuídos':r.pendencia?r.pendencia.ctes:0, 'Receita não atribuída':r.pendencia?+(r.pendencia.receita||0).toFixed(2):0})));
-    add('Comparação SZY x HERE',RT.rotas.filter(r=>r.hereKm!=null).map(lin));
+    const comHere=RT.rotas.filter(r=>r.here&&!r.here.erro);
+    const linHere=r=>{ const i=r.here.ida||{}, v=r.here.volta||{}, tp=i.topo||{}, sn=i.sinu||{};
+      return {...lin(r),
+        'Dist. volta HERE (km)':v.km??null, 'Dist. total HERE (km)':r.kmTotalHere?+r.kmTotalHere.toFixed(1):null,
+        'Duração ida (min)':i.min??null, 'Duração volta (min)':v.min??null,
+        'Duração típica ida (min)':i.minTipico??null,
+        'Ciclo estimado (min)':r.cicloMin??null,
+        'Pedágio ida (R$)':i.pedagio??null, 'Pedágio volta (R$)':v.pedagio??null,
+        'Km aclive':tp.subKm??null, 'Km declive':tp.desKm??null, 'Km plano':tp.planoKm??null,
+        'Inclinação média (%)':tp.incMedia??null, 'Maior inclinação (%)':tp.incMax??null,
+        'Km >3%':tp.km3??null, 'Km >5%':tp.km5??null, 'Km >7%':tp.km7??null, 'Km >10%':tp.km10??null,
+        'Maior aclive contínuo (km)':tp.maiorAclive??null, 'Maior declive contínuo (km)':tp.maiorDeclive??null,
+        'Ganho de elevação (m)':tp.ganho??null, 'Perda de elevação (m)':tp.perda??null,
+        'Altitude mín (m)':tp.altMin??null, 'Altitude máx (m)':tp.altMax??null, 'Variação altitude (m)':tp.altVar??null,
+        'Trecho serrano':tp.serrano==null?'':(tp.serrano?'Sim':'Não'),
+        'Sinuosidade':sn.classe||'', 'Curvas por km':sn.curvasPorKm??null, 'Curvas fechadas':sn.fechadas??null,
+        'Rodoviária ÷ reta':sn.razao??null,
+        'Restrições':i.restr?i.restr.classe:'',
+        'Simulada em':r.here.ts||'', 'Perfil':r.here.perfil||''};
+    };
+    add('Comparação SZY x HERE',comHere.map(linHere));
     add('Premissas',[
       {Premissa:'Limite “Compatível”',Valor:(RT_CFG.divAtencao*100)+'%'},
       {Premissa:'Limite “Atenção”',Valor:(RT_CFG.divRelevante*100)+'%'},
       {Premissa:'Roteio por unidade',Valor:'coluna Operacao do SZB (17=SC · 18=PR · 03=SP)'},
       {Premissa:'Chave composta',Valor:'operação + código + origem + destino + km de ida'},
       {Premissa:'CT-e cancelados',Valor:'excluídos do faturamento'},
-      {Premissa:'Papel da SZY',Valor:'referência e comparativo — não substitui a distância de cálculo'}
+      {Premissa:'Papel da SZY',Valor:'referência e comparativo — não substitui a distância de cálculo'},
+      {Premissa:'Perfil da composição',Valor:`${rtPerfilAtivo().nome} · ${rtPerfilAtivo().eixos} eixos · ${num(rtPerfilAtivo().taraT+rtPerfilAtivo().cargaT,1)} t carregado`},
+      {Premissa:'Modo de transporte na HERE',Valor:'transportMode=truck (ida carregada, volta vazia)'},
+      {Premissa:'Geocodificação',Valor:'centro a centro do município — melhoria futura: endereço do cliente'},
+      {Premissa:'Topografia — método',Valor:`reamostragem ${RT_CFG.topoPassoM} m · média móvel ${RT_CFG.topoJanela} amostras · ruído <${(RT_CFG.topoRuidoPct*100).toFixed(1)}%`},
+      {Premissa:'Sinuosidade — método',Valor:`curva = ${RT_CFG.sinuCurvaGrau}° acumulados em ${RT_CFG.sinuJanelaM} m · fechada = ${RT_CFG.sinuFechadaGrau}° · classificação estimada pela geometria`}
     ]);
     XLSX.writeFile(wb,`Analise_de_Rotas_${per}.xlsx`);
     toast('Excel gerado.','gn');
@@ -4068,7 +4120,15 @@ function rtAtualizar(){
                    :'<span class="pill rd">SZY não encontrada em bases_cloud/szy</span>');
   m.push(RT.szbMeta?`<span class="pill mu">Faturamento · ${num(RT.szb.length,0)} linhas · ${esc(dtBR(RT.szbMeta.ts))}</span>`
                    :'<span class="pill rd">SZB não encontrada</span>');
-  m.push('<span class="pill mu">HERE · nenhuma simulação (Onda 2)</span>');
+  const sim=RT.rotas.filter(r=>r.here&&!r.here.erro);
+  const obs=sim.filter(r=>r.hereObsoleto).length;
+  const falhas=RT.rotas.filter(r=>r.hereErro).length;
+  if(sim.length){
+    const ult=sim.map(r=>r.hereTs).sort().pop();
+    m.push(`<span class="pill mu">HERE · ${num(sim.length,0)} rotas simuladas · última em ${esc(dtBR(ult))}</span>`);
+  } else m.push('<span class="pill mu">HERE · nenhuma rota simulada</span>');
+  if(obs)    m.push(`<span class="pill am">${num(obs,0)} simulações obsoletas (perfil mudou)</span>`);
+  if(falhas) m.push(`<span class="pill rd">${num(falhas,0)} falha(s) de simulação</span>`);
   if(RT.orfaos) m.push(`<span class="pill am" title="CT-e do período sem rota correspondente na SZY">${num(RT.orfaos,0)} CT-e sem rota na SZY</span>`);
   rtMeta(m.join(' '));
 }
@@ -4076,6 +4136,9 @@ async function rtInit(force){
   if(RT.carregando) return;
   if(!RT.carregado || force){
     await rtCarregarBases(force);
+    /* perfil e caches entram antes do primeiro render para que as colunas da
+       HERE já apareçam preenchidas sem nenhuma chamada de rede à API. */
+    await Promise.all([rtCarregarPerfil(), rtCarregarCacheHere(), rtCarregarCacheGeo()]);
     rtRenderMapa();
     simSincronizarRotasSZY();   /* o seletor do Simulador acompanha a recarga */
   }
@@ -4131,9 +4194,569 @@ async function simCarregarRotasSZY(force){
 }
 try{ window.simCarregarRotasSZY=simCarregarRotasSZY; window.simSincronizarRotasSZY=simSincronizarRotasSZY; }catch(_){}
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ANÁLISE DE ROTAS — Onda 2 · HERE, topografia e sinuosidade
+   ──────────────────────────────────────────────────────────────────────────
+   · Roteirização de CAMINHÃO (transportMode=truck) com perfil da composição
+     centralizado e editável — nenhum valor de veículo fixo no código.
+   · Ida e volta são simuladas separadamente (§20).
+   · Geocodificação centro a centro, com cache persistente. A precisão real
+     (porta de fábrica) fica como melhoria futura — o comparativo com a SZY
+     existe justamente para expor onde isso pesa.
+   · O que a HERE não devolver aparece como "Dado não disponível".
+     Nenhum valor é estimado para preencher lacuna.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+Object.assign(RT_CFG,{
+  /* Topografia — §10 */
+  topoPassoM:    100,   /* reamostragem: um ponto a cada 100 m de percurso   */
+  topoJanela:      5,   /* média móvel de 5 amostras ≈ 500 m de suavização   */
+  topoRuidoPct: 0.005,  /* inclinação abaixo de 0,5% é ruído, conta como plano */
+  topoSerranoKm7:  2,   /* km em rampas >7% que caracterizam trecho serrano  */
+  topoSerranoVar: 600,  /* ou variação de altitude acima de 600 m           */
+  /* Sinuosidade — §11 */
+  sinuPassoM:    100,
+  sinuCurvaGrau:  25,   /* mudança acumulada que caracteriza uma curva      */
+  sinuFechadaGrau:60,   /* curva fechada                                     */
+  sinuJanelaM:   500,   /* janela para acumular a mudança de direção        */
+  /* Fila HERE — §27 */
+  hereConc:        3,   /* chamadas simultâneas                              */
+  hereGravarACada:25,   /* grava o cache a cada N rotas concluídas          */
+  hereTtlDias:    90
+});
+
+Object.assign(RT,{
+  perfil:null, perfilHash:'',
+  hereCache:new Map(),     /* chave k3 → registro consolidado                */
+  geoCache:new Map(),      /* cidade/UF → {lat,lng,label}                    */
+  hereCarregado:false, geoCarregado:false,
+  fila:{rodando:false, cancelar:false, feitos:0, total:0, erros:0, atual:''}
+});
+
+/* ══ Perfil da composição (§8) ══════════════════════════════════════════ */
+const RT_PERFIL_PADRAO = {
+  nome:'LS (Carreta 5 eixos) — silo pressurizado',
+  eixos:5, carretas:1,
+  taraT:15, cargaT:32,          /* peso da composição vazia e carga útil     */
+  alturaM:4.0, larguraM:2.6, comprimentoM:18.6,
+  pesoEixoT:10,                  /* peso máximo por eixo                      */
+  combustivel:'diesel',
+  departureHora:8                /* hora típica de partida para o trânsito    */
+};
+function rtPerfilAtivo(){ return RT.perfil || RT_PERFIL_PADRAO; }
+function rtPerfilHash(p){
+  const s=[p.eixos,p.carretas,p.taraT,p.cargaT,p.alturaM,p.larguraM,p.comprimentoM,p.pesoEixoT,p.combustivel].join('|');
+  return rtHash(s);
+}
+/* FNV-1a — chave curta e estável para cache e invalidação. */
+function rtHash(s){
+  let h=0x811c9dc5;
+  for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,0x01000193)>>>0; }
+  return h.toString(36);
+}
+async function rtCarregarPerfil(){
+  try{
+    const doc=await fsGetDoc(COL.config,'rotas_perfil');
+    RT.perfil = (doc&&doc.data&&doc.data.eixos) ? {...RT_PERFIL_PADRAO,...doc.data} : {...RT_PERFIL_PADRAO};
+  }catch(_){ RT.perfil={...RT_PERFIL_PADRAO}; }
+  RT.perfilHash=rtPerfilHash(RT.perfil);
+}
+function rtPerfilModal(){
+  const p=rtPerfilAtivo();
+  const f=(id,l,v,step)=>`<label class="fld">${l}<input type="number" id="rp_${id}" value="${v}" step="${step||'0.1'}" ${isGestorOuAdmin()?'':'disabled'}></label>`;
+  mdAbrir('Perfil da composição — usado em todas as simulações',
+    `<div class="muted" style="margin-bottom:10px">Estes valores vão para a HERE como restrições do caminhão (<span class="mono">transportMode=truck</span>).
+      Alterar o perfil <b>invalida o cache</b> das simulações: as rotas precisam ser resimuladas.</div>
+     <div class="fields">
+       ${f('eixos','Número de eixos',p.eixos,'1')}
+       ${f('carretas','Quantidade de carretas',p.carretas,'1')}
+       ${f('taraT','Tara da composição (t)',p.taraT)}
+       ${f('cargaT','Carga útil (t)',p.cargaT)}
+       ${f('pesoEixoT','Peso máximo por eixo (t)',p.pesoEixoT)}
+       ${f('alturaM','Altura (m)',p.alturaM,'0.05')}
+       ${f('larguraM','Largura (m)',p.larguraM,'0.05')}
+       ${f('comprimentoM','Comprimento (m)',p.comprimentoM,'0.1')}
+       ${f('departureHora','Hora típica de partida',p.departureHora,'1')}
+     </div>
+     <div class="muted" style="margin-top:10px;font-size:11px">
+       Peso bruto enviado à HERE = tara + carga útil = <b id="rpPbt">${num(p.taraT+p.cargaT,1)} t</b> na ida.
+       Na volta, apenas a tara — a volta é simulada vazia (§20).
+     </div>`,
+    isGestorOuAdmin()
+      ? `<button class="btn" onclick="mdFechar()">Cancelar</button><button class="btn pri" onclick="rtPerfilSalvar()">Salvar perfil</button>`
+      : `<button class="btn" onclick="mdFechar()">Fechar</button>`);
+  ['taraT','cargaT'].forEach(id=>{ const e=$('rp_'+id); if(e) e.oninput=()=>{
+    const t=rtNum($('rp_taraT').value), c=rtNum($('rp_cargaT').value);
+    const el=$('rpPbt'); if(el) el.textContent=num(t+c,1)+' t'; }; });
+}
+async function rtPerfilSalvar(){
+  if(!isGestorOuAdmin()) return toast('Somente gestor ou admin pode alterar o perfil.','rd');
+  const novo={...rtPerfilAtivo()};
+  ['eixos','carretas','taraT','cargaT','pesoEixoT','alturaM','larguraM','comprimentoM','departureHora']
+    .forEach(id=>{ const e=$('rp_'+id); if(e) novo[id]=rtNum(e.value); });
+  if(!(novo.eixos>0)||!(novo.taraT>0)||!(novo.cargaT>0)) return toast('Eixos, tara e carga útil precisam ser maiores que zero.','rd');
+  const hashAntigo=RT.perfilHash;
+  RT.perfil=novo; RT.perfilHash=rtPerfilHash(novo);
+  try{
+    await fsSetDoc(COL.config,'rotas_perfil',{...novo, salvo_por:ATLAS_CURRENT_USER.email||'—', salvo_em:agoraISO()},true);
+    if(hashAntigo && hashAntigo!==RT.perfilHash){
+      let n=0; RT.hereCache.forEach(reg=>{ if(reg.perfil!==RT.perfilHash){ reg.obsoleto=true; n++; } });
+      toast(`Perfil salvo. ${n} simulações ficaram obsoletas — resimule quando puder.`,'am');
+    } else toast('Perfil salvo.','gn');
+    mdFechar(); rtAtualizar();
+  }catch(e){ toast('Falha ao salvar: '+e.message,'rd'); }
+}
+
+/* ══ Cache persistente (§27/§28) ═════════════════════════════════════════
+   Guardamos apenas os números derivados — nunca a geometria. Uma rota ocupa
+   ~500 bytes, então centenas de rotas cabem com folga em poucos documentos
+   fragmentados dentro de comercial_config. Sem coleção nova: nada a mexer no
+   index.html nem no firestore.rules.
+   ══════════════════════════════════════════════════════════════════════ */
+const RT_HERE_DOC='rotas_here_', RT_HERE_MAX=300;
+async function rtCarregarCacheHere(){
+  if(RT.hereCarregado) return;
+  RT.hereCarregado=true;
+  for(let n=0;n<12;n++){
+    let doc=null;
+    try{ doc=await fsGetDoc(COL.config,RT_HERE_DOC+n); }catch(_){ break; }
+    if(!doc||!doc.data||!doc.data.itens) break;
+    const it=doc.data.itens;
+    Object.keys(it).forEach(k=>RT.hereCache.set(k,it[k]));
+    if(Object.keys(it).length<RT_HERE_MAX) break;
+  }
+}
+async function rtGravarCacheHere(){
+  const chaves=[...RT.hereCache.keys()];
+  const docs=[];
+  for(let i=0;i<chaves.length;i+=RT_HERE_MAX){
+    const bloco={}; chaves.slice(i,i+RT_HERE_MAX).forEach(k=>bloco[k]=RT.hereCache.get(k));
+    docs.push(bloco);
+  }
+  for(let n=0;n<docs.length;n++){
+    await fsSetDoc(COL.config,RT_HERE_DOC+n,{itens:docs[n],salvo_em:agoraISO(),salvo_por:ATLAS_CURRENT_USER.email||'—'},true);
+  }
+}
+async function rtCarregarCacheGeo(){
+  if(RT.geoCarregado) return;
+  RT.geoCarregado=true;
+  try{
+    const doc=await fsGetDoc(COL.config,'rotas_geo');
+    if(doc&&doc.data&&doc.data.itens) Object.keys(doc.data.itens).forEach(k=>RT.geoCache.set(k,doc.data.itens[k]));
+  }catch(_){}
+}
+async function rtGravarCacheGeo(){
+  const itens={}; RT.geoCache.forEach((v,k)=>itens[k]=v);
+  try{ await fsSetDoc(COL.config,'rotas_geo',{itens,salvo_em:agoraISO()},true); }catch(_){}
+}
+
+/* ══ Geocodificação com cache (§8.1) ══ */
+function rtGeoKey(cidade,uf){ return _nk(cidade)+'|'+String(uf||'').toUpperCase(); }
+async function rtGeocodeCidade(cidade,uf){
+  const cid=String(cidade||'').trim();
+  if(!cid||cid==='—') throw new Error('sem cidade informada');
+  const k=rtGeoKey(cid,uf);
+  const c=RT.geoCache.get(k);
+  if(c && c.lat!=null) return c;
+  const q=cid+(uf?', '+uf:'');
+  const g=await hereGeocode(q);
+  if(!g||g.lat==null) throw new Error('não localizada: '+q);
+  const reg={lat:g.lat,lng:g.lng,label:g.label||q,fonte:'here',ts:agoraISO()};
+  RT.geoCache.set(k,reg);
+  return reg;
+}
+/* Coordenada da rota: preferência para o que já vem na SZY (§8.1). */
+async function rtCoordRota(r){
+  const o = (r.lat && r.lng)   ? {lat:r.lat, lng:r.lng, label:r.origem,  fonte:'szy'}
+                               : await rtGeocodeCidade(r.origem, r.ufO);
+  const d = (r.latD && r.lngD) ? {lat:r.latD,lng:r.lngD,label:r.destino, fonte:'szy'}
+                               : await rtGeocodeCidade(r.destino, r.ufD);
+  return {o,d};
+}
+
+/* ══ Chamada à HERE com perfil de caminhão, elevação e spans (§8.2) ══ */
+function rtDepartureISO(hora){
+  /* Próximo dia útil no horário típico — mantém a simulação reproduzível e
+     comparável entre rotas, em vez de variar com o instante da execução. */
+  const d=new Date(); d.setDate(d.getDate()+1); d.setHours(hora||8,0,0,0);
+  while(d.getDay()===0||d.getDay()===6) d.setDate(d.getDate()+1);
+  return d.toISOString().slice(0,19);
+}
+async function rtHereRota(o,d,perfil,carregado){
+  if(!ST.hereKey) throw new Error('Chave HERE não configurada (aba Pedágio & Rota).');
+  const pesoT = carregado ? (perfil.taraT+perfil.cargaT) : perfil.taraT;
+  const p=new URLSearchParams({
+    transportMode:'truck',
+    origin:`${o.lat},${o.lng}`,
+    destination:`${d.lat},${d.lng}`,
+    'return':'polyline,summary,elevation,typicalDuration,tolls',
+    spans:'length,duration,names,routeNumbers,dynamicSpeedInfo,truckAttributes',
+    departureTime: rtDepartureISO(perfil.departureHora),
+    'truck[axleCount]': String(perfil.eixos||5),
+    'truck[grossWeight]': String(Math.round(pesoT*1000)),
+    'truck[weightPerAxle]': String(Math.round((perfil.pesoEixoT||10)*1000)),
+    'truck[height]': String(Math.round((perfil.alturaM||4)*100)),
+    'truck[width]': String(Math.round((perfil.larguraM||2.6)*100)),
+    'truck[length]': String(Math.round((perfil.comprimentoM||18.6)*100)),
+    'truck[trailerCount]': String(perfil.carretas||1),
+    currency:'BRL',
+    apiKey: ST.hereKey
+  });
+  const resp=await fetch('https://router.hereapi.com/v8/routes?'+p.toString());
+  if(typeof hereContarChamada==='function') hereContarChamada();
+  if(!resp.ok){ const t=await resp.text().catch(()=>''); throw new Error('HTTP '+resp.status+' '+t.slice(0,140)); }
+  const j=await resp.json();
+  const rt=j.routes&&j.routes[0];
+  if(!rt||!rt.sections||!rt.sections.length) throw new Error('sem rota para este par O/D');
+
+  let distM=0, durS=0, baseS=0, tipS=0, temTip=false, pontos=[], temElev=false, notices=[], pedagio=0, nPracas=0;
+  rt.sections.forEach(sec=>{
+    const s=sec.summary||{};
+    distM+=s.length||0; durS+=s.duration||0; baseS+=(s.baseDuration!=null?s.baseDuration:s.duration)||0;
+    if(s.typicalDuration!=null){ tipS+=s.typicalDuration; temTip=true; }
+    if(sec.polyline){
+      try{ const pts=decodeFlexPolyline(sec.polyline);
+        if(pts.length && pts[0].length>2) temElev=true;
+        pontos=pontos.concat(pts);
+      }catch(e){ console.warn('[Rotas] geometria:',e.message); }
+    }
+    (sec.notices||[]).forEach(n=>notices.push({code:n.code||n.title||'aviso', severity:n.severity||''}));
+    (sec.tolls||[]).forEach(t=>(t.fares||[]).forEach(f=>{
+      if(f.price&&f.price.value!=null){ pedagio+=Number(f.price.value); nPracas++; }
+    }));
+  });
+  (rt.notices||[]).forEach(n=>notices.push({code:n.code||n.title||'aviso', severity:n.severity||''}));
+
+  return {
+    km:distM/1000, min:durS/60, minBase:baseS/60, minTipico:temTip?tipS/60:null,
+    pontos, temElev, notices,
+    pedagio: nPracas?pedagio:null, nPracas
+  };
+}
+
+/* ══ Geometria: reamostragem uniforme ═════════════════════════════════════ */
+function _rtMet(a,b){ const R=6371000,r=Math.PI/180,la=(a[0]+b[0])/2*r;
+  return Math.hypot((b[1]-a[1])*r*Math.cos(la),(b[0]-a[0])*r)*R; }
+function rtReamostrar(pts,passoM){
+  if(!pts||pts.length<2) return [];
+  const out=[[...pts[0],0]]; let acum=0, resto=0;
+  for(let i=1;i<pts.length;i++){
+    const a=pts[i-1], b=pts[i], d=_rtMet(a,b);
+    if(!(d>0)) continue;
+    let pos=passoM-resto;
+    while(pos<=d){
+      const t=pos/d;
+      const lat=a[0]+(b[0]-a[0])*t, lng=a[1]+(b[1]-a[1])*t;
+      const z=(a.length>2&&b.length>2)?(a[2]+(b[2]-a[2])*t):null;
+      acum+=passoM; out.push([lat,lng,z,acum]); pos+=passoM;
+    }
+    resto=(resto+d)%passoM; if(resto<0) resto=0;
+  }
+  return out;
+}
+
+/* ══ TOPOGRAFIA (§10) ════════════════════════════════════════════════════
+   Método (documentado conforme exigido): a geometria é reamostrada a cada
+   RT_CFG.topoPassoM metros; a elevação passa por média móvel de
+   RT_CFG.topoJanela amostras; inclinações abaixo de RT_CFG.topoRuidoPct são
+   tratadas como plano. Isso elimina o serrilhado do perfil de elevação, que
+   de outra forma inventaria dezenas de "rampas" de poucos metros.
+   ══════════════════════════════════════════════════════════════════════ */
+function rtTopografia(pontos){
+  const am=rtReamostrar(pontos,RT_CFG.topoPassoM).filter(p=>p[2]!=null && isFinite(p[2]));
+  if(am.length<5) return null;
+  /* suavização */
+  const J=Math.max(1,RT_CFG.topoJanela|0), meia=Math.floor(J/2), z=[];
+  for(let i=0;i<am.length;i++){
+    let s=0,n=0;
+    for(let k=i-meia;k<=i+meia;k++){ if(k>=0&&k<am.length){ s+=am[k][2]; n++; } }
+    z.push(s/n);
+  }
+  const passoKm=RT_CFG.topoPassoM/1000;
+  let subKm=0,desKm=0,planoKm=0, km3=0,km5=0,km7=0,km10=0, ganho=0,perda=0;
+  let incMax=0;
+  let runSub=0,runDes=0, maiorSub=0,maiorDes=0;
+  let altMin=z[0], altMax=z[0];
+  for(let i=1;i<z.length;i++){
+    const dz=z[i]-z[i-1], inc=dz/RT_CFG.topoPassoM;
+    if(z[i]<altMin) altMin=z[i]; if(z[i]>altMax) altMax=z[i];
+    if(Math.abs(inc)<RT_CFG.topoRuidoPct){ planoKm+=passoKm; runSub=0; runDes=0; continue; }
+    if(inc>0){
+      subKm+=passoKm; ganho+=dz;
+      if(inc>incMax) incMax=inc;
+      if(inc>0.03) km3+=passoKm;
+      if(inc>0.05) km5+=passoKm;
+      if(inc>0.07) km7+=passoKm;
+      if(inc>0.10) km10+=passoKm;
+      runSub+=passoKm; if(runSub>maiorSub) maiorSub=runSub; runDes=0;
+    } else {
+      desKm+=passoKm; perda+=-dz;
+      runDes+=passoKm; if(runDes>maiorDes) maiorDes=runDes; runSub=0;
+    }
+  }
+  const altVar=altMax-altMin;
+  return {
+    subKm:+subKm.toFixed(2), desKm:+desKm.toFixed(2), planoKm:+planoKm.toFixed(2),
+    km3:+km3.toFixed(2), km5:+km5.toFixed(2), km7:+km7.toFixed(2), km10:+km10.toFixed(2),
+    /* Inclinação média das rampas = ganho acumulado ÷ distância em aclive.
+       Mais estável que a média das inclinações amostra a amostra, que a
+       suavização puxa para baixo nas transições rampa↔plano. */
+    incMedia: subKm>0 ? +(ganho/(subKm*1000)*100).toFixed(2) : 0,
+    incMax: +(incMax*100).toFixed(2),
+    maiorAclive:+maiorSub.toFixed(2), maiorDeclive:+maiorDes.toFixed(2),
+    ganho:Math.round(ganho), perda:Math.round(perda),
+    altMin:Math.round(altMin), altMax:Math.round(altMax), altVar:Math.round(altVar),
+    serrano: (km7>=RT_CFG.topoSerranoKm7) || (altVar>=RT_CFG.topoSerranoVar),
+    amostras:am.length,
+    metodo:`reamostragem ${RT_CFG.topoPassoM} m · média móvel ${J} amostras · ruído <${(RT_CFG.topoRuidoPct*100).toFixed(1)}%`
+  };
+}
+
+/* ══ SINUOSIDADE E GEOMETRIA (§11) ══════════════════════════════════════ */
+function _rtRumo(a,b){
+  const r=Math.PI/180, la1=a[0]*r, la2=b[0]*r, dl=(b[1]-a[1])*r;
+  const y=Math.sin(dl)*Math.cos(la2);
+  const x=Math.cos(la1)*Math.sin(la2)-Math.sin(la1)*Math.cos(la2)*Math.cos(dl);
+  return (Math.atan2(y,x)*180/Math.PI+360)%360;
+}
+function rtSinuosidade(pontos,kmRodovia){
+  const am=rtReamostrar(pontos,RT_CFG.sinuPassoM);
+  if(am.length<4) return null;
+  const deltas=[];
+  let anterior=_rtRumo(am[0],am[1]), mudTotal=0;
+  for(let i=2;i<am.length;i++){
+    const r=_rtRumo(am[i-1],am[i]);
+    let d=r-anterior; while(d>180)d-=360; while(d<-180)d+=360;
+    deltas.push(Math.abs(d)); mudTotal+=Math.abs(d); anterior=r;
+  }
+  /* curvas = janelas deslizantes com mudança acumulada relevante */
+  const janela=Math.max(2,Math.round(RT_CFG.sinuJanelaM/RT_CFG.sinuPassoM));
+  let curvas=0, fechadas=0, seqs=0, emSeq=0, ultimaCurvaFim=-99;
+  for(let i=0;i+janela<=deltas.length;i++){
+    let soma=0; for(let k=i;k<i+janela;k++) soma+=deltas[k];
+    if(soma>=RT_CFG.sinuCurvaGrau){
+      if(i>ultimaCurvaFim){
+        curvas++; if(soma>=RT_CFG.sinuFechadaGrau) fechadas++;
+        if(i-ultimaCurvaFim<=janela*2){ emSeq++; if(emSeq===2) seqs++; } else emSeq=1;
+        ultimaCurvaFim=i+janela-1;
+      }
+    }
+  }
+  const kmReal = kmRodovia>0?kmRodovia:(am.length*RT_CFG.sinuPassoM/1000);
+  const direta = _rtMet(am[0],am[am.length-1])/1000;
+  const razao  = direta>0 ? kmReal/direta : null;
+  const curvKm = kmReal>0 ? curvas/kmReal : 0;
+  const grausKm= kmReal>0 ? mudTotal/kmReal : 0;
+
+  /* Classificação consolidada — combina densidade de curvas, curvas fechadas
+     e o quanto o traçado se afasta da linha reta. */
+  let p=0;
+  if(curvKm>0.5)p++; if(curvKm>1.2)p++; if(curvKm>2.5)p++;
+  if(grausKm>60)p++; if(grausKm>150)p++;
+  if(fechadas/Math.max(kmReal,1)>0.3)p++;
+  if(razao!=null){ if(razao>1.25)p++; if(razao>1.45)p++; }
+  const classe = p<=1?'Baixa' : p<=3?'Moderada' : p<=5?'Alta' : 'Crítica';
+  return {
+    curvas, fechadas, sequencias:seqs,
+    curvasPorKm:+curvKm.toFixed(2), grausPorKm:+grausKm.toFixed(1),
+    mudancaTotal:Math.round(mudTotal),
+    distDireta:+direta.toFixed(1), razao: razao!=null?+razao.toFixed(3):null,
+    classe, estimada:true,
+    nota:'Classificação estimada pela geometria da rota — o raio real das curvas não é fornecido pela API.'
+  };
+}
+
+/* ══ Restrições sinalizadas pela HERE (§14, parcial) ══ */
+function rtRestricoes(notices){
+  const n=(notices||[]).filter(x=>/restrict|violat|prohibit/i.test(x.code||''));
+  const critico=n.some(x=>String(x.severity).toLowerCase()==='critical');
+  return {
+    total:n.length, itens:n.slice(0,8).map(x=>x.code),
+    classe: !n.length ? 'Sem restrições sinalizadas' : critico ? 'Alta' : n.length>2 ? 'Moderada' : 'Baixa',
+    nota: !n.length ? 'A HERE não sinalizou violação para este perfil de caminhão. Restrições municipais e de horário não estão cobertas.' : ''
+  };
+}
+
+/* ══ Simulação de UMA rota (ida carregada + volta vazia) ══ */
+async function rtSimularRota(r){
+  const perfil=rtPerfilAtivo();
+  const {o,d}=await rtCoordRota(r);
+  const ida=await rtHereRota(o,d,perfil,true);
+  const volta=await rtHereRota(d,o,perfil,false);
+  const reg={
+    v:2, k:r.k3, op:r.op, cod:r.codigoRaw, perfil:RT.perfilHash, ts:agoraISO(),
+    por:ATLAS_CURRENT_USER.email||'—',
+    departure:rtDepartureISO(perfil.departureHora),
+    geo:{oLat:+o.lat.toFixed(5),oLng:+o.lng.toFixed(5),oFonte:o.fonte||'here',
+         dLat:+d.lat.toFixed(5),dLng:+d.lng.toFixed(5),dFonte:d.fonte||'here'},
+    ida:{ km:+ida.km.toFixed(2), min:Math.round(ida.min), minBase:Math.round(ida.minBase),
+          minTipico: ida.minTipico!=null?Math.round(ida.minTipico):null,
+          pedagio: ida.pedagio, temElev: ida.temElev,
+          topo: ida.temElev?rtTopografia(ida.pontos):null,
+          sinu: rtSinuosidade(ida.pontos, ida.km),
+          restr: rtRestricoes(ida.notices) },
+    volta:{ km:+volta.km.toFixed(2), min:Math.round(volta.min), minBase:Math.round(volta.minBase),
+          minTipico: volta.minTipico!=null?Math.round(volta.minTipico):null,
+          pedagio: volta.pedagio, temElev: volta.temElev,
+          topo: volta.temElev?rtTopografia(volta.pontos):null,
+          sinu: rtSinuosidade(volta.pontos, volta.km),
+          restr: rtRestricoes(volta.notices) }
+  };
+  RT.hereCache.set(r.k3,reg);
+  return reg;
+}
+
+/* ══ Fila em lote (§27) ═════════════════════════════════════════════════ */
+function rtEscopoRotas(escopo){
+  const R=RT.rotas;
+  if(escopo==='visiveis') return rtFiltradas();
+  if(escopo==='periodo')  return R.filter(r=>r.status==='prod');
+  if(escopo==='todas')    return R.filter(r=>r.status!=='pend');
+  /* padrão: rotas com faturamento em qualquer mês de 2026 */
+  return R.filter(r=>r.usada2026);
+}
+async function rtSimularLote(escopo,resimular){
+  if(RT.fila.rodando) return;
+  const alvo=rtEscopoRotas(escopo).filter(r=>{
+    if(resimular) return true;
+    const c=RT.hereCache.get(r.k3);
+    return !c || c.obsoleto || c.perfil!==RT.perfilHash;
+  });
+  if(!alvo.length){ toast('Nada a simular: todas as rotas do escopo já estão em cache.','ac'); return; }
+  RT.fila={rodando:true,cancelar:false,feitos:0,total:alvo.length,erros:0,atual:''};
+  rtRenderFila();
+  let i=0, desdeGravacao=0;
+  const worker=async()=>{
+    while(i<alvo.length && !RT.fila.cancelar){
+      const r=alvo[i++];
+      RT.fila.atual=(r.codigoRaw||'')+' '+r.origem+' → '+r.destino;
+      try{ await rtSimularRota(r); }
+      catch(e){
+        RT.fila.erros++;
+        RT.hereCache.set(r.k3,{v:2,k:r.k3,erro:String(e.message||e).slice(0,120),ts:agoraISO(),perfil:RT.perfilHash});
+      }
+      RT.fila.feitos++; desdeGravacao++;
+      if(desdeGravacao>=RT_CFG.hereGravarACada){ desdeGravacao=0; try{ await rtGravarCacheHere(); }catch(_){} }
+      rtRenderFila();
+    }
+  };
+  const n=Math.max(1,Math.min(RT_CFG.hereConc,alvo.length));
+  await Promise.all(Array.from({length:n},worker));
+  try{ await rtGravarCacheHere(); await rtGravarCacheGeo(); }catch(e){ toast('Simulações feitas, mas a gravação falhou: '+e.message,'am'); }
+  const {feitos,erros,cancelar}=RT.fila;
+  RT.fila.rodando=false; rtRenderFila();
+  rtAtualizar();
+  toast(`${feitos-erros} rotas simuladas${erros?`, ${erros} com falha`:''}${cancelar?' (cancelado)':''}.`, erros?'am':'gn');
+}
+function rtRenderFila(){
+  const f=RT.fila, el=$('rtFila');
+  if(!el) return;
+  if(!f.rodando && !f.total){ el.style.display='none'; return; }
+  el.style.display='';
+  const p=f.total?Math.round(f.feitos/f.total*100):0;
+  el.innerHTML=`<div class="alerta ${f.rodando?'ac':'gn'}"><div style="flex:1">
+      <b>${f.rodando?'Simulando na HERE':'Simulação concluída'}</b> — ${f.feitos} de ${f.total} (${p}%)${f.erros?` · <span style="color:var(--rd)">${f.erros} falha(s)</span>`:''}
+      ${f.rodando&&f.atual?`<div class="muted mono" style="font-size:11px;margin-top:3px">${esc(f.atual)}</div>`:''}
+      <div class="rt-prog" style="margin-top:6px"><i style="width:${p}%"></i></div>
+    </div>
+    ${f.rodando?`<button class="btn sm danger" onclick="RT.fila.cancelar=true">Cancelar</button>`:`<button class="btn sm" onclick="RT.fila.total=0;rtRenderFila()">Ocultar</button>`}</div>`;
+}
+function rtSimularModal(){
+  const R=RT.rotas;
+  const cont=e=>rtEscopoRotas(e).length;
+  const pend=e=>rtEscopoRotas(e).filter(r=>{ const c=RT.hereCache.get(r.k3); return !c||c.obsoleto||c.perfil!==RT.perfilHash; }).length;
+  const op=(v,l,d)=>`<label class="rt-chk" style="display:flex;gap:8px;padding:7px 0;align-items:flex-start">
+      <input type="radio" name="rtEsc" value="${v}" ${v==='usadas'?'checked':''}>
+      <span><b>${l}</b><br><span class="muted" style="font-weight:400">${cont(v)} rotas · ${pend(v)} sem simulação atualizada · ~${pend(v)*2} chamadas</span></span></label>`;
+  mdAbrir('Simular rotas na HERE',
+    `<div class="muted" style="margin-bottom:10px">Cada rota consome duas chamadas de roteirização (ida carregada e volta vazia), mais a geocodificação das cidades na primeira vez. O resultado fica em cache e não é recalculado sem necessidade.</div>
+     ${op('usadas','Rotas com faturamento em 2026')}
+     ${op('periodo','Rotas produtivas no período selecionado')}
+     ${op('visiveis','Rotas visíveis no filtro atual')}
+     ${op('todas','Todas as rotas válidas da SZY')}
+     <label class="rt-chk" style="margin-top:10px"><input type="checkbox" id="rtResim"> Resimular também as que já estão em cache</label>
+     <div class="muted" style="margin-top:10px;font-size:11px">Perfil em uso: <b>${esc(rtPerfilAtivo().nome)}</b> · ${rtPerfilAtivo().eixos} eixos · ${num(rtPerfilAtivo().taraT+rtPerfilAtivo().cargaT,1)} t carregado. A tela continua utilizável durante o processamento.</div>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="const e=document.querySelector('input[name=rtEsc]:checked').value,z=$('rtResim').checked;mdFechar();rtSimularLote(e,z)">Iniciar</button>`);
+}
+
+/* ══ Anexa o cache às rotas montadas ══ */
+function rtAplicarHere(rotas){
+  rotas.forEach(r=>{
+    const c=RT.hereCache.get(r.k3);
+    if(!c || c.erro){ r.here=null; r.hereErro=c?c.erro:null; return; }
+    r.here=c;
+    r.hereKm  = c.ida?c.ida.km:null;
+    r.hereMin = c.ida?c.ida.min:null;
+    r.hereTs  = c.ts;
+    r.hereObsoleto = !!c.obsoleto || c.perfil!==RT.perfilHash;
+    r.kmTotalHere = (c.ida?c.ida.km:0)+(c.volta?c.volta.km:0);
+    r.cicloMin = (c.ida?c.ida.min:0)+(c.volta?c.volta.min:0);
+  });
+}
+
+/* ══ Bloco "Rota e relevo" do painel de análise (§7) ══ */
+function rtBlocoRelevo(r){
+  const c=r.here;
+  if(!c) return `<div class="muted" style="padding:14px 0">Rota ainda não simulada na HERE. Use <b>Simular rotas na HERE</b> no topo da aba.</div>`;
+  if(c.erro) return `<div class="alerta rd"><div><b>Falha na simulação.</b> ${esc(c.erro)}</div></div>`;
+  const lado=(t,s)=>{
+    const topo=s.topo, sinu=s.sinu;
+    const l=(a,b)=>`<tr><td class="muted">${a}</td><td class="num">${b}</td></tr>`;
+    const nd='<span class="muted">Dado não disponível</span>';
+    return `<div>
+      <h3 style="font-size:12px;margin-bottom:8px">${t} <span class="src here">HERE</span></h3>
+      <table class="tb">
+        ${l('Distância', num(s.km,1)+' km')}
+        ${l('Duração com trânsito', num(s.min,0)+' min')}
+        ${l('Duração sem trânsito', s.minBase!=null?num(s.minBase,0)+' min':nd)}
+        ${l('Duração típica', s.minTipico!=null?num(s.minTipico,0)+' min':nd)}
+        ${l('Pedágio', s.pedagio!=null?brl(s.pedagio):nd)}
+        ${topo?`
+        ${l('Km em aclive', num(topo.subKm,1))}
+        ${l('Km em declive', num(topo.desKm,1))}
+        ${l('Km plano', num(topo.planoKm,1))}
+        ${l('Inclinação média das rampas', num(topo.incMedia,2)+'%')}
+        ${l('Maior inclinação', num(topo.incMax,2)+'%')}
+        ${l('Km em rampas &gt;3%', num(topo.km3,1))}
+        ${l('Km em rampas &gt;5%', num(topo.km5,1))}
+        ${l('Km em rampas &gt;7%', num(topo.km7,1))}
+        ${l('Km em rampas &gt;10%', num(topo.km10,1))}
+        ${l('Maior aclive contínuo', num(topo.maiorAclive,1)+' km')}
+        ${l('Maior declive contínuo', num(topo.maiorDeclive,1)+' km')}
+        ${l('Ganho acumulado', num(topo.ganho,0)+' m')}
+        ${l('Perda acumulada', num(topo.perda,0)+' m')}
+        ${l('Altitude mín. / máx.', topo.altMin+' / '+topo.altMax+' m')}
+        ${l('Variação de altitude', topo.altVar+' m')}
+        ${l('Trecho serrano', topo.serrano?'<span class="pill am">Sim</span>':'<span class="pill mu">Não</span>')}
+        `:`<tr><td colspan="2" class="muted">Perfil de elevação não disponível para esta rota.</td></tr>`}
+        ${sinu?`
+        ${l('Sinuosidade', `<span class="pill ${sinu.classe==='Baixa'?'gn':sinu.classe==='Moderada'?'ac':sinu.classe==='Alta'?'am':'rd'}">${sinu.classe}</span>`)}
+        ${l('Curvas relevantes por km', num(sinu.curvasPorKm,2))}
+        ${l('Curvas fechadas', num(sinu.fechadas,0))}
+        ${l('Sequências de curvas', num(sinu.sequencias,0))}
+        ${l('Mudança acumulada de direção', num(sinu.mudancaTotal,0)+'°')}
+        ${l('Rodoviária ÷ linha reta', sinu.razao!=null?num(sinu.razao,3):nd)}
+        `:''}
+        ${l('Restrições sinalizadas', `<span class="pill ${s.restr.total?'am':'mu'}">${esc(s.restr.classe)}</span>`)}
+      </table>
+      ${sinu?`<div class="muted" style="font-size:10.5px;margin-top:5px">${esc(sinu.nota)}</div>`:''}
+      ${topo?`<div class="muted" style="font-size:10.5px;margin-top:3px">Método: ${esc(topo.metodo)} · ${topo.amostras} amostras.</div>`:''}
+    </div>`;
+  };
+  return `${r.hereObsoleto?'<div class="alerta am"><div>O perfil da composição mudou depois desta simulação. Os números abaixo são do perfil anterior — resimule para atualizar.</div></div>':''}
+    <div class="grid2">${lado('Ida — carregada',c.ida)}${lado('Volta — vazia',c.volta)}</div>
+    <div class="muted" style="font-size:11px;margin-top:10px">
+      Simulada em ${esc(dtBR(c.ts))}${c.por?' por '+esc(c.por):''} · partida de referência ${esc((c.departure||'').replace('T',' '))} ·
+      origem ${c.geo.oLat}, ${c.geo.oLng} (${esc(c.geo.oFonte)}) → destino ${c.geo.dLat}, ${c.geo.dLng} (${esc(c.geo.dFonte)}).
+      Geocodificação centro a centro.
+    </div>`;
+}
+
 /* Handle de diagnóstico — mesmo padrão de window.__ATLAS_MODULE__ / window._simMap.
    Permite inspecionar o estado da aba pelo console sem expor nada gravável. */
-try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG;
+try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG; window.__ATLAS_ST__ = ST;
      window.__ATLAS_ROTAS_ALIAS__ = {szy:RT_ALIAS_SZY, szb:RT_ALIAS_SZB}; }catch(_){}
 
 /* ── Binds (a aba só carrega quando é aberta — respeita o orçamento de leituras) ── */
@@ -4146,6 +4769,8 @@ try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG;
   const ba=$('rtBtnAtualizar'); if(ba) ba.onclick=()=>{ RT.carregado=false; rtInit(true); };
   const bm=$('rtBtnMapa'); if(bm) bm.onclick=()=>{ const c=$('rtCardMapa'); c.style.display = c.style.display==='none'?'':'none'; if(c.style.display==='') rtRenderMapa(); };
   const bx=$('rtBtnExport'); if(bx) bx.onclick=rtExportar;
+  const bh=$('rtBtnHere');   if(bh) bh.onclick=rtSimularModal;
+  const bp=$('rtBtnPerfil'); if(bp) bp.onclick=rtPerfilModal;
   const ms=$('rtMapaSalvar'); if(ms) ms.onclick=rtSalvarMapa;
   const mr=$('rtMapaReset'); if(mr) mr.onclick=rtResetMapa;
 })();
