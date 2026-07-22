@@ -654,6 +654,7 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
         <button class="btn sm" id="rtBtnMapa" title="Mapeamento das colunas da SZY e do SZB">⚙ Colunas</button>
         <button class="btn sm" id="rtBtnAtualizar" title="Rebaixa SZY e faturamento da nuvem">↻ Atualizar dados</button>
         <button class="btn sm" id="rtBtnPerfil" title="Perfil da composição usado na roteirização">🚛 Perfil</button>
+        <button class="btn sm" id="rtBtnCusto" title="Premissas de custo, tempo e compressor">💰 Custos</button>
         <button class="btn sm pri" id="rtBtnHere" title="Simulação em lote na HERE (ida carregada + volta vazia)">🛣 Simular rotas na HERE</button>
         <button class="btn sm" id="rtBtnExport" title="Exportação executiva (.xlsx)">⬇ Excel</button>
       </span>
@@ -1708,23 +1709,27 @@ function dieselVigente(filial){
    · Outros Custos = Custo Operacional (lubrif, peças, pneus, doc/seguros) + Custo Pessoal
    · Depreciação separa Cavalo (vida 10a) e Carreta (vida 15a)
    · 3 blocos: Resultado Frota · Resultado COMIX por Agregados · Resultado Agregados */
-function calcularFinanceiro(inp){
-  /* inp: {tarifaTon, ton, viagensMes, distIVKm, pedagioIV, premissas P, dieselRS, tipoCarreta} */
+/* ══ NÚCLEO DE CUSTO — fonte única das fórmulas de custo por viagem ══════
+   Consumido por calcularFinanceiro() (Simulador) e por rtCustoRota() (análise
+   de rotas). As expressões são as mesmas da planilha, escritas uma única vez.
+   Custos saem NEGATIVOS, como na planilha.
+   litrosDiesel opcional: quando informado (consumo carregado ≠ vazio), o
+   diesel usa esses litros; sem ele, cai no consumo único da premissa. ══ */
+function custosViagem(inp){
   const P=inp.premissas||{};
   const g=(k,def)=>{ const v=Number(P[k]); return isNaN(v)?def:v; };
   const V=Math.max(inp.viagensMes,1);
-  const linhas=(v)=>({viagem:v, mes:v*V, ano:v*V*12});
+  const d=inp.distKm;
 
-  /* — Premissas (nomes/defaults espelham as células E da planilha) — */
-  const pisCofins = g('pis_cofins',0.0965);                       // E6 (lançado combinado na planilha)
-  const icms      = g('icms',0.12);                               // E8 — varia por rota (12%–17%)
+  const pisCofins = g('pis_cofins',0.0965);                       // E6
+  const icms      = g('icms',0.12);                               // E8
   const aliq      = pisCofins+icms;
   const consumo   = Math.max(g('consumo_kml',2.2),.1);            // E17
-  const diesel    = (inp.dieselRS!=null?inp.dieselRS:g('diesel_rs',5.6)); // E16 (vem da aba Combustível)
+  const diesel    = (inp.dieselRS!=null?inp.dieselRS:g('diesel_rs',5.6)); // E16
   const lubMes    = g('lubrificante_mes',1500);                   // E18
   const lubRend   = Math.max(g('lubrificante_rend_km',30000),1);  // E19
   const pecasMes  = g('pecas_mes',1000);                          // E20
-  /* Pneus lisos por tipo de carreta — fórmula E21: LS=18, Bitrem=22, senão 30 (override via premissa) */
+  /* Pneus lisos por tipo de carreta — fórmula E21: LS=18, Bitrem=22, senão 30 */
   const qtdLisoAuto = inp.tipoCarreta==='LS'?18: inp.tipoCarreta==='Bitrem'?22:30;
   const qLiso    = P.pneus_qtd_liso!=null? Number(P.pneus_qtd_liso): qtdLisoAuto;
   const qBorr    = g('pneus_qtd_borr',4);                         // E22
@@ -1733,29 +1738,57 @@ function calcularFinanceiro(inp){
   const pneuRend = Math.max(g('pneus_rendimento_km',120000),1);   // E25
   const docAno   = g('licenciamento_ano',4500)+g('seguro_ano',11400)+g('laudos_ano',420); // E26:E28
   const salario  = g('salario_motorista',2364.09);                // E29
-  const comisPct = g('comissao_pct',0.05);                        // E30 (sobre fat. líquido)
+  const comisPct = g('comissao_pct',0.05);                        // E30
   const encFator = g('fator_encargos',1.9);                       // E31
   const alimMes  = g('alimentacao_mes',325);                      // E32
   const cvCusto  = g('custo_cavalo',350000), cvVida=Math.max(g('vida_cavalo_anos',10),1);   // E33/E35
   const crCusto  = g('custo_carreta',150000), crVida=Math.max(g('vida_carreta_anos',15),1); // E34/E36
-  /* Premissas Agregados (células S) */
-  const agImpPct   = g('ag_impostos',0.0165);        // S5 = 1-0.9835
-  const agComixPct = g('ag_comissao_comix',0.26);    // S6 — COMIX retém 26%, repassa 74%
-  const agDeprecMes= g('ag_deprec_mensal',500);      // S7 (R$/mês)
-  const agSalPct   = g('ag_salario_pct',0.10);       // S8 (% do faturamento)
+  const agImpPct   = g('ag_impostos',0.0165);        // S5
+  const agComixPct = g('ag_comissao_comix',0.26);    // S6
+  const agDeprecMes= g('ag_deprec_mensal',500);      // S7
+  const agSalPct   = g('ag_salario_pct',0.10);       // S8
+
+  return {
+    diesel:       (inp.litrosDiesel!=null) ? -inp.litrosDiesel*diesel : -d/consumo*diesel, // J12
+    pedagio:      -(inp.pedagio||0),                                                       // J13
+    lubrificante: -lubMes/lubRend*d,                                                       // J19
+    pecas:        -pecasMes/V,                                                             // J20
+    pneus:        -(qLiso*vLiso+qBorr*vBorr)/pneuRend*d,                                   // J21
+    docSeguros:   -docAno/12/V,                                                            // J22
+    /* Parte fixa do custo de pessoal. A comissão é função da receita, não do
+       quilômetro: fica fora do CPK da rota e é somada só no Simulador (J23). */
+    pessoalFixo:  (-salario)*encFator/V - alimMes/V,
+    deprecCavalo: -(cvCusto/cvVida)/12/V,                                                  // J27
+    deprecCarreta:-(crCusto/crVida)/12/V,                                                  // J28
+    p:{ pisCofins,icms,aliq,consumo,diesel,lubMes,lubRend,pecasMes,qLiso,qBorr,vLiso,vBorr,
+        pneuRend,docAno,salario,comisPct,encFator,alimMes,cvCusto,cvVida,crCusto,crVida,
+        agImpPct,agComixPct,agDeprecMes,agSalPct,V }
+  };
+}
+
+function calcularFinanceiro(inp){
+  /* inp: {tarifaTon, ton, viagensMes, distIVKm, pedagioIV, premissas P, dieselRS, tipoCarreta} */
+  const V=Math.max(inp.viagensMes,1);
+  const linhas=(v)=>({viagem:v, mes:v*V, ano:v*V*12});
+
+  /* Premissas e fórmulas de custo vêm do núcleo compartilhado com a análise
+     de rotas — uma única definição para os dois motores. */
+  const N = custosViagem({ distKm:inp.distIVKm, pedagio:inp.pedagioIV, viagensMes:V,
+                           premissas:inp.premissas, dieselRS:inp.dieselRS, tipoCarreta:inp.tipoCarreta });
+  const { aliq, comisPct, encFator, salario, alimMes, agComixPct, agDeprecMes, agSalPct } = N.p;
 
   /* ═ Bloco 1 — RESULTADO FROTA (colunas J/K/L) ═ */
   const RB   = inp.tarifaTon*inp.ton;                          // J5 = E5*E10
   const IMP  = -aliq*RB;                                       // J7
   const RL   = RB+IMP;                                         // J9
-  const cDiesel  = -inp.distIVKm/consumo*diesel;               // J12 = -E13/E17*E16
-  const cPedagio = -inp.pedagioIV;                             // J13 = -E15
+  const cDiesel  = N.diesel;                                   // J12 = -E13/E17*E16
+  const cPedagio = N.pedagio;                                  // J13 = -E15
   const CD   = cDiesel+cPedagio;                               // J11
   const LB   = RL+CD;                                          // J14 = RL + Custo Direto
-  const cLub   = -lubMes/lubRend*inp.distIVKm;                 // J19 = -E18/E19*E13
-  const cPecas = -pecasMes/V;                                  // J20
-  const cPneus = -(qLiso*vLiso+qBorr*vBorr)/pneuRend*inp.distIVKm; // J21
-  const cDoc   = -docAno/12/V;                                 // J22
+  const cLub   = N.lubrificante;                               // J19 = -E18/E19*E13
+  const cPecas = N.pecas;                                      // J20
+  const cPneus = N.pneus;                                      // J21
+  const cDoc   = N.docSeguros;                                 // J22
   const CO   = cLub+cPecas+cPneus+cDoc;                        // J18
   /* J23 — réplica fiel, incluindo a peculiaridade da planilha: a comissão de UMA viagem
      entra no pacote (salário) que é multiplicado pelos encargos e diluído pelas viagens.
@@ -1763,8 +1796,8 @@ function calcularFinanceiro(inp){
   const CP   = (-salario - RL*comisPct)*encFator/V - alimMes/V;
   const OUT  = CO+CP;                                          // J17
   const RO   = LB+OUT;                                         // J24
-  const dCav = -(cvCusto/cvVida)/12/V;                         // J27
-  const dCar = -(crCusto/crVida)/12/V;                         // J28
+  const dCav = N.deprecCavalo;                                 // J27
+  const dCar = N.deprecCarreta;                                // J28
   const EBIT = RO+dCav+dCar;                                   // J29
 
   const frota = {
@@ -3805,6 +3838,9 @@ function rtFiltradas(){
       case 'kmIda': return r.kmIda; case 'hereKm': return r.hereKm==null?-1:r.hereKm;
       case 'dif': { const d=rtDivergencia(r); return d?Math.abs(d.pct):-1; }
       case 'viagens': return r.viagens; case 'ton': return r.ton;
+      case 'ciclo':  return r.cicloH==null?-1:r.cicloH;
+      case 'custoV': return r.custoViagem==null?-1:r.custoViagem;
+      case 'custoT': return r.custoTon==null?-1:r.custoTon;
       default: return r.receita;
     }
   };
@@ -3830,6 +3866,9 @@ const RT_COLS=[
   {k:'viagens', t:'Viagens',     cls:'num'},
   {k:'ton',     t:'Toneladas',   cls:'num'},
   {k:'receita', t:'Receita',     cls:'num'},
+  {k:'ciclo',   t:'Ciclo (h)',   cls:'num'},
+  {k:'custoV',  t:'Custo/viagem',cls:'num'},
+  {k:'custoT',  t:'Custo/t',     cls:'num'},
   {k:null,      t:'',            cls:''}
 ];
 function rtRenderHead(){
@@ -3883,6 +3922,9 @@ function rtRender(){
         <td class="num">${r.viagens||'—'}</td>
         <td class="num">${r.ton?num(r.ton,1):'—'}</td>
         <td class="num">${r.receita?brl(r.receita):'—'}</td>
+        <td class="num">${r.cicloH!=null?num(r.cicloH,1):'—'}</td>
+        <td class="num">${r.custoViagem!=null?brl(r.custoViagem):'—'}</td>
+        <td class="num">${r.custoTon!=null?brl(r.custoTon):'—'}</td>
         <td><button class="icon-btn" title="Analisar" onclick="rtAnalisar(${ini+i})">🔍</button></td>
       </tr>`;
     }).join('');
@@ -3916,13 +3958,19 @@ function rtRenderKpis(){
     card('mu','Rotas sem faturamento no período', num(semf.length,0), 'ocultas por padrão'),
     card('am','Rotas pendentes de validação', num(pend.length,0), RT.ctesAmbiguos?num(RT.ctesAmbiguos,0)+' CT-e sem atribuição':'—'),
     card('rd','Divergência relevante SZY × HERE', simuladas?num(diverg,0):'—', simuladas?('acima de '+pct(RT_CFG.divRelevante,0)+' · '+num(simuladas,0)+' simuladas'):'nenhuma rota simulada ainda'),
-    card('mu','Custo médio estimado por viagem','—','motor de custo — Onda 3')
+    (()=>{ const cs=prod.map(r=>r.custoViagem).filter(v=>v!=null);
+      const md=cs.length?cs.reduce((a,b)=>a+b,0)/cs.length:null;
+      const cpk=prod.map(r=>r.custoKm).filter(v=>v!=null);
+      const mdk=cpk.length?cpk.reduce((a,b)=>a+b,0)/cpk.length:null;
+      return card('ac','Custo médio estimado por viagem', md!=null?brl(md):'—',
+        mdk!=null?`CPK médio ${brl(mdk)} · ${cs.length} rotas`:'informe as premissas de custo'); })()
   ].join('');
 }
 
 /* ══ Painel de análise individual (§7) — Onda 1: resumo + operação + pendência ══ */
 function rtAnalisar(i){
   const r=(RT._pagAtual||RT.rotas)[i]; if(!r) return;
+  RT._analisando=r;
   const dv=rtDivergencia(r);
   const linha=(l,v,src)=>`<tr><td class="muted">${l}</td><td class="num">${v}${src?` <span class="src ${src}">${src.toUpperCase()}</span>`:''}</td></tr>`;
   const ctes=(r.ctes||[]).slice(0,12);
@@ -3958,11 +4006,15 @@ function rtAnalisar(i){
     </div>
     <h3 style="font-size:12px;margin:16px 0 8px;border-top:1px solid var(--bd2);padding-top:12px">Rota e relevo</h3>
     ${rtBlocoRelevo(r)}
+    <h3 style="font-size:12px;margin:16px 0 8px;border-top:1px solid var(--bd2);padding-top:12px">Custos</h3>
+    ${rtBlocoCustos(r)}
+    <h3 style="font-size:12px;margin:16px 0 8px;border-top:1px solid var(--bd2);padding-top:12px">Memória de cálculo</h3>
+    ${rtBlocoMemoria(r)}
     ${ctes.length?`<h3 style="font-size:12px;margin:14px 0 8px">CT-e do período <span class="muted" style="font-weight:400">(${num(r.ctes.length,0)} associados${r.ctes.length>12?' · 12 primeiros':''})</span></h3>
       <table class="tb"><thead><tr><th>Data</th><th>CTRC</th><th>Placa</th><th class="num">Ton</th><th class="num">Valor</th></tr></thead>
       <tbody>${ctes.map(c=>`<tr><td>${esc(dtSimplesBR(c.data))}</td><td class="mono">${esc(c.ctrc||c.cte.slice(-8)||'—')}</td><td class="mono">${esc(c.placa||'—')}</td><td class="num">${num(c.ton,1)}</td><td class="num">${brl(c.valor)}</td></tr>`).join('')}</tbody></table>`:''}
     <div class="muted" style="margin-top:12px;font-size:11px">
-      Custos e Índice de Complexidade entram nas próximas ondas. Nada aqui é estimado: campo sem dado aparece como “—”.
+      O Índice de Complexidade entra na próxima onda. Nada aqui é estimado: campo sem dado aparece como “—”.
     </div>`;
   mdAbrir('Rota '+(r.codigoRaw||'—')+' · '+r.origem+' → '+r.destino, corpo, '<button class="btn" onclick="mdFechar()">Fechar</button>');
 }
@@ -4090,6 +4142,41 @@ async function rtExportar(){
         'Simulada em':r.here.ts||'', 'Perfil':r.here.perfil||''};
     };
     add('Comparação SZY x HERE',comHere.map(linHere));
+    /* Custos (§29) */
+    const comCusto=RT.rotas.filter(r=>r.custo);
+    add('Custos', comCusto.map(r=>{ const c=r.custo, L=c.linhas;
+      return { 'Filial':r.op, 'Rota':r.codigoRaw, 'Origem':r.origem, 'Destino':r.destino,
+        'Status': r.status==='prod'?'Produtiva':r.status==='pend'?'Pendente':'Sem faturamento',
+        'Fonte da distância':c.fonteDist.toUpperCase(),
+        'Km ida':c.km.ida, 'Km volta':c.km.volta, 'Km total':c.km.total,
+        'Km carregado':c.km.carregado, 'Km vazio':c.km.vazio, '% vazio':c.prod.pctVazio!=null?+(c.prod.pctVazio*100).toFixed(1):null,
+        'Litros de diesel':+c.litros.toFixed(1), 'Diesel (R$)':+L.diesel.toFixed(2),
+        'Arla (R$)':+L.arla.toFixed(2), 'Pedágio (R$)':L.pedagio!=null?+L.pedagio.toFixed(2):null,
+        'Lubrificante (R$)':+L.lubrificante.toFixed(2), 'Peças (R$)':+L.pecas.toFixed(2),
+        'Pneus (R$)':+L.pneus.toFixed(2), 'Doc. e seguros (R$)':+L.docSeguros.toFixed(2),
+        'Pessoal (R$)':+L.pessoal.toFixed(2),
+        'Deprec. cavalo (R$)':+L.deprecCavalo.toFixed(2), 'Deprec. carreta (R$)':+L.deprecCarreta.toFixed(2),
+        'Alimentação (R$)':L.alimentacao, 'Limpeza (R$)':L.limpeza, 'Tempo parado (R$)':+L.tempo.toFixed(2),
+        'Descarga pressurizada (R$)':L.compressor!=null?+L.compressor.toFixed(2):null,
+        'Tempo de descarga (h)':c.compressor?+c.compressor.tempoH.toFixed(2):null,
+        'CUSTO POR VIAGEM (R$)':+c.total.toFixed(2),
+        'Custo por km (R$)':c.cpk!=null?+c.cpk.toFixed(3):null,
+        'Custo por tonelada (R$)':c.porTon!=null?+c.porTon.toFixed(2):null,
+        'Custo por hora (R$)':c.porHora!=null?+c.porHora.toFixed(2):null,
+        'Viagens/mês':c.viagensMes, 'Custo mensal (R$)':+c.mensal.toFixed(2),
+        'Ciclo (h)':c.prod.cicloH!=null?+c.prod.cicloH.toFixed(2):null,
+        'Toneladas/viagem':c.tonViagem!=null?+c.tonViagem.toFixed(2):null,
+        'Diferença vs consumo padrão (R$)':+c.difCombustivel.toFixed(2),
+        'Cálculo completo':c.completo?'Sim':'Provisório' };
+    }));
+
+    /* Memória de cálculo (§29) */
+    const memLinhas=[];
+    comCusto.forEach(r=>(r.custo.memoria||[]).forEach(m=>memLinhas.push({
+      'Filial':r.op, 'Rota':r.codigoRaw, 'Trecho':r.origem+' → '+r.destino,
+      'Item':m.o, 'Como foi calculado':m.f, 'Valor':m.v!=null?+Number(m.v).toFixed(2):null })));
+    add('Memória de cálculo', memLinhas);
+
     add('Premissas',[
       {Premissa:'Limite “Compatível”',Valor:(RT_CFG.divAtencao*100)+'%'},
       {Premissa:'Limite “Atenção”',Valor:(RT_CFG.divRelevante*100)+'%'},
@@ -4101,7 +4188,16 @@ async function rtExportar(){
       {Premissa:'Modo de transporte na HERE',Valor:'transportMode=truck (ida carregada, volta vazia)'},
       {Premissa:'Geocodificação',Valor:'centro a centro do município — melhoria futura: endereço do cliente'},
       {Premissa:'Topografia — método',Valor:`reamostragem ${RT_CFG.topoPassoM} m · média móvel ${RT_CFG.topoJanela} amostras · ruído <${(RT_CFG.topoRuidoPct*100).toFixed(1)}%`},
-      {Premissa:'Sinuosidade — método',Valor:`curva = ${RT_CFG.sinuCurvaGrau}° acumulados em ${RT_CFG.sinuJanelaM} m · fechada = ${RT_CFG.sinuFechadaGrau}° · classificação estimada pela geometria`}
+      {Premissa:'Sinuosidade — método',Valor:`curva = ${RT_CFG.sinuCurvaGrau}° acumulados em ${RT_CFG.sinuJanelaM} m · fechada = ${RT_CFG.sinuFechadaGrau}° · classificação estimada pela geometria`},
+      {Premissa:'Motor de custo',Valor:'núcleo único compartilhado com o Simulador (custosViagem)'},
+      {Premissa:'Comissão',Valor:'fora do CPK da rota — é função da tarifa, não do quilômetro'},
+      {Premissa:'Consumo carregado (km/l)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).consumoCarregado},
+      {Premissa:'Consumo vazio (km/l)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).consumoVazio},
+      {Premissa:'Arla (% do diesel)',Valor:((RT.custoGeral||RT_CUSTO_PADRAO).arlaPct*100)+'%'},
+      {Premissa:'Taxa de descarga (t/h)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compTaxaTh},
+      {Premissa:'Consumo do compressor (l/h)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compConsumoLh},
+      {Premissa:'Fonte de energia do compressor',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compFonte==='tdf'?'tomada de força do cavalo':'motor independente'},
+      {Premissa:'Rotas com premissa própria',Valor:RT.custoOv.size}
     ]);
     XLSX.writeFile(wb,`Analise_de_Rotas_${per}.xlsx`);
     toast('Excel gerado.','gn');
@@ -4114,7 +4210,7 @@ function rtAtualizar(){
   if(!RT.carregado) return;
   RT.periodo.a=+($('rtAno')?.value||RT.periodo.a);
   RT.periodo.m=+($('rtMes')?.value||RT.periodo.m);
-  rtMontar(); RT.pag=1; rtRender();
+  rtMontar(); rtCalcularCustos(); RT.pag=1; rtRender();
   const m=[];
   m.push(RT.szyMeta?`<span class="pill mu">SZY · ${num(RT.szy.length,0)} linhas · ${esc(dtBR(RT.szyMeta.ts))}${RT.szyMeta.user?' · '+esc(RT.szyMeta.user):''}</span>`
                    :'<span class="pill rd">SZY não encontrada em bases_cloud/szy</span>');
@@ -4138,7 +4234,7 @@ async function rtInit(force){
     await rtCarregarBases(force);
     /* perfil e caches entram antes do primeiro render para que as colunas da
        HERE já apareçam preenchidas sem nenhuma chamada de rede à API. */
-    await Promise.all([rtCarregarPerfil(), rtCarregarCacheHere(), rtCarregarCacheGeo()]);
+    await Promise.all([rtCarregarPerfil(), rtCarregarCacheHere(), rtCarregarCacheGeo(), rtCarregarCusto()]);
     rtRenderMapa();
     simSincronizarRotasSZY();   /* o seletor do Simulador acompanha a recarga */
   }
@@ -4621,7 +4717,8 @@ async function rtSimularLote(escopo,resimular){
   const alvo=rtEscopoRotas(escopo).filter(r=>{
     if(resimular) return true;
     const c=RT.hereCache.get(r.k3);
-    return !c || c.obsoleto || c.perfil!==RT.perfilHash;
+    /* Falha anterior volta para a fila: só o sucesso conta como resolvido. */
+    return !c || c.erro || c.obsoleto || c.perfil!==RT.perfilHash;
   });
   if(!alvo.length){ toast('Nada a simular: todas as rotas do escopo já estão em cache.','ac'); return; }
   RT.fila={rodando:true,cancelar:false,feitos:0,total:alvo.length,erros:0,atual:''};
@@ -4665,7 +4762,7 @@ function rtRenderFila(){
 function rtSimularModal(){
   const R=RT.rotas;
   const cont=e=>rtEscopoRotas(e).length;
-  const pend=e=>rtEscopoRotas(e).filter(r=>{ const c=RT.hereCache.get(r.k3); return !c||c.obsoleto||c.perfil!==RT.perfilHash; }).length;
+  const pend=e=>rtEscopoRotas(e).filter(r=>{ const c=RT.hereCache.get(r.k3); return !c||c.erro||c.obsoleto||c.perfil!==RT.perfilHash; }).length;
   const op=(v,l,d)=>`<label class="rt-chk" style="display:flex;gap:8px;padding:7px 0;align-items:flex-start">
       <input type="radio" name="rtEsc" value="${v}" ${v==='usadas'?'checked':''}>
       <span><b>${l}</b><br><span class="muted" style="font-weight:400">${cont(v)} rotas · ${pend(v)} sem simulação atualizada · ~${pend(v)*2} chamadas</span></span></label>`;
@@ -4754,6 +4851,446 @@ function rtBlocoRelevo(r){
     </div>`;
 }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ANÁLISE DE ROTAS — Onda 3 · Motor de custo único
+   ──────────────────────────────────────────────────────────────────────────
+   O núcleo de custo (custosViagem) passou a ser a ÚNICA fonte das fórmulas de
+   custo por viagem. Ele é consumido pelos dois lados:
+
+     · calcularFinanceiro()  — Simulador, réplica da planilha (19/19)
+     · rtCustoRota()         — CPK por rota da aba Rotas
+
+   Mexer numa fórmula de custo agora vale para os dois ao mesmo tempo. Não
+   existe mais a possibilidade de o Simulador e a análise de rota discordarem
+   sobre quanto custa um quilômetro.
+
+   O que a rota acrescenta sobre o núcleo: consumo carregado ≠ vazio, Arla,
+   custo do tempo e a descarga pressurizada por compressor.
+
+   Sobre dupla contagem: como não herdamos CPK de lugar nenhum, cada custo é
+   somado uma única vez, na sua própria linha. A comissão fica de fora do CPK
+   da rota — ela é função da tarifa, não do quilômetro, e entra na análise de
+   margem do Simulador, não no custo operacional.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const RT_CUSTO_PADRAO = {
+  /* distância */
+  distFonte:'here',              /* here · szy · manual                        */
+  distManualIda:0, distManualVolta:0, distMotivo:'',
+  idaCarregada:true,             /* §20 — inverte carregado/vazio              */
+  /* combustível */
+  consumoCarregado:2.0, consumoVazio:3.0,   /* km/l                            */
+  precoDiesel:null,              /* null = diesel vigente da aba Combustível    */
+  arlaPct:0.05, precoArla:4.50,
+  /* carga */
+  pesoLiquidoT:null,             /* null = média real do período               */
+  /* tempo */
+  tempoCargaH:1.5, esperaClienteH:1.0, custoOportunidadeH:0,
+  /* despesas da viagem */
+  alimentacaoViagem:0, limpezaViagem:0,
+  pedagioFonte:'here',           /* here · manual                              */
+  pedagioManual:0,
+  viagensMes:null,               /* null = viagens reais do período            */
+  /* compressor — §17 */
+  compModelo:'', compFonte:'tdf',            /* tdf · independente             */
+  compTaxaTh:25, compTempoH:null,            /* t/h  ·  horas informadas        */
+  tipoCarreta:'LS',
+  compConsumoLh:8, compArlaLh:0.4,
+  compManutH:0, compDeprecH:0,
+  compLimpezaH:0.25, compOutros:0, compObs:''
+};
+
+Object.assign(RT,{ custoGeral:null, custoOv:new Map(), custoCarregado:false });
+
+/* ── Premissas: rota primeiro, depois a configuração geral (§17, hierarquia) ── */
+function rtPremissasCusto(r){
+  const base={...RT_CUSTO_PADRAO, ...(RT.custoGeral||{})};
+  const ov=r?RT.custoOv.get(r.k3):null;
+  return ov?{...base,...ov}:base;
+}
+function rtTemOverride(r){ return !!(r && RT.custoOv.get(r.k3)); }
+
+const RT_CUSTO_DOC='rotas_custo_ov_';
+async function rtCarregarCusto(){
+  if(RT.custoCarregado) return;
+  RT.custoCarregado=true;
+  try{ const d=await fsGetDoc(COL.config,'rotas_custo'); if(d&&d.data) RT.custoGeral=d.data; }catch(_){}
+  for(let n=0;n<8;n++){
+    let d=null;
+    try{ d=await fsGetDoc(COL.config,RT_CUSTO_DOC+n); }catch(_){ break; }
+    if(!d||!d.data||!d.data.itens) break;
+    const it=d.data.itens;
+    Object.keys(it).forEach(k=>RT.custoOv.set(k,it[k]));
+    if(Object.keys(it).length<300) break;
+  }
+}
+async function rtGravarCustoOv(){
+  const ch=[...RT.custoOv.keys()], docs=[];
+  for(let i=0;i<ch.length;i+=300){
+    const b={}; ch.slice(i,i+300).forEach(k=>b[k]=RT.custoOv.get(k)); docs.push(b);
+  }
+  if(!docs.length) docs.push({});
+  for(let n=0;n<docs.length;n++)
+    await fsSetDoc(COL.config,RT_CUSTO_DOC+n,{itens:docs[n],salvo_em:agoraISO(),salvo_por:ATLAS_CURRENT_USER.email||'—'},true);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CPK DA ROTA (§19)
+   Devolve o detalhamento completo mais a memória de cálculo linha a linha.
+   Tudo que não tem dado suficiente volta como null — nunca como zero.
+   ══════════════════════════════════════════════════════════════════════════ */
+function rtCustoRota(r, premOverride){
+  const P = premOverride || rtPremissasCusto(r);
+  const mem=[], M=(o,f,v)=>mem.push({o,f,v});
+
+  /* ── 1) distância adotada ── */
+  let kmIda=null, kmVolta=null, fonteDist=P.distFonte;
+  if(P.distFonte==='szy'){ kmIda=r.kmIda||null; kmVolta=r.kmVolta||null; }
+  else if(P.distFonte==='manual'){ kmIda=P.distManualIda||null; kmVolta=P.distManualVolta||null; }
+  else {
+    if(r.here&&!r.here.erro&&r.here.ida){ kmIda=r.here.ida.km; kmVolta=r.here.volta?r.here.volta.km:null; }
+    else { kmIda=r.kmIda||null; kmVolta=r.kmVolta||null; fonteDist='szy'; }
+  }
+  if(!(kmIda>0)) return {erro:'sem distância disponível para esta rota', premissas:P};
+  if(!(kmVolta>0)) kmVolta=kmIda;                       /* volta pelo mesmo trajeto */
+  const kmTotal=kmIda+kmVolta;
+  const kmCarregado = P.idaCarregada?kmIda:kmVolta;
+  const kmVazio     = P.idaCarregada?kmVolta:kmIda;
+  M('Distância', `${fonteDist.toUpperCase()}: ida ${num(kmIda,1)} km + volta ${num(kmVolta,1)} km`, kmTotal);
+  M('Carregado × vazio', `${P.idaCarregada?'ida':'volta'} carregada = ${num(kmCarregado,1)} km · ${P.idaCarregada?'volta':'ida'} vazia = ${num(kmVazio,1)} km`, null);
+
+  /* ── 2) combustível com consumo diferenciado (§19.1) ── */
+  const cc=Math.max(P.consumoCarregado,0.1), cv=Math.max(P.consumoVazio,0.1);
+  const litros = kmCarregado/cc + kmVazio/cv;
+  const dieselRS = (P.precoDiesel!=null && P.precoDiesel>0) ? P.precoDiesel
+                  : (dieselVigente(r.op) || Number((premissasEfetivas(null,r.op,null)||{}).diesel_rs) || 5.6);
+  M('Diesel — litros', `${num(kmCarregado,1)} ÷ ${num(cc,2)} + ${num(kmVazio,1)} ÷ ${num(cv,2)}`, litros);
+  M('Diesel — preço', `R$ ${num(dieselRS,3)}/l${P.precoDiesel>0?' (premissa da rota)':' (diesel vigente da filial '+(r.op||'—')+')'}`, null);
+
+  /* ── 3) pedágio ── */
+  let pedagio=null, fontePed=P.pedagioFonte;
+  if(P.pedagioFonte==='manual') pedagio=P.pedagioManual||0;
+  else if(r.here&&!r.here.erro){
+    const pi=r.here.ida?r.here.ida.pedagio:null, pv=r.here.volta?r.here.volta.pedagio:null;
+    if(pi!=null||pv!=null) pedagio=(pi||0)+(pv||0); else { pedagio=null; fontePed='indisponível'; }
+  } else { pedagio=null; fontePed='indisponível'; }
+  M('Pedágio', pedagio!=null?`ida + volta (${fontePed})`:'não disponível — informe manualmente', pedagio);
+
+  /* ── 4) núcleo de custo compartilhado com o Simulador ── */
+  const viagensMes = P.viagensMes>0 ? P.viagensMes : (r.viagens>0?r.viagens:1);
+  /* Mesmas premissas efetivas que o Simulador usaria para esta filial. */
+  const C = custosViagem({
+    distKm:kmTotal, pedagio:pedagio||0, viagensMes,
+    premissas:premissasEfetivas(null, r.op, null), dieselRS,
+    tipoCarreta:(P.tipoCarreta||'LS'), litrosDiesel:litros
+  });
+  const cDiesel=-C.diesel, cPedagio=-C.pedagio, cLub=-C.lubrificante, cPecas=-C.pecas,
+        cPneus=-C.pneus, cDoc=-C.docSeguros, cPessoal=-C.pessoalFixo,
+        dCav=-C.deprecCavalo, dCar=-C.deprecCarreta;
+  M('Lubrificante', `R$ ${num(C.p.lubMes,0)}/mês ÷ ${num(C.p.lubRend,0)} km × ${num(kmTotal,1)} km`, cLub);
+  M('Peças', `R$ ${num(C.p.pecasMes,0)}/mês ÷ ${num(viagensMes,0)} viagens`, cPecas);
+  M('Pneus', `(${C.p.qLiso}×${num(C.p.vLiso,0)} + ${C.p.qBorr}×${num(C.p.vBorr,0)}) ÷ ${num(C.p.pneuRend,0)} km × ${num(kmTotal,1)} km`, cPneus);
+  M('Documentação e seguros', `R$ ${num(C.p.docAno,0)}/ano ÷ 12 ÷ ${num(viagensMes,0)} viagens`, cDoc);
+  M('Pessoal (sem comissão)', `(salário ${num(C.p.salario,2)} × encargos ${num(C.p.encFator,2)} + alimentação) ÷ ${num(viagensMes,0)}`, cPessoal);
+  M('Depreciação do cavalo', `R$ ${num(C.p.cvCusto,0)} ÷ ${C.p.cvVida} anos ÷ 12 ÷ ${num(viagensMes,0)}`, dCav);
+  M('Depreciação da carreta', `R$ ${num(C.p.crCusto,0)} ÷ ${C.p.crVida} anos ÷ 12 ÷ ${num(viagensMes,0)}`, dCar);
+
+  /* ── 5) Arla ── */
+  const arlaL = litros*(P.arlaPct||0);
+  const cArla = arlaL*(P.precoArla||0);
+  M('Arla', `${num(litros,1)} l × ${pct(P.arlaPct||0,1)} × R$ ${num(P.precoArla,2)}/l`, cArla);
+
+  /* ── 6) tempo de ciclo e custo do tempo (§19/§21) ── */
+  const cicloDesloc = (r.cicloMin!=null) ? r.cicloMin/60 : null;
+  const tonViagem = P.pesoLiquidoT>0 ? P.pesoLiquidoT
+                  : (r.viagens>0 && r.ton>0 ? r.ton/r.viagens : null);
+  const tDescarga = P.compTempoH>0 ? P.compTempoH
+                  : (tonViagem>0 && P.compTaxaTh>0 ? tonViagem/P.compTaxaTh : null);
+  const tParado = (P.tempoCargaH||0)+(P.esperaClienteH||0);
+  const cicloTotal = (cicloDesloc!=null && tDescarga!=null) ? cicloDesloc+tParado+tDescarga+(P.compLimpezaH||0) : null;
+  const cTempo = (P.custoOportunidadeH>0) ? tParado*P.custoOportunidadeH : 0;
+  M('Tempo parado (carga + espera)', `${num(tParado,2)} h × R$ ${num(P.custoOportunidadeH,2)}/h`, cTempo);
+
+  /* ── 7) descarga pressurizada (§17.1) ── */
+  let comp=null;
+  if(tDescarga!=null){
+    const dieselComp = P.compFonte==='tdf' || P.compFonte==='independente'
+      ? tDescarga*(P.compConsumoLh||0)*dieselRS : 0;
+    const arlaComp   = tDescarga*(P.compArlaLh||0)*(P.precoArla||0);
+    const tecnico    = tDescarga*((P.compManutH||0)+(P.compDeprecH||0));
+    const oportun    = (P.custoOportunidadeH>0) ? (tDescarga+(P.compLimpezaH||0))*P.custoOportunidadeH : 0;
+    const outros     = P.compOutros||0;
+    comp={ tempoH:tDescarga, diesel:dieselComp, arla:arlaComp, tecnico, oportunidade:oportun,
+           limpezaH:P.compLimpezaH||0, outros,
+           total:dieselComp+arlaComp+tecnico+oportun+outros,
+           fonte:P.compFonte, taxa:P.compTaxaTh, informado:P.compTempoH>0 };
+    M('Descarga — tempo', comp.informado?`${num(tDescarga,2)} h informadas`:`${num(tonViagem,1)} t ÷ ${num(P.compTaxaTh,1)} t/h`, null);
+    M('Descarga — diesel do compressor', `${num(tDescarga,2)} h × ${num(P.compConsumoLh,1)} l/h × R$ ${num(dieselRS,3)}`, dieselComp);
+    M('Descarga — Arla do compressor', `${num(tDescarga,2)} h × ${num(P.compArlaLh,2)} l/h × R$ ${num(P.precoArla,2)}`, arlaComp);
+    M('Descarga — manutenção e depreciação', `${num(tDescarga,2)} h × R$ ${num((P.compManutH||0)+(P.compDeprecH||0),2)}/h`, tecnico);
+    M('Descarga — custo de oportunidade', `${num(tDescarga+(P.compLimpezaH||0),2)} h × R$ ${num(P.custoOportunidadeH,2)}/h`, oportun);
+    if(outros) M('Descarga — outros custos', 'informado manualmente', outros);
+  }
+
+  /* ── 8) consolidação (§19.2) ── */
+  const desloc = cDiesel+cLub+cPecas+cPneus+cDoc+cPessoal+dCav+dCar;
+  const extras = cArla+(P.alimentacaoViagem||0)+(P.limpezaViagem||0)+cTempo;
+  const total  = desloc+(pedagio||0)+extras+(comp?comp.total:0);
+  const cpk    = kmTotal>0 ? total/kmTotal : null;
+  const porTon = tonViagem>0 ? total/tonViagem : null;
+  const porHora= cicloTotal>0 ? total/cicloTotal : null;
+
+  /* comparação com o consumo padrão único (§19.3) */
+  const litrosPadrao = kmTotal/Math.max(C.p.consumo,0.1);
+  const difCombustivel = (litros-litrosPadrao)*dieselRS;
+
+  /* ── 9) produtividade (§21) ── */
+  const prod = {
+    kmIda, kmVolta, kmTotal, kmVazio,
+    pctVazio: kmTotal>0 ? kmVazio/kmTotal : null,
+    cicloH: cicloTotal, cicloDeslocH: cicloDesloc,
+    viagensDia: cicloTotal>0 ? 24/cicloTotal : null,
+    viagensMesPossiveis: cicloTotal>0 ? (24/cicloTotal)*26 : null,
+    tonDia: (cicloTotal>0&&tonViagem>0) ? (24/cicloTotal)*tonViagem : null,
+    tonMesVeiculo: (cicloTotal>0&&tonViagem>0) ? (24/cicloTotal)*26*tonViagem : null,
+    bateVolta: cicloTotal!=null ? cicloTotal<=24 : null,
+    jornadaLegal: cicloDesloc!=null ? cicloDesloc<=(P.idaCarregada?10:10)*2 : null
+  };
+
+  return {
+    premissas:P, fonteDist, fontePed,
+    km:{ida:kmIda,volta:kmVolta,total:kmTotal,carregado:kmCarregado,vazio:kmVazio},
+    litros, litrosPadrao, difCombustivel, dieselRS, tonViagem, viagensMes,
+    linhas:{ diesel:cDiesel, pedagio:pedagio, lubrificante:cLub, pecas:cPecas, pneus:cPneus,
+             docSeguros:cDoc, pessoal:cPessoal, deprecCavalo:dCav, deprecCarreta:dCar,
+             arla:cArla, alimentacao:P.alimentacaoViagem||0, limpeza:P.limpezaViagem||0,
+             tempo:cTempo, compressor:comp?comp.total:null },
+    deslocamento:desloc, extras, compressor:comp,
+    total, cpk, porTon, porHora,
+    mensal: total*viagensMes,
+    prod, memoria:mem,
+    completo: !!(kmIda>0 && tDescarga!=null && pedagio!=null && cicloDesloc!=null)
+  };
+}
+
+/* Aplica o custo a todas as rotas — usado pela tabela e pelos cards. */
+function rtCalcularCustos(){
+  RT.rotas.forEach(r=>{
+    const c=rtCustoRota(r);
+    r.custo = c.erro?null:c;
+    r.custoViagem = c.erro?null:c.total;
+    r.custoTon    = c.erro?null:c.porTon;
+    r.custoKm     = c.erro?null:c.cpk;
+    r.cicloH      = c.erro?null:(c.prod?c.prod.cicloH:null);
+  });
+}
+
+/* ══ Interface da Onda 3 — premissas de custo, blocos do painel e Excel ══ */
+
+function rtCampo(id,l,v,step,dis){
+  return `<label class="fld">${l}<input type="number" id="rc_${id}" value="${v==null?'':v}" step="${step||'0.01'}" ${dis?'disabled':''}></label>`;
+}
+function rtCustoModal(r){
+  const P=rtPremissasCusto(r);
+  const podeGeral=isGestorOuAdmin();
+  const dis=!podeGeral && !r;
+  const escopo = r ? `rota <b>${esc(r.codigoRaw)}</b> · ${esc(r.origem)} → ${esc(r.destino)}` : 'todas as rotas (configuração geral)';
+  mdAbrir(r?'Premissas de custo da rota':'Premissas de custo — configuração geral',
+   `<div class="muted" style="margin-bottom:10px">Aplicando a ${escopo}.
+     ${r?'O que você salvar aqui vale só para esta rota e tem prioridade sobre a configuração geral.':'Vale para todas as rotas que não tiverem premissa própria.'}
+     Campos deixados em branco caem no padrão.</div>
+
+    <h3 style="font-size:12px;margin:4px 0 6px">Distância e sentido</h3>
+    <div class="fields">
+      <label class="fld">Distância usada no cálculo
+        <select id="rc_distFonte">
+          <option value="here" ${P.distFonte==='here'?'selected':''}>HERE (simulada)</option>
+          <option value="szy"  ${P.distFonte==='szy' ?'selected':''}>SZY (cadastrada)</option>
+          <option value="manual" ${P.distFonte==='manual'?'selected':''}>Manual</option>
+        </select></label>
+      ${rtCampo('distManualIda','Ida manual (km)',P.distManualIda,'1')}
+      ${rtCampo('distManualVolta','Volta manual (km)',P.distManualVolta,'1')}
+      <label class="fld">Sentido carregado
+        <select id="rc_idaCarregada">
+          <option value="1" ${P.idaCarregada?'selected':''}>Ida carregada · volta vazia</option>
+          <option value="0" ${!P.idaCarregada?'selected':''}>Ida vazia · volta carregada</option>
+        </select></label>
+      <label class="fld" style="flex:1 1 240px">Motivo (obrigatório na distância manual)
+        <input type="text" id="rc_distMotivo" value="${esc(P.distMotivo||'')}"></label>
+    </div>
+
+    <h3 style="font-size:12px;margin:14px 0 6px">Combustível e Arla</h3>
+    <div class="fields">
+      ${rtCampo('consumoCarregado','Consumo carregado (km/l)',P.consumoCarregado,'0.05')}
+      ${rtCampo('consumoVazio','Consumo vazio (km/l)',P.consumoVazio,'0.05')}
+      ${rtCampo('precoDiesel','Preço do diesel (R$/l) — vazio usa o vigente',P.precoDiesel,'0.001')}
+      ${rtCampo('arlaPct','Arla (% sobre o diesel)',P.arlaPct,'0.005')}
+      ${rtCampo('precoArla','Preço do Arla (R$/l)',P.precoArla,'0.01')}
+    </div>
+
+    <h3 style="font-size:12px;margin:14px 0 6px">Pedágio, tempo e despesas</h3>
+    <div class="fields">
+      <label class="fld">Pedágio
+        <select id="rc_pedagioFonte">
+          <option value="here" ${P.pedagioFonte==='here'?'selected':''}>HERE / matcher de praças</option>
+          <option value="manual" ${P.pedagioFonte==='manual'?'selected':''}>Manual</option>
+        </select></label>
+      ${rtCampo('pedagioManual','Pedágio manual — ida + volta (R$)',P.pedagioManual,'0.01')}
+      ${rtCampo('tempoCargaH','Tempo de carga (h)',P.tempoCargaH,'0.25')}
+      ${rtCampo('esperaClienteH','Espera no cliente (h)',P.esperaClienteH,'0.25')}
+      ${rtCampo('custoOportunidadeH','Custo de oportunidade (R$/h)',P.custoOportunidadeH,'0.5')}
+      ${rtCampo('alimentacaoViagem','Alimentação por viagem (R$)',P.alimentacaoViagem,'1')}
+      ${rtCampo('limpezaViagem','Limpeza por viagem (R$)',P.limpezaViagem,'1')}
+      ${rtCampo('pesoLiquidoT','Peso líquido (t) — vazio usa a média real',P.pesoLiquidoT,'0.1')}
+      ${rtCampo('viagensMes','Viagens/mês — vazio usa as reais',P.viagensMes,'1')}
+    </div>
+
+    <h3 style="font-size:12px;margin:14px 0 6px">Descarga pressurizada — compressor</h3>
+    <div class="muted" style="font-size:11px;margin-bottom:6px">Todas as rotas descarregam por compressor. O tempo pode ser informado direto ou estimado por toneladas ÷ taxa.</div>
+    <div class="fields">
+      <label class="fld" style="flex:1 1 180px">Modelo<input type="text" id="rc_compModelo" value="${esc(P.compModelo||'')}"></label>
+      <label class="fld">Fonte de energia
+        <select id="rc_compFonte">
+          <option value="tdf" ${P.compFonte==='tdf'?'selected':''}>Tomada de força do cavalo</option>
+          <option value="independente" ${P.compFonte==='independente'?'selected':''}>Motor independente</option>
+        </select></label>
+      ${rtCampo('compTaxaTh','Taxa de descarga (t/h)',P.compTaxaTh,'0.5')}
+      ${rtCampo('compTempoH','Tempo de descarga (h) — sobrepõe a taxa',P.compTempoH,'0.25')}
+      ${rtCampo('compConsumoLh','Consumo no acionamento (l/h)',P.compConsumoLh,'0.1')}
+      ${rtCampo('compArlaLh','Arla do compressor (l/h)',P.compArlaLh,'0.05')}
+      ${rtCampo('compManutH','Manutenção do compressor (R$/h)',P.compManutH,'0.5')}
+      ${rtCampo('compDeprecH','Depreciação do compressor (R$/h)',P.compDeprecH,'0.5')}
+      ${rtCampo('compLimpezaH','Limpeza / purga (h)',P.compLimpezaH,'0.25')}
+      ${rtCampo('compOutros','Outros custos da descarga (R$)',P.compOutros,'1')}
+      <label class="fld" style="flex:1 1 240px">Observação operacional
+        <input type="text" id="rc_compObs" value="${esc(P.compObs||'')}"></label>
+    </div>`,
+   `<button class="btn" onclick="mdFechar()">Cancelar</button>
+    ${r&&rtTemOverride(r)?`<button class="btn danger" onclick="rtCustoLimparRota('${esc(r.k3)}')">Voltar ao geral</button>`:''}
+    <button class="btn pri" onclick="rtCustoSalvar(${r?`'${esc(r.k3)}'`:'null'})">Salvar</button>`);
+}
+
+function rtCustoColeta(){
+  const P={}, n=id=>{ const e=$('rc_'+id); if(!e) return undefined;
+    const v=String(e.value).trim(); return v===''?null:rtNum(v); };
+  ['distManualIda','distManualVolta','consumoCarregado','consumoVazio','precoDiesel','arlaPct','precoArla',
+   'pedagioManual','tempoCargaH','esperaClienteH','custoOportunidadeH','alimentacaoViagem','limpezaViagem',
+   'pesoLiquidoT','viagensMes','compTaxaTh','compTempoH','compConsumoLh','compArlaLh','compManutH',
+   'compDeprecH','compLimpezaH','compOutros'].forEach(k=>{ const v=n(k); if(v!==undefined) P[k]=v; });
+  ['distFonte','pedagioFonte','compFonte'].forEach(k=>{ const e=$('rc_'+k); if(e) P[k]=e.value; });
+  ['distMotivo','compModelo','compObs'].forEach(k=>{ const e=$('rc_'+k); if(e) P[k]=String(e.value||'').trim(); });
+  const ic=$('rc_idaCarregada'); if(ic) P.idaCarregada = ic.value==='1';
+  return P;
+}
+async function rtCustoSalvar(k3){
+  const P=rtCustoColeta();
+  if(P.distFonte==='manual' && !P.distMotivo)
+    return toast('Distância manual exige o motivo — é o que fica registrado na auditoria.','rd');
+  P.salvo_por=ATLAS_CURRENT_USER.email||'—'; P.salvo_em=agoraISO();
+  try{
+    if(k3){ RT.custoOv.set(k3,P); await rtGravarCustoOv(); }
+    else {
+      if(!isGestorOuAdmin()) return toast('Somente gestor ou admin altera a configuração geral.','rd');
+      RT.custoGeral=P; await fsSetDoc(COL.config,'rotas_custo',P,true);
+    }
+    toast('Premissas salvas.','gn'); mdFechar(); rtAtualizar();
+  }catch(e){ toast('Falha ao salvar: '+e.message,'rd'); }
+}
+async function rtCustoLimparRota(k3){
+  RT.custoOv.delete(k3);
+  try{ await rtGravarCustoOv(); toast('Rota voltou a usar a configuração geral.','gn'); }
+  catch(e){ toast('Falha: '+e.message,'rd'); }
+  mdFechar(); rtAtualizar();
+}
+
+/* ══ Bloco "Custos" do painel (§19.3) ══ */
+function rtBlocoCustos(r){
+  const c=r.custo;
+  if(!c) return `<div class="muted" style="padding:12px 0">Sem distância disponível para calcular o custo desta rota.</div>`;
+  const L=c.linhas;
+  const li=(l,v,obs)=>`<tr><td class="muted">${l}${obs?` <span class="muted" style="font-size:10px">${obs}</span>`:''}</td><td class="num">${v==null?'<span class="muted">não disponível</span>':brl(v)}</td></tr>`;
+  const kpi=(l,v,s)=>`<div class="rt-kpi"><div class="k-l">${l}</div><div class="k-v">${v}</div><div class="k-s">${s||'&nbsp;'}</div></div>`;
+  return `
+    <div class="rt-kpis" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+      ${kpi('Custo por viagem', brl(c.total), `${num(c.km.total,0)} km · ${c.fonteDist.toUpperCase()}`)}
+      ${kpi('Custo por km', c.cpk!=null?brl(c.cpk):'—','CPK da rota')}
+      ${kpi('Custo por tonelada', c.porTon!=null?brl(c.porTon):'—', c.tonViagem?num(c.tonViagem,1)+' t/viagem':'sem peso')}
+      ${kpi('Custo por hora', c.porHora!=null?brl(c.porHora):'—', c.prod.cicloH?num(c.prod.cicloH,1)+' h de ciclo':'ciclo não disponível')}
+    </div>
+    <div class="grid2">
+      <div>
+        <h3 style="font-size:12px;margin-bottom:8px">Composição por viagem <span class="src calc">CALCULADO</span></h3>
+        <table class="tb">
+          ${li('Diesel', L.diesel, `${num(c.litros,1)} l`)}
+          ${li('Arla', L.arla)}
+          ${li('Pedágio', L.pedagio, c.fontePed)}
+          ${li('Lubrificante', L.lubrificante)}
+          ${li('Peças', L.pecas)}
+          ${li('Pneus', L.pneus)}
+          ${li('Documentação e seguros', L.docSeguros)}
+          ${li('Pessoal', L.pessoal, 'sem comissão')}
+          ${li('Depreciação do cavalo', L.deprecCavalo)}
+          ${li('Depreciação da carreta', L.deprecCarreta)}
+          ${li('Alimentação', L.alimentacao)}
+          ${li('Limpeza', L.limpeza)}
+          ${li('Custo do tempo parado', L.tempo)}
+          ${li('Descarga pressurizada', L.compressor)}
+          <tr><td><b>Custo operacional estimado</b></td><td class="num"><b>${brl(c.total)}</b></td></tr>
+        </table>
+        <div class="muted" style="font-size:10.5px;margin-top:5px">
+          Custo operacional — não inclui comissão, impostos, margem nem preço de venda.
+        </div>
+      </div>
+      <div>
+        <h3 style="font-size:12px;margin-bottom:8px">Descarga pressurizada</h3>
+        ${c.compressor?`<table class="tb">
+          ${li('Tempo de descarga', null,'')?'':''}
+          <tr><td class="muted">Tempo de descarga</td><td class="num">${num(c.compressor.tempoH,2)} h ${c.compressor.informado?'<span class="src prem">INFORMADO</span>':'<span class="src calc">ESTIMADO</span>'}</td></tr>
+          ${li('Diesel do compressor', c.compressor.diesel)}
+          ${li('Arla do compressor', c.compressor.arla)}
+          ${li('Manutenção e depreciação', c.compressor.tecnico)}
+          ${li('Custo de oportunidade', c.compressor.oportunidade)}
+          ${li('Outros', c.compressor.outros)}
+          <tr><td><b>Total da descarga</b></td><td class="num"><b>${brl(c.compressor.total)}</b></td></tr>
+        </table>
+        <div class="muted" style="font-size:10.5px;margin-top:5px">Fonte de energia: ${c.compressor.fonte==='tdf'?'tomada de força do cavalo':'motor independente'}.</div>`
+        :`<div class="muted">Sem peso por viagem nem taxa de descarga — informe nas premissas para calcular.</div>`}
+
+        <h3 style="font-size:12px;margin:14px 0 8px">Produtividade</h3>
+        <table class="tb">
+          <tr><td class="muted">Km ida / volta</td><td class="num">${num(c.km.ida,0)} / ${num(c.km.volta,0)}</td></tr>
+          <tr><td class="muted">Km vazios</td><td class="num">${num(c.km.vazio,0)} (${pct(c.prod.pctVazio||0,0)})</td></tr>
+          <tr><td class="muted">Ciclo completo</td><td class="num">${c.prod.cicloH?num(c.prod.cicloH,1)+' h':'<span class="muted">não disponível</span>'}</td></tr>
+          <tr><td class="muted">Viagens possíveis por mês</td><td class="num">${c.prod.viagensMesPossiveis?num(c.prod.viagensMesPossiveis,1):'—'}</td></tr>
+          <tr><td class="muted">Toneladas por veículo/mês</td><td class="num">${c.prod.tonMesVeiculo?num(c.prod.tonMesVeiculo,0):'—'}</td></tr>
+          <tr><td class="muted">Bate-volta em 24 h</td><td class="num">${c.prod.bateVolta==null?'—':(c.prod.bateVolta?'<span class="pill gn">Sim</span>':'<span class="pill mu">Não</span>')}</td></tr>
+          <tr><td class="muted">Custo mensal estimado</td><td class="num">${brl(c.mensal)} <span class="muted" style="font-size:10px">${num(c.viagensMes,0)} viagens</span></td></tr>
+        </table>
+      </div>
+    </div>
+    <div class="alerta ${c.completo?'gn':'am'}" style="margin-top:12px"><div>
+      ${c.completo
+        ? 'Todas as premissas necessárias estão disponíveis para esta rota.'
+        : 'Cálculo <b>provisório</b> — falta: '+[!(c.km.total>0)&&'distância', !c.compressor&&'peso ou taxa de descarga', c.linhas.pedagio==null&&'pedágio', c.prod.cicloDeslocH==null&&'tempo de ciclo (simular na HERE)'].filter(Boolean).join(', ')+'.'}
+      <button class="btn sm" style="margin-left:8px" onclick="rtCustoModal(RT._analisando)">Editar premissas</button>
+    </div></div>`;
+}
+
+/* ══ Bloco "Memória de cálculo" (§19.3) ══ */
+function rtBlocoMemoria(r){
+  const c=r.custo;
+  if(!c||!c.memoria) return '';
+  return `<table class="tb"><thead><tr><th>Item</th><th>Como foi calculado</th><th class="num">Valor</th></tr></thead>
+    <tbody>${c.memoria.map(m=>`<tr><td class="muted">${esc(m.o)}</td><td class="mono" style="font-size:11px">${esc(m.f)}</td><td class="num">${m.v==null?'—':(Math.abs(m.v)>=1000||Number.isInteger(m.v)?num(m.v,2):brl(m.v))}</td></tr>`).join('')}
+    <tr><td><b>Custo operacional estimado</b></td><td class="mono" style="font-size:11px">deslocamento + pedágio + extras + descarga</td><td class="num"><b>${brl(c.total)}</b></td></tr>
+    </tbody></table>
+    <div class="muted" style="font-size:10.5px;margin-top:6px">
+      Comparação de combustível: ${num(c.litros,1)} l com consumo diferenciado × ${num(c.litrosPadrao,1)} l no consumo padrão único —
+      diferença de ${brl(c.difCombustivel)} por viagem.
+    </div>`;
+}
+
 /* Handle de diagnóstico — mesmo padrão de window.__ATLAS_MODULE__ / window._simMap.
    Permite inspecionar o estado da aba pelo console sem expor nada gravável. */
 try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG; window.__ATLAS_ST__ = ST;
@@ -4771,6 +5308,7 @@ try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG; window.__
   const bx=$('rtBtnExport'); if(bx) bx.onclick=rtExportar;
   const bh=$('rtBtnHere');   if(bh) bh.onclick=rtSimularModal;
   const bp=$('rtBtnPerfil'); if(bp) bp.onclick=rtPerfilModal;
+  const bc=$('rtBtnCusto');  if(bc) bc.onclick=()=>rtCustoModal(null);
   const ms=$('rtMapaSalvar'); if(ms) ms.onclick=rtSalvarMapa;
   const mr=$('rtMapaReset'); if(mr) mr.onclick=rtResetMapa;
 })();
