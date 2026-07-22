@@ -8,7 +8,9 @@
 <!-- Viewport: width=1280 deixa o navegador calcular o scale automaticamente (initial-scale = larguraDoDevice/1280), exibindo TODA a área do dashboard dentro da tela do celular. user-scalable=yes libera pinch-to-zoom para aproximar de qualquer região. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, minimum-scale=0.1, maximum-scale=5, user-scalable=yes">
 <title>COMIX — Ficha Operacional</title>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+(function(){let job=null;window.atlasEnsureFichaXLSX=function(){if(typeof window.XLSX!=='undefined')return Promise.resolve();if(job)return job;job=new Promise((resolve,reject)=>{const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js';s.async=true;s.onload=resolve;s.onerror=()=>reject(new Error('Falha ao carregar SheetJS'));document.head.appendChild(s);}).catch(e=>{job=null;throw e;});return job;};})();
+</script>
 <style id="atlas-iframe-head">
 #scr_login { display: none !important; }
 
@@ -820,9 +822,16 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 <!-- ══ FIREBASE MODULE ══ -->
 <!-- ══ FIREBASE CDN (compat — sem type=module, sem race condition) ══ -->
 
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script>
+(function(){
+  try{if(window.self!==window.top&&window.parent&&window.parent.firebase)window.firebase=window.parent.firebase;}catch(_){}
+  if(typeof window.firebase==='undefined'){
+    document.write('<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"><\/script>');
+    document.write('<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"><\/script>');
+    document.write('<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"><\/script>');
+  }
+})();
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 (function(){
@@ -835,7 +844,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     appId:             "1:586258388438:web:3b9da22e650e88ddcf4077"
   };
 
-  firebase.initializeApp(firebaseConfig);
+  if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(firebaseConfig);
   const auth    = firebase.auth();
   const db      = firebase.firestore();
   // Supabase Storage usado somente para salvar as imagens dos canhotos
@@ -1741,16 +1750,28 @@ function populateAtlasSZBDatalists() {
   atlasFillDatalist("szb_destinatarios", atlasSZBState.options.destinatarios);
   atlasFillDatalist("szb_destinatarios_entregas", atlasSZBState.options.destinatarios);
 }
+function fichaParentBaseRef(id){
+  try{if(window.parent&&window.parent!==window&&typeof window.parent.atlasGetDataReference==='function')return window.parent.atlasGetDataReference(id);}catch(_){}
+  return null;
+}
+function atlasCollectSZBOptions(rows){
+  const maps={origens:new Map(),destinos:new Map(),destinatarios:new Map()};
+  function add(map,value){const txt=atlasTextValue(value);if(!txt)return;const k=txt.toLocaleUpperCase("pt-BR");if(!map.has(k))map.set(k,txt);}
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i]||{};
+    add(maps.origens,atlasGetRowValue(r,["Local Coleta","Local coleta","Local de Coleta","Local Colet"]));
+    add(maps.destinos,atlasGetRowValue(r,["Local Entrega","Local entrega","Local Entreg","Local de Entrega"]));
+    add(maps.destinatarios,atlasGetRowValue(r,["Destinatário","Destinatario","Nome Destina","Nome Destinatário","Nome Destinatario"]));
+  }
+  const sort=a=>Array.from(a.values()).sort((x,y)=>x.localeCompare(y,"pt-BR",{sensitivity:"base"}));
+  return {origens:sort(maps.origens),destinos:sort(maps.destinos),destinatarios:sort(maps.destinatarios)};
+}
 function ingestAtlasSZBPayload(payload) {
   const rows = payload && Array.isArray(payload.rows) ? payload.rows : [];
   if (!rows.length) return;
   atlasSZBState.rows = rows;
   atlasSZBState.loaded = true;
-  atlasSZBState.options = {
-    origens: atlasUniqueSorted(rows.map(r => atlasGetRowValue(r, ["Local Coleta", "Local coleta", "Local de Coleta", "Local Colet"] ))),
-    destinos: atlasUniqueSorted(rows.map(r => atlasGetRowValue(r, ["Local Entrega", "Local entrega", "Local Entreg", "Local de Entrega"] ))),
-    destinatarios: atlasUniqueSorted(rows.map(r => atlasGetRowValue(r, ["Destinatário", "Destinatario", "Nome Destina", "Nome Destinatário", "Nome Destinatario"] )))
-  };
+  atlasSZBState.options = atlasCollectSZBOptions(rows);
   populateAtlasSZBDatalists();
   setTimeout(renderEntregasSZBRelation, 0);
 }
@@ -1759,6 +1780,8 @@ async function atlasLoadSZBFromFirestore() {
   if (!window._FB || typeof window._FB._db !== "function") return;
   atlasSZBState.loadingCloud = true;
   try {
+    const shared=fichaParentBaseRef('szb');
+    if(shared && shared.rows && shared.rows.length){ ingestAtlasSZBPayload(shared); return; }
     const db = window._FB._db();
     const metaRef = db.collection("bases_szb").doc("meta");
     const metaSnap = await metaRef.get();
@@ -1770,10 +1793,10 @@ async function atlasLoadSZBFromFirestore() {
       for (let i = 0; i < numChunks; i++) {
         const ch = await metaRef.collection("chunks").doc(String(i)).get();
         const data = ch.exists ? (ch.data() || {}) : {};
-        if (Array.isArray(data.rows)) rows.push(...data.rows);
+        if (Array.isArray(data.rows)) for(let j=0;j<data.rows.length;j++) rows.push(data.rows[j]);
       }
     } else if (Array.isArray(meta.rows)) {
-      rows.push(...meta.rows);
+      for(let j=0;j<meta.rows.length;j++) rows.push(meta.rows[j]);
     }
     if (rows.length) ingestAtlasSZBPayload({ rows, count: rows.length, ts: meta.ts || meta.clientTs || "" });
   } catch (err) {
@@ -1785,12 +1808,8 @@ async function atlasLoadSZBFromFirestore() {
 function requestAtlasSZBData() {
   if (atlasSZBState.loaded) { populateAtlasSZBDatalists(); return; }
   try {
-    const p = window.parent && window.parent !== window ? window.parent : null;
-    const payload = p && p.ATLAS_DATA && p.ATLAS_DATA.szb;
-    if (payload && Array.isArray(payload.rows) && payload.rows.length) {
-      ingestAtlasSZBPayload(payload);
-      return;
-    }
+    const payload=fichaParentBaseRef('szb');
+    if(payload && Array.isArray(payload.rows) && payload.rows.length){ ingestAtlasSZBPayload(payload); return; }
   } catch (_) {}
   if (!atlasSZBState.requested) {
     atlasSZBState.requested = true;
@@ -2241,7 +2260,7 @@ function buildEntregas(){return`<datalist id="szb_destinatarios_entregas"></data
 
 /* ═══ RELAÇÃO SZB — ENTREGAS & CANHOTOS ═══ */
 const ENTREGAS_SIZB_CORTE = "2026-06-25";
-const entregasSZBState = window.entregasSZBState || (window.entregasSZBState = { rows: [], loaded: false, loading: false });
+const entregasSZBState = window.entregasSZBState || (window.entregasSZBState = { rows: [], records: null, loaded: false, loading: false });
 
 function entNormKey(value) {
   return String(value || "")
@@ -2414,10 +2433,10 @@ async function loadEntregasSZBFromFirestore() {
   entregasSZBState.loading = true;
   try {
     try {
-      const p = window.parent && window.parent !== window ? window.parent : null;
-      const payload = p && p.ATLAS_DATA && p.ATLAS_DATA.szb;
+      const payload=fichaParentBaseRef('szb');
       if (payload && Array.isArray(payload.rows) && payload.rows.length) {
         entregasSZBState.rows = payload.rows;
+        entregasSZBState.records = null;
         entregasSZBState.loaded = true;
         return entregasSZBState.rows;
       }
@@ -2435,12 +2454,13 @@ async function loadEntregasSZBFromFirestore() {
       for (let start = 0; start < n; start += BATCH) {
         const end = Math.min(start + BATCH, n);
         const snaps = await Promise.all(Array.from({ length: end - start }, (_, j) => metaRef.collection("chunks").doc(String(start + j)).get()));
-        snaps.forEach(s => { const data = s.exists ? (s.data() || {}) : {}; if (Array.isArray(data.rows)) rows.push(...data.rows); });
+        snaps.forEach(s => { const data = s.exists ? (s.data() || {}) : {}; if (Array.isArray(data.rows)) for(let j=0;j<data.rows.length;j++) rows.push(data.rows[j]); });
       }
     } else if (Array.isArray(meta.rows)) {
-      rows.push(...meta.rows);
+      for(let j=0;j<meta.rows.length;j++) rows.push(meta.rows[j]);
     }
     entregasSZBState.rows = rows;
+    entregasSZBState.records = null;
     entregasSZBState.loaded = true;
     return rows;
   } catch (err) {
@@ -2451,16 +2471,16 @@ async function loadEntregasSZBFromFirestore() {
   }
 }
 function getEntregasSZBRecords() {
-  const seen = new Set();
-  return (entregasSZBState.rows || [])
-    .map(entRowToRecord)
-    .filter(Boolean)
-    .filter(r => {
-      if (seen.has(r.ctrcKey)) return false;
-      seen.add(r.ctrcKey);
-      return true;
-    })
-    .sort((a,b) => String(b.dtEmissao).localeCompare(String(a.dtEmissao)) || String(a.ctrc).localeCompare(String(b.ctrc)));
+  if(Array.isArray(entregasSZBState.records)) return entregasSZBState.records;
+  const seen=new Set(), out=[], source=entregasSZBState.rows||[];
+  for(let i=0;i<source.length;i++){
+    const r=entRowToRecord(source[i]);
+    if(!r || seen.has(r.ctrcKey)) continue;
+    seen.add(r.ctrcKey); out.push(r);
+  }
+  out.sort((a,b)=>String(b.dtEmissao).localeCompare(String(a.dtEmissao))||String(a.ctrc).localeCompare(String(b.ctrc)));
+  entregasSZBState.records=out;
+  return out;
 }
 function findEntregasSZBRecordByCTRC(ctrc, motorista) {
   const key = entNormCTRC(ctrc);
@@ -3144,9 +3164,9 @@ function fmtBRL(v){const n=parseFloat(v);return isNaN(n)||!n?"":"R$ "+n.toLocale
 function fmtKm(v){const n=parseFloat(v);return !n?"":n.toLocaleString("pt-BR");}
 function fmtDt(v){if(!v)return"";if(v.includes("/"))return v;const[y,m,d]=v.split("-");return`${d}/${m}/${y}`;}
 
-function exportarRelatorioExcel(docs, filename) {
+async function exportarRelatorioExcel(docs, filename) {
   if(!docs||!docs.length){showToast("Nenhum relatório para exportar","error");return;}
-  if(typeof XLSX==="undefined"){showToast("Aguarde — carregando Excel...","");setTimeout(()=>exportarRelatorioExcel(docs,filename),1500);return;}
+  try{await window.atlasEnsureFichaXLSX();}catch(e){showToast("Biblioteca de exportação não carregada","error");return;}
 
   const wb=XLSX.utils.book_new();
   const hoje=new Date().toLocaleDateString("pt-BR");
@@ -4121,7 +4141,7 @@ window.openPanel = function() {
     }catch(e){}
     /* Reforço periódico leve: cobre navegadores que não disparam eventos ao
        recolher/expandir a barra (custo desprezível). */
-    setInterval(syncVh, 1500);
+    setInterval(function(){ if(!document.hidden) syncVh(); }, 10000);
   }
   document.addEventListener('DOMContentLoaded', queueSync);
 
