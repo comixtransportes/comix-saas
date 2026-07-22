@@ -124,6 +124,35 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
 .ac-city{font-weight:500;color:var(--tx,#1a2233)}
 .ac-uf{margin-left:auto;font-size:11px;font-weight:600;color:var(--mu,#64748b);background:var(--sf,#f1f5f9);padding:1px 7px;border-radius:10px}
 
+/* Combobox com busca — Simulador (Cliente e Rota cadastrada).
+   O <select> original continua no DOM (oculto) e segue sendo a fonte de
+   verdade: todo o resto do módulo lê/escreve $('simCliente').value e
+   $('simRota').value exatamente como antes. */
+.cbx{position:relative;display:block;width:100%}
+.cbx>select.cbx-nativo{display:none!important}
+.cbx-in{width:100%;min-width:0;font-family:var(--f);font-size:12.5px;color:var(--tx);
+  background:var(--wh);border:1px solid var(--bd);border-radius:var(--r);padding:6px 26px 6px 9px;outline:none}
+.cbx-in:focus{border-color:var(--ac);box-shadow:0 0 0 3px var(--ac-bg)}
+.cbx-in::placeholder{color:var(--mu);opacity:.75}
+.cbx.aberto .cbx-in{border-color:var(--ac)}
+.cbx-cta{position:absolute;right:1px;top:1px;bottom:1px;width:24px;border:0;background:transparent;
+  color:var(--mu);font-size:10px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+.cbx-cta:hover{color:var(--tx)}
+.cbx-box{top:calc(100% + 2px);background:var(--wh);border:1px solid var(--bd);border-radius:8px;max-height:280px}
+.cbx-item{display:flex;align-items:baseline;gap:8px;padding:6px 10px;cursor:pointer;font-size:12.5px;
+  color:var(--tx);border-bottom:1px solid var(--bd2)}
+.cbx-item:last-child{border-bottom:none}
+.cbx-item.sel,.cbx-item:hover{background:var(--ht)}
+.cbx-item .cbx-lb{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cbx-item .cbx-gr{flex:0 0 auto;font-size:9.5px;font-weight:600;color:var(--mu);background:var(--sf);
+  border:1px solid var(--bd2);padding:1px 6px;border-radius:99px;white-space:nowrap}
+.cbx-item mark{background:#fde68a;color:inherit;padding:0;border-radius:2px}
+.cbx-grp{padding:5px 10px;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--mu);background:var(--sf);border-bottom:1px solid var(--bd2)}
+.cbx-vazio{padding:8px 10px;font-size:11.5px;color:var(--mu)}
+.cbx-rodape{padding:6px 10px;font-size:10.5px;color:var(--mu);background:var(--sf);border-top:1px solid var(--bd2);
+  position:sticky;bottom:0}
+
 /* Semáforo */
 .semaforo{display:flex;align-items:center;gap:14px;padding:14px;border-radius:10px;border:1px solid var(--bd2)}
 .semaforo.gn{background:var(--gn-bg);border-color:var(--gn-bd)}
@@ -367,14 +396,14 @@ table.tb{width:100%;border-collapse:collapse;font-size:12px}
       <section class="sim-parameter-card">
         <div class="sim-parameter-title">
           <span class="sim-parameter-step">3</span>
-          <div><strong>Receita e volume</strong><small>Informe a condição comercial proposta e a frequência estimada da operação.</small></div>
+          <div><strong>Receita e Volume</strong><small>Informe a condição comercial proposta e a frequência estimada da operação.</small></div>
         </div>
         <div class="sim-parameter-fields">
           <label class="fld">Tarifa bruta (R$/tonelada) [E5]
             <input type="number" id="simTarifa" step="0.01" min="0" placeholder="0,00">
           </label>
           <label class="fld">Toneladas/viagem (aprox.)
-            <input type="number" id="simTon" step="0.1" min="0" placeholder="BT 37 · LS 32">
+            <input type="number" id="simTon" step="0.1" min="0" placeholder="TON">
           </label>
           <label class="fld">Viagens/mês (aprox.)
             <input type="number" id="simViagens" step="1" min="1" value="10">
@@ -4122,5 +4151,322 @@ try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG;
 })();
 
 </script>
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   COMBOBOX COM BUSCA — Simulador · "Cliente" e "Rota cadastrada"
+   ──────────────────────────────────────────────────────────────────
+   Os dois campos eram <select> puros: com centenas de clientes vindos da SA1
+   e centenas de rotas da SZY, achar a linha certa virava rolagem. Aqui eles
+   ganham digitação livre com associação automática (todas as palavras
+   digitadas precisam aparecer na linha, sem acento e sem ligar para
+   maiúscula/minúscula — "itajai capinzal" acha "ITAJAI/SC → CAPINZAL/SC";
+   "12345678" acha o CNPJ formatado).
+
+   Decisão de projeto: o <select> original CONTINUA no DOM, apenas oculto, e
+   segue sendo a fonte de verdade. Todo o resto do módulo lê e escreve
+   $('simCliente').value / $('simRota').value, o onchange de montarSelectRotas
+   continua disparando, e carregarSimulacao continua reidratando o formulário
+   sem nenhuma alteração. Para isso o combobox:
+     · intercepta o setter .value da instância (atribuição programática
+       reflete no campo de texto sem precisar mexer em cada chamador);
+     · observa o childList do select (montarSelects reconstrói o innerHTML a
+       cada carga da SA1/SZY) e RESTAURA a seleção do usuário se a opção ainda
+       existir — antes, uma recarga em segundo plano zerava o cliente escolhido.
+   ══════════════════════════════════════════════════════════════════ */
+(function(){
+'use strict';
+
+var CBX_LIMITE = 80;   /* linhas renderizadas por vez; o resto pede refino */
+
+function cbxNorm(s){
+  return String(s==null?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+}
+function cbxAlnum(s){ return cbxNorm(s).replace(/[^A-Z0-9]/g,''); }
+
+/* Normaliza mantendo o mapa de volta para os índices do texto original —
+   é o que permite grifar o trecho encontrado sem quebrar acentuação. */
+function cbxMapa(s){
+  var src=String(s==null?'':s);
+  var plano=cbxNorm(src);
+  /* Caminho rápido: rótulo sem acento → os índices batem 1:1 e não é preciso
+     montar o mapa caractere a caractere (é o caso da maioria das linhas). */
+  if(plano.length===src.length) return {norm:plano, idx:null};
+  var norm='', idx=[], i, k, ch;
+  for(i=0;i<src.length;i++){
+    ch=src[i].normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+    for(k=0;k<ch.length;k++){ norm+=ch[k]; idx.push(i); }
+  }
+  return {norm:norm, idx:idx};
+}
+
+function cbxRealce(txt, toks){
+  if(!toks || !toks.length) return esc(txt);
+  var m=cbxMapa(txt), faixas=[];
+  toks.forEach(function(t){
+    if(!t) return;
+    var p=m.norm.indexOf(t);
+    while(p>=0){
+      var e=p+t.length-1;
+      var a=m.idx?m.idx[p]:p, b=m.idx?m.idx[e]:e;
+      if(a!=null && b!=null) faixas.push([a, b+1]);
+      p=m.norm.indexOf(t,p+1);
+    }
+  });
+  if(!faixas.length) return esc(txt);
+  faixas.sort(function(a,b){ return a[0]-b[0]; });
+  var un=[];
+  faixas.forEach(function(f){
+    var u=un[un.length-1];
+    if(u && f[0]<=u[1]) u[1]=Math.max(u[1],f[1]); else un.push([f[0],f[1]]);
+  });
+  var out='', pos=0;
+  un.forEach(function(f){
+    out+=esc(txt.slice(pos,f[0]))+'<mark>'+esc(txt.slice(f[0],f[1]))+'</mark>';
+    pos=f[1];
+  });
+  return out+esc(txt.slice(pos));
+}
+
+function ligarCombo(id, cfg){
+  var sel=document.getElementById(id);
+  if(!sel || sel._cbxLigado) return null;
+  sel._cbxLigado=true;
+  cfg=cfg||{};
+
+  var wrap=document.createElement('div'); wrap.className='cbx';
+  var inp=document.createElement('input');
+  inp.type='text'; inp.className='cbx-in'; inp.id=id+'Busca';
+  inp.setAttribute('autocomplete','off');
+  inp.setAttribute('role','combobox');
+  inp.setAttribute('aria-autocomplete','list');
+  inp.setAttribute('aria-expanded','false');
+  inp.placeholder=cfg.placeholder||'digite para buscar…';
+  var cta=document.createElement('button');
+  cta.type='button'; cta.className='cbx-cta'; cta.tabIndex=-1;
+  cta.setAttribute('aria-label','Abrir lista'); cta.textContent='▾';
+  var box=document.createElement('div'); box.className='ac-box cbx-box'; box.style.display='none';
+
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.appendChild(inp); wrap.appendChild(cta); wrap.appendChild(box); wrap.appendChild(sel);
+  sel.classList.add('cbx-nativo');
+  sel.tabIndex=-1;
+  sel.setAttribute('aria-hidden','true');
+
+  var descVal =Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,'value');
+  var descHtml=Object.getOwnPropertyDescriptor(Element.prototype,'innerHTML');
+  var opcoes=[], filtrados=[], marcado=-1, aberto=false;
+  /* digitando = o texto do input pertence ao usuário neste instante; nada
+     vindo de fora (rebuild da SA1/SZY em segundo plano) pode sobrescrevê-lo. */
+  var digitando=false;
+  /* O índice normalizado (sem acento, caixa alta, versão só-alfanumérica) é
+     caro para milhares de clientes da SA1 — só é refeito quando as <option>
+     realmente mudam, nunca a cada tecla. */
+  var indiceSujo=true;
+  var ultimoValor=descVal.get.call(sel)||'';
+
+  function valorAtual(){ return descVal.get.call(sel); }
+  function rotuloAtual(){
+    var o=sel.options[sel.selectedIndex];
+    return (o && o.value!=='') ? o.textContent.trim() : '';
+  }
+  function sincronizar(){ inp.value=rotuloAtual(); }
+
+  function indexar(){
+    opcoes=Array.prototype.map.call(sel.options, function(o,i){
+      var g=(o.parentElement && o.parentElement.tagName==='OPTGROUP') ? o.parentElement.label : '';
+      var txt=(o.textContent||'').trim();
+      return { i:i, value:o.value, rotulo:txt, grupo:g, off:!!o.disabled,
+               chave:cbxNorm(txt+' '+g), alnum:cbxAlnum(txt+' '+g) };
+    });
+    indiceSujo=false;
+  }
+  function garantirIndice(){ if(indiceSujo) indexar(); }
+
+  function tokens(q){ return cbxNorm(q).split(/\s+/).filter(Boolean); }
+
+  function filtrar(q){
+    var base=opcoes.filter(function(o){ return !o.off; });
+    var toks=tokens(q);
+    if(!toks.length) return base;
+    return base.filter(function(o){
+      return toks.every(function(t){
+        if(o.chave.indexOf(t)>=0) return true;
+        var ta=t.replace(/[^A-Z0-9]/g,'');
+        return ta.length>0 && o.alnum.indexOf(ta)>=0;
+      });
+    });
+  }
+
+  function render(){
+    var toks=tokens(inp.value);
+    if(!filtrados.length){
+      var info=opcoes.filter(function(o){ return o.off; })[0];
+      box.innerHTML='<div class="cbx-vazio">'+
+        (info ? esc(info.rotulo) : 'Nenhum resultado para “'+esc(inp.value.trim())+'”.')+'</div>';
+      box.style.display='block';
+      return;
+    }
+    var lista=filtrados.slice(0,CBX_LIMITE), html='', gAtual=null;
+    lista.forEach(function(o,k){
+      if(o.grupo!==gAtual){ gAtual=o.grupo; if(gAtual) html+='<div class="cbx-grp">'+esc(gAtual)+'</div>'; }
+      html+='<div class="cbx-item'+(k===marcado?' sel':'')+'" data-k="'+k+'">'
+          + '<span class="cbx-lb">'+cbxRealce(o.rotulo,toks)+'</span></div>';
+    });
+    if(filtrados.length>CBX_LIMITE){
+      html+='<div class="cbx-rodape">Mostrando '+CBX_LIMITE+' de '+filtrados.length+' — refine a busca.</div>';
+    }
+    box.innerHTML=html;
+    box.style.display='block';
+    var m=box.querySelector('.cbx-item.sel');
+    if(m && m.scrollIntoView) m.scrollIntoView({block:'nearest'});
+  }
+
+  function abrir(){ aberto=true; wrap.classList.add('aberto'); inp.setAttribute('aria-expanded','true'); }
+  function fechar(){
+    aberto=false; box.style.display='none'; marcado=-1;
+    wrap.classList.remove('aberto'); inp.setAttribute('aria-expanded','false');
+  }
+
+  /* Abre com a lista inteira, já marcando a opção selecionada hoje. */
+  function abrirLista(){
+    garantirIndice(); abrir();
+    filtrados=filtrar('');
+    var v=valorAtual(), vis=filtrados.slice(0,CBX_LIMITE), pos=-1;
+    vis.forEach(function(o,k){ if(pos<0 && o.value===v) pos=k; });
+    marcado = filtrados.length ? Math.max(0,pos) : -1;
+    render();
+  }
+
+  function buscar(){
+    garantirIndice(); abrir();
+    filtrados=filtrar(inp.value);
+    marcado = filtrados.length ? 0 : -1;
+    render();
+  }
+
+  function aplicar(v, disparar){
+    digitando=false;
+    descVal.set.call(sel, v);
+    ultimoValor=valorAtual();
+    sincronizar();
+    if(disparar) sel.dispatchEvent(new Event('change',{bubbles:true}));
+  }
+
+  function escolher(k){
+    var o=filtrados[k]; if(!o) return;
+    aplicar(o.value, true);
+    fechar();
+  }
+
+  /* Ao sair do campo: texto igual ao rótulo atual → nada. Campo esvaziado →
+     volta para a opção vazia (— avulso — / — nova / manual —). Texto que
+     resolve para exatamente um resultado → seleciona. Caso contrário,
+     devolve o rótulo da seleção vigente (nunca deixa texto órfão). */
+  function resolver(){
+    var txt=inp.value.trim();
+    digitando=false; garantirIndice();
+    if(txt===rotuloAtual()){ fechar(); return; }
+    if(!txt){
+      var vazia=opcoes.filter(function(o){ return o.value==='' && !o.off; })[0];
+      if(vazia && valorAtual()!=='') aplicar('', true);
+      fechar(); sincronizar(); return;
+    }
+    var hits=filtrar(txt).filter(function(o){ return o.value!==''; });
+    if(hits.length===1) aplicar(hits[0].value, true);
+    fechar(); sincronizar();
+  }
+
+  inp.addEventListener('focus', function(){ inp.select(); abrirLista(); });
+  inp.addEventListener('mousedown', function(){ if(!aberto) setTimeout(abrirLista,0); });
+  inp.addEventListener('input', function(){ digitando=true; buscar(); });
+  inp.addEventListener('blur', function(){ setTimeout(resolver,140); });
+
+  cta.addEventListener('mousedown', function(e){
+    e.preventDefault();
+    if(aberto){ fechar(); } else { inp.focus(); abrirLista(); }
+  });
+
+  box.addEventListener('mousedown', function(e){
+    var el=e.target.closest && e.target.closest('.cbx-item');
+    if(el){ e.preventDefault(); escolher(+el.dataset.k); inp.focus(); }
+  });
+
+  inp.addEventListener('keydown', function(e){
+    if(e.key==='ArrowDown' || e.key==='ArrowUp'){
+      e.preventDefault();
+      if(!aberto){ abrirLista(); return; }
+      var n=Math.min(filtrados.length, CBX_LIMITE);
+      if(!n) return;
+      marcado = (e.key==='ArrowDown')
+        ? (marcado+1>=n ? 0 : marcado+1)
+        : (marcado-1<0 ? n-1 : marcado-1);
+      render();
+    } else if(e.key==='Enter'){
+      if(aberto && marcado>=0){ e.preventDefault(); escolher(marcado); }
+    } else if(e.key==='Escape'){
+      if(aberto){ e.preventDefault(); digitando=false; fechar(); sincronizar(); }
+    } else if(e.key==='Tab'){
+      if(aberto) resolver();
+    }
+  });
+
+  /* Atribuição programática de .value (carregarSimulacao, onchange da rota
+     que preenche o cliente, montarSelectRotas restaurando o anterior). */
+  Object.defineProperty(sel,'value',{
+    configurable:true, enumerable:true,
+    get:function(){ return descVal.get.call(this); },
+    set:function(v){ descVal.set.call(this,v); ultimoValor=descVal.get.call(this);
+                     if(!digitando) sincronizar(); }
+  });
+
+  sel.addEventListener('change', function(){ ultimoValor=valorAtual(); if(!digitando) sincronizar(); });
+
+  /* montarSelects/montarSelectRotas trocam o innerHTML inteiro a cada carga
+     da SA1 ou da SZY — sem isto a escolha do usuário sumiria no meio da
+     simulação. Reindexa e restaura a seleção se a opção ainda existir. */
+  function reconciliar(){
+    indiceSujo=true;
+    /* restauração da seleção: consulta direta nas options, sem reindexar */
+    if(ultimoValor && valorAtual()!==ultimoValor){
+      var achou=false;
+      for(var k=0;k<sel.options.length;k++){
+        if(sel.options[k].value===ultimoValor && !sel.options[k].disabled){ achou=true; break; }
+      }
+      if(achou) descVal.set.call(sel, ultimoValor);
+    }
+    ultimoValor=valorAtual();
+    if(!digitando) sincronizar();
+    if(aberto){ garantirIndice(); filtrados=filtrar(inp.value); marcado=filtrados.length?0:-1; render(); }
+  }
+
+  /* O caminho real é sempre select.innerHTML = '...' — interceptado aqui para
+     que a reconciliação seja SÍNCRONA: qualquer leitura de .value logo depois
+     do rebuild já enxerga a seleção restaurada. */
+  Object.defineProperty(sel,'innerHTML',{
+    configurable:true, enumerable:true,
+    get:function(){ return descHtml.get.call(this); },
+    set:function(v){ descHtml.set.call(this,v); reconciliar(); }
+  });
+
+  /* Rede de segurança para mutações por outro caminho (appendChild, remove). */
+  var obs=new MutationObserver(reconciliar);
+  obs.observe(sel,{childList:true, subtree:true});
+
+  sincronizar();
+  return {sel:sel, input:inp, atualizar:function(){ indiceSujo=true; sincronizar(); }};
+}
+
+function cbxLigarSimulador(){
+  ligarCombo('simCliente',{placeholder:'Digite razão social, CNPJ, filial ou município…'});
+  ligarCombo('simRota',   {placeholder:'Digite filial, nº da rota, origem, destino ou km…'});
+}
+
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', cbxLigarSimulador);
+else cbxLigarSimulador();
+
+try{ window.ligarCombo=ligarCombo; window.cbxLigarSimulador=cbxLigarSimulador; }catch(_){}
+})();
+</script>
+
 </body>
 </html>
