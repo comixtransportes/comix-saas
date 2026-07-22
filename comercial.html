@@ -106,6 +106,18 @@ input[type=number]{font-family:var(--m)}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+/* Formulários dos modais de premissas: rótulo no topo, campo SEMPRE na base
+   da célula. Sem isso, um rótulo de duas linhas empurra o seu campo para
+   baixo e desalinha a linha inteira. */
+.fields.rt-fields{grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:12px 14px;align-items:stretch}
+.rt-fields label.fld{min-width:0;gap:0}
+.rt-fields label.fld>.fl{display:block;min-height:30px;line-height:1.3;margin-bottom:4px}
+.rt-fields label.fld>input,.rt-fields label.fld>select{margin-top:auto;width:100%;box-sizing:border-box}
+.rt-fields label.fld>.fl>i{display:block;font-style:normal;font-weight:400;opacity:.72;font-size:10px}
+.rt-fields .fl-wide{grid-column:1/-1}
+.rt-sec{font-size:12px;margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--bd2);color:var(--hd);font-weight:600}
+.rt-sec:first-of-type{border-top:none;padding-top:0;margin-top:4px}
+.rt-hint{font-size:10.5px;color:var(--mu);margin:-4px 0 8px}
 @media(max-width:1000px){.grid2,.grid3{grid-template-columns:1fr}}
 
 /* Tabelas */
@@ -4194,6 +4206,9 @@ async function rtExportar(){
       {Premissa:'Consumo carregado (km/l)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).consumoCarregado},
       {Premissa:'Consumo vazio (km/l)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).consumoVazio},
       {Premissa:'Arla (% do diesel)',Valor:((RT.custoGeral||RT_CUSTO_PADRAO).arlaPct*100)+'%'},
+      {Premissa:'Preço do diesel',Valor:(()=>{const m=rtPrecoMedio('diesel',String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0'),'');return m.preco>0?`R$ ${num(m.preco,3)}/l — média ponderada de ${m.qtdMedia} abastecimentos`:'sem abastecimento no período';})()},
+      {Premissa:'Preço do Arla',Valor:(()=>{const m=rtPrecoMedio('arla',String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0'),'');return m.preco>0?`R$ ${num(m.preco,3)}/l — média ponderada de ${m.qtdMedia} abastecimentos`:'sem abastecimento no período';})()},
+      {Premissa:'Regra do preço médio',Valor:`abastecimentos do período · janela diesel ${RT_CFG.dieselLitrosMin}–${RT_CFG.dieselLitrosMax} l · descarte abaixo de ${RT_CFG.precoForaDaCurva*100}% da média dos demais · ponderação por litros`},
       {Premissa:'Taxa de descarga (t/h)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compTaxaTh},
       {Premissa:'Consumo do compressor (l/h)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compConsumoLh},
       {Premissa:'Fonte de energia do compressor',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compFonte==='tdf'?'tomada de força do cavalo':'motor independente'},
@@ -4225,6 +4240,14 @@ function rtAtualizar(){
   } else m.push('<span class="pill mu">HERE · nenhuma rota simulada</span>');
   if(obs)    m.push(`<span class="pill am">${num(obs,0)} simulações obsoletas (perfil mudou)</span>`);
   if(falhas) m.push(`<span class="pill rd">${num(falhas,0)} falha(s) de simulação</span>`);
+  const _mes=String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0');
+  const _pd=rtPrecoMedio('diesel',_mes,''), _pa=rtPrecoMedio('arla',_mes,'');
+  m.push(_pd.preco>0
+    ? `<span class="pill mu" title="Média ponderada de ${_pd.qtdMedia} abastecimentos">Diesel realizado · R$ ${num(_pd.preco,3)}/l</span>`
+    : '<span class="pill am">Sem abastecimento de diesel no período</span>');
+  m.push(_pa.preco>0
+    ? `<span class="pill mu" title="Média ponderada de ${_pa.qtdMedia} abastecimentos">Arla realizado · R$ ${num(_pa.preco,3)}/l</span>`
+    : '<span class="pill am">Sem abastecimento de Arla no período</span>');
   if(RT.orfaos) m.push(`<span class="pill am" title="CT-e do período sem rota correspondente na SZY">${num(RT.orfaos,0)} CT-e sem rota na SZY</span>`);
   rtMeta(m.join(' '));
 }
@@ -4234,7 +4257,8 @@ async function rtInit(force){
     await rtCarregarBases(force);
     /* perfil e caches entram antes do primeiro render para que as colunas da
        HERE já apareçam preenchidas sem nenhuma chamada de rede à API. */
-    await Promise.all([rtCarregarPerfil(), rtCarregarCacheHere(), rtCarregarCacheGeo(), rtCarregarCusto()]);
+    await Promise.all([rtCarregarPerfil(), rtCarregarCacheHere(), rtCarregarCacheGeo(),
+                       rtCarregarCusto(), rtCarregarSZC(force)]);
     rtRenderMapa();
     simSincronizarRotasSZY();   /* o seletor do Simulador acompanha a recarga */
   }
@@ -4360,11 +4384,11 @@ async function rtCarregarPerfil(){
 }
 function rtPerfilModal(){
   const p=rtPerfilAtivo();
-  const f=(id,l,v,step)=>`<label class="fld">${l}<input type="number" id="rp_${id}" value="${v}" step="${step||'0.1'}" ${isGestorOuAdmin()?'':'disabled'}></label>`;
+  const f=(id,l,v,step,dica)=>`<label class="fld"><span class="fl">${l}${dica?`<i>${dica}</i>`:''}</span><input type="number" id="rp_${id}" value="${v}" step="${step||'0.1'}" ${isGestorOuAdmin()?'':'disabled'}></label>`;
   mdAbrir('Perfil da composição — usado em todas as simulações',
     `<div class="muted" style="margin-bottom:10px">Estes valores vão para a HERE como restrições do caminhão (<span class="mono">transportMode=truck</span>).
       Alterar o perfil <b>invalida o cache</b> das simulações: as rotas precisam ser resimuladas.</div>
-     <div class="fields">
+     <div class="fields rt-fields">
        ${f('eixos','Número de eixos',p.eixos,'1')}
        ${f('carretas','Quantidade de carretas',p.carretas,'1')}
        ${f('taraT','Tara da composição (t)',p.taraT)}
@@ -4881,8 +4905,8 @@ const RT_CUSTO_PADRAO = {
   idaCarregada:true,             /* §20 — inverte carregado/vazio              */
   /* combustível */
   consumoCarregado:2.0, consumoVazio:3.0,   /* km/l                            */
-  precoDiesel:null,              /* null = diesel vigente da aba Combustível    */
-  arlaPct:0.05, precoArla:4.50,
+  precoDiesel:null,              /* null = preço médio realizado (SZC)          */
+  arlaPct:0.05, precoArla:null,  /* null = preço médio realizado (SZC)          */
   /* carga */
   pesoLiquidoT:null,             /* null = média real do período               */
   /* tempo */
@@ -4896,7 +4920,7 @@ const RT_CUSTO_PADRAO = {
   compModelo:'', compFonte:'tdf',            /* tdf · independente             */
   compTaxaTh:25, compTempoH:null,            /* t/h  ·  horas informadas        */
   tipoCarreta:'LS',
-  compConsumoLh:8, compArlaLh:0.4,
+  compConsumoLh:8,
   compManutH:0, compDeprecH:0,
   compLimpezaH:0.25, compOutros:0, compObs:''
 };
@@ -4963,10 +4987,10 @@ function rtCustoRota(r, premOverride){
   /* ── 2) combustível com consumo diferenciado (§19.1) ── */
   const cc=Math.max(P.consumoCarregado,0.1), cv=Math.max(P.consumoVazio,0.1);
   const litros = kmCarregado/cc + kmVazio/cv;
-  const dieselRS = (P.precoDiesel!=null && P.precoDiesel>0) ? P.precoDiesel
-                  : (dieselVigente(r.op) || Number((premissasEfetivas(null,r.op,null)||{}).diesel_rs) || 5.6);
+  const pDiesel = rtPrecoEfetivo('diesel',P,r), dieselRS = pDiesel.valor;
+  const pArla   = rtPrecoEfetivo('arla',P,r),   arlaRS   = pArla.valor;
   M('Diesel — litros', `${num(kmCarregado,1)} ÷ ${num(cc,2)} + ${num(kmVazio,1)} ÷ ${num(cv,2)}`, litros);
-  M('Diesel — preço', `R$ ${num(dieselRS,3)}/l${P.precoDiesel>0?' (premissa da rota)':' (diesel vigente da filial '+(r.op||'—')+')'}`, null);
+  M('Diesel — preço', `R$ ${num(dieselRS,3)}/l · ${rtFontePreco(pDiesel)}`, null);
 
   /* ── 3) pedágio ── */
   let pedagio=null, fontePed=P.pedagioFonte;
@@ -4998,8 +5022,10 @@ function rtCustoRota(r, premOverride){
 
   /* ── 5) Arla ── */
   const arlaL = litros*(P.arlaPct||0);
-  const cArla = arlaL*(P.precoArla||0);
-  M('Arla', `${num(litros,1)} l × ${pct(P.arlaPct||0,1)} × R$ ${num(P.precoArla,2)}/l`, cArla);
+  const cArla = arlaRS!=null ? arlaL*arlaRS : null;
+  M('Arla', arlaRS!=null
+      ? `${num(litros,1)} l × ${pct(P.arlaPct||0,1)} × R$ ${num(arlaRS,3)}/l · ${rtFontePreco(pArla)}`
+      : 'sem preço de Arla — nenhum abastecimento de Arla no período', cArla);
 
   /* ── 6) tempo de ciclo e custo do tempo (§19/§21) ── */
   const cicloDesloc = (r.cicloMin!=null) ? r.cicloMin/60 : null;
@@ -5017,17 +5043,16 @@ function rtCustoRota(r, premOverride){
   if(tDescarga!=null){
     const dieselComp = P.compFonte==='tdf' || P.compFonte==='independente'
       ? tDescarga*(P.compConsumoLh||0)*dieselRS : 0;
-    const arlaComp   = tDescarga*(P.compArlaLh||0)*(P.precoArla||0);
+
     const tecnico    = tDescarga*((P.compManutH||0)+(P.compDeprecH||0));
     const oportun    = (P.custoOportunidadeH>0) ? (tDescarga+(P.compLimpezaH||0))*P.custoOportunidadeH : 0;
     const outros     = P.compOutros||0;
-    comp={ tempoH:tDescarga, diesel:dieselComp, arla:arlaComp, tecnico, oportunidade:oportun,
+    comp={ tempoH:tDescarga, diesel:dieselComp, tecnico, oportunidade:oportun,
            limpezaH:P.compLimpezaH||0, outros,
-           total:dieselComp+arlaComp+tecnico+oportun+outros,
+           total:dieselComp+tecnico+oportun+outros,
            fonte:P.compFonte, taxa:P.compTaxaTh, informado:P.compTempoH>0 };
     M('Descarga — tempo', comp.informado?`${num(tDescarga,2)} h informadas`:`${num(tonViagem,1)} t ÷ ${num(P.compTaxaTh,1)} t/h`, null);
     M('Descarga — diesel do compressor', `${num(tDescarga,2)} h × ${num(P.compConsumoLh,1)} l/h × R$ ${num(dieselRS,3)}`, dieselComp);
-    M('Descarga — Arla do compressor', `${num(tDescarga,2)} h × ${num(P.compArlaLh,2)} l/h × R$ ${num(P.precoArla,2)}`, arlaComp);
     M('Descarga — manutenção e depreciação', `${num(tDescarga,2)} h × R$ ${num((P.compManutH||0)+(P.compDeprecH||0),2)}/h`, tecnico);
     M('Descarga — custo de oportunidade', `${num(tDescarga+(P.compLimpezaH||0),2)} h × R$ ${num(P.custoOportunidadeH,2)}/h`, oportun);
     if(outros) M('Descarga — outros custos', 'informado manualmente', outros);
@@ -5035,7 +5060,7 @@ function rtCustoRota(r, premOverride){
 
   /* ── 8) consolidação (§19.2) ── */
   const desloc = cDiesel+cLub+cPecas+cPneus+cDoc+cPessoal+dCav+dCar;
-  const extras = cArla+(P.alimentacaoViagem||0)+(P.limpezaViagem||0)+cTempo;
+  const extras = (cArla||0)+(P.alimentacaoViagem||0)+(P.limpezaViagem||0)+cTempo;
   const total  = desloc+(pedagio||0)+extras+(comp?comp.total:0);
   const cpk    = kmTotal>0 ? total/kmTotal : null;
   const porTon = tonViagem>0 ? total/tonViagem : null;
@@ -5065,6 +5090,7 @@ function rtCustoRota(r, premOverride){
     linhas:{ diesel:cDiesel, pedagio:pedagio, lubrificante:cLub, pecas:cPecas, pneus:cPneus,
              docSeguros:cDoc, pessoal:cPessoal, deprecCavalo:dCav, deprecCarreta:dCar,
              arla:cArla, alimentacao:P.alimentacaoViagem||0, limpeza:P.limpezaViagem||0,
+             precoDiesel:dieselRS, precoArla:arlaRS, fonteDiesel:pDiesel.fonte, fonteArla:pArla.fonte,
              tempo:cTempo, compressor:comp?comp.total:null },
     deslocamento:desloc, extras, compressor:comp,
     total, cpk, porTon, porHora,
@@ -5088,83 +5114,88 @@ function rtCalcularCustos(){
 
 /* ══ Interface da Onda 3 — premissas de custo, blocos do painel e Excel ══ */
 
-function rtCampo(id,l,v,step,dis){
-  return `<label class="fld">${l}<input type="number" id="rc_${id}" value="${v==null?'':v}" step="${step||'0.01'}" ${dis?'disabled':''}></label>`;
+function rtFontePreco(p){
+  if(!p||p.valor==null) return 'sem preço disponível';
+  if(p.fonte==='premissa') return 'premissa informada';
+  if(p.fonte==='realizado') return `média ponderada de ${p.det.qtdMedia} abastecimento${p.det.qtdMedia===1?'':'s'} (${p.det.op})`;
+  if(p.fonte==='combustível') return 'preço vigente da aba Combustível';
+  return 'premissa geral';
+}
+/* Rótulo em <span class="fl"> com dica opcional em <i>: é o que mantém todos
+   os campos alinhados na base da célula, independente de o rótulo ter uma ou
+   duas linhas. */
+function rtRot(l,dica){ return `<span class="fl">${l}${dica?`<i>${dica}</i>`:''}</span>`; }
+function rtCampo(id,l,v,step,dica,ph){
+  return `<label class="fld">${rtRot(l,dica)}<input type="number" id="rc_${id}" value="${v==null?'':v}" step="${step||'0.01'}" placeholder="${ph||''}"></label>`;
+}
+function rtCampoTxt(id,l,v,dica,wide){
+  return `<label class="fld ${wide?'fl-wide':''}">${rtRot(l,dica)}<input type="text" id="rc_${id}" value="${esc(v||'')}"></label>`;
+}
+function rtCampoSel(id,l,ops,val,dica){
+  return `<label class="fld">${rtRot(l,dica)}<select id="rc_${id}">${ops.map(o=>`<option value="${o[0]}" ${o[0]===val?'selected':''}>${o[1]}</option>`).join('')}</select></label>`;
 }
 function rtCustoModal(r){
   const P=rtPremissasCusto(r);
-  const podeGeral=isGestorOuAdmin();
-  const dis=!podeGeral && !r;
   const escopo = r ? `rota <b>${esc(r.codigoRaw)}</b> · ${esc(r.origem)} → ${esc(r.destino)}` : 'todas as rotas (configuração geral)';
+  const mes=String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0');
+  const mD=rtPrecoMedio('diesel',mes,r?r.op:''), mA=rtPrecoMedio('arla',mes,r?r.op:'');
+  const chip=(m,nome)=> m.preco>0
+    ? `<span class="pill gn">${nome}: R$ ${num(m.preco,3)}/l</span> <span class="muted">média ponderada de ${num(m.qtdMedia,0)} de ${num(m.qtd,0)} abastecimentos${m.foraDaJanela?` · ${m.foraDaJanela} fora da janela`:''}${m.foraDaCurva?` · ${m.foraDaCurva} com preço fora da curva`:''} · janela ${esc(m.janela)}</span>`
+    : `<span class="pill am">${nome}: sem abastecimento no período</span>`;
+
   mdAbrir(r?'Premissas de custo da rota':'Premissas de custo — configuração geral',
-   `<div class="muted" style="margin-bottom:10px">Aplicando a ${escopo}.
+   `<div class="muted" style="margin-bottom:8px">Aplicando a ${escopo}.
      ${r?'O que você salvar aqui vale só para esta rota e tem prioridade sobre a configuração geral.':'Vale para todas as rotas que não tiverem premissa própria.'}
-     Campos deixados em branco caem no padrão.</div>
+     Campo em branco cai no padrão indicado abaixo dele.</div>
+   <div class="alerta ac" style="margin-bottom:12px"><div>
+     <b>Preços realizados em ${esc(RT_MESES[RT.periodo.m-1])}/${RT.periodo.a}</b> — apurados dos abastecimentos, mesma regra do PD.<br>
+     ${chip(mD,'Diesel')}<br>${chip(mA,'Arla')}
+   </div></div>
 
-    <h3 style="font-size:12px;margin:4px 0 6px">Distância e sentido</h3>
-    <div class="fields">
-      <label class="fld">Distância usada no cálculo
-        <select id="rc_distFonte">
-          <option value="here" ${P.distFonte==='here'?'selected':''}>HERE (simulada)</option>
-          <option value="szy"  ${P.distFonte==='szy' ?'selected':''}>SZY (cadastrada)</option>
-          <option value="manual" ${P.distFonte==='manual'?'selected':''}>Manual</option>
-        </select></label>
-      ${rtCampo('distManualIda','Ida manual (km)',P.distManualIda,'1')}
-      ${rtCampo('distManualVolta','Volta manual (km)',P.distManualVolta,'1')}
-      <label class="fld">Sentido carregado
-        <select id="rc_idaCarregada">
-          <option value="1" ${P.idaCarregada?'selected':''}>Ida carregada · volta vazia</option>
-          <option value="0" ${!P.idaCarregada?'selected':''}>Ida vazia · volta carregada</option>
-        </select></label>
-      <label class="fld" style="flex:1 1 240px">Motivo (obrigatório na distância manual)
-        <input type="text" id="rc_distMotivo" value="${esc(P.distMotivo||'')}"></label>
+    <div class="rt-sec">Distância e sentido</div>
+    <div class="fields rt-fields">
+      ${rtCampoSel('distFonte','Distância usada no cálculo',[['here','HERE (simulada)'],['szy','SZY (cadastrada)'],['manual','Manual']],P.distFonte)}
+      ${rtCampo('distManualIda','Ida manual',P.distManualIda,'1','km')}
+      ${rtCampo('distManualVolta','Volta manual',P.distManualVolta,'1','km')}
+      ${rtCampoSel('idaCarregada','Sentido carregado',[['1','Ida carregada · volta vazia'],['0','Ida vazia · volta carregada']],P.idaCarregada?'1':'0')}
+      ${rtCampoTxt('distMotivo','Motivo da distância manual',P.distMotivo,'obrigatório quando a distância for manual',true)}
     </div>
 
-    <h3 style="font-size:12px;margin:14px 0 6px">Combustível e Arla</h3>
-    <div class="fields">
-      ${rtCampo('consumoCarregado','Consumo carregado (km/l)',P.consumoCarregado,'0.05')}
-      ${rtCampo('consumoVazio','Consumo vazio (km/l)',P.consumoVazio,'0.05')}
-      ${rtCampo('precoDiesel','Preço do diesel (R$/l) — vazio usa o vigente',P.precoDiesel,'0.001')}
-      ${rtCampo('arlaPct','Arla (% sobre o diesel)',P.arlaPct,'0.005')}
-      ${rtCampo('precoArla','Preço do Arla (R$/l)',P.precoArla,'0.01')}
+    <div class="rt-sec">Combustível e Arla</div>
+    <div class="fields rt-fields">
+      ${rtCampo('consumoCarregado','Consumo carregado',P.consumoCarregado,'0.05','km/l')}
+      ${rtCampo('consumoVazio','Consumo vazio',P.consumoVazio,'0.05','km/l')}
+      ${rtCampo('precoDiesel','Preço do diesel',P.precoDiesel,'0.001','R$/l · vazio usa o realizado', mD.preco>0?num(mD.preco,3):'')}
+      ${rtCampo('arlaPct','Arla sobre o diesel',P.arlaPct,'0.005','fração — 0,05 = 5%')}
+      ${rtCampo('precoArla','Preço do Arla',P.precoArla,'0.001','R$/l · vazio usa o realizado', mA.preco>0?num(mA.preco,3):'')}
     </div>
 
-    <h3 style="font-size:12px;margin:14px 0 6px">Pedágio, tempo e despesas</h3>
-    <div class="fields">
-      <label class="fld">Pedágio
-        <select id="rc_pedagioFonte">
-          <option value="here" ${P.pedagioFonte==='here'?'selected':''}>HERE / matcher de praças</option>
-          <option value="manual" ${P.pedagioFonte==='manual'?'selected':''}>Manual</option>
-        </select></label>
-      ${rtCampo('pedagioManual','Pedágio manual — ida + volta (R$)',P.pedagioManual,'0.01')}
-      ${rtCampo('tempoCargaH','Tempo de carga (h)',P.tempoCargaH,'0.25')}
-      ${rtCampo('esperaClienteH','Espera no cliente (h)',P.esperaClienteH,'0.25')}
-      ${rtCampo('custoOportunidadeH','Custo de oportunidade (R$/h)',P.custoOportunidadeH,'0.5')}
-      ${rtCampo('alimentacaoViagem','Alimentação por viagem (R$)',P.alimentacaoViagem,'1')}
-      ${rtCampo('limpezaViagem','Limpeza por viagem (R$)',P.limpezaViagem,'1')}
-      ${rtCampo('pesoLiquidoT','Peso líquido (t) — vazio usa a média real',P.pesoLiquidoT,'0.1')}
-      ${rtCampo('viagensMes','Viagens/mês — vazio usa as reais',P.viagensMes,'1')}
+    <div class="rt-sec">Pedágio, tempo e despesas</div>
+    <div class="fields rt-fields">
+      ${rtCampoSel('pedagioFonte','Pedágio',[['here','HERE / matcher de praças'],['manual','Manual']],P.pedagioFonte)}
+      ${rtCampo('pedagioManual','Pedágio manual',P.pedagioManual,'0.01','R$ · ida + volta')}
+      ${rtCampo('tempoCargaH','Tempo de carga',P.tempoCargaH,'0.25','horas')}
+      ${rtCampo('esperaClienteH','Espera no cliente',P.esperaClienteH,'0.25','horas')}
+      ${rtCampo('custoOportunidadeH','Custo de oportunidade',P.custoOportunidadeH,'0.5','R$/hora parada')}
+      ${rtCampo('alimentacaoViagem','Alimentação',P.alimentacaoViagem,'1','R$ por viagem')}
+      ${rtCampo('limpezaViagem','Limpeza',P.limpezaViagem,'1','R$ por viagem')}
+      ${rtCampo('pesoLiquidoT','Peso líquido',P.pesoLiquidoT,'0.1','t · vazio usa a média real','média real')}
+      ${rtCampo('viagensMes','Viagens por mês',P.viagensMes,'1','vazio usa as reais','reais')}
     </div>
 
-    <h3 style="font-size:12px;margin:14px 0 6px">Descarga pressurizada — compressor</h3>
-    <div class="muted" style="font-size:11px;margin-bottom:6px">Todas as rotas descarregam por compressor. O tempo pode ser informado direto ou estimado por toneladas ÷ taxa.</div>
-    <div class="fields">
-      <label class="fld" style="flex:1 1 180px">Modelo<input type="text" id="rc_compModelo" value="${esc(P.compModelo||'')}"></label>
-      <label class="fld">Fonte de energia
-        <select id="rc_compFonte">
-          <option value="tdf" ${P.compFonte==='tdf'?'selected':''}>Tomada de força do cavalo</option>
-          <option value="independente" ${P.compFonte==='independente'?'selected':''}>Motor independente</option>
-        </select></label>
-      ${rtCampo('compTaxaTh','Taxa de descarga (t/h)',P.compTaxaTh,'0.5')}
-      ${rtCampo('compTempoH','Tempo de descarga (h) — sobrepõe a taxa',P.compTempoH,'0.25')}
-      ${rtCampo('compConsumoLh','Consumo no acionamento (l/h)',P.compConsumoLh,'0.1')}
-      ${rtCampo('compArlaLh','Arla do compressor (l/h)',P.compArlaLh,'0.05')}
-      ${rtCampo('compManutH','Manutenção do compressor (R$/h)',P.compManutH,'0.5')}
-      ${rtCampo('compDeprecH','Depreciação do compressor (R$/h)',P.compDeprecH,'0.5')}
-      ${rtCampo('compLimpezaH','Limpeza / purga (h)',P.compLimpezaH,'0.25')}
-      ${rtCampo('compOutros','Outros custos da descarga (R$)',P.compOutros,'1')}
-      <label class="fld" style="flex:1 1 240px">Observação operacional
-        <input type="text" id="rc_compObs" value="${esc(P.compObs||'')}"></label>
+    <div class="rt-sec">Descarga pressurizada — compressor</div>
+    <div class="rt-hint">Todas as rotas descarregam por compressor. O tempo pode ser informado direto ou estimado por toneladas ÷ taxa.</div>
+    <div class="fields rt-fields">
+      ${rtCampoTxt('compModelo','Modelo do compressor',P.compModelo,'opcional')}
+      ${rtCampoSel('compFonte','Fonte de energia',[['tdf','Tomada de força do cavalo'],['independente','Motor independente']],P.compFonte)}
+      ${rtCampo('compTaxaTh','Taxa de descarga',P.compTaxaTh,'0.5','t/h')}
+      ${rtCampo('compTempoH','Tempo de descarga',P.compTempoH,'0.25','horas · sobrepõe a taxa','por taxa')}
+      ${rtCampo('compConsumoLh','Consumo no acionamento',P.compConsumoLh,'0.1','l/h de diesel')}
+      ${rtCampo('compManutH','Manutenção do compressor',P.compManutH,'0.5','R$/h')}
+      ${rtCampo('compDeprecH','Depreciação do compressor',P.compDeprecH,'0.5','R$/h')}
+      ${rtCampo('compLimpezaH','Limpeza / purga',P.compLimpezaH,'0.25','horas')}
+      ${rtCampo('compOutros','Outros custos da descarga',P.compOutros,'1','R$ por viagem')}
+      ${rtCampoTxt('compObs','Observação operacional',P.compObs,'',true)}
     </div>`,
    `<button class="btn" onclick="mdFechar()">Cancelar</button>
     ${r&&rtTemOverride(r)?`<button class="btn danger" onclick="rtCustoLimparRota('${esc(r.k3)}')">Voltar ao geral</button>`:''}
@@ -5176,7 +5207,7 @@ function rtCustoColeta(){
     const v=String(e.value).trim(); return v===''?null:rtNum(v); };
   ['distManualIda','distManualVolta','consumoCarregado','consumoVazio','precoDiesel','arlaPct','precoArla',
    'pedagioManual','tempoCargaH','esperaClienteH','custoOportunidadeH','alimentacaoViagem','limpezaViagem',
-   'pesoLiquidoT','viagensMes','compTaxaTh','compTempoH','compConsumoLh','compArlaLh','compManutH',
+   'pesoLiquidoT','viagensMes','compTaxaTh','compTempoH','compConsumoLh','compManutH',
    'compDeprecH','compLimpezaH','compOutros'].forEach(k=>{ const v=n(k); if(v!==undefined) P[k]=v; });
   ['distFonte','pedagioFonte','compFonte'].forEach(k=>{ const e=$('rc_'+k); if(e) P[k]=e.value; });
   ['distMotivo','compModelo','compObs'].forEach(k=>{ const e=$('rc_'+k); if(e) P[k]=String(e.value||'').trim(); });
@@ -5239,7 +5270,9 @@ function rtBlocoCustos(r){
           <tr><td><b>Custo operacional estimado</b></td><td class="num"><b>${brl(c.total)}</b></td></tr>
         </table>
         <div class="muted" style="font-size:10.5px;margin-top:5px">
-          Custo operacional — não inclui comissão, impostos, margem nem preço de venda.
+          Custo operacional — não inclui comissão, impostos, margem nem preço de venda.<br>
+          Diesel R$ ${num(L.precoDiesel,3)}/l (${esc(L.fonteDiesel)}) ·
+          Arla ${L.precoArla!=null?'R$ '+num(L.precoArla,3)+'/l ('+esc(L.fonteArla)+')':'sem preço no período'}.
         </div>
       </div>
       <div>
@@ -5248,7 +5281,6 @@ function rtBlocoCustos(r){
           ${li('Tempo de descarga', null,'')?'':''}
           <tr><td class="muted">Tempo de descarga</td><td class="num">${num(c.compressor.tempoH,2)} h ${c.compressor.informado?'<span class="src prem">INFORMADO</span>':'<span class="src calc">ESTIMADO</span>'}</td></tr>
           ${li('Diesel do compressor', c.compressor.diesel)}
-          ${li('Arla do compressor', c.compressor.arla)}
           ${li('Manutenção e depreciação', c.compressor.tecnico)}
           ${li('Custo de oportunidade', c.compressor.oportunidade)}
           ${li('Outros', c.compressor.outros)}
@@ -5289,6 +5321,126 @@ function rtBlocoMemoria(r){
       Comparação de combustível: ${num(c.litros,1)} l com consumo diferenciado × ${num(c.litrosPadrao,1)} l no consumo padrão único —
       diferença de ${brl(c.difCombustivel)} por viagem.
     </div>`;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PREÇO MÉDIO REALIZADO — diesel e Arla a partir dos abastecimentos (SZC)
+   ──────────────────────────────────────────────────────────────────────────
+   Réplica da regra do pd.html (calcDieselKPI), aplicada também ao Arla:
+
+     1. filtra os abastecimentos do período e da operação;
+     2. preço unitário = Valor ÷ Qtd Litros (cai em Unit Venda se não houver
+        litragem);
+     3. descarta registro sem litragem, sem valor ou com preço não positivo;
+     4. janela de litragem — no diesel, 50 a 1.200 l, que é o que exclui
+        arremates e transferências de tanque;
+     5. descarta o registro cujo preço unitário fique abaixo de metade da
+        média ponderada dos demais (lançamento errado, bonificação, estorno);
+     6. média PONDERADA pelos litros: Σ(preço × litros) ÷ Σ litros.
+
+   A janela de litragem do Arla vem desligada de fábrica: abastecimento de
+   Arla é de poucas dezenas de litros e a janela do diesel zeraria a amostra.
+   O filtro de preço fora da curva continua valendo nos dois casos.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+Object.assign(RT_CFG,{
+  dieselLitrosMin:50, dieselLitrosMax:1200,
+  arlaLitrosMin:0,    arlaLitrosMax:0,        /* 0 = sem janela            */
+  precoForaDaCurva:0.5                        /* corte em 50% da média     */
+});
+Object.assign(RT,{ szc:[], szcMeta:null, szcCarregado:false, precoCache:new Map() });
+
+async function rtCarregarSZC(force){
+  if(RT.szcCarregado && !force) return;
+  try{
+    const b=await loadBaseCloud('szc');
+    RT.szc=(b&&Array.isArray(b.rows))?b.rows:[];
+    RT.szcMeta=b?{ts:b.ts,file:b.file,user:b.user,count:b.count}:null;
+  }catch(e){ console.warn('[Rotas] SZC:',e&&e.message); RT.szc=[]; RT.szcMeta=null; }
+  RT.szcCarregado=true; RT.precoCache.clear();
+}
+
+/* Operação do abastecimento — mesma cascata de campos que o pd.html usa. */
+function rtSzcOp(row){
+  return rtSigla(row['Operacao']) || rtSigla(row['Filial']) ||
+         rtSigla(row['Filial de In']) || rtSigla(row['Filial incl']) ||
+         rtSigla(row['Unidade']) || '';
+}
+
+/* tipo: 'diesel' | 'arla' · mes: 'AAAA-MM' · op: 'SC'|'PR'|'SP'|'' (todas) */
+function rtPrecoMedio(tipo, mes, op){
+  const ck=tipo+'|'+mes+'|'+(op||'');
+  if(RT.precoCache.has(ck)) return RT.precoCache.get(ck);
+
+  const ehArla = tipo==='arla';
+  const lMin = ehArla?RT_CFG.arlaLitrosMin:RT_CFG.dieselLitrosMin;
+  const lMax = ehArla?RT_CFG.arlaLitrosMax:RT_CFG.dieselLitrosMax;
+
+  const base=[];
+  for(let i=0;i<RT.szc.length;i++){
+    const row=RT.szc[i];
+    const iso=rtDataISO(row['Data Emissao']||row['Data Emissão']||row['Data']);
+    if(!iso || iso.slice(0,7)!==mes) continue;
+    if(op && rtSzcOp(row)!==op) continue;
+    const comb=String(row['Combustivel']||row['Combustível']||'').trim();
+    if(ehArla){ if(!/arla/i.test(comb)) continue; }
+    else { if(!/diesel/i.test(comb) || /arla/i.test(comb)) continue; }
+    const litros=rtNum(row['Qtd Litros']), valor=rtNum(row['Valor']);
+    const unit=rtNum(row['Unit Venda']);
+    const precoUnit = litros>0 ? valor/litros : unit;
+    if(!(litros>0) || !(valor>0) || !(precoUnit>0)) continue;
+    base.push({litros,valor,precoUnit});
+  }
+  const qtdBruta=base.length;
+  const litrosTot=base.reduce((a,r)=>a+r.litros,0);
+  const valorTot =base.reduce((a,r)=>a+r.valor,0);
+
+  /* janela de litragem */
+  const naJanela = (lMin>0||lMax>0)
+    ? base.filter(r=> r.litros>=(lMin||0) && (lMax>0 ? r.litros<=lMax : true))
+    : base;
+
+  /* preço fora da curva, medido contra a média ponderada dos demais */
+  const limpa = naJanela.filter((r,_,arr)=>{
+    if(arr.length<=1) return true;
+    const outrosL=arr.reduce((a,x)=>a+(x===r?0:x.litros),0);
+    const outrosV=arr.reduce((a,x)=>a+(x===r?0:x.precoUnit*x.litros),0);
+    const media = outrosL>0 ? outrosV/outrosL : 0;
+    return media<=0 || r.precoUnit >= media*RT_CFG.precoForaDaCurva;
+  });
+
+  const lm=limpa.reduce((a,r)=>a+r.litros,0);
+  const vm=limpa.reduce((a,r)=>a+r.precoUnit*r.litros,0);
+  const out={
+    preco: lm>0 ? vm/lm : null,
+    litros:litrosTot, valor:valorTot,
+    qtd:qtdBruta, qtdMedia:limpa.length,
+    foraDaJanela: base.length-naJanela.length,
+    foraDaCurva:  naJanela.length-limpa.length,
+    descartados:  qtdBruta-limpa.length,
+    mes, op:op||'todas', tipo,
+    janela: (lMin>0||lMax>0) ? `${lMin||0}–${lMax||'∞'} l` : 'sem janela'
+  };
+  RT.precoCache.set(ck,out);
+  return out;
+}
+
+/* Preço efetivo usado no cálculo, com a cascata de origem documentada. */
+function rtPrecoEfetivo(tipo, P, r){
+  const mes = String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0');
+  const manual = tipo==='arla' ? P.precoArla : P.precoDiesel;
+  if(manual!=null && manual>0) return {valor:manual, fonte:'premissa'};
+  /* 1º a média da própria operação, 2º a média consolidada do período */
+  let m=rtPrecoMedio(tipo, mes, r?r.op:'');
+  if(!(m.preco>0) && r && r.op) m=rtPrecoMedio(tipo, mes, '');
+  if(m.preco>0) return {valor:m.preco, fonte:'realizado', det:m};
+  if(tipo==='diesel'){
+    const v=dieselVigente(r?r.op:null);
+    if(v>0) return {valor:v, fonte:'combustível'};
+    return {valor:Number((premissasEfetivas(null,r?r.op:null,null)||{}).diesel_rs)||5.6, fonte:'premissa geral'};
+  }
+  return {valor:null, fonte:'indisponível'};
 }
 
 /* Handle de diagnóstico — mesmo padrão de window.__ATLAS_MODULE__ / window._simMap.
