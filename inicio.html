@@ -661,7 +661,7 @@ window.addEventListener('message', ev => {
   }
   /* Portal respondeu o ATLAS_REQUEST_DATA da SZC (push com linhas) OU sinalizou
      que a SZC ficou pronta — em ambos os casos recarrega o diesel dos cards */
-  if((d.type==='ATLAS_DATA_READY' || d.type==='ATLAS_DATA') && d.table==='szc'){
+  if((d.type==='ATLAS_DATA_READY' || d.type==='ATLAS_DATA' || d.type==='ATLAS_DATA_RESPONSE') && d.table==='szc'){
     const rows = Array.isArray(d.rows) ? d.rows : (d.payload && Array.isArray(d.payload.rows) ? d.payload.rows : null);
     if(rows && rows.length){ _szcRows=rows; tryRenderFrota(); }
     else { loadSZCRows().then(r=>{ if(r&&r.length){ _szcRows=r; tryRenderFrota(); } }).catch(()=>{}); }
@@ -695,7 +695,12 @@ function abrirOSNoPainel(osId){
 ──────────────────────────────────────────────────────────────── */
 async function loadSZB(){
   try {
-    // Estratégia 1: dados já em memória no index
+    // Estratégia 1: referência direta e já escopada pelo portal (sem clone)
+    if(typeof window.parent.atlasGetDataReference==='function'){
+      const ref=window.parent.atlasGetDataReference('szb');
+      if(ref && Array.isArray(ref.rows) && ref.rows.length) return ref;
+    }
+    // Compatibilidade: dados já em memória no index
     const mem = window.parent.ATLAS_DATA && window.parent.ATLAS_DATA['szb'];
     if(mem && Array.isArray(mem.rows) && mem.rows.length > 0){
       console.log('[Início] SZB: usando dados em memória do index (' + mem.rows.length + ' linhas)');
@@ -703,8 +708,9 @@ async function loadSZB(){
     }
 
     // Estratégia 2: função do index que usa Firestore autenticado
-    if(typeof window.parent.atlasLoadBaseFromFirestore === 'function'){
-      const payload = await window.parent.atlasLoadBaseFromFirestore('szb');
+    if(typeof window.parent.atlasLoadBaseFromFirestoreShared === 'function' || typeof window.parent.atlasLoadBaseFromFirestore === 'function'){
+      const loader=window.parent.atlasLoadBaseFromFirestoreShared||window.parent.atlasLoadBaseFromFirestore;
+      const payload = await loader('szb');
       if(payload && Array.isArray(payload.rows) && payload.rows.length > 0){
         console.log('[Início] SZB: carregado do Firestore via parent (' + payload.rows.length + ' linhas)');
         return payload;
@@ -726,6 +732,10 @@ async function loadBaseParent(id){
   const aliases = { szc:['szc','SZC','Szc','diesel','DIESEL'] };
   const cands = aliases[id] || [id, id.toUpperCase(), id.toLowerCase()];
   try{
+    if(window.parent && typeof window.parent.atlasGetDataReference==='function'){
+      const ref=window.parent.atlasGetDataReference(id);
+      if(ref && Array.isArray(ref.rows) && ref.rows.length) return ref.rows;
+    }
     const AD = window.parent && window.parent.ATLAS_DATA;
     // Diagnóstico: o que o parent realmente expõe em memória
     try{ console.log('[Início] ATLAS_DATA keys =', AD? Object.keys(AD) : '(sem ATLAS_DATA)'); }catch(_){}
@@ -738,10 +748,11 @@ async function loadBaseParent(id){
         }
       }
     }
-    if(typeof window.parent.atlasLoadBaseFromFirestore === 'function'){
+    if(typeof window.parent.atlasLoadBaseFromFirestoreShared === 'function' || typeof window.parent.atlasLoadBaseFromFirestore === 'function'){
+      const loader=window.parent.atlasLoadBaseFromFirestoreShared||window.parent.atlasLoadBaseFromFirestore;
       for(const k of cands){
         try{
-          const p = await window.parent.atlasLoadBaseFromFirestore(k);
+          const p = await loader(k);
           if(p && Array.isArray(p.rows) && p.rows.length>0){
             console.log('[Início] base "'+id+'" obtida do Firestore via parent sob chave "'+k+'" ('+p.rows.length+' linhas)');
             return p.rows;
@@ -790,7 +801,7 @@ async function loadCloudBaseDirect(id){
       const reqs=[];
       for(let i=start;i<end;i++) reqs.push(docRef.collection('chunks').doc(String(i)).get());
       const snaps = await Promise.all(reqs);
-      for(const s of snaps){ if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) rows.push(...r); } }
+      for(const s of snaps){ if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) for(let j=0;j<r.length;j++) rows.push(r[j]); } }
     }
     return rows.length ? rows : null;
   }catch(e){ console.warn('[Início] leitura direta bases_cloud/'+id+' falhou:', e.message); return null; }
@@ -799,38 +810,16 @@ async function loadCloudBaseDirect(id){
 /* Carrega a base SZC (diesel) de bases_cloud/szc — MESMO local que o pd.html lê.
    Estratégias em ordem; a primeira que trouxer linhas vence. */
 async function loadSZCRows(){
-  // 1) DIRETO no Firestore do parent (caminho idêntico ao PD — mais confiável)
-  const direct = await loadCloudBaseDirect('szc');
-  if(direct && direct.length){ console.log('[Início] SZC: '+direct.length+' linhas de bases_cloud/szc (Firestore direto do parent)'); return direct; }
+  // 1) Referência/cache do portal: mesma base, sem novo download nem clone.
+  const viaParent=await loadBaseParent('szc');
+  if(viaParent && viaParent.length){ console.log('[Início] SZC: '+viaParent.length+' linhas via portal compartilhado'); return viaParent; }
 
-  // 2) Ponte → subcoleção de chunks (caso o parent não exponha firebase)
-  try{
-    const res = await fsParent('getCollection', { collection:'bases_cloud/szc/chunks', limit:5000 });
-    const docs = (res && res.docs) || [];
-    if(docs.length){
-      docs.sort((a,b)=>(parseInt(a.id,10)||0)-(parseInt(b.id,10)||0));
-      const rows=[];
-      docs.forEach(d=>{ const r=d.data && d.data.rows; if(Array.isArray(r)) rows.push(...r); });
-      if(rows.length){ console.log('[Início] SZC: '+rows.length+' linhas de bases_cloud/szc/chunks (ponte)'); return rows; }
-    }
-  }catch(e){ console.warn('[Início] SZC via ponte chunks falhou:', e.message); }
+  // 2) Solicita ao portal; a resposta assíncrona é tratada pelo listener.
+  try{ if(window.parent&&window.parent!==window) window.parent.postMessage({type:'ATLAS_REQUEST_DATA',table:'szc'},'*'); }catch(_){}
 
-  // 3) Doc único bases_cloud/szc (caso a base não esteja chunked)
-  try{
-    const res = await fsParent('getCollection', { collection:'bases_cloud', limit:50 });
-    const docs = (res && res.docs) || [];
-    const szc = docs.find(d=>String(d.id).toLowerCase()==='szc');
-    if(szc && szc.data && Array.isArray(szc.data.rows) && szc.data.rows.length){
-      console.log('[Início] SZC: '+szc.data.rows.length+' linhas do doc bases_cloud/szc (ponte)'); return szc.data.rows;
-    }
-  }catch(e){ /* segue para o fallback */ }
-
-  // 4) Fallback: parent expõe ATLAS_DATA['szc'] ou atlasLoadBaseFromFirestore('szc')
-  const viaParent = await loadBaseParent('szc');
-  if(viaParent && viaParent.length){ console.log('[Início] SZC: '+viaParent.length+' linhas via loadBaseParent'); return viaParent; }
-
-  // 4) Best-effort: pede a base ao portal (resposta assíncrona tratada no listener)
-  try{ if(window.parent && window.parent!==window) window.parent.postMessage({type:'ATLAS_REQUEST_DATA', table:'szc'}, '*'); }catch(_){}
+  // 3) Fallback standalone/direto, mantido para compatibilidade.
+  const direct=await loadCloudBaseDirect('szc');
+  if(direct&&direct.length){ console.log('[Início] SZC: '+direct.length+' linhas do Firestore direto'); return direct; }
   console.warn('[Início] SZC ainda não disponível — nova tentativa em instantes.');
   return null;
 }
@@ -1803,15 +1792,10 @@ document.addEventListener('DOMContentLoaded', async ()=>{
      SZB), então a tela aparece completa sem depender das auxiliares. */
   (async ()=>{
     try{ await tryLoadSZB(1); }catch(_){}
-    if(_isMobile){
-      try{ await tryLoadVeiculos(1); }catch(_){}
-      try{ await loadDiesel(1); }catch(_){}
-      try{ await tryLoadAprovacoes(1); }catch(_){}
-    } else {
-      tryLoadVeiculos(1);
-      loadDiesel(1);
-      tryLoadAprovacoes(1);
-    }
+    const tasks=[()=>tryLoadVeiculos(1),()=>loadDiesel(1),()=>tryLoadAprovacoes(1)];
+    const limit=_isMobile?1:2; let next=0;
+    async function worker(){while(next<tasks.length){const task=tasks[next++];try{await task();}catch(_){}}}
+    await Promise.all(Array.from({length:limit},worker));
   })();
 });
 
