@@ -888,6 +888,8 @@ async function boot(){
   renderAntt(); renderVeiculos(); renderClientes(); renderRotas(); renderDiesel(); renderPremissas();
   carregarAuditoria();
   carregarSA1EmSegundoPlano();   /* SA1 entra assim que chegar, sem travar o boot */
+  /* Rotas da SZY para o seletor do Simulador — mesma fonte da aba Rotas. */
+  try{ if(typeof simCarregarRotasSZY==='function') simCarregarRotasSZY(false); }catch(_){}
   initMapa();
   checarVigenciaAntt();
   ativarAutocompleteCidades();  /* Simulador e Pedágio & Rota (campos estáticos) */
@@ -1154,19 +1156,57 @@ function cliRotulo(c){
   const fil=(c.filiais&&c.filiais.length)?c.filiais.join('/'):(d.filial||'');
   return [d.razao_social||d.nome||'—', d.cnpj||'', fil, d.municipio||''].filter(Boolean).join(' · ');
 }
+/* Rótulo da rota da SZY no Simulador: filial · nº da rota · origem → destino.
+   A distância vai junto porque o mesmo código de rota se repete entre filiais
+   com trajetos diferentes — sem ela, dá para escolher a rota errada. */
+function simRotaRotulo(r){
+  const o=(r.origem||'—')+(r.ufO?'/'+r.ufO:'');
+  const d=(r.destino||'—')+(r.ufD?'/'+r.ufD:'');
+  return `${r.op||'—'} · ${r.codigoRaw||r.codigo||'—'} · ${o} → ${d}`+(r.kmIda>0?` · ${num(r.kmIda,0)} km`:'');
+}
+function montarSelectRotas(){
+  const sr=$('simRota'); if(!sr) return;
+  const anterior=sr.value;
+  const szy=(window.SIM_ROTAS_SZY||[]);
+  const st=window.SIM_ROTAS_SZY_ST||'idle';
+  let html='<option value="">— nova / manual —</option>';
+  if(szy.length){
+    html+=`<optgroup label="Rotas da SZY (${szy.length})">`+
+      szy.map(r=>`<option value="szy:${esc(r.id)}">${esc(simRotaRotulo(r))}</option>`).join('')+
+      '</optgroup>';
+  }else{
+    html+=`<option value="" disabled>${st==='carregando'?'— carregando rotas da SZY… —'
+          : st==='erro'?'— SZY indisponível: confira a carga no menu Base —'
+          : '— nenhuma rota lida da SZY —'}</option>`;
+  }
+  if(ST.rotas.length){
+    html+='<optgroup label="Rotas recorrentes cadastradas no Atlas">'+
+      ST.rotas.map(r=>`<option value="${r.id}">${esc(r.data.nome||((r.data.origem||'')+' → '+(r.data.destino||'')))}</option>`).join('')+
+      '</optgroup>';
+  }
+  sr.innerHTML=html;
+  if(anterior){ sr.value=anterior; if(sr.value!==anterior) sr.value=''; }
+  sr.onchange = ()=>{
+    const v=sr.value||'';
+    if(v.startsWith('szy:')){
+      const r=(window.SIM_ROTAS_SZY||[]).find(x=>('szy:'+x.id)===v); if(!r) return;
+      $('simOrigem').value = (r.origem&&r.origem!=='—'?r.origem:'')+(r.ufO?', '+r.ufO:'');
+      $('simDestino').value= (r.destino&&r.destino!=='—'?r.destino:'')+(r.ufD?', '+r.ufD:'');
+      if(r.op) $('simFilial').value=r.op;
+      return;
+    }
+    const r=ST.rotas.find(x=>x.id===v); if(!r) return;
+    $('simOrigem').value=r.data.origem||''; $('simDestino').value=r.data.destino||'';
+    if(r.data.cliente_id) $('simCliente').value=r.data.cliente_id;
+    if(r.data.filial) $('simFilial').value=r.data.filial;
+  };
+}
 function montarSelects(){
   const sv=$('simVeiculo');
   sv.innerHTML = ST.veiculos.map(v=>`<option value="${v.id}">${esc(v.data.nome)} · ${v.data.eixos} eixos</option>`).join('');
   const sc=$('simCliente');
   sc.innerHTML = '<option value="">— avulso —</option>'+ST.clientes.map(c=>`<option value="${c.id}">${esc(cliRotulo(c))}</option>`).join('');
-  const sr=$('simRota');
-  sr.innerHTML = '<option value="">— nova / manual —</option>'+ST.rotas.map(r=>`<option value="${r.id}">${esc(r.data.nome||((r.data.origem||'')+' → '+(r.data.destino||'')))}</option>`).join('');
-  sr.onchange = ()=>{
-    const r=ST.rotas.find(x=>x.id===sr.value); if(!r) return;
-    $('simOrigem').value=r.data.origem||''; $('simDestino').value=r.data.destino||'';
-    if(r.data.cliente_id) $('simCliente').value=r.data.cliente_id;
-    if(r.data.filial) $('simFilial').value=r.data.filial;
-  };
+  montarSelectRotas();
   const pe=$('premEscopo');
   pe.innerHTML = '<option value="default">Defaults (por veículo/filial)</option>'+
     ST.rotas.map(r=>`<option value="${r.id}">${esc(r.data.nome||((r.data.origem||'')+' → '+(r.data.destino||'')))}</option>`).join('');
@@ -1804,13 +1844,24 @@ async function simular(){
         + `<tr class="tot"><td colspan="2">Total ida (×2 = ida-volta) · fonte: ${esc(rota.pedagioFonte==='base local'?'base local de praças':'HERE')}</td><td class="num">${brl(rota.pedagioIda)}</td></tr>`
       : '<tr><td colspan="3" class="empty">Sem pedágio: HERE não retornou tolls e nenhuma praça da base passou pela validação da rota — confira a Base de praças na aba Pedágio &amp; Rota.</td></tr>';
 
-    /* Conferência contra distância validada da rota cadastrada */
-    const rotaCad = ST.rotas.find(r=>r.id===$('simRota').value);
+    /* Conferência da distância: rota da SZY confere contra o km cadastrado no
+       Protheus; rota recorrente do Atlas, contra a distância validada. */
+    const selRota=$('simRota').value||'';
+    let distRef=null, fonteRef='';
+    if(selRota.startsWith('szy:')){
+      const rs=(window.SIM_ROTAS_SZY||[]).find(x=>('szy:'+x.id)===selRota);
+      if(rs && rs.kmIda>0){ distRef=rs.kmIda; fonteRef='SZY'; }
+    }else{
+      const rotaCad = ST.rotas.find(r=>r.id===selRota);
+      if(rotaCad && Number(rotaCad.data.dist_validada_km)>0){ distRef=Number(rotaCad.data.dist_validada_km); fonteRef='validada'; }
+    }
     let alertaDist='';
-    if(rotaCad && Number(rotaCad.data.dist_validada_km)>0){
-      const dv=Number(rotaCad.data.dist_validada_km);
-      const desvio=Math.abs(distIda-dv)/dv;
-      if(desvio>0.08){ alertaDist=` ⚠️ divergência de ${pct(desvio)} vs. distância validada (${num(dv,0)} km)`; toast('Distância da API diverge '+pct(desvio)+' da validada — investigar.','am'); }
+    if(distRef>0){
+      const desvio=Math.abs(distIda-distRef)/distRef;
+      if(desvio>0.08){
+        alertaDist=` ⚠️ divergência de ${pct(desvio)} vs. distância ${fonteRef} (${num(distRef,0)} km)`;
+        toast('Distância da API diverge '+pct(desvio)+' da distância '+fonteRef+' — investigar.','am');
+      }
     }
 
     /* Piso ANTT — sobre a distância de IDA (operação com carga); pedágio fora */
@@ -1820,7 +1871,12 @@ async function simular(){
       toast('A Tabela '+tabelaAntt+' não possui '+piso.eixosSolicitados+' eixos nesta categoria; aplicado o coeficiente de '+piso.eixos+' eixos conforme a regra ANTT.','am');
     }
 
-    const prem = premissasEfetivas($('simRota').value||null, filial, veic.id);
+    /* O id "szy:<linha>" é posicional — não serve como chave de auditoria nem
+       de premissa. Para rota da SZY grava-se a identidade (filial + código). */
+    const ehSZY = selRota.startsWith('szy:');
+    const rotaSZY = ehSZY ? (window.SIM_ROTAS_SZY||[]).find(x=>('szy:'+x.id)===selRota) : null;
+    const rotaIdPrem = ehSZY ? null : (selRota||null);
+    const prem = premissasEfetivas(rotaIdPrem, filial, veic.id);
     const dsl = dieselVigente(filial);
     /* tarifa é R$/TONELADA (E5 da planilha); receita por viagem = tarifa × ton (J5) */
     const tipoCarreta = /bitrem/i.test(veic.data.nome)?'Bitrem': /(^|\s)LS(\s|$)/i.test(veic.data.nome)?'LS':'Outro';
@@ -1855,7 +1911,11 @@ async function simular(){
       ts: agoraISO(), usuario: ATLAS_CURRENT_USER.email, usuario_nome: ATLAS_CURRENT_USER.nome||'',
       filial, cliente_id: $('simCliente').value||null,
       cliente_nome: (ST.clientes.find(c=>c.id===$('simCliente').value)||{data:{}}).data.nome||null,
-      rota_id: $('simRota').value||null, origem: gO.label, destino: gD.label, carga: $('simCarga').value,
+      rota_id: rotaIdPrem, origem: gO.label, destino: gD.label, carga: $('simCarga').value,
+      rota_fonte: ehSZY?'szy':(selRota?'atlas':'manual'),
+      rota_szy_filial: rotaSZY?(rotaSZY.op||null):null,
+      rota_szy_codigo: rotaSZY?(rotaSZY.codigoRaw||rotaSZY.codigo||null):null,
+      rota_szy_km_ida: rotaSZY&&rotaSZY.kmIda>0?rotaSZY.kmIda:null,
       veiculo_id: veic.id, veiculo_nome: veic.data.nome, eixos: veic.data.eixos, categoria_antt: categoriaAntt,
       dist_ida_km:+distIda.toFixed(2), dist_iv_km:+distIV.toFixed(2), pedagio_iv:+pedagioIV.toFixed(2),
       pracas: rota.pracas.map(p=>({n:p.nome,r:p.rodovia,v:p.valor})),
@@ -1983,7 +2043,10 @@ async function carregarHistRota(){
   if(!ST.sim) return;
   const sims=(ST.sims||[]).filter(s=>{
     const d=s.data;
-    return (ST.sim.rota_id && d.rota_id===ST.sim.rota_id) || (d.origem===ST.sim.origem && d.destino===ST.sim.destino);
+    if(ST.sim.rota_id && d.rota_id===ST.sim.rota_id) return true;
+    if(ST.sim.rota_szy_codigo && d.rota_szy_codigo===ST.sim.rota_szy_codigo
+       && d.rota_szy_filial===ST.sim.rota_szy_filial) return true;
+    return (d.origem===ST.sim.origem && d.destino===ST.sim.destino);
   }).slice(0,8);
   const tb=$('tbHistRota').querySelector('tbody');
   tb.innerHTML = sims.length? sims.map(s=>{
@@ -3262,22 +3325,28 @@ const RT = {
   rotas:[], orfaos:0, ctesUsados:0, ctesAmbiguos:0,
   periodo:{m:0,a:0}, periodosDisp:[],
   sort:{c:'receita',d:-1}, pag:1,
-  carregado:false, carregando:false, ts:0
+  carregado:false, carregando:false, ts:0,
+  szyOk:false, szyTs:0, _szyProm:null
 };
 
 /* ── Aliases de cabeçalho. A detecção usa _nk() (sem acento/pontuação, caixa
      alta), então basta listar a forma canônica de cada variação conhecida. ── */
+/* Os aliases de origem/destino são os MESMOS que o pd.html usa em enrichSZY()
+   (rowLoose + splitSZYTrecho). Aqui eles passam por _nk(), que remove acento e
+   pontuação — por isso "Desc.Reg.Orig" vira DESCREGORIG e
+   "Coleta -> Entrega (base do cálculo)" vira COLETAENTREGABASEDOCALCULO. */
 const RT_ALIAS_SZY = {
-  filial:      {req:1, lbl:'Filial / Operação',   a:['OPERACAO','FILIAL','UNIDADE','FIL','CODFILIAL']},
-  codigo:      {req:1, lbl:'Código da rota',      a:['CODIGO','CODROTA','CODIGOROTA','ROTA','COD']},
-  descricao:   {req:0, lbl:'Descrição da rota',   a:['DESCRICAO','DESCROTA','DESCRICAOROTA','NOME','NOMEROTA','DESC']},
-  kmIda:       {req:1, lbl:'Km ida',              a:['KMIDA','KMDEIDA','DISTANCIAIDA','KILOMETRAGEMIDA','KM','DISTANCIA']},
-  kmVolta:     {req:0, lbl:'Km volta',            a:['KMVOLTA','KMDEVOLTA','DISTANCIAVOLTA','KILOMETRAGEMVOLTA','KMRETORNO']},
-  codOrigem:   {req:1, lbl:'Código origem',       a:['CODREGORIG','CODREGORIGEM','CODORIGEM','CODIGOORIGEM','CODORIG','ORIGEM']},
-  codDestino:  {req:1, lbl:'Código destino',      a:['CODREGDEST','CODREGDESTINO','CODDESTINO','CODIGODESTINO','CODDEST','DESTINO']},
-  cidOrigem:   {req:0, lbl:'Cidade origem',       a:['CIDADEORIGEM','MUNICIPIOORIGEM','LOCALCOLETA','LOCALORIGEM','DESCORIGEM','CIDORIG']},
-  cidDestino:  {req:0, lbl:'Cidade destino',      a:['CIDADEDESTINO','MUNICIPIODESTINO','LOCALENTREG','LOCALENTREGA','LOCALDESTINO','DESCDESTINO','CIDDEST']},
-  ufOrigem:    {req:0, lbl:'UF origem',           a:['UFORIGEM','UFORIG','ESTADOORIGEM']},
+  filial:      {req:1, lbl:'Filial / Operação',   a:['OPERACAO','FILIAL','UNIDADE','FIL','CODFILIAL','FILIALDEIN','FILIALINCL','UFFILIAL']},
+  codigo:      {req:1, lbl:'Código da rota',      a:['CODIGO','CODROTA','CODROTA','CODIGOROTA','ROTA','COD']},
+  descricao:   {req:0, lbl:'Descrição da rota',   a:['DESCRICAO','DESCROTA','DESCRICAOROTA','NOMEROTA','ROTADESCRICAO','NOME','DESC']},
+  trecho:      {req:0, lbl:'Coleta → Entrega',    a:['COLETAENTREGABASEDOCALCULO','COLETAENTREGA','ORIGEMDESTINO','TRECHO','COLETAXENTREGA','PERCURSO']},
+  kmIda:       {req:1, lbl:'Km ida',              a:['KMIDA','KMDEIDA','DISTANCIAIDA','KILOMETRAGEMIDA','IDA','KM','DISTANCIA']},
+  kmVolta:     {req:0, lbl:'Km volta',            a:['KMVOLTA','KMDEVOLTA','DISTANCIAVOLTA','KILOMETRAGEMVOLTA','KMRETORNO','VOLTA']},
+  codOrigem:   {req:0, lbl:'Cód. região origem',  a:['CODREGORIG','CODREGORIGEM','CODIGOREGIAOORIGEM','CODORIGEM','CODIGOORIGEM','CODORIG','CODRORIG']},
+  codDestino:  {req:0, lbl:'Cód. região destino', a:['CODREGDEST','CODREGDESTINO','CODIGOREGIAODESTINO','CODDESTINO','CODIGODESTINO','CODDEST','CODRDEST']},
+  cidOrigem:   {req:0, lbl:'Origem (local/região)',  a:['LOCALCOLETA','DESCREGORIG','DESCREGORIGEM','DESCRICAOREGIAOORIGEM','REGIAOORIGEM','CIDADEORIGEM','MUNICIPIOORIGEM','LOCALORIGEM','DESCORIGEM','CIDORIG','ORIGEM']},
+  cidDestino:  {req:0, lbl:'Destino (local/região)', a:['LOCALENTREGA','LOCALENTREG','DESCREGDEST','DESCREGDESTINO','DESCRICAOREGIAODESTINO','REGIAODESTINO','CIDADEDESTINO','MUNICIPIODESTINO','LOCALDESTINO','DESCDESTINO','CIDDEST','DESTINO']},
+  ufOrigem:    {req:0, lbl:'UF origem',           a:['UFORIGEM','UFORIG','UFOR','ESTADOORIGEM']},
   ufDestino:   {req:0, lbl:'UF destino',          a:['UFDESTINO','UFDEST','ESTADODESTINO']},
   remetente:   {req:0, lbl:'Remetente',           a:['REMETENTE','NOMEREMETEN','NOMEREMETENTE','CLIENTE','NOMECLIENTE']},
   destinatario:{req:0, lbl:'Destinatário',        a:['DESTINATARIO','NOMEDESTINA','NOMEDESTINATARIO']},
@@ -3326,11 +3395,21 @@ function rtSigla(v){
   if(typeof v==='string' && _rtMemoSigla.size<500) _rtMemoSigla.set(v,out);
   return out;
 }
+/* Mesma regra do normOpKey() do pd.html, só que devolvendo a sigla.
+   A SZY traz a operação como "0117"/"0118"/"0003" — o corte anterior por
+   zeros à esquerda transformava "0117" em "117" e devolvia vazio, deixando a
+   coluna Filial em branco e furando o casamento com a SZB. */
 function _rtSiglaCalc(v){
-  const s=rtTxt(v).toUpperCase();
+  const s=rtTxt(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+  if(!s) return '';
   if(/^(SC|PR|SP)$/.test(s)) return s;
-  const c=s.replace(/\D/g,'').replace(/^0+/,'');
-  return c==='17'?'SC':c==='18'?'PR':c==='3'?'SP':'';
+  const compact=s.replace(/\s+/g,'');
+  if(compact==='0003' || /(^|\D)0?3($|\D)/.test(s) || /\bSP\b/.test(s) || /SAO PAULO/.test(s)) return 'SP';
+  if(compact==='0117' || /(^|\D)17($|\D)/.test(s) || /\bSC\b/.test(s) || /SANTA CATARINA/.test(s)) return 'SC';
+  if(compact==='0118' || /(^|\D)18($|\D)/.test(s) || /\bPR\b/.test(s) || /PARANA/.test(s)) return 'PR';
+  const d=s.replace(/\D/g,'');
+  if(d){ const n=parseInt(d,10); if(n===3) return 'SP'; if(n===17) return 'SC'; if(n===18) return 'PR'; }
+  return '';
 }
 /* Normaliza código eliminando padding e zeros à esquerda do Protheus. */
 function rtCod(v){ return rtTxt(v).toUpperCase().replace(/\s+/g,'').replace(/^0+(?=.)/,''); }
@@ -3385,6 +3464,32 @@ function rtGetN(row, mapa, campo){ const c=mapa[campo]; return c ? rtNum(row[c])
    viram "Pendente de validação" com o motivo — uma ambiguidade nunca
    transforma rota produtiva em improdutiva.
    ══════════════════════════════════════════════════════════════════ */
+/* ── Trecho "Coleta -> Entrega": réplica do splitSZYTrecho() do pd.html ──
+   A SZY do Protheus traz o par origem/destino numa coluna só, no formato
+   "Itajaí / SC -> Capinzal / SC". Quando existem colunas separadas elas têm
+   prioridade; esta função é o fallback que faz as duas telas (PD e Comercial)
+   mostrarem exatamente o mesmo trecho. */
+function rtSplitTrecho(raw){
+  const vazio={orig:'',dest:'',ufo:'',ufd:''};
+  const s=rtTxt(raw); if(!s) return vazio;
+  const partes=s.split(/\s*(?:->|→|–>|—>|=>)\s*/);
+  if(partes.length<2) return vazio;
+  const lado=(v)=>{
+    const t=rtTxt(v);
+    const m=t.match(/^(.*?)(?:\s*\/\s*([A-Za-z]{2}))?\s*$/);
+    return {local:rtTxt(m&&m[1]?m[1]:t), uf:(m&&m[2]?m[2]:'').toUpperCase()};
+  };
+  const a=lado(partes[0]), b=lado(partes.slice(1).join(' -> '));
+  return {orig:a.local, dest:b.local, ufo:a.uf, ufd:b.uf};
+}
+/* Extrai a UF de um texto livre ("CAPINZAL / SC", "SC") — espelha normUfKey(). */
+const RT_UFS=/(?:^|[\s\/\-,.])(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)(?:$|[\s\/\-,.])/;
+function rtUf(v){
+  const s=rtTxt(v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase();
+  if(!s) return '';
+  const m=(' '+s+' ').match(RT_UFS);
+  return m?m[1]:(s.length===2&&/^[A-Z]{2}$/.test(s)?s:'');
+}
 function rtChaveOD(cod, cidade, uf){
   const c=rtCod(cod);
   if(c) return c;
@@ -3406,15 +3511,39 @@ function rtProg(p){
 }
 function rtMeta(html){ const el=$('rtMeta'); if(el) el.innerHTML=html; }
 
+/* Lê o override de mapeamento salvo em comercial_config/rotas_mapa (uma vez). */
+async function rtLerOverride(){
+  if(RT._mapaLido) return;
+  RT._mapaLido=true;
+  try{ const doc=await fsGetDoc(COL.config,'rotas_mapa');
+    if(doc&&doc.data){ RT.override.szy=doc.data.szy||{}; RT.override.szb=doc.data.szb||{}; RT.overrideMeta={por:doc.data.salvo_por,em:doc.data.salvo_em}; }
+  }catch(_){}
+}
+
+/* Carga da SZY isolada: a aba Rotas e o seletor do Simulador compartilham a
+   MESMA leitura e o MESMO mapeamento de colunas — nunca duas verdades. */
+async function rtCarregarSZY(force, onProg){
+  if(RT.szyOk && !force && (Date.now()-RT.szyTs)<RT_CFG.ttlMs) return;
+  if(RT._szyProm && !force) return RT._szyProm;
+  RT._szyProm = (async ()=>{
+    const szy=await loadBaseCloud('szy',onProg);
+    RT.szy = (szy&&Array.isArray(szy.rows))?szy.rows:[];
+    RT.szyMeta = szy?{ts:szy.ts,file:szy.file,user:szy.user,count:szy.count}:null;
+    await rtLerOverride();
+    const dSZY=rtDetectar(RT.szy[0]||{}, RT_ALIAS_SZY, RT.override.szy);
+    RT.mapaSZY=dSZY.fin; RT.autoSZY=dSZY.auto; RT.colsSZY=dSZY.cols;
+    RT.szyOk=true; RT.szyTs=Date.now();
+  })();
+  try{ await RT._szyProm; } finally { RT._szyProm=null; }
+}
+
 async function rtCarregarBases(force){
   if(RT.carregando) return;
   if(RT.carregado && !force && (Date.now()-RT.ts)<RT_CFG.ttlMs) return;
   RT.carregando=true;
   try{
     rtMeta('<span>Carregando SZY…</span>'); rtProg(4);
-    const szy=await loadBaseCloud('szy',(f,t)=>rtProg(4+ (t?36*f/t:0)));
-    RT.szy = (szy&&Array.isArray(szy.rows))?szy.rows:[];
-    RT.szyMeta = szy?{ts:szy.ts,file:szy.file,user:szy.user,count:szy.count}:null;
+    await rtCarregarSZY(force,(f,t)=>rtProg(4+ (t?36*f/t:0)));
 
     rtMeta('<span>Carregando faturamento (SZB)…</span>'); rtProg(42);
     const szb=await loadBaseCloud('szb',(f,t)=>rtProg(42+ (t?52*f/t:0)));
@@ -3422,16 +3551,8 @@ async function rtCarregarBases(force){
     RT.szbMeta = szb?{ts:szb.ts,file:szb.file,user:szb.user,count:szb.count}:null;
 
     rtProg(96);
-    /* mapeamento salvo (opcional) */
-    if(!RT._mapaLido){
-      RT._mapaLido=true;
-      try{ const doc=await fsGetDoc(COL.config,'rotas_mapa');
-        if(doc&&doc.data){ RT.override.szy=doc.data.szy||{}; RT.override.szb=doc.data.szb||{}; RT.overrideMeta={por:doc.data.salvo_por,em:doc.data.salvo_em}; }
-      }catch(_){}
-    }
-    const dSZY=rtDetectar(RT.szy[0]||{}, RT_ALIAS_SZY, RT.override.szy);
+    await rtLerOverride();
     const dSZB=rtDetectar(RT.szb[0]||{}, RT_ALIAS_SZB, RT.override.szb);
-    RT.mapaSZY=dSZY.fin; RT.autoSZY=dSZY.auto; RT.colsSZY=dSZY.cols;
     RT.mapaSZB=dSZB.fin; RT.autoSZB=dSZB.auto; RT.colsSZB=dSZB.cols;
 
     _rtMemoData.clear(); _rtMemoSigla.clear();
@@ -3469,11 +3590,18 @@ function rtIndexarPeriodos(){
 /* ══════════════════════════════════════════════════════════════════
    MOTOR — monta as rotas da SZY e cruza com o faturamento do período
    ══════════════════════════════════════════════════════════════════ */
-function rtMontar(){
-  const mY=RT.mapaSZY, mB=RT.mapaSZB;
-  const per=String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0');
-
-  /* ── 1) inventário da SZY ── */
+/* ══════════════════════════════════════════════════════════════════
+   INVENTÁRIO DA SZY — origem/destino resolvidos como no pd.html
+   ──────────────────────────────────────────────────────────────────
+   Precedência (idêntica a enrichSZY() do pd):
+     1) coluna de local/região própria  (Local Coleta, Desc.Reg.Orig, Cidade…)
+     2) coluna de trecho "Coleta -> Entrega", quebrada na seta
+     3) código da região, como último recurso
+   A UF sai da coluna dedicada, do sufixo "/UF" do trecho ou do próprio texto.
+   Usado pela tabela da aba Rotas E pelo seletor do Simulador.
+   ══════════════════════════════════════════════════════════════════ */
+function rtInventarioSZY(){
+  const mY=RT.mapaSZY;
   const rotas=[], iK1=new Map(), iK2=new Map(), iK3=new Map();
   for(let i=0;i<RT.szy.length;i++){
     const r=RT.szy[i];
@@ -3481,15 +3609,21 @@ function rtMontar(){
     const codigo=rtGet(r,mY,'codigo');
     if(!codigo && !op) continue;
     const kmIda=rtGetN(r,mY,'kmIda'), kmVolta=rtGetN(r,mY,'kmVolta');
-    const o=rtChaveOD(rtGet(r,mY,'codOrigem'), rtGet(r,mY,'cidOrigem'), rtGet(r,mY,'ufOrigem'));
-    const d=rtChaveOD(rtGet(r,mY,'codDestino'),rtGet(r,mY,'cidDestino'),rtGet(r,mY,'ufDestino'));
+
+    const tr=rtSplitTrecho(rtGet(r,mY,'trecho'));
+    const cO=rtGet(r,mY,'codOrigem'), cD=rtGet(r,mY,'codDestino');
+    const origem  = rtGet(r,mY,'cidOrigem')  || tr.orig || cO || '—';
+    const destino = rtGet(r,mY,'cidDestino') || tr.dest || cD || '—';
+    const ufO = (rtGet(r,mY,'ufOrigem')  || tr.ufo || rtUf(origem)  || '').toUpperCase();
+    const ufD = (rtGet(r,mY,'ufDestino') || tr.ufd || rtUf(destino) || '').toUpperCase();
+
+    const o=rtChaveOD(cO, origem, ufO);
+    const d=rtChaveOD(cD, destino, ufD);
     const k=rtChaves(op,codigo,o,d,kmIda);
     const it={
       i, op, codigo:rtCod(codigo), codigoRaw:codigo,
       descricao:rtGet(r,mY,'descricao'),
-      origem: rtGet(r,mY,'cidOrigem')||rtGet(r,mY,'codOrigem')||'—',
-      destino:rtGet(r,mY,'cidDestino')||rtGet(r,mY,'codDestino')||'—',
-      ufO:rtGet(r,mY,'ufOrigem'), ufD:rtGet(r,mY,'ufDestino'),
+      origem, destino, ufO, ufD,
       remetente:rtGet(r,mY,'remetente'), destinatario:rtGet(r,mY,'destinatario'),
       kmIda, kmVolta, kmTotal:kmIda+kmVolta,
       revisto:rtGet(r,mY,'revisto'),
@@ -3505,6 +3639,15 @@ function rtMontar(){
     const bal=(mp,kk)=>{ let v=mp.get(kk); if(!v){ v=[]; mp.set(kk,v); } v.push(it); };
     bal(iK1,k.k1); bal(iK2,k.k2); bal(iK3,k.k3);
   }
+  return {rotas, iK1, iK2, iK3};
+}
+
+function rtMontar(){
+  const mB=RT.mapaSZB;
+  const per=String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0');
+
+  /* ── 1) inventário da SZY ── */
+  const {rotas, iK1, iK2, iK3} = rtInventarioSZY();
 
   /* ── 2) faturamento do período, roteado pela Operacao ── */
   let orfaos=0, usados=0, ambiguos=0;
@@ -3905,9 +4048,59 @@ async function rtInit(force){
   if(!RT.carregado || force){
     await rtCarregarBases(force);
     rtRenderMapa();
+    simSincronizarRotasSZY();   /* o seletor do Simulador acompanha a recarga */
   }
   rtAtualizar();
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   ROTAS DA SZY NO SIMULADOR
+   ──────────────────────────────────────────────────────────────────
+   O seletor "Rota cadastrada" listava só comercial_rotas (as rotas
+   recorrentes digitadas à mão) — na prática, vazio. Passa a ser alimentado
+   pelo MESMO inventário da SZY da aba Rotas, exibindo filial · nº da rota ·
+   origem → destino. A distância entra junto porque o número da rota NÃO é
+   único entre filiais (mesma pegadinha já tratada no pd.html).
+   ══════════════════════════════════════════════════════════════════ */
+window.SIM_ROTAS_SZY = [];
+window.SIM_ROTAS_SZY_ST = 'idle';   /* idle | carregando | ok | erro */
+
+/* Reconstrói a lista a partir do que já está em memória (sem nova leitura). */
+function simSincronizarRotasSZY(){
+  if(!RT.szyOk) return;
+  const vistas=new Set(), out=[];
+  for(const r of rtInventarioSZY().rotas){
+    if(!r.op && !r.codigo) continue;
+    const ch=r.op+'|'+r.codigo+'|'+_nk(r.origem)+'|'+_nk(r.destino)+'|'+Math.round(r.kmIda||0);
+    if(vistas.has(ch)) continue;
+    vistas.add(ch);
+    out.push({ id:String(r.i), op:r.op, codigo:r.codigo, codigoRaw:r.codigoRaw,
+               origem:r.origem, destino:r.destino, ufO:r.ufO, ufD:r.ufD,
+               kmIda:r.kmIda, kmVolta:r.kmVolta, descricao:r.descricao });
+  }
+  out.sort((a,b)=> String(a.op||'zz').localeCompare(String(b.op||'zz'),'pt-BR')
+                || String(a.codigoRaw||'').localeCompare(String(b.codigoRaw||''),'pt-BR','numeric')
+                || String(a.origem||'').localeCompare(String(b.origem||''),'pt-BR'));
+  window.SIM_ROTAS_SZY = out;
+  window.SIM_ROTAS_SZY_ST = 'ok';
+  if(typeof montarSelects==='function'){ try{ montarSelects(); }catch(_){} }
+}
+
+/* Carga em segundo plano no boot — não trava o Simulador. */
+async function simCarregarRotasSZY(force){
+  if(window.SIM_ROTAS_SZY_ST==='carregando' && !force) return;
+  window.SIM_ROTAS_SZY_ST='carregando';
+  if(typeof montarSelects==='function'){ try{ montarSelects(); }catch(_){} }
+  try{
+    await rtCarregarSZY(force);
+    simSincronizarRotasSZY();
+  }catch(e){
+    window.SIM_ROTAS_SZY_ST='erro';
+    console.warn('[Comercial] rotas da SZY para o Simulador:', e&&e.message);
+    if(typeof montarSelects==='function'){ try{ montarSelects(); }catch(_){} }
+  }
+}
+try{ window.simCarregarRotasSZY=simCarregarRotasSZY; window.simSincronizarRotasSZY=simSincronizarRotasSZY; }catch(_){}
 
 /* Handle de diagnóstico — mesmo padrão de window.__ATLAS_MODULE__ / window._simMap.
    Permite inspecionar o estado da aba pelo console sem expor nada gravável. */
