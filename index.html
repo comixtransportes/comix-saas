@@ -7,10 +7,27 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 <title>COMIX Atlas</title>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<!-- [PERF][INDEX] SheetJS e JSZip só são usados no fluxo Download Base (parse de XLSM/ZIP).
-     defer remove ~700KB do caminho crítico de boot sem alterar nenhuma funcionalidade. -->
-<script defer src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- [PERF][INDEX] Bibliotecas de planilha são carregadas somente quando o usuário
+     seleciona um arquivo em Download Base. Assim elas não ocupam memória no boot. -->
+<script>
+(function(){
+  const jobs = Object.create(null);
+  function loadOnce(src, ready){
+    if(ready()) return Promise.resolve();
+    if(jobs[src]) return jobs[src];
+    jobs[src] = new Promise((resolve,reject)=>{
+      const s=document.createElement('script');
+      s.src=src; s.async=true;
+      s.onload=()=> ready() ? resolve() : reject(new Error('Biblioteca carregada sem expor a API esperada.'));
+      s.onerror=()=>reject(new Error('Falha ao carregar '+src));
+      document.head.appendChild(s);
+    }).catch(e=>{ delete jobs[src]; throw e; });
+    return jobs[src];
+  }
+  window.atlasEnsureXLSX=()=>loadOnce('https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js',()=>typeof window.XLSX!=='undefined');
+  window.atlasEnsureJSZip=()=>loadOnce('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',()=>typeof window.JSZip!=='undefined');
+})();
+</script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
@@ -862,12 +879,41 @@ async function doForgot() {
   try { await auth.sendPasswordResetEmail(email); document.getElementById('lc-ok').classList.add('on'); }
   catch(e) { loginErr('Não foi possível enviar o e-mail.'); }
 }
-async function doLogout() { Object.values(pollers).forEach(clearInterval); await auth.signOut(); }
+async function doLogout() { Object.values(pollers).forEach(clearInterval); Object.keys(__atlasWatchUnsubs||{}).forEach(k=>{try{__atlasWatchUnsubs[k]();}catch(_){} delete __atlasWatchUnsubs[k];}); await auth.signOut(); }
 function loginErr(msg) { const el=document.getElementById('lc-err'); el.textContent=msg; el.classList.add('on'); }
 document.getElementById('lc-senha').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 document.getElementById('lc-email').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('lc-senha').focus();});
 
 /* ══ NAVEGAÇÃO ══ */
+/* Controle de ciclo de vida dos iframes. No desktop, apenas dashboards pesados
+   e reconstruíveis entram no LRU; telas transacionais/formulários permanecem
+   intactas para não perder estado de edição. */
+const ATLAS_DESKTOP_EVICTABLE = new Set(['inicio','pd-diario','frota','painel']);
+function atlasManageFrameMemory(viewId){
+  window.__atlasMru = window.__atlasMru || [];
+  window.__atlasMru = window.__atlasMru.filter(x=>x!==viewId);
+  window.__atlasMru.unshift(viewId);
+  let keepN=window.ATLAS_IS_MOBILE ? 2 : 2;
+  try{
+    if(window.ATLAS_IS_MOBILE && /iPhone|iPad|iPod/i.test(navigator.userAgent)) keepN=1;
+    if(window.ATLAS_IS_MOBILE && navigator.deviceMemory && navigator.deviceMemory<=3) keepN=1;
+    if(Number.isFinite(Number(window.ATLAS_FRAME_KEEP))) keepN=Math.max(1,Number(window.ATLAS_FRAME_KEEP));
+  }catch(_){}
+  const candidates=window.ATLAS_IS_MOBILE
+    ? window.__atlasMru.slice()
+    : window.__atlasMru.filter(id=>ATLAS_DESKTOP_EVICTABLE.has(id));
+  const keep=new Set(candidates.slice(0,keepN));
+  keep.add(viewId);
+  Object.keys(VIEWS).forEach(other=>{
+    if(keep.has(other) || frFlags[other]!=='done') return;
+    if(!window.ATLAS_IS_MOBILE && !ATLAS_DESKTOP_EVICTABLE.has(other)) return;
+    const fr=document.getElementById('fr-'+other);
+    if(fr && fr.src && fr.src!=='about:blank'){
+      fr.removeAttribute('src'); fr.src='about:blank'; frFlags[other]=null;
+    }
+  });
+  window.__atlasMru=window.__atlasMru.filter(id=>keep.has(id) || (!window.ATLAS_IS_MOBILE && !ATLAS_DESKTOP_EVICTABLE.has(id)));
+}
 function go(viewId, el) {
   const v = VIEWS[viewId];
   if (!v) return;
@@ -892,40 +938,7 @@ function go(viewId, el) {
 
   if (!v.src) return;
 
-  /* [PERF][MOBILE] LRU adaptativo — descarrega os outros módulos ANTES de
-     carregar o novo. No fluxo anterior o descarregamento acontecia DEPOIS
-     (via requestAnimationFrame), então o módulo novo começava a carregar com
-     os antigos ainda vivos na memória; era exatamente nesse PICO que o Safari
-     do iPhone matava a página ("Um problema ocorreu repetidamente").
-     • iPhone/iPad (Safari, limite de memória agressivo): keep-1 — só o módulo
-       atual permanece vivo, igual ao comportamento original.
-     • Android / aparelhos com mais memória: keep-2 — atual + último visitado,
-       para a volta ao menu anterior ser instantânea.
-     Ajuste fino: window.ATLAS_MOBILE_KEEP = 1 ou 2 força o valor. */
-  if (window.ATLAS_IS_MOBILE) {
-    if (!window.__atlasMru) window.__atlasMru = [];
-    window.__atlasMru = window.__atlasMru.filter(x => x !== viewId);
-    window.__atlasMru.unshift(viewId);
-    let keepN = 2;
-    try {
-      if (window.ATLAS_MOBILE_KEEP === 1 || window.ATLAS_MOBILE_KEEP === 2) keepN = window.ATLAS_MOBILE_KEEP;
-      else if (/iPhone|iPad|iPod/i.test(navigator.userAgent)) keepN = 1;
-      else if (navigator.deviceMemory && navigator.deviceMemory <= 3) keepN = 1;
-    } catch(_) {}
-    const keep = new Set(window.__atlasMru.slice(0, keepN));
-    keep.add(viewId);
-    Object.keys(VIEWS).forEach(other => {
-      if (keep.has(other)) return;
-      if (frFlags[other] !== 'done') return;
-      const ofr = document.getElementById('fr-'+other);
-      if (ofr && ofr.src) {
-        ofr.removeAttribute('src');
-        ofr.src = 'about:blank';
-        frFlags[other] = null; // força recarga limpa no próximo acesso
-      }
-    });
-    window.__atlasMru = window.__atlasMru.filter(x => keep.has(x));
-  }
+  atlasManageFrameMemory(viewId);
 
   /* Carrega iframe na primeira vez */
   if (!frFlags[viewId]) {
@@ -1066,6 +1079,37 @@ document.addEventListener('keydown',e=>{
 /* ══ DOWNLOAD BASE ══ */
 window.ATLAS_DATA={};
 
+/* Referência direta entre iframes do mesmo domínio. Evita structured-clone de
+   bases grandes pelo postMessage (que duplicava centenas de MB temporariamente).
+   O fallback por postMessage continua disponível para qualquer cenário externo. */
+const __atlasScopedRefCache = new Map();
+function atlasGetDataReference(table){
+  const id=String(table||'').toLowerCase();
+  const payload=window.ATLAS_DATA && window.ATLAS_DATA[id];
+  if(!payload || !Array.isArray(payload.rows) || !payload.rows.length) return null;
+  const ctx=atlasPermissionContext();
+  let rows=payload.rows;
+  if(id==='szb' || id==='szc') {
+    const ops=atlasPDAllowedOps();
+    if(Array.isArray(ops)) {
+      const scopeKey=ops.slice().sort().join(',');
+      const key=id+'|'+String(payload.ts||'')+'|'+scopeKey;
+      for(const k of __atlasScopedRefCache.keys()) if(k.startsWith(id+'|') && k!==key) __atlasScopedRefCache.delete(k);
+      if(__atlasScopedRefCache.has(key)) rows=__atlasScopedRefCache.get(key);
+      else {
+        const allowed=new Set(ops);
+        rows=payload.rows.filter(r=>allowed.has(atlasRowPDOp(r)));
+        __atlasScopedRefCache.set(key,rows);
+      }
+    }
+  }
+  return {
+    rows, file:payload.file||'', ts:payload.ts||'', count:rows.length,
+    user:payload.user||'', scope:ctx, __atlasSharedRef:true
+  };
+}
+window.atlasGetDataReference=atlasGetDataReference;
+
 /* ── Detecção de ambiente mobile ──────────────────────────────────────────
    No desktop há RAM de sobra para manter todas as bases em window.ATLAS_DATA.
    No mobile (Safari/Chrome iOS/Android) o teto de memória por aba é baixo
@@ -1083,7 +1127,8 @@ window.ATLAS_IS_MOBILE = (function(){
 /* Bases que o iframe Início/Frota/PD realmente precisam para a 1ª pintura.
    No mobile pré-carregamos SOMENTE estas; as demais (financeiro, agregados…)
    são carregadas sob demanda quando o usuário abre o respectivo menu. */
-window.ATLAS_MOBILE_PRELOAD = new Set(['szb']);
+window.ATLAS_INITIAL_PRELOAD = new Set(['szb']);
+window.ATLAS_MOBILE_PRELOAD = window.ATLAS_INITIAL_PRELOAD; // alias legado
 
 const ATLAS_DB_NAME='COMIX_ATLAS_BASES';
 const ATLAS_DB_STORE='bases';
@@ -1747,14 +1792,14 @@ async function atlasLoadBaseFromFirestore(id){
     // Lê chunks em LOTES paralelos. Tudo de uma vez estourava a memória no
     // mobile; um a um travava por lentidão. Lote pequeno (mobile) equilibra.
     const rows = [];
-    const __batch = window.ATLAS_IS_MOBILE ? 5 : 25;
+    const __batch = window.ATLAS_IS_MOBILE ? 5 : 12;
     for(let start=0; start<n; start+=__batch){
       const end = Math.min(start+__batch, n);
       const reqs = [];
       for(let i=start; i<end; i++) reqs.push(docRef.collection('chunks').doc(String(i)).get());
       const snaps = await Promise.all(reqs);
       for(const s of snaps){
-        if(s.exists){ const r = s.data().rows; if(Array.isArray(r)) rows.push(...r); }
+        if(s.exists){ const r=s.data().rows; if(Array.isArray(r)) for(let j=0;j<r.length;j++) rows.push(r[j]); }
       }
     }
     if(!rows.length) return null;
@@ -1784,7 +1829,13 @@ async function atlasLoadSZBFromFirestore(){
 const __atlasBaseInflight = {};
 function atlasLoadBaseFromFirestoreShared(id){
   if(__atlasBaseInflight[id]) return __atlasBaseInflight[id];
-  const job = atlasLoadBaseFromFirestore(id);
+  const job = atlasLoadBaseFromFirestore(id).then(payload=>{
+    if(payload && Array.isArray(payload.rows) && payload.rows.length){
+      window.ATLAS_DATA[id]=payload;
+      try{ atlasWatchBase(id); }catch(_){}
+    }
+    return payload;
+  });
   __atlasBaseInflight[id] = job;
   job.then(()=>{}, ()=>{}).then(()=>{ if(__atlasBaseInflight[id]===job) delete __atlasBaseInflight[id]; });
   return job;
@@ -1837,7 +1888,7 @@ const __atlasWatchLastTs = {};
 function atlasWatchBase(id){
   if(!db || !curUser) return;
   if(!ATLAS_CLOUD_BASES.has(id)) return;
-  if(__atlasWatchUnsubs[id]) { try{__atlasWatchUnsubs[id]();}catch(_){} delete __atlasWatchUnsubs[id]; }
+  if(__atlasWatchUnsubs[id]) return;
   let firstSnapshot = true;
   const docRef = atlasCloudDocRef(id);
   __atlasWatchUnsubs[id] = docRef.onSnapshot(async snap=>{
@@ -1882,12 +1933,8 @@ function atlasWatchBase(id){
 /* Ativa watchers para todas as bases que devem ser sincronizadas. */
 function atlasWatchAllBases(){
   ATLAS_CLOUD_BASES.forEach(id => {
-    /* MOBILE: só observamos em tempo real as bases essenciais (as mesmas do
-       preload). Manter 10 listeners onSnapshot vivos no celular consome memória
-       e conexões persistentes sem necessidade — as bases não-essenciais são
-       carregadas sob demanda e não precisam de auto-sync no mobile. No desktop,
-       todas continuam observadas. */
-    if(window.ATLAS_IS_MOBILE && !window.ATLAS_MOBILE_PRELOAD.has(id)) return;
+    const mem=window.ATLAS_DATA && window.ATLAS_DATA[id];
+    if(!window.ATLAS_INITIAL_PRELOAD.has(id) && !(mem && Array.isArray(mem.rows) && mem.rows.length)) return;
     atlasWatchBase(id);
   });
 }
@@ -1962,14 +2009,13 @@ async function atlasPreloadAllBases(){
      (financeiro, agregados, szy, szc…) NÃO entram na memória agora — são carregadas
      sob demanda quando o usuário abre o menu correspondente (o handler de
      ATLAS_REQUEST_DATA já faz esse load da nuvem). No desktop, carrega tudo. */
-  let ids = [...ATLAS_CLOUD_BASES].filter(id =>
-    !(window.ATLAS_IS_MOBILE && !window.ATLAS_MOBILE_PRELOAD.has(id)));
+  let ids = [...window.ATLAS_INITIAL_PRELOAD].filter(id => ATLAS_CLOUD_BASES.has(id));
   // SZB primeiro: é a base da PD Diário (prioridade máxima do sistema).
   ids.sort((a,b)=> (a==='szb'? -1 : 0) - (b==='szb'? -1 : 0));
 
   // Pool de concorrência limitada — substitui o laço serial (uma base esperava a
   // outra). Desktop: 4 simultâneas; mobile: 1 (teto de memória da aba).
-  const LIMIT = window.ATLAS_IS_MOBILE ? 1 : 4;
+  const LIMIT = 1;
   let i = 0;
   async function worker(){
     while(i < ids.length){
@@ -2028,12 +2074,12 @@ async function atlasLoadBase(id){
   });
 }
 function atlasBroadcast(id,payload){
-  const scopedPayload = atlasScopePayloadForCurrentUser(id, payload);
+  const scopedRef = atlasGetDataReference(id);
   const ctx = atlasPermissionContext();
   const msg={
     type:'ATLAS_DATA_READY',
     table:id,
-    count:scopedPayload && scopedPayload.count !== undefined ? scopedPayload.count : payload.count,
+    count:scopedRef ? scopedRef.count : payload.count,
     ts:payload.ts,
     scope:ctx
   };
@@ -2111,6 +2157,7 @@ window.addEventListener('message',async ev=>{
   }
 
   if(payload&&ev.source){
+    try{ atlasWatchBase(id); }catch(_){}
     try{
       ev.source.postMessage({
         type:'ATLAS_DATA_RESPONSE',
@@ -2206,6 +2253,7 @@ function dbColIndex(ref){
   let n=0; for(const ch of m[0].toUpperCase()){n=n*26+(ch.charCodeAt(0)-64);} return n-1;
 }
 async function dbXmlFallbackRows(buf,id){
+  await window.atlasEnsureJSZip();
   if(typeof JSZip==='undefined') throw new Error('Leitor compatível não disponível: JSZip não carregou.');
   dbLog(`⚠ ${id.toUpperCase()} retornou 0 linhas no SheetJS. Acionando leitor XML compatível por partes...`,'info');
   dbPct(id,82);
@@ -2315,6 +2363,7 @@ async function dbXmlFallbackRows(buf,id){
   return rows;
 }
 async function dbReadRows(file,id,buf,perf){
+  await window.atlasEnsureXLSX();
   perf = perf || {};
   const tParse0 = performance.now();
   let raw=[];
@@ -3520,13 +3569,9 @@ function atlasScopePayloadForCurrentUser(table, payload) {
   if (!payload || !Array.isArray(payload.rows)) return payload;
   const id = String(table || '').toLowerCase();
   if (id !== 'szb' && id !== 'szc') return payload;
-  const rows = atlasScopeRowsForCurrentUser(id, payload.rows);
-  return {
-    ...payload,
-    rows,
-    count: rows.length,
-    scope: atlasPermissionContext()
-  };
+  const ref = atlasGetDataReference(id);
+  const rows = ref ? ref.rows : atlasScopeRowsForCurrentUser(id, payload.rows);
+  return { ...payload, rows, count:rows.length, scope:atlasPermissionContext() };
 }
 function atlasRefreshScopesInOpenFrames() {
   Object.values(FRAME_MAP || {}).forEach(fid => sendTabPermsToFrame(fid));
@@ -3721,7 +3766,11 @@ window.addEventListener('message', async function(ev) {
             if ((amostra / n) * docs.length > 3000000) cachear = false;
           } catch(_) {}
         }
-        if (cachear) __atlasBridgeCache[key] = { ts: Date.now(), docs };
+        if (cachear) {
+          __atlasBridgeCache[key] = { ts: Date.now(), docs };
+          const keys=Object.keys(__atlasBridgeCache);
+          if(keys.length>24) keys.sort((a,b)=>__atlasBridgeCache[a].ts-__atlasBridgeCache[b].ts).slice(0,keys.length-24).forEach(k=>delete __atlasBridgeCache[k]);
+        }
         return docs;
       })();
       __atlasBridgeInflight[key] = job;
