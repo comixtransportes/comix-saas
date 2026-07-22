@@ -14,15 +14,25 @@
 <title>COMIX — PD Diário</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
-<!-- [PERF][PD] JSZip só é usado no parseXLSM (upload local de arquivo). Dentro do
-     Atlas os dados chegam pelo bridge do parent, então o JSZip nunca é necessário
-     no boot. defer remove ~95KB do caminho crítico sem alterar funcionalidade. -->
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<!-- Firebase para leitura do SZB no Firestore (mesma config do Atlas).
-     No iframe, reusa a instância do parent. Standalone, inicializa aqui. -->
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<!-- [PERF][PD] Reutiliza o Firebase do portal no iframe e carrega JSZip só no
+     upload manual. O modo standalone conserva exatamente as mesmas bibliotecas. -->
+<script>
+(function(){
+  try{ if(window.self!==window.top && window.parent && window.parent.firebase){ window.firebase=window.parent.firebase; } }catch(_){}
+  if(typeof window.firebase==='undefined'){
+    document.write('<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"><\/script>');
+    document.write('<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"><\/script>');
+    document.write('<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"><\/script>');
+  }
+  let zipJob=null;
+  window.atlasEnsurePDJSZip=function(){
+    if(typeof window.JSZip!=='undefined') return Promise.resolve();
+    if(zipJob) return zipJob;
+    zipJob=new Promise((resolve,reject)=>{ const s=document.createElement('script'); s.src='https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'; s.async=true; s.onload=resolve; s.onerror=()=>reject(new Error('Falha ao carregar JSZip')); document.head.appendChild(s); }).catch(e=>{zipJob=null;throw e;});
+    return zipJob;
+  };
+})();
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
 :root{
@@ -2931,6 +2941,7 @@ async function loadF(file){
 
 // ── Parser XLSM/XLSX (OOXML) ──
 async function parseXLSM(file){
+  await window.atlasEnsurePDJSZip();
   const buf=await file.arrayBuffer();
   const zip=await JSZip.loadAsync(buf);
 
@@ -5596,11 +5607,14 @@ function normalizeAtlasSZCRows(rows) {
   return rows;
 }
 
-function atlasParentSZC() {
-  // Segurança funcional: dentro do Atlas o PD não lê mais window.parent.ATLAS_DATA diretamente.
-  // Ele solicita a base ao portal e recebe o payload já limitado pela filial ativa do perfil.
+function atlasParentDataRef(table){
+  try{
+    if(window.parent && window.parent!==window && typeof window.parent.atlasGetDataReference==='function')
+      return window.parent.atlasGetDataReference(table);
+  }catch(_){}
   return null;
 }
+function atlasParentSZC() { return atlasParentDataRef('szc'); }
 
 function applyAtlasSZC(parentData, origem) {
   if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
@@ -5611,7 +5625,7 @@ function applyAtlasSZC(parentData, origem) {
     console.log('[PERF][PD] SZC ignorado antes da normalização (versão já aplicada)');
     return true;
   }
-  var rows = normalizeAtlasSZCRows(parentData.rows);
+  var rows = normalizeAtlasSZCRows(parentData.__atlasSharedRef ? parentData.rows.slice() : parentData.rows);
   rows = atlasFilterRowsForScope(rows, 'szc');
   if (!rows.length) return false;
   // [PERF][PD] Idempotência: a SZC pode chegar do parent E do Firestore (corrida).
@@ -5639,6 +5653,8 @@ function tryAtlasSZC() {
 
 function requestAtlasSZC(force) {
   try {
+    var direct=atlasParentDataRef('szc');
+    if(direct && applyAtlasSZC(direct, 'Referência compartilhada SZC')) return;
     if (window.parent && window.parent !== window) {
       if (!force) {
         if (typeof RAW_SZC !== 'undefined' && RAW_SZC && RAW_SZC.length) return; // já temos
@@ -5658,7 +5674,7 @@ function applyAtlasSZY(parentData, origem) {
     console.log('[PERF][PD] SZY ignorado antes da normalização (versão já aplicada)');
     return true;
   }
-  var rows = normalizeAtlasSZYRows(parentData.rows);
+  var rows = normalizeAtlasSZYRows(parentData.__atlasSharedRef ? parentData.rows.slice() : parentData.rows);
   if (!rows.length) return false;
   // [PERF][PD] Idempotência: a SZY pode chegar do parent E do Firestore (corrida).
   var __sig = (parentData.ts || '') + '|' + rows.length;
@@ -5676,9 +5692,11 @@ function applyAtlasSZY(parentData, origem) {
   }
   return true;
 }
-function tryAtlasSZY() { return false; }
+function tryAtlasSZY() { try{return applyAtlasSZY(atlasParentDataRef('szy'),'Download Base SZY');}catch(_){return false;} }
 function requestAtlasSZY(force) {
   try {
+    var direct=atlasParentDataRef('szy');
+    if(direct && applyAtlasSZY(direct, 'Referência compartilhada SZY')) return;
     if (window.parent && window.parent !== window) {
       if (!force) {
         if (typeof RAW_SZY !== 'undefined' && RAW_SZY && RAW_SZY.length) return; // já temos
@@ -5689,11 +5707,7 @@ function requestAtlasSZY(force) {
   } catch(e) {}
 }
 
-function atlasParentSZB() {
-  // Segurança funcional: dentro do Atlas o PD não lê mais window.parent.ATLAS_DATA diretamente.
-  // Ele solicita a base ao portal e recebe o payload já limitado pela filial ativa do perfil.
-  return null;
-}
+function atlasParentSZB() { return atlasParentDataRef('szb'); }
 
 function setPDTimestamp(isoString){
   var el=document.getElementById('h-ts-v');
@@ -5729,7 +5743,7 @@ function applyAtlasSZB(parentData, origem) {
     try { parentData.rows = null; } catch(_) {}
     return true;
   }
-  var rows = normalizeAtlasSZBRows(parentData.rows);
+  var rows = normalizeAtlasSZBRows(parentData.__atlasSharedRef ? parentData.rows.slice() : parentData.rows);
   rows = atlasFilterRowsForScope(rows, 'szb');
   if (!rows.length) return false;
 
@@ -5814,6 +5828,8 @@ function tryAtlasSZB() {
 
 function requestAtlasSZB(force) {
   try {
+    var direct=atlasParentDataRef('szb');
+    if(direct && applyAtlasSZB(direct, 'Referência compartilhada SZB')) return;
     if (window.parent && window.parent !== window) {
       if (!force) {
         // [FIX][PD][v2] Já carregado ⇒ pedidos "cegos" dos timers de boot são
@@ -5920,6 +5936,7 @@ window.addEventListener('message', function(event) {
 // este navegador recebe o update e recarrega o dashboard sem refresh manual.
 // ═══════════════════════════════════════════════════════
 (function watchSZBChanges() {
+  try{ if(window.self!==window.top) return; }catch(_){}
   /* MOBILE: o portal (index.html) já mantém o auto-sync da SZB e re-broadcasta
      para os iframes. Manter AQUI um segundo onSnapshot que, ao disparar, recarrega
      a SZB inteira (loadSZBFromFirestore) e refaz o dashboard (applyAtlasSZB →
