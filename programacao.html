@@ -657,6 +657,26 @@ function norm(v){ return String(v==null?'':v).normalize('NFD').replace(/[\u0300-
 function num(v,d=0){ const n=Number(v); return Number.isFinite(n)?n.toFixed(d):'—'; }
 function normalizeEmail(e){ return String(e||'').trim().toLowerCase(); }
 
+/* Traduz o erro do Firestore em algo acionável. O caso mais comum em módulo
+   novo é permission-denied: a coleção ainda não foi liberada nas regras. */
+function erroFirestore(e,colecao){
+  const cod=String((e&&e.code)||'');
+  const msg=String((e&&e.message)||e||'');
+  if(cod.includes('permission-denied')||/permission|insufficient/i.test(msg))
+    return 'Sem permissão para gravar em "'+colecao+'". Libere a coleção nas regras do Firestore.';
+  if(cod.includes('unavailable')||/offline|network/i.test(msg))
+    return 'Sem conexão com o Firestore. Tente novamente.';
+  if(/invalid|undefined|Unsupported field/i.test(msg))
+    return 'Campo inválido no formulário ('+msg.slice(0,80)+')';
+  return 'Falha ao gravar em "'+colecao+'"'+(cod?' ['+cod+']':'');
+}
+/* O Firestore rejeita o documento inteiro se QUALQUER campo vier undefined. */
+function semUndefined(o){
+  const out={};
+  Object.keys(o||{}).forEach(k=>{ if(o[k]!==undefined) out[k]=o[k]; });
+  return out;
+}
+
 function toast(msg,tp=''){
   const el=document.getElementById('toast');
   el.textContent=msg; el.className='toast show'+(tp?' '+tp:'');
@@ -920,6 +940,91 @@ async function carregarCadastros(){
 }
 
 /* ═══════════════════════════════════════════════════════════════
+   PONTE FIRESTORE DO PORTAL
+   As coleções comercial_* são lidas pelo portal (index.html), que mantém a
+   whitelist e um cache curto por coleção — é o mesmo caminho que o próprio
+   comercial.html usa. A leitura direta fica como plano B.
+   ═══════════════════════════════════════════════════════════════ */
+let _fsSeq=0; const _fsPend={};
+function temPonteAtlas(){ return !!(window.parent && window.parent!==window); }
+function pontePedido(action,payload,timeout){
+  if(!temPonteAtlas()) return Promise.reject(new Error('Ponte indisponível'));
+  const requestId='progfs-'+Date.now()+'-'+(_fsSeq++);
+  return new Promise((resolve,reject)=>{
+    const timer=setTimeout(()=>{ delete _fsPend[requestId]; reject(new Error('Timeout na ponte')); },timeout||12000);
+    _fsPend[requestId]={resolve,reject,timer};
+    window.parent.postMessage(Object.assign({type:'ATLAS_FIRESTORE_REQUEST',requestId,action},payload||{}),'*');
+  });
+}
+window.addEventListener('message',ev=>{
+  const m=ev.data||{};
+  if(m.type==='ATLAS_FIRESTORE_RESPONSE' && m.requestId){
+    const pnd=_fsPend[m.requestId]; if(!pnd) return;
+    clearTimeout(pnd.timer); delete _fsPend[m.requestId];
+    m.ok ? pnd.resolve(m.result||{}) : pnd.reject(new Error(m.error||'Falha na ponte'));
+  }
+});
+/* Devolve sempre {id, ...campos}, venha da ponte ({id,data}) ou do SDK. */
+async function lerColecao(nome){
+  if(temPonteAtlas()){
+    try{
+      const r=await pontePedido('getCollection',{collection:nome});
+      const docs=r.docs||[];
+      if(docs.length) return docs.map(d=>Object.assign({id:d.id},d.data||{}));
+    }catch(e){ console.warn('Programação: ponte '+nome+' falhou —',e.message); }
+  }
+  const s=await db.collection(nome).get();
+  return s.docs.map(d=>Object.assign({id:d.id},d.data()));
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   BASE SA1 (clientes do Protheus)
+   A carteira que o Comercial mostra é a UNIÃO dos cadastros do Atlas com a
+   SA1 — e a maior parte dos clientes só existe na SA1. Por isso a base é
+   CARREGADA de fato (não apenas lida se já estivesse em memória).
+   Cabeçalho normalizado por apelidos: imune a acento, pontuação e padding.
+   ═══════════════════════════════════════════════════════════════ */
+const SA1_ALIAS = {
+  codigo:   ['CODIGO','CODCLIENTE','CODCLI','CLIENTE'],
+  fantasia: ['NFANTASIA','NOMEFANTASIA','NOMEREDUZ','NREDUZIDO','FANTASIA'],
+  razao:    ['RAZAOSOCIAL','NOMECLIENTE','NOME','RAZAO'],
+  cnpj:     ['CGCCPF','CNPJCPF','CPFCNPJ','CGC','CNPJ','CPF'],
+  municipio:['MUNICIPIO','CIDADE','MUN'],
+  uf:       ['UF','ESTADO','EST'],
+  filial:   ['FILIAL']
+};
+function chaveCol(k){ return String(k==null?'':k).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function mapaSA1(row){
+  const idx={}; Object.keys(row||{}).forEach(k=>{ const n=chaveCol(k); if(!(n in idx)) idx[n]=k; });
+  const m={};
+  for(const campo in SA1_ALIAS){
+    for(const a of SA1_ALIAS[campo]){ if(idx[a]!==undefined){ m[campo]=idx[a]; break; } }
+  }
+  return m;
+}
+async function carregarSA1(){
+  try{
+    if(!temPonteAtlas()) return [];
+    let ref=null;
+    if(typeof window.parent.atlasGetDataReference==='function') ref=window.parent.atlasGetDataReference('sa1');
+    if((!ref||!Array.isArray(ref.rows)||!ref.rows.length) && typeof window.parent.atlasLoadBaseFromFirestoreShared==='function'){
+      await window.parent.atlasLoadBaseFromFirestoreShared('sa1');
+      ref=window.parent.atlasGetDataReference('sa1');
+    }
+    return (ref&&Array.isArray(ref.rows))?ref.rows:[];
+  }catch(e){ console.warn('Programação: SA1 não carregou —',e.message); return []; }
+}
+/* Filial do Protheus → sigla do módulo (mesma regra do comercial.html). */
+function filialSigla(cod,uf){
+  const c=String(cod==null?'':cod).replace(/\D/g,'').replace(/^0+/,'');
+  if(c==='17') return 'SC';
+  if(c==='18') return 'PR';
+  if(c==='3')  return 'SP';
+  const u=up(uf);
+  return UNIS.includes(u)?u:'';
+}
+
+/* ═══════════════════════════════════════════════════════════════
    CADASTROS DO MÓDULO COMERCIAL
    Clientes e rotas moram na MESMA coleção (comercial_rotas): documentos
    com tipo:'cliente' são a carteira; os demais são as rotas. É exatamente
@@ -927,49 +1032,47 @@ async function carregarCadastros(){
    ═══════════════════════════════════════════════════════════════ */
 async function carregarComercial(){
   if(ST.com.loaded) return;
+  const clientes=[]; let erroCad=null;
+
+  /* 1 · Cadastros feitos no Atlas */
   try{
-    const s=await db.collection('comercial_rotas').get();
-    const docs=s.docs.map(d=>({id:d.id,...d.data()}));
-
-    const clientes=docs.filter(d=>d.tipo==='cliente').map(d=>({
-      id:d.id, nome:up(d.nome||d.razao_social||''), filial:up(d.filial||''),
-      cnpj:String(d.cnpj||''), municipio:up(d.municipio||''), origem:'atlas'
-    })).filter(c=>c.nome);
-
-    /* Carteira do Comercial = cadastros do Atlas UNIDOS à base SA1 do Protheus.
-       A SA1 só é lida se já estiver em memória no portal — não vale atrasar o
-       formulário para baixá-la; sem ela, a lista fica com os cadastros do Atlas. */
-    try{
-      let ref=null;
-      if(window.parent && window.parent!==window && typeof window.parent.atlasGetDataReference==='function')
-        ref=window.parent.atlasGetDataReference('sa1');
-      const rows = ref && Array.isArray(ref.rows) ? ref.rows : [];
-      const vistos=new Set(clientes.map(c=>norm(c.nome)));
-      rows.forEach(r=>{
-        const nome=up(r['Razao Social']||r['RAZAO SOCIAL']||r['Nome']||r['NOME']||r['N Fantasia']||r['Nome Cliente']||'');
-        if(!nome || vistos.has(norm(nome))) return;
-        vistos.add(norm(nome));
-        clientes.push({ id:'sa1:'+nome, nome, filial:up(r['Filial']||''),
-          cnpj:String(r['Cgc/Cpf']||r['CNPJ']||''), municipio:up(r['Municipio']||''), origem:'sa1' });
-      });
-    }catch(_){ /* sem SA1 em memória: segue com os cadastros do Atlas */ }
-
-    ST.com.clientes=clientes.sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
-
+    const docs=await lerColecao('comercial_rotas');
+    docs.filter(d=>d.tipo==='cliente').forEach(d=>{
+      const nome=up(d.nome||d.razao_social||'');
+      if(nome) clientes.push({nome, filial:up(d.filial||''), cnpj:String(d.cnpj||''), municipio:up(d.municipio||''), origem:'atlas'});
+    });
     ST.com.rotas=docs.filter(d=>d.tipo!=='cliente').map(d=>({
       id:d.id,
-      nome:String(d.nome||'').trim() || ((d.origem||'')+' → '+(d.destino||'')),
+      nome:String(d.nome||'').trim() || [String(d.origem||'').trim(),String(d.destino||'').trim()].filter(Boolean).join(' → '),
       origem:up(d.origem||''), destino:up(d.destino||''),
       filial:up(d.filial||''), cliente_id:d.cliente_id||null,
       km:Number(d.dist_validada_km)||0, carga:d.carga||''
-    })).filter(r=>r.nome.trim()&&r.nome.trim()!=='→')
-      .sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
-
-    ST.com.loaded=true; ST.com.erro=null;
+    })).filter(r=>r.nome).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
   }catch(e){
     console.warn('Programação: comercial_rotas não carregou',e);
-    ST.com.erro=String(e&&e.message||e);
+    erroCad=String(e&&e.message||e); ST.com.rotas=[];
   }
+
+  /* 2 · Base SA1 — onde está a maior parte da carteira */
+  try{
+    const rows=await carregarSA1();
+    if(rows.length){
+      const m=mapaSA1(rows[0]);
+      const g=(r,c)=> m[c]!==undefined ? String(r[m[c]]==null?'':r[m[c]]).trim() : '';
+      const vistos=new Set(clientes.map(c=>norm(c.nome)));
+      rows.forEach(r=>{
+        const nome=up(g(r,'razao')||g(r,'fantasia'));
+        if(!nome||vistos.has(norm(nome))) return;
+        vistos.add(norm(nome));
+        clientes.push({ nome, filial:filialSigla(g(r,'filial'),g(r,'uf')),
+          cnpj:g(r,'cnpj'), municipio:up(g(r,'municipio')), origem:'sa1' });
+      });
+    }
+  }catch(e){ console.warn('Programação: SA1 não unificou —',e.message); }
+
+  ST.com.clientes=clientes.sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
+  ST.com.erro = (!clientes.length && erroCad) ? erroCad : null;
+  ST.com.loaded=true;
   atualizarListasSeAberto();
 }
 
@@ -1465,7 +1568,10 @@ async function programarDemanda(demandaId){
     await auditar('viagem_criada',ref.id,{demanda:d.id,conjunto:c?c.cavalo_frota:'sem conjunto'},uni);
     renderTudo();
     toast(c?('Programada em '+(c.cavalo_frota||c.cavalo_placa)):'Programada sem conjunto — defina os recursos','ok');
-  }catch(e){ console.error(e); toast('Falha ao programar a demanda','err'); }
+  }catch(e){
+    console.error('[Programação] programarDemanda',e);
+    toast(erroFirestore(e,'programacao_viagens'),'err');
+  }
 }
 function gerarNumero(uni){
   const seq=String(ST.viagens.length+1).padStart(4,'0');
@@ -1533,8 +1639,9 @@ window.fecharDemanda=function(){ document.getElementById('ovDem').classList.remo
    Remetente / Destinatário → SZB, com a UF vindo junto
    Rota     → aba Rotas do Comercial, filtrada pela filial da demanda
    ═══════════════════════════════════════════════════════════════ */
+const DL_MAX=2000;   // teto de opções: datalist com dezenas de milhares trava o navegador
 function opcoesDatalist(itens){
-  return itens.map(i=>'<option value="'+esc(i.nome)+'">'+(i.hint?esc(i.hint):'')+'</option>').join('');
+  return itens.slice(0,DL_MAX).map(i=>'<option value="'+esc(i.nome)+'">'+(i.hint?esc(i.hint):'')+'</option>').join('');
 }
 window.montarListasDemanda=function(rotaSel){
   const uni=(document.getElementById('dUnid')||{}).value||uniAtual()||'SC';
@@ -1545,9 +1652,12 @@ window.montarListasDemanda=function(rotaSel){
   const cli=ST.com.clientes.filter(c=>!c.filial||c.filial===uni||!UNIS.includes(c.filial));
   const dlC=document.getElementById('dlCliente');
   if(dlC) dlC.innerHTML=opcoesDatalist((cli.length?cli:ST.com.clientes).map(c=>({nome:c.nome,hint:c.municipio||''})));
-  hint('hCliente', ST.com.loaded
-    ? 'Carteira do Comercial — '+(cli.length||ST.com.clientes.length)+' cliente(s). Nome fora da lista também é aceito.'
-    : (ST.com.erro?'Não foi possível ler a carteira do Comercial.':'Carregando carteira do Comercial…'));
+  hint('hCliente', !ST.com.loaded ? 'Carregando carteira do Comercial…'
+    : ST.com.erro ? 'Não foi possível ler a carteira do Comercial — pode digitar o nome mesmo assim.'
+    : !ST.com.clientes.length ? 'Nenhum cliente na carteira (Comercial › Clientes) nem na base SA1 — pode digitar o nome.'
+    : 'Carteira do Comercial — '+(cli.length||ST.com.clientes.length)+' cliente(s)'
+      +((cli.length||ST.com.clientes.length)>DL_MAX?' (lista mostra os '+DL_MAX+' primeiros; digite para achar)':'')
+      +'. Nome fora da lista também é aceito.');
 
   /* — Produtos (SZB) — */
   const prods=ST.szbIdx.produtos.filter(daFilial);
@@ -1574,16 +1684,20 @@ window.montarListasDemanda=function(rotaSel){
 function montarSelectRotas(sel){
   const s=document.getElementById('dRota'); if(!s) return;
   const uni=(document.getElementById('dUnid')||{}).value||uniAtual()||'SC';
-  const rs=ST.com.rotas.filter(r=>!r.filial||r.filial===uni);
+  const daFilial=ST.com.rotas.filter(r=>!r.filial||r.filial===uni);
+  /* Rota cadastrada em outra filial ainda é rota: em vez de select vazio,
+     mostra a lista inteira e avisa que o filtro da filial não pegou nada. */
+  const rs=daFilial.length?daFilial:ST.com.rotas;
   const atual=sel!=null?String(sel):String(s.value||'');
   s.innerHTML='<option value="">— sem rota vinculada —</option>'+rs.map(r=>{
-    const lbl=r.nome+(r.km?' · '+r.km+' km':'');
+    const lbl=r.nome+(r.filial&&r.filial!==uni?' ['+r.filial+']':'')+(r.km?' · '+r.km+' km':'');
     return '<option value="'+esc(r.id)+'"'+(atual===r.id?' selected':'')+'>'+esc(lbl)+'</option>';
   }).join('');
   const h=document.getElementById('hRota');
-  if(h) h.textContent = ST.com.loaded
-    ? 'Aba Rotas do Comercial — '+rs.length+' rota(s) na filial '+uni+'.'
-    : (ST.com.erro?'Não foi possível ler as rotas do Comercial.':'Carregando rotas do Comercial…');
+  if(h) h.textContent = !ST.com.loaded ? 'Carregando rotas do Comercial…'
+    : !ST.com.rotas.length ? 'Nenhuma rota cadastrada em Comercial › Rotas.'
+    : daFilial.length ? 'Aba Rotas do Comercial — '+daFilial.length+' rota(s) na filial '+uni+'.'
+    : 'Nenhuma rota na filial '+uni+' — exibindo as '+rs.length+' rotas cadastradas.';
 }
 
 /* UF automática: a partir do nome escolhido, usa a UF predominante da SZB. */
@@ -1695,7 +1809,7 @@ window.salvarDemanda=async function(){
      referência, para o dado nascer completo mesmo sem digitação. */
   const eRem=acharSZB(ST.szbIdx.remetentes,g('dOrigem'));
   const eDes=acharSZB(ST.szbIdx.destinatarios,g('dDestino'));
-  const payload={
+  const payload=semUndefined({
     unidade_slug:g('dUnid'), data:g('dData')||ST.data,
     cliente:up(cliente), produto:up(produto), pedido:g('dPedido'),
     quantidade_prevista:Number(g('dQtd'))||null,
@@ -1711,7 +1825,7 @@ window.salvarDemanda=async function(){
     compressor_origem:g('dComp'), tipo_frota_permitido:g('dFrota'),
     prioridade:g('dPrio'), status:g('dStatus'), observacoes:g('dObs'),
     atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||''
-  };
+  });
 
   try{
     if(ST.editDemandaId){
@@ -1759,7 +1873,10 @@ window.salvarDemanda=async function(){
     fecharDemanda();
     if((todasFiliais()||payload.unidade_slug===ST.unidade)&&payload.data===ST.data) await carregarDia();
     else toast('Demanda salva em '+payload.unidade_slug+' · '+dataLabel(payload.data),'ok');
-  }catch(e){ console.error(e); toast('Falha ao salvar a demanda','err'); }
+  }catch(e){
+    console.error('[Programação] salvarDemanda',e);
+    toast(erroFirestore(e,'programacao_demandas'),'err');
+  }
   btn.disabled=false;
 };
 
