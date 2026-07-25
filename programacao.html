@@ -208,6 +208,20 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
 #ovDem .f label{font-size:9.5px}
 #ovDem .f-hint{font-size:9.5px;line-height:1.25}
 #ovDem input[type=date],#ovDem select,#ovDem input[type=text],#ovDem input[type=number],#ovDem input[type=time],#ovDem textarea{padding:6px 8px}
+
+/* Busca de rota no formulário: filtra por código, origem, destino, cidade e filial. */
+.rota-cbx{position:relative;width:100%}
+.rota-cbx input[type=text]{width:100%;padding-right:30px!important}
+.rota-cbx-cta{position:absolute;right:1px;top:1px;bottom:1px;width:28px;border:0;background:transparent;color:var(--gray);cursor:pointer;font-size:11px}
+.rota-cbx-cta:hover{color:var(--purple)}
+.rota-sug{display:none;position:absolute;left:0;right:0;bottom:calc(100% + 3px);z-index:30;background:var(--white);border:1px solid var(--gray-l);border-radius:7px;box-shadow:0 10px 28px rgba(0,0,0,.18);max-height:245px;overflow-y:auto}
+.rota-sug.on{display:block}
+.rota-sug-item{display:block;width:100%;border:0;border-bottom:1px solid var(--gray-ll);background:var(--white);padding:7px 9px;text-align:left;cursor:pointer;font-family:inherit;color:var(--black)}
+.rota-sug-item:last-child{border-bottom:0}
+.rota-sug-item:hover,.rota-sug-item.sel{background:var(--purple-l)}
+.rota-sug-main{display:block;font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rota-sug-sub{display:block;margin-top:2px;font-size:9.5px;color:var(--gray);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rota-sug-empty{padding:9px 10px;font-size:10.5px;color:var(--gray)}
 @media(max-width:1080px){
   .demanda-grid{grid-template-columns:1fr 1fr}
   .dem-col:nth-child(3){grid-column:1/-1;border-left:0;border-top:1px solid var(--gray-ll);padding:12px 2px 0}
@@ -489,7 +503,16 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
               <datalist id="dlDest"></datalist>
               <span class="f-hint" id="hDest">Destinatários da SZB — a UF de destino é preenchida sozinha.</span></div>
             <div class="f"><label>UF destino</label><input type="text" id="dUfD" maxlength="2" style="text-transform:uppercase" placeholder="automático"></div>
-            <div class="f full"><label>Rota</label><select id="dRota" onchange="onRotaDemanda()"><option value="">— sem rota vinculada —</option></select>
+            <div class="f full"><label>Rota</label>
+              <div class="rota-cbx" id="dRotaCbx">
+                <input type="hidden" id="dRota">
+                <input type="text" id="dRotaBusca" placeholder="Digite código, origem ou destino..." autocomplete="off"
+                  onfocus="filtrarRotasDemanda()" oninput="filtrarRotasDemanda()"
+                  onkeydown="teclaRotaDemanda(event)" onchange="confirmarRotaDigitada()"
+                  onblur="setTimeout(fecharSugestoesRota,160)">
+                <button type="button" class="rota-cbx-cta" aria-label="Mostrar rotas" onclick="alternarSugestoesRota(event)">▼</button>
+                <div class="rota-sug" id="dRotaSug"></div>
+              </div>
               <span class="f-hint" id="hRota">Rotas da base SZY carregada no Index, iguais às exibidas em Comercial › Rotas.</span></div>
           </div>
         </div>
@@ -710,10 +733,28 @@ function erroFirestore(e,colecao){
   return 'Falha ao gravar em "'+colecao+'"'+(cod?' ['+cod+']':'');
 }
 /* O Firestore rejeita o documento inteiro se QUALQUER campo vier undefined. */
-function semUndefined(o){
-  const out={};
-  Object.keys(o||{}).forEach(k=>{ if(o[k]!==undefined) out[k]=o[k]; });
-  return out;
+function semUndefined(v){
+  if(Array.isArray(v)) return v.map(semUndefined).filter(x=>x!==undefined);
+  if(v && typeof v==='object'){
+    const out={};
+    Object.keys(v).forEach(k=>{ if(v[k]!==undefined) out[k]=semUndefined(v[k]); });
+    return out;
+  }
+  return v;
+}
+/* Quando o Firebase vem do Index (parent), objetos criados dentro do iframe
+   pertencem a outro realm do JavaScript. O Firestore os interpreta como
+   "custom Object" e rejeita add/update. A clonagem pelo JSON do mesmo realm
+   do Firebase entrega objetos simples válidos sem alterar os dados. */
+function paraFirestore(v){
+  const limpo=semUndefined(v);
+  const txt=JSON.stringify(limpo);
+  try{
+    if(window.parent && window.parent!==window && window.firebase===window.parent.firebase && window.parent.JSON){
+      return window.parent.JSON.parse(txt);
+    }
+  }catch(_){ }
+  return JSON.parse(txt);
 }
 
 function toast(msg,tp=''){
@@ -1692,7 +1733,7 @@ async function programarDemanda(demandaId){
   };
   try{
     if(await diaFechado()) v.alterado_apos_fechamento=true;
-    const ref=await db.collection('programacao_viagens').add(v);
+    const ref=await db.collection('programacao_viagens').add(paraFirestore(v));
     ST.viagens.push({id:ref.id,...v});
     await auditar('viagem_criada',ref.id,{demanda:d.id,conjunto:c?c.cavalo_frota:'sem conjunto'},uni);
     renderTudo();
@@ -1713,7 +1754,7 @@ function gerarNumero(uni){
 window.abrirDemanda=function(){
   ST.editDemandaId=null;
   document.getElementById('tiDem').textContent='Nova Demanda';
-  ['dCliente','dProduto','dPedido','dQtd','dOrigem','dUfO','dDestino','dUfD','dJcIni','dJcFim','dJdIni','dJdFim','dObs']
+  ['dCliente','dProduto','dPedido','dQtd','dOrigem','dUfO','dDestino','dUfD','dRota','dRotaBusca','dJcIni','dJcFim','dJdIni','dJdFim','dObs']
     .forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
   document.getElementById('dUnid').value=uniAtual()||'SC';
   document.getElementById('dData').value=ST.data;
@@ -1759,7 +1800,7 @@ window.editarDemanda=function(id){
   }
   document.getElementById('ovDem').classList.add('active');
 };
-window.fecharDemanda=function(){ document.getElementById('ovDem').classList.remove('active'); };
+window.fecharDemanda=function(){ fecharSugestoesRota(); document.getElementById('ovDem').classList.remove('active'); };
 
 /* ═══════════════════════════════════════════════════════════════
    LISTAS DO FORMULÁRIO
@@ -1818,39 +1859,107 @@ window.montarListasDemanda=function(rotaSel){
   montarSelectRotas(rotaSel);
 };
 
-function montarSelectRotas(sel){
-  const s=document.getElementById('dRota'); if(!s) return;
+let rotaSugIdx=-1;
+
+function rotasDisponiveisDemanda(){
   const uni=(document.getElementById('dUnid')||{}).value||uniAtual()||'SC';
-  const atual=sel!=null?String(sel):String(s.value||'');
   const filtra=arr=>{
-    const daFilial=arr.filter(r=>!r.filial||r.filial===uni);
-    return {itens:daFilial.length?daFilial:arr,filtrou:!!daFilial.length};
+    const daFilial=(arr||[]).filter(r=>!r.filial||r.filial===uni);
+    return daFilial.length?daFilial:(arr||[]);
   };
-  const szy=filtra(ST.com.rotasSZY||[]), atlas=filtra(ST.com.rotasAtlas||[]);
-  const selecionada=r=> atual===String(r.id)
-    ||(!String(atual).startsWith('szy:') && (norm(atual)===norm(r.codigo)||norm(atual)===norm(r.nome)));
-  let html='<option value="">— sem rota vinculada —</option>';
-  if(!ST.com.loaded) html+='<option value="" disabled>— carregando rotas da SZY… —</option>';
-  if(szy.itens.length){
-    html+='<optgroup label="Rotas da SZY · '+esc(uni)+' ('+szy.itens.length+')">'
-      +szy.itens.map(r=>'<option value="'+esc(r.id)+'"'+(selecionada(r)?' selected':'')+'>'+esc(r.rotulo)+'</option>').join('')
-      +'</optgroup>';
-  }
-  if(atlas.itens.length){
-    html+='<optgroup label="Rotas manuais do Comercial ('+atlas.itens.length+')">'
-      +atlas.itens.map(r=>{
-        const lbl=(r.rotulo||r.nome)+(r.filial&&r.filial!==uni?' ['+r.filial+']':'')+(r.kmIda?' · '+num(r.kmIda,0)+' km':'');
-        return '<option value="'+esc(r.id)+'"'+(selecionada(r)?' selected':'')+'>'+esc(lbl)+'</option>';
-      }).join('')+'</optgroup>';
-  }
-  s.innerHTML=html;
+  return [...filtra(ST.com.rotasSZY),...filtra(ST.com.rotasAtlas)];
+}
+function textoBuscaRota(r){
+  return norm([r.filial,r.codigo,r.nome,r.rotulo,r.origem,r.ufOrigem,r.destino,r.ufDestino,r.kmIda,r.km].filter(Boolean).join(' '));
+}
+function rotuloCampoRota(r){
+  if(!r) return '';
+  if(r.rotulo) return r.rotulo;
+  return [r.filial,r.codigo,[r.origem,r.ufOrigem].filter(Boolean).join(' / '),'→',[r.destino,r.ufDestino].filter(Boolean).join(' / '),r.kmIda?num(r.kmIda,0)+' km':''].filter(Boolean).join(' · ');
+}
+function encontrarRota(valor,lista){
+  const v=String(valor==null?'':valor), n=norm(v);
+  return (lista||rotasDisponiveisDemanda()).find(r=>String(r.id)===v)
+    ||(lista||rotasDisponiveisDemanda()).find(r=>n && (n===norm(r.codigo)||n===norm(r.nome)||n===norm(r.rotulo)||n===norm(rotuloCampoRota(r))))
+    ||null;
+}
+function montarSelectRotas(sel){
+  const idEl=document.getElementById('dRota'), busca=document.getElementById('dRotaBusca');
+  if(!idEl||!busca) return;
+  const uni=(document.getElementById('dUnid')||{}).value||uniAtual()||'SC';
+  const lista=rotasDisponiveisDemanda();
+  const atual=sel!=null?String(sel):String(idEl.value||'');
+  const escolhida=encontrarRota(atual,lista)||encontrarRota(atual,ST.com.rotas);
+  if(escolhida){ idEl.value=String(escolhida.id); busca.value=rotuloCampoRota(escolhida); }
+  else { idEl.value=''; if(sel!=null) busca.value=''; }
+  fecharSugestoesRota();
+  const szyFilial=(ST.com.rotasSZY||[]).filter(r=>!r.filial||r.filial===uni);
+  const qtd=szyFilial.length||ST.com.rotasSZY.length;
   const h=document.getElementById('hRota');
   if(h) h.textContent = !ST.com.loaded ? 'Carregando a base SZY do Index…'
-    : ST.com.rotasSZY.length ? 'Base SZY do Index — '+szy.itens.length+' rota(s) exibida(s) para '+uni+', no mesmo padrão de Comercial › Rotas.'
+    : ST.com.rotasSZY.length ? 'Base SZY do Index — '+qtd+' rota(s) disponíveis para '+uni+'. Digite código, origem ou destino para filtrar.'
     : ST.com.erroRotas ? ST.com.erroRotas
-    : atlas.itens.length ? 'SZY sem rotas reconhecidas — exibindo o cadastro manual do Comercial.'
+    : ST.com.rotasAtlas.length ? 'SZY sem rotas reconhecidas — pesquisando nas rotas manuais do Comercial.'
     : 'Nenhuma rota disponível.';
 }
+window.filtrarRotasDemanda=function(){
+  const busca=document.getElementById('dRotaBusca'), idEl=document.getElementById('dRota'), box=document.getElementById('dRotaSug');
+  if(!busca||!idEl||!box) return;
+  const lista=rotasDisponiveisDemanda(), q=norm(busca.value);
+  const selecionada=encontrarRota(idEl.value,lista)||encontrarRota(idEl.value,ST.com.rotas);
+  if(selecionada && norm(busca.value)!==norm(rotuloCampoRota(selecionada))) idEl.value='';
+  const achadas=lista.filter(r=>!q||textoBuscaRota(r).includes(q)).slice(0,40);
+  rotaSugIdx=-1;
+  if(!ST.com.loaded){ box.innerHTML='<div class="rota-sug-empty">Carregando rotas da SZY…</div>'; }
+  else if(!achadas.length){ box.innerHTML='<div class="rota-sug-empty">Nenhuma rota encontrada para esta busca.</div>'; }
+  else {
+    box.innerHTML=achadas.map(r=>{
+      const sub=[[r.origem,r.ufOrigem].filter(Boolean).join(' / '),[r.destino,r.ufDestino].filter(Boolean).join(' / '),r.kmIda?num(r.kmIda,0)+' km':'',r.fonte==='SZY'?'SZY':'Comercial'].filter(Boolean).join(' · ');
+      return '<button type="button" class="rota-sug-item" data-id="'+esc(r.id)+'" onmousedown="selecionarRotaDemanda(this.dataset.id,event)">'
+        +'<span class="rota-sug-main">'+esc(rotuloCampoRota(r))+'</span>'
+        +'<span class="rota-sug-sub">'+esc(sub)+'</span></button>';
+    }).join('');
+  }
+  box.classList.add('on');
+};
+window.selecionarRotaDemanda=function(id,ev){
+  if(ev){ ev.preventDefault(); ev.stopPropagation(); }
+  const r=encontrarRota(id,ST.com.rotas); if(!r) return;
+  document.getElementById('dRota').value=String(r.id);
+  document.getElementById('dRotaBusca').value=rotuloCampoRota(r);
+  fecharSugestoesRota();
+  onRotaDemanda();
+};
+window.confirmarRotaDigitada=function(){
+  const busca=document.getElementById('dRotaBusca'), idEl=document.getElementById('dRota'); if(!busca||!idEl) return;
+  if(!busca.value.trim()){ idEl.value=''; return; }
+  const r=encontrarRota(busca.value,rotasDisponiveisDemanda());
+  if(r) selecionarRotaDemanda(r.id);
+  else idEl.value='';
+};
+window.fecharSugestoesRota=function(){
+  const box=document.getElementById('dRotaSug'); if(box) box.classList.remove('on'); rotaSugIdx=-1;
+};
+window.alternarSugestoesRota=function(ev){
+  if(ev){ ev.preventDefault(); ev.stopPropagation(); }
+  const box=document.getElementById('dRotaSug');
+  if(box&&box.classList.contains('on')) fecharSugestoesRota(); else filtrarRotasDemanda();
+  const busca=document.getElementById('dRotaBusca'); if(busca) busca.focus();
+};
+window.teclaRotaDemanda=function(ev){
+  const box=document.getElementById('dRotaSug'); if(!box) return;
+  let itens=[...box.querySelectorAll('.rota-sug-item')];
+  if(ev.key==='ArrowDown'||ev.key==='ArrowUp'){
+    ev.preventDefault();
+    if(!box.classList.contains('on')){ filtrarRotasDemanda(); itens=[...box.querySelectorAll('.rota-sug-item')]; }
+    if(!itens.length) return;
+    rotaSugIdx=ev.key==='ArrowDown'?Math.min(rotaSugIdx+1,itens.length-1):Math.max(rotaSugIdx-1,0);
+    itens.forEach((x,i)=>x.classList.toggle('sel',i===rotaSugIdx));
+    itens[rotaSugIdx].scrollIntoView({block:'nearest'});
+  }else if(ev.key==='Enter' && rotaSugIdx>=0 && itens[rotaSugIdx]){
+    ev.preventDefault(); selecionarRotaDemanda(itens[rotaSugIdx].dataset.id,ev);
+  }else if(ev.key==='Escape') fecharSugestoesRota();
+};
 
 function rotaDemandaSelecionada(){
   const id=String((document.getElementById('dRota')||{}).value||'');
@@ -2005,7 +2114,7 @@ window.salvarDemanda=async function(){
         btn.disabled=false; fecharDemanda(); await carregarDia(); return;
       }
       payload.versao=Number((atual&&atual.versao)||1)+1;
-      await ref.update(payload);
+      await ref.update(paraFirestore(payload));
       await auditar('demanda_editada',ST.editDemandaId,{cliente:payload.cliente},payload.unidade_slug);
       let extra=0;
       /* Propagação para o resto da série: a DATA de cada ocorrência é
@@ -2023,7 +2132,7 @@ window.salvarDemanda=async function(){
 
       if(datas.length<=1){
         payload.data=datas[0]||payload.data;
-        const ref=await db.collection('programacao_demandas').add(payload);
+        const ref=await db.collection('programacao_demandas').add(paraFirestore(payload));
         await auditar('demanda_criada',ref.id,{cliente:payload.cliente},payload.unidade_slug);
         toast('Demanda criada','ok');
       } else {
@@ -2054,9 +2163,9 @@ async function gravarSerie(datas,payload,recId,rec){
     const lote=db.batch();
     datas.slice(i,i+BLOCO).forEach((dt,j)=>{
       const ref=db.collection('programacao_demandas').doc();
-      lote.set(ref, Object.assign({},payload,{
+      lote.set(ref, paraFirestore(Object.assign({},payload,{
         data:dt, recorrencia_id:recId, recorrencia:rec, recorrencia_indice:i+j+1
-      }));
+      })));
     });
     await lote.commit();
   }
@@ -2074,7 +2183,7 @@ async function propagarSerie(recId,dataAtual,payload){
   for(let i=0;i<alvos.length;i+=BLOCO){
     const lote=db.batch();
     alvos.slice(i,i+BLOCO).forEach(d=>{
-      lote.update(d.ref, Object.assign({},corpo,{versao:Number((d.data()||{}).versao||1)+1}));
+      lote.update(d.ref, paraFirestore(Object.assign({},corpo,{versao:Number((d.data()||{}).versao||1)+1})));
     });
     await lote.commit();
   }
@@ -2169,7 +2278,7 @@ window.salvarConjunto=async function(){
       toast('Outro usuário alterou esta viagem. Recarregando…','err');
       btn.disabled=false; fecharConjunto(); await carregarDia(); return;
     }
-    await ref.update(upd);
+    await ref.update(paraFirestore(upd));
     Object.assign(v,upd);
     await auditar('conjunto_alterado',vid,{cavalo:upd.cavalo_frota||'—',motorista:upd.motorista_nome||'—'});
     fecharConjunto(); renderTudo(); toast('Conjunto atualizado','ok');
@@ -2194,13 +2303,13 @@ window.liberarViagem=async function(vid){
   }
   try{
     const posFech=await diaFechado();
-    await db.collection('programacao_viagens').doc(vid).update({
+    await db.collection('programacao_viagens').doc(vid).update(paraFirestore({
       status:'liberada', status_em:new Date().toISOString(),
       alterado_apos_fechamento: posFech?true:(v.alterado_apos_fechamento||false),
       bloqueios_justificados: alertas.map(a=>a.titulo),
       versao:Number(v.versao||1)+1,
       atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||''
-    });
+    }));
     v.status='liberada'; v.versao=Number(v.versao||1)+1;
     await auditar('viagem_liberada',vid,{alertas:alertas.length,justificativa:justificativa||''});
     renderTudo(); toast('Viagem liberada','ok');
@@ -2214,11 +2323,11 @@ window.removerViagem=async function(vid){
   if(!String(motivo).trim()){ toast('Motivo obrigatório','err'); return; }
   try{
     /* Não apaga: preserva histórico, como exige a especificação. */
-    await db.collection('programacao_viagens').doc(vid).update({
+    await db.collection('programacao_viagens').doc(vid).update(paraFirestore({
       status:'cancelada', motivo_cancelamento:String(motivo).trim(),
       versao:Number(v.versao||1)+1,
       atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||''
-    });
+    }));
     v.status='cancelada';
     await auditar('viagem_cancelada',vid,{motivo:String(motivo).trim()});
     renderTudo(); toast('Viagem cancelada (histórico preservado)','ok');
@@ -2240,11 +2349,11 @@ window.validarDia=async function(){
    ═══════════════════════════════════════════════════════════════ */
 async function auditar(tipo,alvo,dados,uni){
   try{
-    await db.collection('programacao_auditoria').add({
+    await db.collection('programacao_auditoria').add(paraFirestore({
       tipo, alvo_id:alvo, unidade_slug:uni||uniAtual()||'ALL', data:ST.data,
       usuario:(currentUser&&currentUser.email)||'', perfil:currentPerfil,
       dados:dados||{}, em:new Date().toISOString()
-    });
+    }));
   }catch(_){ /* auditoria é best-effort: nunca bloqueia a operação */ }
 }
 
@@ -2368,7 +2477,7 @@ window.salvarStatus=async function(){
       atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||'' };
     if(campo && !v[campo]) upd[campo]=hhmmAgora;   // não sobrescreve carimbo já feito
     if(await diaFechado()) upd.alterado_apos_fechamento=true;
-    await db.collection('programacao_viagens').doc(v.id).update(upd);
+    await db.collection('programacao_viagens').doc(v.id).update(paraFirestore(upd));
     Object.assign(v,upd);
     await auditar('status_alterado',v.id,{de:v.status,para:novo,salto,obs});
     fecharStatus(); renderTudo();
@@ -2479,9 +2588,9 @@ window.salvarReprog=async function(){
       upd=Object.assign({},base,{ status:'cancelada', motivo_cancelamento:motivo });
     }
 
-    await db.collection('programacao_viagens').doc(v.id).update(upd);
+    await db.collection('programacao_viagens').doc(v.id).update(paraFirestore(upd));
     /* A programação original é preservada: a ocorrência é um registro à parte. */
-    await db.collection('programacao_ocorrencias').add({
+    await db.collection('programacao_ocorrencias').add(paraFirestore({
       viagem_id:v.id, viagem_numero:v.numero||'', demanda_id:v.demanda_id||null,
       unidade_slug:v.unidade_slug, data_original:v.data,
       motivo, acao, justificativa:just,
@@ -2489,7 +2598,7 @@ window.salvarReprog=async function(){
       horarios_depois:{carregamento:upd.prev_carregamento||null,descarga:upd.prev_descarga||null,retorno:upd.prev_retorno||null},
       impacto_viagens:impacto, apos_fechamento:!!fechado,
       usuario:(currentUser&&currentUser.email)||'', em:new Date().toISOString()
-    });
+    }));
     await auditar('reprogramacao',v.id,{motivo,acao,justificativa:just,impacto:impacto.length});
     Object.assign(v,upd);
     fecharReprog();
@@ -2562,10 +2671,10 @@ window.avancarDia=async function(){
     if(!confirm('Liberar a programação de '+ST.unidade+' em '+dataLabel(ST.data)+' com '+vs.length+' viagem(ns)?\n\nApós a liberação, toda alteração fica marcada como "alteração após fechamento".')) return;
   }
   try{
-    await db.collection('programacao_dias').doc(diaId()).set({
+    await db.collection('programacao_dias').doc(diaId()).set(paraFirestore({
       unidade_slug:ST.unidade, data:ST.data, estado:prox.id,
       atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||''
-    },{merge:true});
+    }),paraFirestore({merge:true}));
     ST.dia={...(ST.dia||{}),estado:prox.id};
     await auditar('dia_'+prox.id,diaId(),{unidade:ST.unidade,data:ST.data});
     renderChipDia(); renderTudo();
@@ -2814,7 +2923,7 @@ window.salvarTransferencia=async function(){
       solicitante:(currentUser&&currentUser.email)||'', aprovador:null,
       criado_em:new Date().toISOString()
     };
-    const ref=await db.collection('programacao_transferencias').add(payload);
+    const ref=await db.collection('programacao_transferencias').add(paraFirestore(payload));
     ST.transferencias.push({id:ref.id,...payload});
     await auditar('transferencia_solicitada',ref.id,{recurso:lb,de:dona,para:ST.unidade});
     fecharTransferencia(); renderTransferencias(); renderTudo();
@@ -2836,7 +2945,7 @@ window.decidirTransf=async function(id,decisao){
     const upd={ status:decisao, aprovador:(currentUser&&currentUser.email)||'',
       decidido_em:new Date().toISOString() };
     if(obs) upd.observacoes=String(obs).trim();
-    await db.collection('programacao_transferencias').doc(id).update(upd);
+    await db.collection('programacao_transferencias').doc(id).update(paraFirestore(upd));
     Object.assign(t,upd);
     await auditar('transferencia_'+decisao,id,{recurso:t.recurso_label,para:t.unidade_solicitante});
     renderTransferencias(); renderTudo();
