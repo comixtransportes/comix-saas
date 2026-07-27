@@ -1032,8 +1032,8 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
           </div>
           <div class="form-field" id="dep-i-perc-wrap"><label>Percentual anual (%)</label><input type="text" id="dep-i-percentualAnual" inputmode="decimal" oninput="cpkDepFormPreview()"></div>
           <div class="form-field" id="dep-i-manual-wrap" style="display:none"><label>Valor mensal manual (R$)</label><input type="text" id="dep-i-valorManualMensal" inputmode="decimal" oninput="cpkDepFormPreview()"></div>
-          <div class="form-field"><label>Status do ativo <span style="font-weight:400;color:var(--mu)">· sincronizado com Cadastros</span></label>
-            <select id="dep-i-status" onchange="cpkDepFormPreview()" title="Mesmo campo do cadastro de veículos (Cadastros › Veículos). Alterar aqui atualiza lá.">
+          <div class="form-field"><label>Status do ativo</label>
+            <select id="dep-i-status" onchange="cpkDepFormPreview()">
               <option value="ativo">Ativo</option>
               <option value="vendido">Vendido</option>
               <option value="baixado">Baixado</option>
@@ -1652,6 +1652,37 @@ function cpkStatus(margemKm){
   if(margemKm<0.20)return'atencao';
   return'saudavel';
 }
+// ── RANKING RELATIVO — 2º eixo do status ──────────────────────────
+//  cpkStatus (acima) NÃO foi recalibrado de propósito. Deslocar o
+//  limiar para preservar a proporção de verde desfaria a correção dos
+//  impostos — seria um painel projetado para mostrar sempre a mesma
+//  quantidade de verde independente da realidade. A âncora
+//  margem_km >= 0 é verdade contábil, não calibragem.
+//  O status absoluto responde "qual o TAMANHO do problema" (preço ou
+//  custo?). O quartil responde "em QUAL caminhão mexer na segunda".
+function cpkRankQuartil(placas){
+  const scopeFils=cpkScopeFiliais();
+  const porFil={};
+  (placas||[]).forEach(p=>{
+    p.rank_fil=null; p.rank_fil_tot=null; p.quartil=null;
+    if(p.ehCarreta||p.margem_km==null) return;          // carreta não roda km próprio
+    const f=cpkFilialDe(p,scopeFils)||'—';
+    (porFil[f]=porFil[f]||[]).push(p);
+  });
+  Object.values(porFil).forEach(arr=>{
+    arr.sort((a,b)=>a.margem_km-b.margem_km);           // pior → melhor
+    const n=arr.length;
+    arr.forEach((p,i)=>{
+      p.rank_fil=i+1; p.rank_fil_tot=n;
+      p.quartil = n<4 ? null : Math.min(4, Math.floor(i*4/n)+1);   // 1 = pior quartil
+    });
+  });
+}
+function cpkQuartilBadge(p){
+  if(!p||p.quartil==null) return '';
+  const cls={1:'br',2:'ba',3:'bm',4:'bg'}[p.quartil]||'bm';
+  return '<span class="bdg '+cls+'" title="'+p.rank_fil+'º de '+p.rank_fil_tot+' na filial (por margem/km)">Q'+p.quartil+'</span>';
+}
 function cpkStatusBadge(st){const cfg={saudavel:'bg',atencao:'ba',critico:'br','sem-km':'bm'};const lbl={saudavel:'Saudável',atencao:'Atenção',critico:'Prejuízo','sem-km':'Sem KM'};return `<span class="bdg ${cfg[st]||'bm'}">${lbl[st]||st}</span>`;}
 function cpkFonteBadge(f){const cfg={szy:'ds-szy',szb:'ds-szb',importado:'ds-szc',estimado:'ds-est',pendente:'ds-nd'};const lbl={szy:'SZY',szb:'SZB',importado:'Importado',estimado:'Est.',pendente:'Pendente'};return `<span class="ds-badge ${cfg[f]||'ds-est'}">${lbl[f]||f}</span>`;}
 function cpkChartDestroy(id){if(CPK.charts[id]){try{CPK.charts[id].destroy();}catch(_){}delete CPK.charts[id];}}
@@ -1971,35 +2002,6 @@ function cpkDepDisplayCodigoCompressor(c,id){
   return String(c.identificacao||c.codigo||c.cod||c.numero||c.serie||id||'').trim().toUpperCase();
 }
 function cpkDepStatusFromCompressor(c){ return cpkDepStatusFromVeic({status:(c&&c.status)||''}); }
-
-/* ══════════════════════════════════════════════════════════════════
-   STATUS DO ATIVO — FONTE ÚNICA COM O CADASTRO
-   ------------------------------------------------------------------
-   O status do ativo (ativo/vendido/baixado/inativo) passa a viver no
-   cadastro de veículos (coleção 'veiculos', campo status_ativo). O CPK
-   continua gravando o status dentro do próprio registro de depreciação
-   (compatibilidade, exportação e ativos que não existem no cadastro —
-   compressores e registros manuais), mas quando a placa EXISTE no
-   cadastro é o cadastro que manda. Editar de qualquer um dos dois lados
-   grava nos dois: o CPK escreve status_ativo em 'veiculos' e o Cadastros
-   espelha o status no doc de depreciação.
-   ══════════════════════════════════════════════════════════════════ */
-// Status explícito do cadastro. Retorna '' quando o cadastro nada diz —
-// nesse caso o registro de depreciação do CPK segue valendo (sem quebrar
-// nenhuma base já existente).
-function cpkDepStatusCadastro(cad){
-  if(!cad) return '';
-  const raw=cpkNormStr(cad.statusAtivo||'');
-  if(raw) return cpkDepNormStatus(raw);
-  const legado=cpkDepStatusFromVeic(cad);            // disponibilidade/status/situacao (legado)
-  return (legado && legado!=='ativo') ? legado : '';
-}
-// Status que o CPK realmente usa no cálculo e na tela.
-function cpkDepStatusEfetivo(rec, cad){
-  return cpkDepStatusCadastro(cad)
-      || (rec && rec.status ? cpkDepNormStatus(rec.status) : '')
-      || 'ativo';
-}
 function cpkDepCarretaSubtipo(v){
   v=v||{};
   return String(v.tipoCarreta||v.tipo_carreta||v.tipoDaCarreta||v.tipo_da_carreta||v.subtipo||v.carreta_tipo||v.tipoImplemento||v.tipo_implemento||'').trim();
@@ -2046,10 +2048,6 @@ async function cpkLoadFrota(){
                anoFab:cpkDepAnoCampo(v,'fab'), anoMod:cpkDepAnoCampo(v,'mod'),
                tipo:cpkDepTipoRawVeic(v), subtipo:subtipoCarreta,
                tipoCarreta:subtipoCarreta,
-               // Status do ativo — fonte única compartilhada com o módulo Cadastros
-               // (coleção 'veiculos', campo status_ativo). Vazio = sem definição
-               // explícita no cadastro (o CPK cai no status do próprio registro).
-               statusAtivo:(v.status_ativo||v.statusAtivo||'').toString(),
                disponibilidade:(v.disponibilidade||v.status||v.situacao||'').toString() };
     });
 
@@ -2120,6 +2118,64 @@ function cpkUnidadeReceitaSZB(opSZB, frotaSZB, placa){
 //  Lê as MESMAS coleções do mapinha.html e reconstrói o custo de frota.
 //  Tudo cacheado por mês; cada coleção é lida UMA vez (evita leituras extra).
 // ════════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+//  IMPOSTOS — alíquota efetiva por filial (regra 07/2026)
+//  A receita do CPK é LÍQUIDA. O imposto é lançado no Mapinha no nível
+//  FILIAL×MÊS (cabecalho.impostos); a receita do CPK vive no nível
+//  CT-e. A ponte é a alíquota efetiva da filial:
+//      aliq[fil] = (icms + pisCofins + irCs + iss) / fatBruto
+//
+//  IR/CS ENTRA: no lucro presumido a base é presumida sobre a receita
+//  (8% IRPJ / 12% CSLL em transporte de carga), logo é proporcional ao
+//  faturamento POR CONSTRUÇÃO — não há distorção em diluir por CT-e.
+//  No lucro real, com a operação perto do zero a zero, é irrelevante em
+//  magnitude. Nos dois regimes, incluir está certo.
+//
+//  ALÍQUOTA MISTA (própria + agregado) — aceita: quem emite o CT-e é
+//  sempre a Comix (o agregado recebe comissão SZB−SZC−SZI, não fatura),
+//  então o débito é idêntico por real de receita; e o insumo do agregado
+//  é comprado pela Comix (diesel interno/externo, arla, 10/11/12.01),
+//  então o crédito também é da Comix. A assimetria é de 3ª ordem.
+//
+//  SEMPRE POR FILIAL, NUNCA CONSOLIDADA: mix interestadual (12%) x
+//  interno (17-18%) viraria diferença operacional falsa entre SC/PR/SP,
+//  e o gestor seria cobrado por um número que não governa.
+// ══════════════════════════════════════════════════════════════════
+const CPK_IMP_CAMPOS = ['icms','pisCofins','irCs','iss'];
+function cpkImpTotal(imp){ return CPK_IMP_CAMPOS.reduce((s,k)=>s+(+(imp||{})[k]||0),0); }
+
+// Alíquota de UM doc mensal do Mapinha. null = doc inservível.
+function cpkAliqDoc(v){
+  const fat=+(((v||{}).receita||{}).fatBruto)||0;
+  const imp=cpkImpTotal((v||{}).impostos);
+  if(!(fat>0)||!(imp>0)) return null;
+  const a=imp/fat;
+  if(a<=0||a>=0.5) return null;            // guarda de sanidade: fora de 0–50% é erro de lançamento
+  return { aliq:a, fatBruto:fat, imposto:imp, det:Object.assign({},((v||{}).impostos||{})) };
+}
+
+// Alíquota vigente da filial no mês, com FALLBACK na última conhecida.
+// NUNCA retorna zero silenciosamente: aliq=0 faria a margem MELHORAR
+// sozinha no mês em que alguém esquece de lançar o imposto — e erro que
+// agrada não é investigado, é comemorado. O modo de falha tem que
+// apontar para o lado desconfortável.
+// A varredura não custa leitura: cpkFsGet('mapinha_mensal') já traz
+// TODOS os meses (o filtro por mesRef é client-side).
+function cpkAliqFilial(mensal, fil, mes){
+  const doc=(mensal||[]).find(d=>{ const v=d.data||{}; return v.mesRef===mes && v.filial===fil; });
+  const cur=cpkAliqDoc(doc&&doc.data);
+  if(cur) return Object.assign({}, cur, {fonte:'mes', mesRef:mes, estimada:false});
+  let best=null;
+  (mensal||[]).forEach(d=>{
+    const v=d.data||{}; if(v.filial!==fil) return;
+    const mr=String(v.mesRef||''); if(!mr||mr>=mes) return;   // só meses anteriores
+    const a=cpkAliqDoc(v); if(!a) return;
+    if(!best||mr>best.mesRef) best=Object.assign({}, a, {mesRef:mr});
+  });
+  if(best) return Object.assign({}, best, {fonte:'anterior', estimada:true});
+  return { aliq:0, fatBruto:0, imposto:0, det:{}, fonte:'ausente', mesRef:'', estimada:true };
+}
+
 async function cpkLoadCusto(mes){
   if(CPK.custoLoaded && CPK.custoMes===mes) return;
   // SINGLE-FLIGHT: troca de mês durante a carga inicial disparava duas execuções
@@ -2141,6 +2197,8 @@ async function _cpkLoadCustoRun(mes){
   CPK.garantiaAgregFil={SC:0,PR:0,SP:0}; // Garantia Agregados incluída, por filial
   CPK.custoExcluidos=[];         // itens encontrados nas bases e NÃO incluídos no CPK
   CPK.custoIncons=[];            // inconsistências (ex.: custo/garantia sem filial)
+  CPK.aliqFil={};                // alíquota efetiva por filial (fator da receita líquida)
+  CPK.impostosFil={};            // memória: {aliq, fatBruto, imposto, det, fonte, mesRef, estimada}
   cpkLoaderMsg('Carregando custos do DRE (Mapinha)…');
 
   // Leituras únicas (paralelas). O custo da frota própria espelha o DRE do Mapinha:
@@ -2224,9 +2282,22 @@ async function _cpkLoadCustoRun(mes){
     });
     CPK.garantiaAgregFil[fil]=tot.garantiaAgreg||0;
 
-    const receita = +(((mensalByFil[fil]||{}).receita||{}).fatBruto||0); // referência do Mapinha
+    const receita = +(((mensalByFil[fil]||{}).receita||{}).fatBruto||0); // referência do Mapinha (BRUTO — filial inteira: própria + agregado)
+
+    // IMPOSTOS — alíquota efetiva da filial. Ver bloco cpkAliqFilial.
+    const ali = cpkAliqFilial(mensal, fil, mes);
+    CPK.aliqFil[fil]     = ali.aliq;
+    CPK.impostosFil[fil] = ali;
+    if(ali.fonte==='anterior')
+      CPK.custoIncons.push({ tipo:'Impostos não lançados no mês', fil, placa:'',
+        descricao:'Receita líquida ESTIMADA com a alíquota de '+ali.mesRef+' ('+(ali.aliq*100).toFixed(2)+'%). Lançar ICMS / PIS-COFINS / IR-CS / ISS no Mapinha e recalcular.', valor:0 });
+    if(ali.fonte==='ausente')
+      CPK.custoIncons.push({ tipo:'Impostos ausentes — receita BRUTA', fil, placa:'',
+        descricao:'Sem imposto lançado no mês nem em qualquer mês anterior. A margem desta filial está SUPERESTIMADA pelo valor integral do imposto.', valor:0 });
+
     CPK.custoFilial[fil]={ diesel:tot.diesel, co:tot.co, cp:tot.cp, ce:tot.ce, ped:tot.ped, total:tot.total, receita, garantiaAgreg:tot.garantiaAgreg||0,
-      flags:{ receita:receita>0, possuiCusto:tot.total!==0, premissa:!!premissa, pedagio:(pedInfo.porFil[fil]||0)>0 } };
+      aliq:ali.aliq, impostoMapinha:ali.imposto, aliqFonte:ali.fonte,
+      flags:{ receita:receita>0, possuiCusto:tot.total!==0, premissa:!!premissa, pedagio:(pedInfo.porFil[fil]||0)>0, impostoEstimado:ali.estimada } };
   }
 
   // AUDITORIA: pedágios de placa não-própria (agregado/apoio/carreta/sem cadastro)
@@ -2288,10 +2359,6 @@ async function cpkLoadAll(){
 
   cpkLoaderMsg('Carregando custos e KM do mês…');
   await Promise.allSettled([ cpkLoadCusto(CPK.filtros.mes), cpkLoadKmImport(CPK.filtros.mes), cpkLoadDep() ]);
-
-  // Status do ativo virou campo compartilhado com o Cadastros — sobe para o
-  // cadastro o que hoje só existe no CPK (não bloqueia o boot).
-  cpkDepReconciliarStatusCadastro();
 
   cpkLoaderMsg('Solicitando bases ao Atlas (SZB, SZY, SZC)…');
   for(const t of CPK_BASES){ if(!cpkTryParentBase(t)) cpkRequestAtlasBase(t); }
@@ -2537,6 +2604,15 @@ function cpkCalculate(){
   CPK.diag={semCadastro:[], indefinidas:[], semKm:[], semCusto:false};
   CPK.receitaComplementar=0; // Cartas Frete Complementar (FSC0000): receita real, fora da análise por placa
   CPK.receitaComplementarFil={}; // idem, quebrada por filial (uniC) p/ reconciliar o card por filial
+  CPK.receitaComplementarBruta=0; // espelho BRUTO do complementar (auditoria)
+
+  // Fator líquido por filial: receita_liquida = fat × (1 − aliq[fil]).
+  // Aplicado no NÍVEL DO CT-E, não na agregação: assim placa, rota,
+  // cliente e filial ficam consistentes POR CONSTRUÇÃO e a soma fecha
+  // com o DRE sem reconciliação posterior. Aplicar só em recFilPropria
+  // deixaria placa/rota/cliente em bruto — segunda inconsistência.
+  const _aliq  = CPK.aliqFil||{};
+  const fatLiq = (v,fil)=> (+v||0) * (1 - (+_aliq[fil]||0));
 
   // ── CUSTO DE CAPITAL = DEPRECIAÇÃO (regra 07/2026) ──────────────────
   //  O C.E da premissa foi DESATIVADO no CPK (número não verdadeiro que puxava
@@ -2578,14 +2654,18 @@ function cpkCalculate(){
   // em mais de uma operação no mesmo mês (ex.: QTL6904, SXA0A46) e o rateio por
   // placa colapsaria tudo numa única filial.
   const recFilProp={};
+  const recFilPropBr={};   // espelho BRUTO por filial (reconciliação SZB × DRE)
   // Divergências cadastro × SZB (só informativo — NÃO altera a receita):
   const recDiverg=[];
   for(const d of derivRows){
     if(d.k===0){ // FSC0000 — Carta Frete Complementar
       if(f.placa) continue;
       if(scope.size&&d.uniC&&!scope.has(d.uniC)) continue;
-      CPK.receitaComplementar += d.fat;
-      const _uc=d.uniC||''; CPK.receitaComplementarFil[_uc]=(CPK.receitaComplementarFil[_uc]||0)+d.fat;
+      const _uc=d.uniC||'';
+      const _fl=fatLiq(d.fat, _uc||scopeArr[0]);   // mesma alíquota da filial do CT-e
+      CPK.receitaComplementar      += _fl;
+      CPK.receitaComplementarBruta += d.fat;
+      CPK.receitaComplementarFil[_uc]=(CPK.receitaComplementarFil[_uc]||0)+_fl;
       continue;
     }
     const placa=d.placa;
@@ -2601,15 +2681,22 @@ function cpkCalculate(){
     }
     if(d.vinc!=='proprio'){ if(d.vinc==='indefinido'&&!CPK.diag.indefinidas.includes(placa))CPK.diag.indefinidas.push(placa); continue; }
 
-    const fat=d.fat, rota=d.rota, cliente=d.cliente;
+    const rota=d.rota, cliente=d.cliente;
     if(f.cliente&&!cpkNormStr(cliente).includes(cpkNormStr(f.cliente)))continue;
     if(f.rota&&!(rota.includes(cpkPadRota(f.rota))||cpkNormStr(d.localEntreg).includes(cpkNormStr(f.rota))))continue;
 
-    // Receita por filial no nível do CT-e (unidade HISTÓRICA do SZB).
+    // Filial da RECEITA = unidade HISTÓRICA do SZB (Regra A, coluna Operacao).
+    // Resolvida ANTES do valor porque é ela que escolhe a alíquota.
     const _fRev=d.uPre||cpkFilialDe({placa,unidade:d.unidade},scopeArr)||'';
-    if(_fRev) recFilProp[_fRev]=(recFilProp[_fRev]||0)+fat;
+    // Receita LÍQUIDA de impostos, no nível do CT-e.
+    const fatBr=d.fat;
+    const fat=fatLiq(fatBr, _fRev);
+    if(_fRev){
+      recFilProp[_fRev]  =(recFilProp[_fRev]  ||0)+fat;
+      recFilPropBr[_fRev]=(recFilPropBr[_fRev]||0)+fatBr;
+    }
 
-    viagens.push({ placa, frotaSZB:d.frotaSZB, motorista:d.motorista, unidade:d.unidade, filial:d.uPre||'', fat, rota, rotaResolved:d.rota_resolvida||'',
+    viagens.push({ placa, frotaSZB:d.frotaSZB, motorista:d.motorista, unidade:d.unidade, filial:d.uPre||'', fat, fatBr, rota, rotaResolved:d.rota_resolvida||'',
       localColeta:d.localColeta, ufO:d.ufO, localEntreg:d.localEntreg, ufD:d.ufD,
       cliente, tipoFrete:d.tipoFrete, km:d.km, fonte_km:d.fonte_km });
 
@@ -2618,15 +2705,16 @@ function cpkCalculate(){
     // (vem de recFilProp, no nível do CT-e).
     const _uFis=d.uniCad||d.unidade;
     if(!aggP[placa]) aggP[placa]={ placa, frota:cpkVeic(placa)?.frota||d.frotaSZB, motorista:d.motorista, unidade:_uFis, unidadeReceita:d.unidade,
-      tipo:cpkVeic(placa)?.tipo||'', viagens:0, faturamento:0, km_szb:0, clientes:{}, rotas:{} };
+      tipo:cpkVeic(placa)?.tipo||'', viagens:0, faturamento:0, faturamento_bruto:0, km_szb:0, clientes:{}, rotas:{} };
     const pa=aggP[placa];
-    pa.viagens++; pa.faturamento+=fat; pa.km_szb+=d.km;
+    pa.viagens++; pa.faturamento+=fat; pa.faturamento_bruto+=fatBr; pa.km_szb+=d.km;
     if(!pa.unidade&&_uFis)pa.unidade=_uFis; if(!pa.motorista&&d.motorista)pa.motorista=d.motorista;
     pa.clientes[cliente]=(pa.clientes[cliente]||0)+fat;
     if(rota)pa.rotas[rota]=(pa.rotas[rota]||0)+1;
   }
   // Publica a receita por filial (CT-e level) e as divergências para a Auditoria.
   CPK.recFilPropria=recFilProp;
+  CPK.recFilPropriaBruta=recFilPropBr;
   CPK.diag.recDiverg=recDiverg;
 
   // 4) KM por placa: se há importação no mês, ela é a fonte AUTORITATIVA (= aba Dados).
@@ -2651,7 +2739,7 @@ function cpkCalculate(){
     if(scope.size&&filEst&&!scope.has(filEst))return;
     const km=CPK.kmImport[placa].km; if(!(km>0))return;
     aggP[placa]={ placa, frota:v.frota, motorista:v.motorista, unidade:v.unidade, tipo:v.tipo,
-      viagens:0, faturamento:0, km_szb:0, km_total:km, fonte_km:'importado', clientes:{}, rotas:{}, semReceita:true };
+      viagens:0, faturamento:0, faturamento_bruto:0, km_szb:0, km_total:km, fonte_km:'importado', clientes:{}, rotas:{}, semReceita:true };
     totalKm+=km;
   });
 
@@ -2856,12 +2944,19 @@ function cpkCalculate(){
   placas.forEach(p=>{ p.var_media = (p.margem_km!=null&&mgMedia!=null&&mgMedia!==0)? (p.margem_km-mgMedia)/Math.abs(mgMedia)*100 : null; });
   CPK.margemMediaKm=mgMedia;
   CPK.aggPlaca=placas;
+  cpkRankQuartil(placas);   // 2º eixo: posição relativa dentro da filial
   // RECEITA da FROTA = soma dos CTRC de frota própria no SZB (exclui agregado).
   // O fatBruto do Mapinha é o total da filial (frota+agregado) e fica só como referência.
   // receitaPlacas = receita analisável (soma da tabela por placa).
   // receitaTotal  = receita real do topo = placas + Cartas Frete Complementar (FSC0000).
+  // LÍQUIDO (número oficial do módulo — alinhado ao Fat. Líquido do DRE)
   CPK.receitaPlacas = placas.reduce((s,p)=>s+(+p.faturamento||0),0);
   CPK.receitaTotal  = CPK.receitaPlacas + (CPK.receitaComplementar||0);
+  // BRUTO (auditoria / reconciliação com o SZB)
+  CPK.receitaPlacasBruta = placas.reduce((s,p)=>s+(+p.faturamento_bruto||0),0);
+  CPK.receitaTotalBruta  = CPK.receitaPlacasBruta + (CPK.receitaComplementarBruta||0);
+  CPK.impostosCPK        = CPK.receitaTotalBruta - CPK.receitaTotal;
+  CPK.aliqEfetivaCPK     = CPK.receitaTotalBruta>0 ? CPK.impostosCPK/CPK.receitaTotalBruta : null;
 
   // 6) ROTAS — filial + identidade física. O código bruto da SZB fica como
   // informação, não como chave: mudanças de código e linhas vazias do mesmo
@@ -3264,6 +3359,10 @@ function cpkRenderVG(){
   const margem = rec - (CPK.pool||0);
   const margemPct = rec>0 ? margem/rec*100 : null;
   const recKm = km>0 ? rec/km : null;
+  const recBr = +CPK.receitaTotalBruta||0;
+  const impV  = +CPK.impostosCPK||0;
+  const aliqM = CPK.aliqEfetivaCPK!=null ? CPK.aliqEfetivaCPK*100 : null;
+  const impEst= Object.values(CPK.impostosFil||{}).some(a=>a&&a.estimada);
   const comKmCnt = CPK.aggPlaca.filter(p=>p.km_total>0).length;
   const totKmBase = CPK.aggPlaca.filter(p=>!p.ehCarreta).length;   // base de km = frota que roda (carreta não roda km próprio)
   const medido = CPK.cobertura ? CPK.cobertura.medidoPct : null;
@@ -3281,7 +3380,8 @@ function cpkRenderVG(){
     '<div class="vg-result">'+
       '<div class="vr-bar">'+segC+segM+'</div>'+
       '<div class="vr-stats">'+
-        '<div class="vr-st"><span class="vr-l">'+cpkIco('trend',10)+'Receita</span><span class="vr-v" title="'+cpkFmt(rec)+'">'+cpkFmt(rec)+'</span></div>'+
+        '<div class="vr-st"><span class="vr-l">'+cpkIco('trend',10)+'Receita líq.</span><span class="vr-v" title="Bruto '+cpkFmt(recBr)+' − Impostos '+cpkFmt(impV)+'">'+cpkFmt(rec)+'</span></div>'+
+        '<div class="vr-st"><span class="vr-l">'+cpkIco('percent',10)+'(–) Impostos</span><span class="vr-v rd" title="Alíquota efetiva '+(aliqM!=null?cpkFmtPct(aliqM):'—')+(impEst?' · ESTIMADA (mês anterior)':'')+'">'+cpkFmt(impV)+(impEst?' *':'')+'</span></div>'+
         '<div class="vr-st"><span class="vr-l">'+cpkIco('wallet',10)+'Custo</span><span class="vr-v rd" title="'+cpkFmt(custoV)+'">'+cpkFmt(custoV)+'</span></div>'+
         '<div class="vr-st"><span class="vr-l">'+cpkIco('check',10)+'Margem</span><span class="vr-v '+(margem>=0?'gn':'rd')+'" title="'+cpkFmt(margem)+'">'+cpkFmt(margem)+'</span></div>'+
         '<div class="vr-st"><span class="vr-l">'+cpkIco('percent',10)+'% Margem</span><span class="vr-v '+(margemPct!=null&&margemPct<0?'rd':'gn')+'">'+(margemPct!=null?cpkFmtPct(margemPct):'—')+'</span></div>'+
@@ -3673,7 +3773,7 @@ function cpkRenderPlacas(){
     <td class="r" style="color:${dvColor}">${dvTxt}</td>
     <td>${cpkAbrev(p.cliente_princ,16)}</td>
     <td>${p.rota_princ||'—'}</td>
-    <td>${cpkStatusBadge(p.status)}</td>
+    <td>${cpkStatusBadge(p.status)}${cpkQuartilBadge(p)}</td>
     <td><button class="btn-icon" title="Memória de cálculo" onclick="cpkPlacaMemoria('${p.placa}')">𝑓</button></td></tr>`;}).join('') : cpkEmptyRow(16);
 }
 
@@ -4218,12 +4318,9 @@ function cpkDepIndex(mes){
     const ehProprio = cad ? cpkDepVeicEhFrotaPropria(cad,tipo) : true;  // registro manual sem cadastro também conta
     const anoFab=cpkDepAnoParts(rec.anoFab || (cad&&cad.anoFab) || (cad&&cad.ano) || '').fab;
     const anoMod=cpkDepAnoParts(rec.anoMod || (cad&&cad.anoMod) || (cad&&cad.ano) || '').mod;
-    // Status do ativo: o cadastro (veiculos.status_ativo) é a fonte única.
-    // O status salvo no registro do CPK só vale quando não há cadastro.
-    const statusEf=cpkDepStatusEfetivo(rec, cad);
-    const calc=cpkDepCalc(Object.assign({},rec,{tipo,status:statusEf}), mes);
+    const calc=cpkDepCalc(Object.assign({},rec,{tipo}), mes);
     const row=Object.assign({}, rec, {
-      placa, tipo, status:statusEf,
+      placa, tipo,
       codigo:rec.codigo || (comp&&comp.codigoDisplay) || placa,
       frota:rec.frota || (cad&&cad.frota) || '',
       tipoCarreta:rec.tipoCarreta || (cad&&cad.tipoCarreta) || (cad&&cad.subtipo) || '',
@@ -4260,7 +4357,7 @@ function cpkDepIndex(mes){
       anoFab, anoMod,
       valorCompra:0, valorResidual:0, periodoMeses:Math.round(cpkNum(p.prazo||0)),
       metodo:p.metodo||'linear', percentualAnual:cpkNum(p.percAnual||0), valorManualMensal:0,
-      status:cpkDepStatusEfetivo(null, v)
+      status:cpkDepStatusFromVeic(v)
     };
     const calc=cpkDepCalc(rec, mes);
     list.push(Object.assign({}, rec, {
@@ -4596,7 +4693,7 @@ function cpkDepEditarItem(placa){
   set('dep-i-marca',(v&&v.marca)||''); set('dep-i-modelo',(v&&(v.modelo||v.subtipo||v.serie))||'');
   set('dep-i-anoFab',cpkDepAnoParts((v&&v.anoFab)||(v&&v.anoMod)||(v&&v.ano)||'').fab);
   set('dep-i-anoMod',cpkDepAnoParts((v&&v.anoMod)||(v&&v.anoFab)||(v&&v.ano)||'').mod);
-  set('dep-i-status',cpkDepStatusEfetivo(null, v));
+  set('dep-i-status',cpkDepStatusFromVeic(v));
   cpkDepFormTipoChange(true);
   cpkDepFormMetodoChange();
   document.getElementById('dep-form-err').innerHTML='';
@@ -4622,7 +4719,7 @@ function cpkDepEditar(placa){
   setNum('dep-i-valorCompra',rec.valorCompra); set('dep-i-dataCompra',cpkNormDate(rec.dataCompra)||'');
   setNum('dep-i-valorResidual',rec.valorResidual); set('dep-i-periodoMeses',rec.periodoMeses);
   set('dep-i-metodo',rec.metodo||'linear'); setNum('dep-i-percentualAnual',rec.percentualAnual,4);
-  setNum('dep-i-valorManualMensal',rec.valorManualMensal); set('dep-i-status',cpkDepStatusEfetivo(rec, v));
+  setNum('dep-i-valorManualMensal',rec.valorManualMensal); set('dep-i-status',rec.status||'ativo');
   cpkDepFormMetodoChange();
   document.getElementById('dep-form-err').innerHTML='';
   document.getElementById('dep-modal').classList.add('open');
@@ -4716,73 +4813,11 @@ async function cpkDepSalvarVeic(){
   const btn=document.getElementById('dep-modal-save'); if(btn){btn.disabled=true;btn.textContent='Salvando…';}
   try{
     await cpkDepPersist();
-    // Status do ativo é campo compartilhado: reflete no Cadastros na mesma ação.
-    const esp=await cpkDepEspelharStatusCadastro(rec.placa, rec.status);
-    if(esp.ok) cpkToast('Depreciação de '+rec.placa+' salva.');
-    else cpkToast('Depreciação salva, mas o status não refletiu no Cadastro: '+esp.erro);
+    cpkToast('Depreciação de '+rec.placa+' salva.');
     cpkDepModalClose();
     cpkCalculate(); cpkRenderActive();
   }catch(e){ cpkToast('Erro ao salvar: '+(e.message||e)); }
   finally{ if(btn){btn.textContent='Salvar';btn.disabled=false;} }
-}
-
-/* Grava o status do ativo no cadastro de veículos (coleção 'veiculos',
-   campo status_ativo) — merge, sem tocar em nenhum outro campo do veículo.
-   Ativos fora do cadastro (compressores, registros manuais) seguem apenas
-   com o status do próprio registro de depreciação. */
-async function cpkDepEspelharStatusCadastro(placa, status){
-  const p=cpkNormPlaca(placa);
-  if(!p) return {ok:true, pulado:true};
-  const v=cpkVeic(p);
-  if(!v || !v.id) return {ok:true, pulado:true};            // não está no cadastro de veículos
-  const st=cpkDepNormStatus(status||'ativo');
-  if(cpkNormStr(v.statusAtivo||'') && cpkDepNormStatus(v.statusAtivo)===st) return {ok:true, pulado:true};
-  try{
-    await cpkFsSet('veiculos', v.id, {
-      status_ativo: st,
-      status_ativo_atualizado_em: new Date().toISOString(),
-      status_ativo_atualizado_por: (CPK.user&&CPK.user.email)||'',
-      status_ativo_origem: 'cpk'
-    }, true);
-    v.statusAtivo=st;                                        // memória local reflete na hora
-    CPK._dataVer=(CPK._dataVer||0)+1; CPK._depIdxCache=null;
-    cpkLog('Status do ativo espelhado no cadastro:',p,'→',st);
-    return {ok:true};
-  }catch(e){ return {ok:false, erro:e.message||String(e)}; }
-}
-
-/* Reconciliação única na carga: placas que hoje estão vendido/baixado/inativo
-   SOMENTE no registro de depreciação e ainda não têm status_ativo no cadastro
-   são promovidas para o cadastro. Garante que ninguém "volta para ativo" ao
-   passarmos a fonte única para o cadastro. Placas ativas não geram gravação. */
-async function cpkDepReconciliarStatusCadastro(){
-  try{
-    if(!cpkPodeEditarDep()) return;
-    const veics=(CPK.depData&&CPK.depData.veiculos)||{};
-    const pend=[];
-    for(const pl in veics){
-      const rec=veics[pl]||{};
-      const placa=cpkNormPlaca(rec.placa||pl); if(!placa) continue;
-      const st=cpkDepNormStatus(rec.status||'ativo'); if(st==='ativo') continue;
-      const v=cpkVeic(placa); if(!v||!v.id) continue;         // fora do cadastro → nada a fazer
-      if(cpkNormStr(v.statusAtivo||'')) continue;             // cadastro já tem definição própria
-      pend.push({v, st});
-    }
-    if(!pend.length) return;
-    for(const it of pend){
-      try{
-        await cpkFsSet('veiculos', it.v.id, {
-          status_ativo: it.st,
-          status_ativo_atualizado_em: new Date().toISOString(),
-          status_ativo_atualizado_por: (CPK.user&&CPK.user.email)||'',
-          status_ativo_origem: 'cpk-reconciliacao'
-        }, true);
-        it.v.statusAtivo=it.st;
-      }catch(e){ cpkLog('Reconciliação de status falhou em',it.v.placa,e.message); }
-    }
-    CPK._dataVer=(CPK._dataVer||0)+1; CPK._depIdxCache=null;
-    cpkLog('Status do ativo reconciliado com o cadastro:',pend.length,'placa(s).');
-  }catch(e){ cpkLog('Reconciliação de status do ativo:',e.message); }
 }
 async function cpkDepExcluir(){
   const placa=CPK._depEdit; if(!placa)return;
@@ -5430,13 +5465,11 @@ async function cpkDepUniSalvar(){
   CPK.depData=CPK.depData||{veiculos:{},params:cpkDepParamsDefault()};
   const veics=Object.assign({}, CPK.depData.veiculos||{});
   const now=new Date().toISOString(), by=(CPK.user&&CPK.user.email)||'';
-  const statusImportados={};   // placa → status vindo da planilha (espelha no cadastro)
   let n=0;
   CPK_DEP_ABAS.forEach(t=>{
     const d=U[t]; if(!d||!d.count) return;
     Object.keys(d.recs).forEach(pl=>{
       veics[pl]=Object.assign({}, veics[pl]||{}, d.recs[pl], {_editadoEm:now,_editadoPor:by});
-      if(d.recs[pl] && d.recs[pl].status) statusImportados[pl]=d.recs[pl].status;
       n++;
     });
   });
@@ -5446,8 +5479,6 @@ async function cpkDepUniSalvar(){
   if(msg){ msg.textContent='Gravando e verificando…'; msg.style.color='var(--mu)'; }
   try{
     await cpkDepPersist();   // grava em cpk_lancamentos/DEPRECIACAO + read-back de verificação
-    // Status do ativo é compartilhado: leva o que veio da planilha para o cadastro.
-    for(const pl in statusImportados){ await cpkDepEspelharStatusCadastro(pl, statusImportados[pl]); }
     cpkToast('Depreciação salva e verificada: '+n+' registro(s).');
     if(msg){ msg.textContent='✓ '+n+' registro(s) salvos e confirmados no Firestore.'; msg.style.color='var(--gn)'; }
     cpkDepUniLimparTudo();
@@ -5573,7 +5604,11 @@ function cpkAudNums(){
   let residuo=0; const rf=A.recFil||{};
   for(const f in rf) for(const b in rf[f]) residuo+=(+((rf[f][b]||{}).residuo)||0);
   const exAgreg=(CPK.custoExcluidos||[]).filter(e=>/agregad/i.test(e.motivo||'')).reduce((s,e)=>s+(+e.valorOrig||0),0);
-  return { receita, receitaPlacas, compl, custo, km, cpk, garantia, resultado, margem, residuo, exAgreg,
+  const receitaBruta=+CPK.receitaTotalBruta||0, imposto=+CPK.impostosCPK||0;
+  const aliqEf=CPK.aliqEfetivaCPK!=null?CPK.aliqEfetivaCPK*100:null;
+  const impEstimado=Object.values(CPK.impostosFil||{}).some(a=>a&&a.estimada);
+  return { receita, receitaPlacas, compl, receitaBruta, imposto, aliqEf, impEstimado,
+    custo, km, cpk, garantia, resultado, margem, residuo, exAgreg,
     diesel:+P.diesel||0, co:+P.co||0, coSemGar:(+P.co||0)-garantia, cp:+P.cp||0, ped:+P.ped||0, dep:+P.dep||0,
     ce:+P.ce||0, ceDre:+P.ceDre||0, capModo:CPK.capModo||'dep', depStat:CPK.depStat||null,
     qtdPlacas:(CPK.aggPlaca||[]).length, qtdRotas:(CPK.aggRota||[]).length };
@@ -5606,6 +5641,36 @@ function cpkAudInconsList(){
   return out;
 }
 
+// Reconciliação de impostos por filial: o que o Mapinha lançou × o que
+// o CPK deduziu. As bases são DIFERENTES de propósito — o Mapinha é a
+// filial inteira (própria + agregado), o CPK é só a receita própria.
+// A alíquota é que é compartilhada. Esta tabela existe para que isso
+// nunca precise ser reexplicado.
+function cpkAudImpostosTabela(){
+  const fils=cpkScopeFiliais();
+  const recBr=CPK.recFilPropriaBruta||{}, recLq=CPK.recFilPropria||{};
+  const linhas=fils.map(f=>{
+    const a=(CPK.impostosFil||{})[f]||{};
+    const br=+recBr[f]||0, lq=+recLq[f]||0;
+    const tagCls = a.fonte==='mes'?'inc' : a.fonte==='anterior'?'inc0' : 'exc';
+    const tagTxt = a.fonte==='mes'?'do mês' : a.fonte==='anterior'?('est. '+a.mesRef) : 'ausente';
+    return '<tr><td><b>'+f+'</b></td>'+
+      '<td class="r">'+cpkFmt(+a.fatBruto||0)+'</td>'+
+      '<td class="r">'+cpkFmt(+a.imposto||0)+'</td>'+
+      '<td class="r"><b>'+((+a.aliq||0)*100).toFixed(2)+'%</b> <span class="aud-tag '+tagCls+'">'+tagTxt+'</span></td>'+
+      '<td class="r">'+cpkFmt(br)+'</td>'+
+      '<td class="r">'+cpkFmt(br-lq)+'</td>'+
+      '<td class="r"><b>'+cpkFmt(lq)+'</b></td></tr>';
+  }).join('');
+  return '<div class="cpk-card"><div class="ct"><span>Impostos — Mapinha × CPK</span></div>'+
+    '<table class="cpk-tbl"><thead><tr>'+
+      '<th>Filial</th><th class="r">Fat. Bruto (Mapinha, filial inteira)</th><th class="r">Imposto (Mapinha)</th>'+
+      '<th class="r">Alíquota efetiva</th><th class="r">Receita própria bruta (CPK)</th>'+
+      '<th class="r">Imposto deduzido (CPK)</th><th class="r">Receita própria líquida</th>'+
+    '</tr></thead><tbody>'+(linhas||'<tr><td colspan="7">Sem filial no escopo.</td></tr>')+'</tbody></table>'+
+    '<div class="cpk-info"><span>A base do Mapinha é a <b>filial inteira</b> (frota própria + agregado); a do CPK é <b>só a receita própria</b>. O que os dois compartilham é a <b>alíquota</b>, não o valor. Alíquota mista é aceita porque quem emite o CT-e é sempre a Comix e o insumo do agregado é comprado pela Comix — débito e crédito são simétricos por real de receita. <b>IR/CS entra</b> (lucro presumido: base presumida sobre a receita, logo proporcional por construção).</span></div></div>';
+}
+
 function cpkRenderAuditoria(){
   const host=document.getElementById('aud-body'); if(!host) return;
   const A=CPK.audit;
@@ -5626,7 +5691,10 @@ function cpkRenderAuditoria(){
   const inconsN=cpkAudInconsList().length;
   const mgTone=n.margem==null?'':n.margem>=0?'gn':'rd';
   document.getElementById('aud-cards').innerHTML =
-    cpkKpi('trend','', 'Receita no CPK', cpkFmt(n.receita), 'SZB · CTRC de frota própria'+(n.compl>0?' + complementares':'')) +
+    cpkKpi('trend','', 'Receita líquida no CPK', cpkFmt(n.receita), 'SZB · CTRC de frota própria, líquido de impostos'+(n.compl>0?' + complementares':'')) +
+    cpkKpi('percent', (Object.values(CPK.impostosFil||{}).some(a=>a&&a.estimada)?'am':''), 'Impostos deduzidos',
+      cpkFmt(+CPK.impostosCPK||0),
+      'Alíquota efetiva '+(CPK.aliqEfetivaCPK!=null?cpkFmtPct(CPK.aliqEfetivaCPK*100):'—')+' · ICMS + PIS/COFINS + IR/CS + ISS (Mapinha)') +
     cpkKpi('wallet','', 'Custo total no CPK', cpkFmt(n.custo), 'Diesel + C.O + C.P + Pedágio + Depreciação (CE não entra)') +
     cpkKpi('layers', 'gn', 'Custo de capital: Depreciação',
       cpkFmt(n.dep),
@@ -5650,7 +5718,7 @@ function cpkRenderAuditoria(){
   // ── RESUMO AUTOMÁTICO ──────────────────────────────────────────────
   const resumo=document.getElementById('aud-resumo');
   const filTxt = A.scope&&A.scope.length? ('a(s) filial(is) '+A.scope.join(', ')) : 'todas as filiais (SC, PR, SP)';
-  resumo.innerHTML='<span>No período <b>'+cpkMesLabel(A.mes)+'</b>, considerando '+filTxt+', o CPK foi calculado com <b>'+cpkFmt(n.receita)+'</b> de receita, <b>'+cpkFmt(n.custo)+'</b> de custos e <b>'+cpkFmtKm(n.km)+'</b>. '+
+  resumo.innerHTML='<span>No período <b>'+cpkMesLabel(A.mes)+'</b>, considerando '+filTxt+', o CPK foi calculado com <b>'+cpkFmt(n.receita)+'</b> de receita <b>líquida</b> (bruto '+cpkFmt(n.receitaBruta)+' − impostos '+cpkFmt(n.imposto)+', alíquota efetiva '+(n.aliqEf!=null?cpkFmtPct(n.aliqEf):'—')+(n.impEstimado?', <b>estimada</b> em pelo menos uma filial':'')+'), <b>'+cpkFmt(n.custo)+'</b> de custos e <b>'+cpkFmtKm(n.km)+'</b>. '+
     'O custo total foi formado por Diesel ('+cpkFmt(n.diesel)+'), C.O ('+cpkFmt(n.coSemGar)+'), Garantia Agregados ('+cpkFmt(n.garantia)+'), C.P/Pessoal ('+cpkFmt(n.cp)+'), Pedágio ('+cpkFmt(n.ped)+') e Depreciação ('+cpkFmt(n.dep)+', por placa e quando cadastrada — o CE da premissa, '+cpkFmt(n.ceDre)+', não entra no CPK por regra de 07/2026). '+
     'Foram <b>excluídos</b> os custos diretos de agregados (diesel, arla, empréstimos, fechamento e manutenção de placa agregada), somando '+cpkFmt(n.exAgreg)+'; o <b>pedágio é sempre custo de frota</b> — pedágio de placas não-próprias (agregado, carro de apoio ou sem cadastro) foi incluído, imputado na filial e diluído entre as placas próprias. '+
     'O item <b>Garantia Agregados</b> foi <b>incluído</b> como C.O rateado igualmente entre as placas próprias de cada filial. '+
@@ -5664,11 +5732,11 @@ function cpkRenderAuditoria(){
   else if(tipo==='incons'){ html=cpkAudIncons(); }
   else {
     switch(visao){
-      case 'filial':  html=cpkAudPorFilial(fils); break;
+      case 'filial':  html=cpkAudImpostosTabela()+cpkAudPorFilial(fils); break;
       case 'placa':   html=cpkAudPorPlaca(); break;
       case 'rota':    html=cpkAudPorRota(n); break;
       case 'cliente': html=cpkAudPorCliente(n); break;
-      default:        html=cpkAudMemoria(n,tipo)+cpkAudExcluidos()+cpkAudIncons();
+      default:        html=cpkAudImpostosTabela()+cpkAudMemoria(n,tipo)+cpkAudExcluidos()+cpkAudIncons();
     }
   }
   host.innerHTML=html;
