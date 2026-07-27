@@ -408,7 +408,8 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 .status-tag.em_reforma{background:#fef3c7;color:#854f0b}
 .status-tag.a_reformar{background:var(--orange-l);color:var(--orange)}
 .status-tag.reserva{background:var(--gray-bg);color:var(--gray)}
-.status-tag.vendida{background:#f3f4f6;color:#6b7280;text-decoration:line-through}
+.status-tag.vendida,.status-tag.vendido{background:#f3f4f6;color:#6b7280;text-decoration:line-through}
+.status-tag.baixado,.status-tag.inativo{background:#f3f4f6;color:#6b7280;text-decoration:line-through}
 
 /* Placa Mercosul */
 .plate-mercosul{
@@ -1217,7 +1218,7 @@ table.data-table{
 
   const UNIT_FULL = { SC: "SANTA CATARINA", SP: "SÃO PAULO", PR: "PARANÁ" };
   const SUB_LABEL = { rodotrem:"RODOTREM", bitrem:"BITREM", "4eixo":"4º EIXO", vanderleia:"VANDERLEIA", ls30:"LS (30m³)", ls35:"LS (35m³)" };
-  const DISP_SUFFIX = { operando:"OPERANDO", disponivel:"DISPONÍVEL", indisponivel:"INDISPONÍVEL", a_reformar:"A REFORMAR", em_reforma:"EM REFORMA", reserva:"RESERVA", manutencao:"MANUTENÇÃO" };
+  const DISP_SUFFIX = { operando:"OPERANDO", disponivel:"DISPONÍVEL", indisponivel:"INDISPONÍVEL", a_reformar:"A REFORMAR", em_reforma:"EM REFORMA", reserva:"RESERVA", manutencao:"MANUTENÇÃO", vendida:"VENDIDO", baixado:"BAIXADO", inativo:"INATIVO" };
   const COMP_STATUS = { operando:"OPERANDO", estoque:"EM ESTOQUE", manutencao:"MANUTENÇÃO", indisponivel:"INDISPONÍVEL", disponivel:"EM ESTOQUE" };
 
   function xmlEsc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
@@ -1310,6 +1311,7 @@ table.data-table{
   function findVeh(ctx,key){ return ctx.vehById[key]||ctx.vehByPlaca[key]||ctx.vehByFrota[key]||null; }
   function alocRowsForUnit(slug,ctx){
     const cavalos=ctx.veiculos.filter(v=>v.categoria==="cavalo" && v.unidade_slug===slug
+      && !foraDaFrota(v)
       && !["em_reforma","a_reformar","indisponivel","reserva"].includes(v.disponibilidade));
     return cavalos.map(v=>{
       const aloc=ctx.alocByCav[v.id]||{};
@@ -1334,14 +1336,14 @@ table.data-table{
     const ctx={ veiculos:STATE.veiculos, vehById, vehByPlaca, vehByFrota, compById, alocByCav, alocByComp };
 
     let g=dec(files["xl/worksheets/sheet1.xml"]);
-    g=setSheetData(g,1,"ABCDEFGHIJKLMNO".split(""),STATE.veiculos,geralVals,2);
+    g=setSheetData(g,1,"ABCDEFGHIJKLMNO".split(""),STATE.veiculos.filter(v=>!foraDaFrota(v)),geralVals,2);
     files["xl/worksheets/sheet1.xml"]=enc(g);
 
     let cp=dec(files["xl/worksheets/sheet2.xml"]);
     cp=setSheetData(cp,1,"ABCDEFGH".split(""),STATE.compressores,makeCompVals(ctx),2);
     files["xl/worksheets/sheet2.xml"]=enc(cp);
 
-    const carretas=STATE.veiculos.filter(v=>v.categoria==="carreta");
+    const carretas=STATE.veiculos.filter(v=>v.categoria==="carreta" && !foraDaFrota(v));
     let ca=dec(files["xl/worksheets/sheet3.xml"]);
     ca=setSheetData(ca,1,"ABCDEFGHIJK".split(""),carretas,carretaVals,2);
     files["xl/worksheets/sheet3.xml"]=enc(ca);
@@ -1737,7 +1739,13 @@ function normalizeVeiculo(v) {
 
   const stRaw = String(v.status || "").toUpperCase();
   let disp = "operando";
-  if (stRaw.includes("INDISPON")) disp = "indisponivel";
+  // ── FORA DE FROTA — precede qualquer outra regra ──────────────────────────
+  // VENDIDO / BAIXADO / INATIVO deixam de ser caminhão da frota (próprio ou
+  // agregado) e não entram em nenhuma contagem operacional.
+  if (/VENDID/.test(stRaw)) disp = "vendida";
+  else if (/BAIXAD|BAIXA DEFINITIVA|^BAIXA$/.test(stRaw)) disp = "baixado";
+  else if (/INATIV|DESATIV/.test(stRaw)) disp = "inativo";
+  else if (stRaw.includes("INDISPON")) disp = "indisponivel";
   else if (stRaw.includes("MANUT") || stRaw.includes("MANUTENÇÃO") || stRaw.includes("MANUTENCAO")) disp = "manutencao";
   else if (stRaw.includes("EM REFORMA")) disp = "em_reforma";
   else if (stRaw.includes("A REFORMAR") || stRaw.includes("REFORMAR")) disp = "a_reformar";
@@ -1769,6 +1777,19 @@ function normalizeVeiculo(v) {
   };
 }
 function upperText(s) { return String(s || "").trim().toUpperCase(); }
+
+/* ─── FORA DE FROTA ──────────────────────────────────────────────────────────
+   Veículo com status VENDIDO, BAIXADO ou INATIVO não é mais caminhão da frota:
+   sai de todas as contagens (próprio e agregado), do Kanban, dos alertas, dos
+   rankings e das exportações. Permanece visível apenas na aba Geral, para
+   consulta e para permitir reverter o status manualmente. */
+var STATUS_FORA_FROTA = ["vendida","vendido","baixado","baixada","inativo","inativa","desativado","desativada"];
+function foraDaFrota(v) {
+  if (!v) return false;
+  return STATUS_FORA_FROTA.indexOf(String(v.disponibilidade || "").toLowerCase()) !== -1;
+}
+window.foraDaFrota = foraDaFrota;
+window.STATUS_FORA_FROTA = STATUS_FORA_FROTA;
 
 /* ─── Carregamento de dados ─── */
 function setFrotaTimestamp() {
@@ -1823,7 +1844,9 @@ async function loadAllData() {
       if (v) {
         if (a.unidade_slug) { v.unidade_slug = a.unidade_slug; }
         if (a.unidade) { v.unidade = a.unidade; }
-        if (a.disponibilidade) { v.disponibilidade = a.disponibilidade; }
+        // Alocação antiga não pode "ressuscitar" um veículo vendido/baixado/inativo:
+        // o status do cadastro (Firestore) prevalece nesses casos.
+        if (a.disponibilidade && !foraDaFrota(v)) { v.disponibilidade = a.disponibilidade; }
       }
     });
 
@@ -1852,6 +1875,8 @@ async function loadAllData() {
       placasEmManutencao.forEach(p => placasSemOSAberta.delete(p));
 
       STATE.veiculos.forEach(v => {
+        // Vendido / baixado / inativo não volta para manutenção por OS antiga
+        if (foraDaFrota(v)) return;
         const placaUp = String(v.placa || v.id || "").toUpperCase().trim();
         if (placasEmManutencao.has(placaUp)) {
           // Força manutenção independente do que está salvo na alocação
@@ -1935,10 +1960,11 @@ async function loadAllData() {
           }
         });
       });
-      const STATUS_ESPECIAL = ["indisponivel","em_reforma","a_reformar","manutencao","vendida"];
+      const STATUS_ESPECIAL = ["indisponivel","em_reforma","a_reformar","manutencao"].concat(STATUS_FORA_FROTA);
       const toSync = [];
       STATE.veiculos.forEach(v => {
         if (v.categoria !== "carreta") return;
+        if (foraDaFrota(v)) return;   // fora de frota não é reconciliada
         const emUso = carretasEmUso.has(v.id) || carretasEmUso.has(v.placa) || (v.frota && carretasEmUso.has(v.frota));
         if (emUso) {
           // Alocada → deve ser operando
@@ -2379,6 +2405,7 @@ const COLUMNS = [
 
 function getCavalosPorColuna(colId) {
   return STATE.veiculos.filter(v => {
+    if (foraDaFrota(v)) return false;   // vendido / baixado / inativo não vai ao board
     const d = v.disponibilidade;
     const isCavalo = v.categoria === "cavalo" || v.categoria === "apoio";
     const isCarreta = v.categoria === "carreta";
@@ -2475,7 +2502,8 @@ function renderCard(cavalo, searchTerm) {
     : '<div class="card-days gray">—</div>';
 
   const dispLabel = { operando:'operando', disponivel:'disponível', manutencao:'manutenção', indisponivel:'indisponível',
-                      em_reforma:'em reforma', a_reformar:'a reformar', reserva:'reserva' };
+                      em_reforma:'em reforma', a_reformar:'a reformar', reserva:'reserva',
+                      vendida:'vendido', baixado:'baixado', inativo:'inativo' };
   const statusTag = '<span class="status-tag '+cavalo.disponibilidade+'">'+(dispLabel[cavalo.disponibilidade]||cavalo.disponibilidade)+'</span>';
 
   const canEdit = STATE.isAdmin;
@@ -2588,7 +2616,7 @@ function renderBoard() {
   // Stats globais
   const stats = { green: 0, yellow: 0, orange: 0, red: 0, gray: 0 };
   STATE.veiculos.forEach(v => {
-    if (v.categoria !== "cavalo") return;
+    if (v.categoria !== "cavalo" || foraDaFrota(v)) return;
     const szb = szbDe(v.id);
     const dias = szb ? szb.dias_sem_viagem : null;
     const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
@@ -2995,7 +3023,7 @@ function openSlotPicker(cavaloId, slot, title) {
     const livres = STATE.compressores.filter(c => !usadosCompressor.has(c.id));
     opts = livres.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.identificacao || c.id)} ${c.serie ? '· '+escapeHtml(c.serie) : ''}</option>`).join("");
   } else {
-    const livres = STATE.veiculos.filter(x => x.categoria === "carreta" && !usadosCarreta.has(x.id) && x.disponibilidade !== "vendida");
+    const livres = STATE.veiculos.filter(x => x.categoria === "carreta" && !usadosCarreta.has(x.id) && !foraDaFrota(x));
     opts = livres.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.frota || '')} · ${escapeHtml(c.placa)} ${c.subtipo ? '('+escapeHtml(c.subtipo)+')' : ''}</option>`).join("");
   }
 
@@ -3034,6 +3062,7 @@ function openMotoristaModal(cavaloId) {
   const atual = v.motorista ? String(v.motorista).trim().toUpperCase() : null;
   const ocupados = new Set();
   STATE.veiculos.forEach(x => {
+    if (foraDaFrota(x)) return;   // veículo fora de frota não bloqueia motorista
     if (x.id !== cavaloId && x.motorista) ocupados.add(String(x.motorista).trim().toUpperCase());
   });
   const motoristasOrd = STATE.motoristas.slice()
@@ -3253,7 +3282,9 @@ function renderGeral() {
     {v:"em_reforma",l:"Em reforma"},
     {v:"a_reformar",l:"A reformar"},
     {v:"indisponivel",l:"Indisponível"},
-    {v:"vendida",l:"Vendida"},
+    {v:"vendida",l:"Vendido / Vendida (fora de frota)"},
+    {v:"baixado",l:"Baixado (fora de frota)"},
+    {v:"inativo",l:"Inativo (fora de frota)"},
   ];
   const UNIT_OPTS = [
     {v:"SC",l:"Santa Catarina"},
@@ -3542,7 +3573,7 @@ function renderCompressores() {
     return;
   }
   // Datalist global (todas placas de cavalos)
-  const allCavalos = STATE.veiculos.filter(v => v.categoria === "cavalo");
+  const allCavalos = STATE.veiculos.filter(v => v.categoria === "cavalo" && !foraDaFrota(v));
   const datalistHtml = `<datalist id="dl-cavalos">
     ${allCavalos.map(v => `<option value="${escapeHtml(v.placa)}">${escapeHtml(v.frota || '')} · ${escapeHtml(v.placa)}</option>`).join('')}
   </datalist>`;
@@ -3792,6 +3823,10 @@ function calcResumo() {
   }
 
   STATE.veiculos.forEach(v => {
+    // ── REGRA FORA DE FROTA ───────────────────────────────────────────────
+    // Vendido / baixado / inativo não é contado como caminhão da frota,
+    // nem como próprio nem como agregado, em nenhum indicador.
+    if (foraDaFrota(v)) return;
     const unit = v.unidade_slug;
     const d = v.disponibilidade;
 
@@ -3827,7 +3862,7 @@ function calcResumo() {
 
     // ── CARRETAS ─────────────────────────────────────────────────────────────
     if (v.categoria === "carreta" && unit && u[unit]) {
-      if (d === "vendida") return; // Vendidas fora de todos os contadores
+      // vendida/baixado/inativo já saíram no topo do loop (regra fora de frota)
 
       const sub  = classifySubtipo(v.subtipo);
       const isPar = (sub === "rodotrem" || sub === "bitrem");
@@ -3903,7 +3938,7 @@ function calcResumo() {
   const total = {};
   Object.keys(u.SC).forEach(k => { total[k] = (u.SC[k]||0) + (u.SP[k]||0) + (u.PR[k]||0); });
   const alertas = { green: 0, yellow: 0, orange: 0, red: 0, gray: 0 };
-  STATE.veiculos.filter(v => v.categoria === "cavalo").forEach(v => {
+  STATE.veiculos.filter(v => v.categoria === "cavalo" && !foraDaFrota(v)).forEach(v => {
     const szb = szbDe(v.id);
     const dias = szb ? szb.dias_sem_viagem : null;
     const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
@@ -4124,7 +4159,7 @@ function renderDashboard() {
       <div class="dash-grid">
         ${['SC','SP','PR'].map(uk => {
           // Calcula caminhões parados (>= limiar yellow) da filial e tempo médio
-          const cavalosFilial = STATE.veiculos.filter(v => v.categoria === 'cavalo' && v.unidade_slug === uk);
+          const cavalosFilial = STATE.veiculos.filter(v => v.categoria === 'cavalo' && v.unidade_slug === uk && !foraDaFrota(v));
           const parados = cavalosFilial.map(v => {
             const szb = szbDe(v.id);
             const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
@@ -4175,7 +4210,7 @@ function renderDashboard() {
     <div class="dash-section">
       <div class="dash-section-header">
         🚨 Distribuição de Alertas
-        <div class="count">${STATE.veiculos.filter(v=>v.categoria==='cavalo').length} cavalos</div>
+        <div class="count">${STATE.veiculos.filter(v=>v.categoria==='cavalo' && !foraDaFrota(v)).length} cavalos</div>
       </div>
       <div style="padding:6px 0">
         ${renderAlertBar('OK (verde)', r.alertas.green, '#10b981')}
@@ -4230,7 +4265,7 @@ function renderDashboard() {
 }
 
 function renderAlertBar(label, val, color) {
-  const total = STATE.veiculos.filter(v => v.categoria === "cavalo").length;
+  const total = STATE.veiculos.filter(v => v.categoria === "cavalo" && !foraDaFrota(v)).length;
   const pct = total > 0 ? (val/total*100) : 0;
   return `
     <div class="dash-bar-row">
@@ -4288,7 +4323,7 @@ function populateFilialFilters() {
   const selC = document.getElementById("cf_cavalo");
   if (selC) {
     selC.innerHTML = '<option value="">— Nenhum —</option>' +
-      STATE.veiculos.filter(v => v.categoria === "cavalo").sort((a,b)=>(a.frota||"").localeCompare(b.frota||""))
+      STATE.veiculos.filter(v => v.categoria === "cavalo" && !foraDaFrota(v)).sort((a,b)=>(a.frota||"").localeCompare(b.frota||""))
         .map(v => `<option value="${escapeHtml(v.placa)}">${escapeHtml(v.frota || v.placa)} · ${escapeHtml(v.placa)}</option>`).join("");
   }
 }
@@ -4306,7 +4341,7 @@ async function imprimirRelatorio() {
     const wb = XLSX.utils.book_new();
 
     // === Aba GERAL ===
-    const geral = STATE.veiculos.map(v => ({
+    const geral = STATE.veiculos.filter(v => !foraDaFrota(v)).map(v => ({
       "Frota": v.frota || "",
       "Placa": v.placa || "",
       "Tipo": v.tipo_raw || "",
@@ -4328,6 +4363,7 @@ async function imprimirRelatorio() {
       const unitLabel = UNIT_LABEL[slug];
       const linhas = [];
       STATE.veiculos.filter(v => v.categoria === "cavalo" && v.unidade_slug === slug
+        && !foraDaFrota(v)
         && !["em_reforma","a_reformar","indisponivel","reserva"].includes(v.disponibilidade)
       ).forEach(v => {
         const aloc = STATE.alocacoes[v.id] || {};
