@@ -335,11 +335,14 @@ td>.skel-line{vertical-align:middle}
       <table>
         <thead><tr>
           <th>Linha</th>
-          <th class="num">Realizado</th><th class="num">% Fat.</th>
+          <th class="num">Realizado</th><th class="num" title="Análise vertical sobre o Fat. Líquido (mudança 07/2026). A linha de Impostos é a única exceção: % sobre o Bruto.">% Fat. Líq.</th>
           <th class="num">Meta (PA)</th><th class="num">% Real x Meta</th>
         </tr></thead>
         <tbody id="dreTbody"></tbody>
       </table>
+      <div id="dreBaseNote" style="margin-top:10px;font-size:11px;line-height:1.5;color:var(--mu);background:var(--sf);border:1px solid var(--bd2);border-left:3px solid var(--am,#b45309);border-radius:4px;padding:8px 11px">
+        <b>Mudança de base (07/2026):</b> a margem % e a coluna AV% passaram a ser calculadas sobre o <b>Fat. Líquido</b>, não sobre o Bruto. O resultado em R$ não mudou — só o denominador. Séries anteriores a 07/2026 usam a base antiga e <b>não são comparáveis em %</b>.
+      </div>
       <div id="agregNote" style="margin-top:10px"></div>
     </div>
   </div>
@@ -1547,6 +1550,15 @@ async function saveCabecalho(){
     irCs:+document.getElementById('impIR').value||0,
     iss:+document.getElementById('impISS').value||0
   };
+  // Alíquota efetiva publicada no cabeçalho: o CPK usa para DESCER a
+  // receita ao líquido; o Comercial usa para SUBIR o custo ao piso bruto
+  // da rota. Mesma fonte, mesmo número, nenhum dos dois chuta.
+  (function(){
+    const _f=+ST.cabecalho.receita.fatBruto||0;
+    const _i=(+ST.cabecalho.impostos.icms||0)+(+ST.cabecalho.impostos.pisCofins||0)
+            +(+ST.cabecalho.impostos.irCs||0)+(+ST.cabecalho.impostos.iss||0);
+    ST.cabecalho.aliqEfetiva = _f>0 ? _i/_f : 0;
+  })();
   ST.cabecalho.filial=ST.filial; ST.cabecalho.mesRef=ST.mesRef;
   ST.cabecalho.ano=+ST.mesRef.slice(0,4); ST.cabecalho.mes=+ST.mesRef.slice(5,7);
   if(!ST.cabecalho.status) ST.cabecalho.status='rascunho';
@@ -1846,7 +1858,13 @@ function calcDRE(){
   const cp=cpInfo.realTotal; const ce=ceInfo.realTotal;
   const rf=fl-diesel-agreg-pedagio-co-cp-ce;
   return { fat, prod, pm: prod?fat/prod:0, imp, fl, diesel, dieselDet, agreg, pedagio, co, cp, ce, rf,
-           margem: fat? rf/fat : 0 };
+           // MARGEM SOBRE O LÍQUIDO (mudança 07/2026). Antes era rf/fat: o
+           // numerador já era líquido (rf = fl − custos) e o denominador era
+           // bruto — base mista. Sobre bruto, a filial com carga interestadual
+           // aparecia pior POR ALÍQUOTA, não por operação, e o gestor era
+           // cobrado por algo que não governa.
+           margem: fl? rf/fl : 0,
+           aliqEfetiva: fat? imp/fat : 0 };
 }
 /* Sub-custos do Custo Operacional (detalhamento dentro do grupo CO).
    Melhorias Equip. (Reformas) = CC 03.01 (ou nome ~ melhoria/reforma).
@@ -1902,7 +1920,11 @@ function calcBreakdownConsolidado(){
   });
   Object.assign(ST, save);   // restaura escopo consolidado
   D.dieselDet=DD;
-  D.pm=D.prod?D.fat/D.prod:0; D.margem=D.fat?D.rf/D.fat:0;
+  // Consolidado recalcula a margem do zero (não herda de calcDRE) — tem que
+  // seguir a MESMA base do por-filial: Fat. LÍQUIDO. Sem isso, "Todas"
+  // mostraria margem sobre bruto e SC/PR/SP sobre líquido, na mesma tela.
+  D.pm=D.prod?D.fat/D.prod:0; D.margem=D.fl?D.rf/D.fl:0;
+  D.aliqEfetiva=D.fat?D.imp/D.fat:0;   // alíquota mista do escopo (só leitura — o CPK usa a da filial)
   CP.realTotal=CP.folhaReal+CP.epiReal+CP.legalReal+CP.outrosReal;
   CP.metaTotal=CP.folhaMeta+CP.epiMeta+CP.legalMeta+CP.outrosMeta;
   CP.folhaRealPct=D.fat?(CP.folhaReal/D.fat*100):0;
@@ -1914,12 +1936,14 @@ function renderDre(){
   const cons = isConsolidado();
   document.getElementById('dreTitle').textContent = 'DRE — '+(cons?'Todas':ST.filial)+' · '+mesLabel(ST.mesRef);
   const V = dreView(); const d=V.d, m=V.metas||{}, cp=V.cp, ce=V.ce, co=V.co; const dd=d.dieselDet||{};
-  const fatPct=v=> d.fat? v/d.fat : 0;
+  // AV% sobre o Fat. LÍQUIDO (padrão DRE). A linha de Impostos é a única
+  // exceção — só faz sentido sobre o bruto — e é tratada em linha().
+  const fatPct=v=> d.fl? v/d.fl : 0;
   const linha=(nome,val,meta,cls='')=>{
     const realxmeta = meta? val/meta : 0;
     return `<tr class="${cls}"><td>${nome}</td>
       <td class="num ${val<0?'neg':''}">${moeda(val)}</td>
-      <td class="num">${nome==='Fat. Bruto'?'—':pct(fatPct(val))}</td>
+      <td class="num">${nome==='Fat. Bruto'?'—':(/Impostos/.test(nome)? pct(d.fat? val/d.fat : 0) : pct(fatPct(val)))}</td>
       <td class="num">${meta?moeda(meta):'—'}</td>
       <td class="num">${meta?pct(realxmeta):'—'}</td></tr>`;
   };
@@ -2316,7 +2340,7 @@ async function fechar(){
   ST.cabecalho.status='fechado';
   ST.cabecalho.totais={ fatBruto:d.fat, producaoT:d.prod, precoMedio:d.pm, totalImpostos:d.imp, fatLiquido:d.fl,
     diesel:d.diesel, agregados:d.agreg, pedagio:d.pedagio, custoOperacional:d.co, custoPessoal:d.cp, custoEquip:d.ce,
-    resultadoFinanceiro:d.rf, margemPct:d.margem };
+    resultadoFinanceiro:d.rf, margemPct:d.margem, aliqEfetiva:d.aliqEfetiva };
   ST.cabecalho.fechadoPor=userMin(); ST.cabecalho.fechadoEm=new Date().toISOString();
   ST.cabecalho.historico=[...(ST.cabecalho.historico||[]),{acao:'fechado',por:userMin(),em:new Date().toISOString()}];
   await fsSetDoc('mapinha_mensal', mapId(), ST.cabecalho, {merge:true});
