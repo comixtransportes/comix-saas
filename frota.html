@@ -408,8 +408,8 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 .status-tag.em_reforma{background:#fef3c7;color:#854f0b}
 .status-tag.a_reformar{background:var(--orange-l);color:var(--orange)}
 .status-tag.reserva{background:var(--gray-bg);color:var(--gray)}
-.status-tag.vendida,.status-tag.vendido{background:#f3f4f6;color:#6b7280;text-decoration:line-through}
-.status-tag.baixado,.status-tag.inativo{background:#f3f4f6;color:#6b7280;text-decoration:line-through}
+.status-tag.vendida,.status-tag.vendido,.status-tag.baixado{background:#f3f4f6;color:#6b7280;text-decoration:line-through}
+.status-tag.inativo{background:#eceff3;color:#6b7280}
 
 /* Placa Mercosul */
 .plate-mercosul{
@@ -1737,28 +1737,24 @@ function normalizeVeiculo(v) {
   }
   if (!vinc) vinc = "FROTA";  // default seguro
 
-  const stRaw  = String(v.status || "").toUpperCase();
-  // O badge Ativo/Inativo do módulo Cadastros NÃO vive no campo `status`.
-  // Como o nome do campo varia entre registros antigos e novos, aceitamos
-  // todas as formas plausíveis — booleano, string ou campo `situacao`.
-  const sitRaw = String(v.situacao || v["situação"] || v.situation || "").toUpperCase();
-  const ativoRaw = (v.ativo !== undefined) ? v.ativo
-                 : (v.active !== undefined) ? v.active
-                 : (v.is_active !== undefined) ? v.is_active
-                 : undefined;
-  const inativoPorFlag =
-      ativoRaw === false || ativoRaw === 0 || ativoRaw === "false" || ativoRaw === "0" ||
-      /^(INATIV|DESATIV|NAO|NÃO|N)$|INATIV|DESATIV/.test(String(ativoRaw === undefined ? "" : ativoRaw).toUpperCase());
-  const foraRaw = (stRaw + " " + sitRaw).trim();
+  /* ── DOIS EIXOS DIFERENTES, DUAS FONTES DIFERENTES ──────────────────────
+     `status_ativo`  → CICLO DE VIDA do bem (ativo | vendido | baixado |
+                       inativo). Dono: módulo Cadastros, aba Veículos, campo
+                       "Status do ativo". Espelhado no CPK › Depreciação.
+                       É ele que decide se o veículo é frota ou não.
+     `status`        → ESTADO OPERACIONAL do dia (operando, disponível,
+                       manutenção, reserva, reforma...). Dono: este módulo.
+     Confundir os dois foi exatamente o que deixou o CA131/OWR2H06 marcado
+     como Inativo no Cadastros e OPERANDO no Kanban. */
+  const stRaw = String(v.status || "").toUpperCase();
+  const statusAtivo = normalizeStatusAtivo(
+    (v.status_ativo !== undefined && v.status_ativo !== null && String(v.status_ativo).trim() !== "")
+      ? v.status_ativo
+      : v.status   // ponte p/ registros antigos, gravados antes do campo existir
+  );
 
   let disp = "operando";
-  // ── FORA DE FROTA — precede qualquer outra regra ──────────────────────────
-  // VENDIDO / BAIXADO / INATIVO deixam de ser caminhão da frota (próprio ou
-  // agregado) e não entram em nenhuma contagem operacional.
-  if (/VENDID/.test(foraRaw)) disp = "vendida";
-  else if (/BAIXAD|BAIXA DEFINITIVA/.test(foraRaw) || foraRaw === "BAIXA") disp = "baixado";
-  else if (/INATIV|DESATIV/.test(foraRaw) || inativoPorFlag) disp = "inativo";
-  else if (stRaw.includes("INDISPON")) disp = "indisponivel";
+  if (stRaw.includes("INDISPON")) disp = "indisponivel";
   else if (stRaw.includes("MANUT") || stRaw.includes("MANUTENÇÃO") || stRaw.includes("MANUTENCAO")) disp = "manutencao";
   else if (stRaw.includes("EM REFORMA")) disp = "em_reforma";
   else if (stRaw.includes("A REFORMAR") || stRaw.includes("REFORMAR")) disp = "a_reformar";
@@ -1783,8 +1779,9 @@ function normalizeVeiculo(v) {
     motorista: upperText(v.motorista),
     disponibilidade: disp,
     status_raw: v.status || "OPERANDO",
-    ativo_raw: (ativoRaw === undefined ? null : ativoRaw),
-    situacao_raw: v.situacao || v["situação"] || null,
+    status_ativo: statusAtivo,              // ativo | vendido | baixado | inativo
+    status_ativo_raw: v.status_ativo || null,
+    status_ativo_origem: v.status_ativo_origem || null,
     observacao: v.observacao || v.observacoes || null,
     chassi: v.chassi || null,
     renavam: v.renavam || null,
@@ -1793,18 +1790,32 @@ function normalizeVeiculo(v) {
 }
 function upperText(s) { return String(s || "").trim().toUpperCase(); }
 
+/* ─── STATUS DO ATIVO · fonte única ──────────────────────────────────────────
+   Cópia literal da regra do módulo Cadastros (cadastros.html → função de mesmo
+   nome). Campo canônico: coleção `veiculos`, chave `status_ativo`, valores
+   ativo | vendido | baixado | inativo. Sem valor gravado o veículo é ATIVO —
+   é o padrão de toda a frota já cadastrada, então ausência nunca some com nada.
+   Se a regra mudar no Cadastros, tem que mudar aqui junto. */
+function normalizeStatusAtivo(value) {
+  const n = String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  if (/VEND/.test(n))            return "vendido";
+  if (/BAIX/.test(n))            return "baixado";
+  if (/INATIV|DESATIV/.test(n))  return "inativo";
+  return "ativo";
+}
+const STATUS_ATIVO_LABEL = { ativo:"Ativo", vendido:"Vendido", baixado:"Baixado", inativo:"Inativo" };
+
 /* ─── FORA DE FROTA ──────────────────────────────────────────────────────────
-   Veículo com status VENDIDO, BAIXADO ou INATIVO não é mais caminhão da frota:
-   sai de todas as contagens (próprio e agregado), do Kanban, dos alertas, dos
-   rankings e das exportações. Permanece visível apenas na aba Geral, para
-   consulta e para permitir reverter o status manualmente. */
-var STATUS_FORA_FROTA = ["vendida","vendido","baixado","baixada","inativo","inativa","desativado","desativada"];
+   Vendido, baixado ou inativo deixa de ser caminhão da frota: sai de todas as
+   contagens (própria e agregada), do Kanban, dos alertas, dos rankings e das
+   exportações. Continua visível na aba Geral, em modo leitura — o status só se
+   altera no Cadastros, que é quem espelha a mudança no CPK › Depreciação. */
 function foraDaFrota(v) {
   if (!v) return false;
-  return STATUS_FORA_FROTA.indexOf(String(v.disponibilidade || "").toLowerCase()) !== -1;
+  return normalizeStatusAtivo(v.status_ativo) !== "ativo";
 }
+window.normalizeStatusAtivo = normalizeStatusAtivo;
 window.foraDaFrota = foraDaFrota;
-window.STATUS_FORA_FROTA = STATUS_FORA_FROTA;
 
 /* ─── Carregamento de dados ─── */
 function setFrotaTimestamp() {
@@ -1859,8 +1870,8 @@ async function loadAllData() {
       if (v) {
         if (a.unidade_slug) { v.unidade_slug = a.unidade_slug; }
         if (a.unidade) { v.unidade = a.unidade; }
-        // Alocação antiga não pode "ressuscitar" um veículo vendido/baixado/inativo:
-        // o status do cadastro (Firestore) prevalece nesses casos.
+        // Alocação só governa o estado operacional. Um veículo fora de frota
+        // (status_ativo ≠ ativo) não é "ressuscitado" por alocação antiga.
         if (a.disponibilidade && !foraDaFrota(v)) { v.disponibilidade = a.disponibilidade; }
       }
     });
@@ -1907,10 +1918,11 @@ async function loadAllData() {
       // Diagnóstico da regra "fora de frota" — confere no console quais veículos
       // saíram das contagens e por qual campo foram identificados.
       const _fora = STATE.veiculos.filter(foraDaFrota);
-      console.log("[Frota] Fora de frota: " + _fora.length + " veículo(s) — não contam como próprio nem agregado");
+      console.log("[Frota] Fora de frota: " + _fora.length + " veículo(s) — status_ativo ≠ ativo, não contam como próprio nem agregado");
       if (_fora.length) console.table(_fora.map(x => ({
         frota: x.frota, placa: x.placa, categoria: x.categoria,
-        regra: x.disponibilidade, status: x.status_raw, ativo: x.ativo_raw, situacao: x.situacao_raw
+        status_ativo: x.status_ativo, gravado: x.status_ativo_raw,
+        origem: x.status_ativo_origem, status_operacional: x.status_raw
       })));
     } catch(osErr) {
       console.warn("[Frota] Não foi possível cruzar OS:", osErr.message);
@@ -3306,9 +3318,8 @@ function renderGeral() {
     {v:"em_reforma",l:"Em reforma"},
     {v:"a_reformar",l:"A reformar"},
     {v:"indisponivel",l:"Indisponível"},
-    {v:"vendida",l:"Vendido / Vendida (fora de frota)"},
-    {v:"baixado",l:"Baixado (fora de frota)"},
-    {v:"inativo",l:"Inativo (fora de frota)"},
+    // Vendido / baixado / inativo NÃO entram aqui: são ciclo de vida do ativo
+    // (campo status_ativo), editável só em Cadastros › Veículos.
   ];
   const UNIT_OPTS = [
     {v:"SC",l:"Santa Catarina"},
@@ -3351,7 +3362,9 @@ function renderGeral() {
                   ${UNIT_OPTS.map(o => `<option value="${o.v}" ${v.unidade_slug===o.v?'selected':''}>${o.l}</option>`).join('')}
                 </select>`
               : escapeHtml(v.unidade || '—')}</td>
-            <td>${STATE.isAdmin
+            <td>${foraDaFrota(v)
+              ? `<span class="status-tag ${v.status_ativo}" title="Fora de frota. O status do ativo só muda em Cadastros › Veículos (espelha no CPK › Depreciação).">${STATUS_ATIVO_LABEL[v.status_ativo]}</span>`
+              : STATE.isAdmin
               ? `<select class="inline-edit" onchange="editGeralField('${escapeHtml(v.id)}','status',this.value)" style="padding:3px 6px;border:1px solid var(--gray-l);border-radius:4px;font-size:11.5px;font-family:inherit">
                   ${STATUS_OPTS.map(o => `<option value="${o.v}" ${v.disponibilidade===o.v?'selected':''}>${o.l}</option>`).join('')}
                 </select>`
