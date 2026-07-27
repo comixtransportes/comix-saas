@@ -755,6 +755,96 @@ firebase.firestore().settings({
 });
 const db   = firebase.firestore();
 
+/* ══════════════════════════════════════════════════════════════════════════
+   CROSS-REALM GUARD · Firestore compartilhado com os iframes dos módulos
+   ────────────────────────────────────────────────────────────────────────
+   CONTEXTO: cada módulo, quando embutido no portal, reusa o SDK daqui
+      window.firebase = window.parent.firebase
+   Isso é proposital: mantém UMA sessão de auth para os 16 módulos e evita
+   baixar o SDK 16 vezes. Efeito colateral: o payload nasce no realm DO
+   IFRAME, mas quem valida é o SDK DESTE realm. O Firestore testa com
+
+      Object.getPrototypeOf(obj) === Object.prototype
+
+   e cada janela tem o SEU próprio Object/Array/Date. Um objeto legítimo
+   criado no iframe é lido aqui como "a custom Object object" e a gravação
+   é abortada:
+      "Function addDoc() called with invalid data. Data must be an object,
+       but it was: a custom Object object (found in document ...)"
+   Leitura não passa por essa validação — por isso só GRAVAÇÃO quebra, e só
+   dentro do portal (abrir o módulo direto pela URL sempre funcionou).
+   Nenhuma versão do firebase-js-sdk trata isso (conferido da 9.22 até a 11.x).
+
+   SOLUÇÃO: reconstruir o payload neste realm antes de entregar ao SDK.
+   - Instâncias de classe (Timestamp, FieldValue, GeoPoint, Bytes,
+     DocumentReference) passam INTACTAS — já pertencem a este realm.
+   - Date criado no iframe vira Timestamp (o instanceof Date falharia igual).
+   - Fast path: se o objeto do topo já é deste realm (todo write do próprio
+     shell, incluindo os chunks da SZB), retorna sem tocar em nada — custo
+     zero, sem clonar base grande.
+   Não altera dado, fórmula, regra de negócio nem estrutura de coleção.
+══════════════════════════════════════════════════════════════════════════ */
+(function(){
+  try{
+    var FS = firebase.firestore;
+
+    function deep(v){
+      if (v === null || typeof v !== 'object') return v;
+      if (Array.isArray(v)) {                                  // funciona cross-realm
+        var a = [];
+        for (var i = 0; i < v.length; i++) a.push(deep(v[i]));
+        return a;
+      }
+      if (Object.prototype.toString.call(v) === '[object Date]') {
+        return FS.Timestamp.fromMillis(v.getTime());            // Date do iframe falha no instanceof
+      }
+      var p = Object.getPrototypeOf(v);
+      /* objeto "puro" de QUALQUER realm: o proto dele tem proto null.
+         Instância de classe (Timestamp/FieldValue/...) não bate → passa direto. */
+      if (p !== null && Object.getPrototypeOf(p) !== null) return v;
+      var o = {};
+      for (var k in v) if (Object.prototype.hasOwnProperty.call(v, k)) o[k] = deep(v[k]);
+      return o;
+    }
+
+    /* Fast path: payload já deste realm → devolve o MESMO objeto, sem clonar. */
+    function norm(v){
+      if (v === null || typeof v !== 'object') return v;
+      if (Object.getPrototypeOf(v) === Object.prototype) return v;
+      return deep(v);
+    }
+    window.atlasNormalizeFirestoreData = norm;
+
+    var patched = [], missing = [];
+    function wrap(owner, proto, method, mapArgs){
+      if (!proto || typeof proto[method] !== 'function') { missing.push(owner + '.' + method); return; }
+      if (proto[method].__atlasRealmSafe) return;
+      var orig = proto[method];
+      var fn = function(){ return orig.apply(this, mapArgs(Array.prototype.slice.call(arguments))); };
+      fn.__atlasRealmSafe = true;
+      proto[method] = fn;
+      patched.push(owner + '.' + method);
+    }
+
+    var normAll    = function(a){ return a.map(function(x){ return norm(x); }); };      // update(campo, valor, ...)
+    var normFirst  = function(a){ if (a.length)     a[0] = norm(a[0]); return a; };     // set(data, opts) / add(data)
+    var normSecond = function(a){ if (a.length > 1) a[1] = norm(a[1]); return a; };     // batch.set(ref, data, opts)
+
+    wrap('DocumentReference',   FS.DocumentReference   && FS.DocumentReference.prototype,   'set',    normFirst);
+    wrap('DocumentReference',   FS.DocumentReference   && FS.DocumentReference.prototype,   'update', normAll);
+    wrap('CollectionReference', FS.CollectionReference && FS.CollectionReference.prototype, 'add',    normFirst);
+    wrap('WriteBatch',          FS.WriteBatch          && FS.WriteBatch.prototype,          'set',    normSecond);
+    wrap('WriteBatch',          FS.WriteBatch          && FS.WriteBatch.prototype,          'update', normAll);
+    wrap('Transaction',         FS.Transaction         && FS.Transaction.prototype,         'set',    normSecond);
+    wrap('Transaction',         FS.Transaction         && FS.Transaction.prototype,         'update', normAll);
+
+    window.__atlasRealmGuard = { patched: patched, missing: missing };
+    if (missing.length) console.warn('[Atlas] cross-realm guard incompleto:', missing);
+  }catch(e){
+    console.warn('[Atlas] cross-realm guard não aplicado:', e && e.message);
+  }
+})();
+
 let curUser = null, curPerfil = 'motorista', curNome = '', sbPinned = false, _sbPeekT = null, _sbInit = false;
 /* authReady: resolve assim que o estado de auth é CONHECIDO (com ou sem usuário).
    A ponte Firestore aguarda esta promessa antes de rejeitar pedidos dos iframes,
