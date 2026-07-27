@@ -1032,8 +1032,8 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
           </div>
           <div class="form-field" id="dep-i-perc-wrap"><label>Percentual anual (%)</label><input type="text" id="dep-i-percentualAnual" inputmode="decimal" oninput="cpkDepFormPreview()"></div>
           <div class="form-field" id="dep-i-manual-wrap" style="display:none"><label>Valor mensal manual (R$)</label><input type="text" id="dep-i-valorManualMensal" inputmode="decimal" oninput="cpkDepFormPreview()"></div>
-          <div class="form-field"><label>Status do ativo</label>
-            <select id="dep-i-status" onchange="cpkDepFormPreview()">
+          <div class="form-field"><label>Status do ativo <span style="font-weight:400;color:var(--mu)">· sincronizado com Cadastros</span></label>
+            <select id="dep-i-status" onchange="cpkDepFormPreview()" title="Mesmo campo do cadastro de veículos (Cadastros › Veículos). Alterar aqui atualiza lá.">
               <option value="ativo">Ativo</option>
               <option value="vendido">Vendido</option>
               <option value="baixado">Baixado</option>
@@ -1971,6 +1971,35 @@ function cpkDepDisplayCodigoCompressor(c,id){
   return String(c.identificacao||c.codigo||c.cod||c.numero||c.serie||id||'').trim().toUpperCase();
 }
 function cpkDepStatusFromCompressor(c){ return cpkDepStatusFromVeic({status:(c&&c.status)||''}); }
+
+/* ══════════════════════════════════════════════════════════════════
+   STATUS DO ATIVO — FONTE ÚNICA COM O CADASTRO
+   ------------------------------------------------------------------
+   O status do ativo (ativo/vendido/baixado/inativo) passa a viver no
+   cadastro de veículos (coleção 'veiculos', campo status_ativo). O CPK
+   continua gravando o status dentro do próprio registro de depreciação
+   (compatibilidade, exportação e ativos que não existem no cadastro —
+   compressores e registros manuais), mas quando a placa EXISTE no
+   cadastro é o cadastro que manda. Editar de qualquer um dos dois lados
+   grava nos dois: o CPK escreve status_ativo em 'veiculos' e o Cadastros
+   espelha o status no doc de depreciação.
+   ══════════════════════════════════════════════════════════════════ */
+// Status explícito do cadastro. Retorna '' quando o cadastro nada diz —
+// nesse caso o registro de depreciação do CPK segue valendo (sem quebrar
+// nenhuma base já existente).
+function cpkDepStatusCadastro(cad){
+  if(!cad) return '';
+  const raw=cpkNormStr(cad.statusAtivo||'');
+  if(raw) return cpkDepNormStatus(raw);
+  const legado=cpkDepStatusFromVeic(cad);            // disponibilidade/status/situacao (legado)
+  return (legado && legado!=='ativo') ? legado : '';
+}
+// Status que o CPK realmente usa no cálculo e na tela.
+function cpkDepStatusEfetivo(rec, cad){
+  return cpkDepStatusCadastro(cad)
+      || (rec && rec.status ? cpkDepNormStatus(rec.status) : '')
+      || 'ativo';
+}
 function cpkDepCarretaSubtipo(v){
   v=v||{};
   return String(v.tipoCarreta||v.tipo_carreta||v.tipoDaCarreta||v.tipo_da_carreta||v.subtipo||v.carreta_tipo||v.tipoImplemento||v.tipo_implemento||'').trim();
@@ -2017,6 +2046,10 @@ async function cpkLoadFrota(){
                anoFab:cpkDepAnoCampo(v,'fab'), anoMod:cpkDepAnoCampo(v,'mod'),
                tipo:cpkDepTipoRawVeic(v), subtipo:subtipoCarreta,
                tipoCarreta:subtipoCarreta,
+               // Status do ativo — fonte única compartilhada com o módulo Cadastros
+               // (coleção 'veiculos', campo status_ativo). Vazio = sem definição
+               // explícita no cadastro (o CPK cai no status do próprio registro).
+               statusAtivo:(v.status_ativo||v.statusAtivo||'').toString(),
                disponibilidade:(v.disponibilidade||v.status||v.situacao||'').toString() };
     });
 
@@ -2255,6 +2288,10 @@ async function cpkLoadAll(){
 
   cpkLoaderMsg('Carregando custos e KM do mês…');
   await Promise.allSettled([ cpkLoadCusto(CPK.filtros.mes), cpkLoadKmImport(CPK.filtros.mes), cpkLoadDep() ]);
+
+  // Status do ativo virou campo compartilhado com o Cadastros — sobe para o
+  // cadastro o que hoje só existe no CPK (não bloqueia o boot).
+  cpkDepReconciliarStatusCadastro();
 
   cpkLoaderMsg('Solicitando bases ao Atlas (SZB, SZY, SZC)…');
   for(const t of CPK_BASES){ if(!cpkTryParentBase(t)) cpkRequestAtlasBase(t); }
@@ -4181,9 +4218,12 @@ function cpkDepIndex(mes){
     const ehProprio = cad ? cpkDepVeicEhFrotaPropria(cad,tipo) : true;  // registro manual sem cadastro também conta
     const anoFab=cpkDepAnoParts(rec.anoFab || (cad&&cad.anoFab) || (cad&&cad.ano) || '').fab;
     const anoMod=cpkDepAnoParts(rec.anoMod || (cad&&cad.anoMod) || (cad&&cad.ano) || '').mod;
-    const calc=cpkDepCalc(Object.assign({},rec,{tipo}), mes);
+    // Status do ativo: o cadastro (veiculos.status_ativo) é a fonte única.
+    // O status salvo no registro do CPK só vale quando não há cadastro.
+    const statusEf=cpkDepStatusEfetivo(rec, cad);
+    const calc=cpkDepCalc(Object.assign({},rec,{tipo,status:statusEf}), mes);
     const row=Object.assign({}, rec, {
-      placa, tipo,
+      placa, tipo, status:statusEf,
       codigo:rec.codigo || (comp&&comp.codigoDisplay) || placa,
       frota:rec.frota || (cad&&cad.frota) || '',
       tipoCarreta:rec.tipoCarreta || (cad&&cad.tipoCarreta) || (cad&&cad.subtipo) || '',
@@ -4220,7 +4260,7 @@ function cpkDepIndex(mes){
       anoFab, anoMod,
       valorCompra:0, valorResidual:0, periodoMeses:Math.round(cpkNum(p.prazo||0)),
       metodo:p.metodo||'linear', percentualAnual:cpkNum(p.percAnual||0), valorManualMensal:0,
-      status:cpkDepStatusFromVeic(v)
+      status:cpkDepStatusEfetivo(null, v)
     };
     const calc=cpkDepCalc(rec, mes);
     list.push(Object.assign({}, rec, {
@@ -4556,7 +4596,7 @@ function cpkDepEditarItem(placa){
   set('dep-i-marca',(v&&v.marca)||''); set('dep-i-modelo',(v&&(v.modelo||v.subtipo||v.serie))||'');
   set('dep-i-anoFab',cpkDepAnoParts((v&&v.anoFab)||(v&&v.anoMod)||(v&&v.ano)||'').fab);
   set('dep-i-anoMod',cpkDepAnoParts((v&&v.anoMod)||(v&&v.anoFab)||(v&&v.ano)||'').mod);
-  set('dep-i-status',cpkDepStatusFromVeic(v));
+  set('dep-i-status',cpkDepStatusEfetivo(null, v));
   cpkDepFormTipoChange(true);
   cpkDepFormMetodoChange();
   document.getElementById('dep-form-err').innerHTML='';
@@ -4582,7 +4622,7 @@ function cpkDepEditar(placa){
   setNum('dep-i-valorCompra',rec.valorCompra); set('dep-i-dataCompra',cpkNormDate(rec.dataCompra)||'');
   setNum('dep-i-valorResidual',rec.valorResidual); set('dep-i-periodoMeses',rec.periodoMeses);
   set('dep-i-metodo',rec.metodo||'linear'); setNum('dep-i-percentualAnual',rec.percentualAnual,4);
-  setNum('dep-i-valorManualMensal',rec.valorManualMensal); set('dep-i-status',rec.status||'ativo');
+  setNum('dep-i-valorManualMensal',rec.valorManualMensal); set('dep-i-status',cpkDepStatusEfetivo(rec, v));
   cpkDepFormMetodoChange();
   document.getElementById('dep-form-err').innerHTML='';
   document.getElementById('dep-modal').classList.add('open');
@@ -4676,11 +4716,73 @@ async function cpkDepSalvarVeic(){
   const btn=document.getElementById('dep-modal-save'); if(btn){btn.disabled=true;btn.textContent='Salvando…';}
   try{
     await cpkDepPersist();
-    cpkToast('Depreciação de '+rec.placa+' salva.');
+    // Status do ativo é campo compartilhado: reflete no Cadastros na mesma ação.
+    const esp=await cpkDepEspelharStatusCadastro(rec.placa, rec.status);
+    if(esp.ok) cpkToast('Depreciação de '+rec.placa+' salva.');
+    else cpkToast('Depreciação salva, mas o status não refletiu no Cadastro: '+esp.erro);
     cpkDepModalClose();
     cpkCalculate(); cpkRenderActive();
   }catch(e){ cpkToast('Erro ao salvar: '+(e.message||e)); }
   finally{ if(btn){btn.textContent='Salvar';btn.disabled=false;} }
+}
+
+/* Grava o status do ativo no cadastro de veículos (coleção 'veiculos',
+   campo status_ativo) — merge, sem tocar em nenhum outro campo do veículo.
+   Ativos fora do cadastro (compressores, registros manuais) seguem apenas
+   com o status do próprio registro de depreciação. */
+async function cpkDepEspelharStatusCadastro(placa, status){
+  const p=cpkNormPlaca(placa);
+  if(!p) return {ok:true, pulado:true};
+  const v=cpkVeic(p);
+  if(!v || !v.id) return {ok:true, pulado:true};            // não está no cadastro de veículos
+  const st=cpkDepNormStatus(status||'ativo');
+  if(cpkNormStr(v.statusAtivo||'') && cpkDepNormStatus(v.statusAtivo)===st) return {ok:true, pulado:true};
+  try{
+    await cpkFsSet('veiculos', v.id, {
+      status_ativo: st,
+      status_ativo_atualizado_em: new Date().toISOString(),
+      status_ativo_atualizado_por: (CPK.user&&CPK.user.email)||'',
+      status_ativo_origem: 'cpk'
+    }, true);
+    v.statusAtivo=st;                                        // memória local reflete na hora
+    CPK._dataVer=(CPK._dataVer||0)+1; CPK._depIdxCache=null;
+    cpkLog('Status do ativo espelhado no cadastro:',p,'→',st);
+    return {ok:true};
+  }catch(e){ return {ok:false, erro:e.message||String(e)}; }
+}
+
+/* Reconciliação única na carga: placas que hoje estão vendido/baixado/inativo
+   SOMENTE no registro de depreciação e ainda não têm status_ativo no cadastro
+   são promovidas para o cadastro. Garante que ninguém "volta para ativo" ao
+   passarmos a fonte única para o cadastro. Placas ativas não geram gravação. */
+async function cpkDepReconciliarStatusCadastro(){
+  try{
+    if(!cpkPodeEditarDep()) return;
+    const veics=(CPK.depData&&CPK.depData.veiculos)||{};
+    const pend=[];
+    for(const pl in veics){
+      const rec=veics[pl]||{};
+      const placa=cpkNormPlaca(rec.placa||pl); if(!placa) continue;
+      const st=cpkDepNormStatus(rec.status||'ativo'); if(st==='ativo') continue;
+      const v=cpkVeic(placa); if(!v||!v.id) continue;         // fora do cadastro → nada a fazer
+      if(cpkNormStr(v.statusAtivo||'')) continue;             // cadastro já tem definição própria
+      pend.push({v, st});
+    }
+    if(!pend.length) return;
+    for(const it of pend){
+      try{
+        await cpkFsSet('veiculos', it.v.id, {
+          status_ativo: it.st,
+          status_ativo_atualizado_em: new Date().toISOString(),
+          status_ativo_atualizado_por: (CPK.user&&CPK.user.email)||'',
+          status_ativo_origem: 'cpk-reconciliacao'
+        }, true);
+        it.v.statusAtivo=it.st;
+      }catch(e){ cpkLog('Reconciliação de status falhou em',it.v.placa,e.message); }
+    }
+    CPK._dataVer=(CPK._dataVer||0)+1; CPK._depIdxCache=null;
+    cpkLog('Status do ativo reconciliado com o cadastro:',pend.length,'placa(s).');
+  }catch(e){ cpkLog('Reconciliação de status do ativo:',e.message); }
 }
 async function cpkDepExcluir(){
   const placa=CPK._depEdit; if(!placa)return;
@@ -5328,11 +5430,13 @@ async function cpkDepUniSalvar(){
   CPK.depData=CPK.depData||{veiculos:{},params:cpkDepParamsDefault()};
   const veics=Object.assign({}, CPK.depData.veiculos||{});
   const now=new Date().toISOString(), by=(CPK.user&&CPK.user.email)||'';
+  const statusImportados={};   // placa → status vindo da planilha (espelha no cadastro)
   let n=0;
   CPK_DEP_ABAS.forEach(t=>{
     const d=U[t]; if(!d||!d.count) return;
     Object.keys(d.recs).forEach(pl=>{
       veics[pl]=Object.assign({}, veics[pl]||{}, d.recs[pl], {_editadoEm:now,_editadoPor:by});
+      if(d.recs[pl] && d.recs[pl].status) statusImportados[pl]=d.recs[pl].status;
       n++;
     });
   });
@@ -5342,6 +5446,8 @@ async function cpkDepUniSalvar(){
   if(msg){ msg.textContent='Gravando e verificando…'; msg.style.color='var(--mu)'; }
   try{
     await cpkDepPersist();   // grava em cpk_lancamentos/DEPRECIACAO + read-back de verificação
+    // Status do ativo é compartilhado: leva o que veio da planilha para o cadastro.
+    for(const pl in statusImportados){ await cpkDepEspelharStatusCadastro(pl, statusImportados[pl]); }
     cpkToast('Depreciação salva e verificada: '+n+' registro(s).');
     if(msg){ msg.textContent='✓ '+n+' registro(s) salvos e confirmados no Firestore.'; msg.style.color='var(--gn)'; }
     cpkDepUniLimparTudo();
