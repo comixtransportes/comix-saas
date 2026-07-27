@@ -1864,6 +1864,14 @@ const cfgCache = { usuarios: [], veiculos: [], motoristas: [], filiais: [], cent
 function cfgIsAdmin() {
   return !!(window._FB && typeof window._FB.getCurrentPerfil === "function" && window._FB.getCurrentPerfil() === "admin");
 }
+/* E-mail do usuário logado. `currentUser` vive dentro do IIFE do window._FB e
+   NÃO é global — acessar direto daqui gera ReferenceError. Sempre por aqui. */
+function cfgUsuarioEmail() {
+  try {
+    return (window._FB && typeof window._FB.getCurrentUser === "function" && window._FB.getCurrentUser()?.email) || "";
+  } catch (_) { return ""; }
+}
+
 function cfgRequireAdmin() {
   if (cfgIsAdmin()) return true;
   const menu = document.getElementById("cfg_menu");
@@ -6008,37 +6016,37 @@ function cfgResetVeiculo() {
 }
 async function cfgSaveVeiculo(event) {
   event.preventDefault();
-  if (!cfgRequireAdmin()) return;
-  const placa = cfgUpper(cfgVal("cfg_veic_placa"));
-  if (!placa) return showToast("Informe a placa.", "error");
-  const tipo = cfgVal("cfg_veic_tipo") || "Cavalo";
-  const ano = cfgVal("cfg_veic_ano");
-  if (!cfgAnoFormatoValido(ano)) return showToast("Informe o ano no formato AAAA/AAAA.", "error");
-  const frota = cfgUpper(cfgVal("cfg_veic_frota"));
-  if (!frota) return showToast("Não foi possível gerar o número de frota.", "error");
-  const veiculoDuplicado = cfgCache.veiculos.find(v =>
-    cfgUpper(v.frota) === frota && v.id !== cfgVal("cfg_veic_doc_id")
-  );
-  if (veiculoDuplicado) return showToast(`A frota ${frota} já está cadastrada.`, "error");
-  const statusAtivo = normalizeStatusAtivo(cfgVal("cfg_veic_status") || "ativo");
-  const payload = {
-    tipo,
-    placa,
-    frota,
-    modelo: cfgUpper(cfgVal("cfg_veic_modelo")),
-    subtipo: tipo === "Carreta" ? cfgUpper(cfgVal("cfg_veic_subtipo")) : "",
-    ano,
-    filial: cfgVal("cfg_veic_filial"),
-    renavam: cfgVal("cfg_veic_renavam") || "",
-    chassi: cfgUpper(cfgVal("cfg_veic_chassi")) || "",
-    tipo_vinculo: cfgVal("cfg_veic_tipo_vinculo") || "",
-    /* Campo compartilhado com o CPK › Depreciação (fonte única do status). */
-    status_ativo: statusAtivo,
-    status_ativo_atualizado_em: new Date().toISOString(),
-    status_ativo_atualizado_por: (currentUser && currentUser.email) || "",
-    status_ativo_origem: "cadastros"
-  };
   try {
+    if (!cfgRequireAdmin()) return;
+    const placa = cfgUpper(cfgVal("cfg_veic_placa"));
+    if (!placa) return showToast("Informe a placa.", "error");
+    const tipo = cfgVal("cfg_veic_tipo") || "Cavalo";
+    const ano = cfgVal("cfg_veic_ano");
+    if (!cfgAnoFormatoValido(ano)) return showToast("Informe o ano no formato AAAA/AAAA.", "error");
+    const frota = cfgUpper(cfgVal("cfg_veic_frota"));
+    if (!frota) return showToast("Não foi possível gerar o número de frota.", "error");
+    const veiculoDuplicado = cfgCache.veiculos.find(v =>
+      cfgUpper(v.frota) === frota && v.id !== cfgVal("cfg_veic_doc_id")
+    );
+    if (veiculoDuplicado) return showToast(`A frota ${frota} já está cadastrada.`, "error");
+    const statusAtivo = normalizeStatusAtivo(cfgVal("cfg_veic_status") || "ativo");
+    const payload = {
+      tipo,
+      placa,
+      frota,
+      modelo: cfgUpper(cfgVal("cfg_veic_modelo")),
+      subtipo: tipo === "Carreta" ? cfgUpper(cfgVal("cfg_veic_subtipo")) : "",
+      ano,
+      filial: cfgVal("cfg_veic_filial"),
+      renavam: cfgVal("cfg_veic_renavam") || "",
+      chassi: cfgUpper(cfgVal("cfg_veic_chassi")) || "",
+      tipo_vinculo: cfgVal("cfg_veic_tipo_vinculo") || "",
+      /* Campo compartilhado com o CPK › Depreciação (fonte única do status). */
+      status_ativo: statusAtivo,
+      status_ativo_atualizado_em: new Date().toISOString(),
+      status_ativo_atualizado_por: cfgUsuarioEmail(),
+      status_ativo_origem: "cadastros"
+    };
     await cfgSave("veiculos", cfgVal("cfg_veic_doc_id") || placa, payload);
     /* Espelho no registro de depreciação do CPK — não bloqueia o salvamento
        do veículo: o cadastro já é a fonte única e o CPK lê de lá. */
@@ -6047,11 +6055,13 @@ async function cfgSaveVeiculo(event) {
       await window._FB.espelharStatusDepreciacaoCPK(placa, statusAtivo);
     } catch (err) {
       avisoEspelho = " (status não replicado no CPK: " + (err.message || err) + ")";
+      console.error("[cadastros] espelho de status no CPK falhou:", err);
     }
-    showToast("Veículo salvo no Firebase." + avisoEspelho, avisoEspelho ? "warning" : "success");
+    showToast("Veículo salvo · status " + statusAtivoLabel(statusAtivo) + "." + avisoEspelho, avisoEspelho ? "warning" : "success");
     await cfgRefreshVeiculos();
     cfgResetVeiculo();
   } catch (err) {
+    console.error("[cadastros] cfgSaveVeiculo:", err);
     showToast(err.message || "Erro ao salvar veículo.", "error");
   }
 }
