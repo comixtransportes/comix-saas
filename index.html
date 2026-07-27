@@ -2616,7 +2616,27 @@ function atlasDiffDaysISO(inicioISO, fimISO){
   return Math.floor((b.getTime() - a.getTime()) / 86400000);
 }
 
+/* Status do ativo — mesma regra de cadastros.html e frota.html.
+   Fonte única: coleção `veiculos`, campo `status_ativo`
+   (ativo | vendido | baixado | inativo). Sem valor gravado = ativo. */
+function atlasNormalizeStatusAtivo(value){
+  const n = String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  if (/VEND/.test(n))           return "vendido";
+  if (/BAIX/.test(n))           return "baixado";
+  if (/INATIV|DESATIV/.test(n)) return "inativo";
+  return "ativo";
+}
+
 function atlasFrotaOwnByCadastro(v){
+  // Vendido, baixado ou inativo não é frota: fica fora do alerta de veículo
+  // sem carregamento — cobrar um caminhão vendido é ruído puro.
+  const stAtivo = atlasNormalizeStatusAtivo(
+    (v && v.status_ativo !== undefined && v.status_ativo !== null && String(v.status_ativo).trim() !== "")
+      ? v.status_ativo
+      : (v && v.status)
+  );
+  if (stAtivo !== "ativo") return false;
+
   const tipo = atlasNormUpper(v && v.tipo);
   const frota = atlasNormUpper(v && v.frota).replace(/\s+/g, '');
   const vinc = atlasNormUpper((v && (v.tipo_vinculo || v.tipoVinculo || v.vinculo || v.propriedade)) || '');
@@ -2648,7 +2668,7 @@ async function atlasLoadFrotaVeiculosCadastrados(){
       if (!placa && !frota) return;
       out.push({ id: doc.id, unidade, frota, placa });
     });
-    console.log(`[Atlas Frota-mail] veículos frota cadastrados elegíveis: ${out.length}.`);
+    console.log(`[Atlas Frota-mail] veículos frota cadastrados elegíveis: ${out.length} (vendidos/baixados/inativos já excluídos).`);
     return out;
   } catch (e) {
     console.warn('[Atlas Frota-mail] não foi possível ler cadastro de veículos; usando fallback pela SZB:', e && e.message);
