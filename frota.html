@@ -1737,14 +1737,27 @@ function normalizeVeiculo(v) {
   }
   if (!vinc) vinc = "FROTA";  // default seguro
 
-  const stRaw = String(v.status || "").toUpperCase();
+  const stRaw  = String(v.status || "").toUpperCase();
+  // O badge Ativo/Inativo do módulo Cadastros NÃO vive no campo `status`.
+  // Como o nome do campo varia entre registros antigos e novos, aceitamos
+  // todas as formas plausíveis — booleano, string ou campo `situacao`.
+  const sitRaw = String(v.situacao || v["situação"] || v.situation || "").toUpperCase();
+  const ativoRaw = (v.ativo !== undefined) ? v.ativo
+                 : (v.active !== undefined) ? v.active
+                 : (v.is_active !== undefined) ? v.is_active
+                 : undefined;
+  const inativoPorFlag =
+      ativoRaw === false || ativoRaw === 0 || ativoRaw === "false" || ativoRaw === "0" ||
+      /^(INATIV|DESATIV|NAO|NÃO|N)$|INATIV|DESATIV/.test(String(ativoRaw === undefined ? "" : ativoRaw).toUpperCase());
+  const foraRaw = (stRaw + " " + sitRaw).trim();
+
   let disp = "operando";
   // ── FORA DE FROTA — precede qualquer outra regra ──────────────────────────
   // VENDIDO / BAIXADO / INATIVO deixam de ser caminhão da frota (próprio ou
   // agregado) e não entram em nenhuma contagem operacional.
-  if (/VENDID/.test(stRaw)) disp = "vendida";
-  else if (/BAIXAD|BAIXA DEFINITIVA|^BAIXA$/.test(stRaw)) disp = "baixado";
-  else if (/INATIV|DESATIV/.test(stRaw)) disp = "inativo";
+  if (/VENDID/.test(foraRaw)) disp = "vendida";
+  else if (/BAIXAD|BAIXA DEFINITIVA/.test(foraRaw) || foraRaw === "BAIXA") disp = "baixado";
+  else if (/INATIV|DESATIV/.test(foraRaw) || inativoPorFlag) disp = "inativo";
   else if (stRaw.includes("INDISPON")) disp = "indisponivel";
   else if (stRaw.includes("MANUT") || stRaw.includes("MANUTENÇÃO") || stRaw.includes("MANUTENCAO")) disp = "manutencao";
   else if (stRaw.includes("EM REFORMA")) disp = "em_reforma";
@@ -1770,6 +1783,8 @@ function normalizeVeiculo(v) {
     motorista: upperText(v.motorista),
     disponibilidade: disp,
     status_raw: v.status || "OPERANDO",
+    ativo_raw: (ativoRaw === undefined ? null : ativoRaw),
+    situacao_raw: v.situacao || v["situação"] || null,
     observacao: v.observacao || v.observacoes || null,
     chassi: v.chassi || null,
     renavam: v.renavam || null,
@@ -1888,6 +1903,15 @@ async function loadAllData() {
       });
 
       console.log("[Frota] OS cruzadas: " + placasEmManutencao.size + " placas em manutenção");
+
+      // Diagnóstico da regra "fora de frota" — confere no console quais veículos
+      // saíram das contagens e por qual campo foram identificados.
+      const _fora = STATE.veiculos.filter(foraDaFrota);
+      console.log("[Frota] Fora de frota: " + _fora.length + " veículo(s) — não contam como próprio nem agregado");
+      if (_fora.length) console.table(_fora.map(x => ({
+        frota: x.frota, placa: x.placa, categoria: x.categoria,
+        regra: x.disponibilidade, status: x.status_raw, ativo: x.ativo_raw, situacao: x.situacao_raw
+      })));
     } catch(osErr) {
       console.warn("[Frota] Não foi possível cruzar OS:", osErr.message);
     }
