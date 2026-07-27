@@ -1009,9 +1009,14 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     if (collectionName === "usuarios" && out.nome) out.nome = upperAdminText(out.nome);
     if (collectionName === "veiculos") {
       out.tipo = normalizeVehicleTipoAdmin(out.tipo);
-      ["placa", "frota", "modelo", "subtipo", "filial"].forEach(k => {
+      ["placa", "frota", "modelo", "subtipo", "filial", "chassi", "tipo_vinculo"].forEach(k => {
         if (out[k] !== undefined && out[k] !== null) out[k] = upperAdminText(out[k]);
       });
+      /* Renavam é sempre numérico puro na base — nada de ponto, traço ou espaço,
+         senão a leitura/consulta por renavam volta a divergir. */
+      if (out.renavam !== undefined && out.renavam !== null) {
+        out.renavam = String(out.renavam).replace(/\D/g, "").slice(0, 11);
+      }
     }
     if (collectionName === "motoristas" && out.nome) out.nome = upperAdminText(out.nome);
     if (collectionName === "filiais") {
@@ -1630,9 +1635,50 @@ function statusAtivoLabel(value) {
   return { ativo: "Ativo", vendido: "Vendido", baixado: "Baixado", inativo: "Inativo" }[normalizeStatusAtivo(value)];
 }
 
+/* [CORREÇÃO CADASTRO/VEÍCULOS] Renavam, chassi e tipo de vínculo não voltavam
+   ao abrir "Editar". Causa: a leitura era estrita na chave (v.renavam,
+   v.chassi, v.tipo_vinculo), mas parte da base foi gravada por importação /
+   outros módulos com grafia diferente (renavan, RENAVAM, tipoVinculo, número
+   em vez de texto...). Agora o veículo é normalizado na LEITURA: qualquer
+   variação vira sempre a chave canônica, e o formulário volta preenchido. */
+function pickFieldAlias(obj, keys) {
+  if (!obj) return "";
+  for (const k of keys) {
+    const val = obj[k];
+    if (val !== undefined && val !== null && String(val).trim() !== "") return val;
+  }
+  return "";
+}
+const VEHICLE_FIELD_ALIASES = {
+  renavam: ["renavam", "renavan", "RENAVAM", "RENAVAN", "Renavam", "renavam_veiculo", "numero_renavam", "num_renavam", "codigo_renavam", "cod_renavam"],
+  chassi: ["chassi", "chasi", "chassis", "CHASSI", "Chassi", "numero_chassi", "num_chassi", "chassi_veiculo", "nchassi"],
+  tipo_vinculo: ["tipo_vinculo", "tipoVinculo", "tipo_vínculo", "TIPO_VINCULO", "TipoVinculo", "vinculo", "vínculo", "tipo_de_vinculo"]
+};
+function normalizeRenavam(value) {
+  return String(value ?? "").replace(/\D/g, "").slice(0, 11);
+}
+function normalizeTipoVinculo(value) {
+  const raw = upperText(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (!raw) return "";
+  if (raw.includes("AGREG") || raw.includes("TERCEIR")) return "AGREGADO";
+  if (raw.includes("FROTA") || raw.includes("PROPRI")) return "FROTA";
+  return "";
+}
 function normalizeOperationalVehicle(v) {
   const placa = upperText(v.placa || v.id);
-  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial), status_ativo: normalizeStatusAtivo(v.status_ativo) };
+  return {
+    ...v,
+    tipo: normalizeTipoVeiculo(v.tipo),
+    placa,
+    frota: upperText(v.frota),
+    modelo: upperText(v.modelo),
+    subtipo: upperText(v.subtipo),
+    filial: upperText(v.filial),
+    renavam: normalizeRenavam(pickFieldAlias(v, VEHICLE_FIELD_ALIASES.renavam)),
+    chassi: upperText(pickFieldAlias(v, VEHICLE_FIELD_ALIASES.chassi)),
+    tipo_vinculo: normalizeTipoVinculo(pickFieldAlias(v, VEHICLE_FIELD_ALIASES.tipo_vinculo)),
+    status_ativo: normalizeStatusAtivo(v.status_ativo)
+  };
 }
 
 function normalizeOperationalDriver(m) {
@@ -1971,6 +2017,31 @@ function cfgVal(id) {
 function cfgSet(id, value) {
   const el = document.getElementById(id);
   if (el) el.value = value ?? "";
+}
+/* [CORREÇÃO CADASTRO/VEÍCULOS] Em <select>, atribuir um valor que não existe
+   entre as options é ignorado silenciosamente pelo navegador — o campo fica
+   "Selecione" sem erro nenhum. É o que acontecia com Unidade: o veículo foi
+   gravado com o NOME da filial ("SANTA CATARINA") e a option usa a SIGLA
+   ("SC"). Agora casa por value, por texto da option, e como último recurso
+   cria a option para não perder o dado que está no Firebase. */
+function cfgSetSelect(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const alvo = String(value ?? "").trim();
+  if (!alvo) { el.value = ""; return; }
+  const chave = s => String(s ?? "").trim().toLocaleUpperCase("pt-BR").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const alvoChave = chave(alvo);
+  const opts = Array.from(el.options);
+  let match = opts.find(o => chave(o.value) === alvoChave);
+  if (!match) match = opts.find(o => chave(o.textContent) === alvoChave);
+  if (!match) match = opts.find(o => o.value && chave(o.textContent).split("—").some(p => chave(p) === alvoChave));
+  if (!match) {
+    match = document.createElement("option");
+    match.value = alvo;
+    match.textContent = alvo + " (fora da lista)";
+    el.appendChild(match);
+  }
+  el.value = match.value;
 }
 function cfgDigits(value) {
   return String(value || "").replace(/\D/g, "");
@@ -5810,6 +5881,11 @@ function cfgValidarItemImportacaoVeiculo(item) {
       subtipo: tipo === "Carreta" ? cfgUpper(item.subtipo) : "",
       ano,
       filial: cfgUpper(item.filial),
+      /* A importação também carrega renavam/chassi/vínculo quando a lista traz
+         esses campos — antes eles eram descartados e o veículo nascia sem eles. */
+      renavam: normalizeRenavam(pickFieldAlias(item, VEHICLE_FIELD_ALIASES.renavam)),
+      chassi: cfgUpper(pickFieldAlias(item, VEHICLE_FIELD_ALIASES.chassi)),
+      tipo_vinculo: normalizeTipoVinculo(pickFieldAlias(item, VEHICLE_FIELD_ALIASES.tipo_vinculo)),
       /* Toda importação entra como ativo — o status é ajustado depois aqui
          ou pelo CPK › Depreciação (mesmo campo, mesma informação). */
       status_ativo: normalizeStatusAtivo(item.status_ativo || item.status || "ativo")
@@ -6007,6 +6083,10 @@ function cfgRenderVeiculoList(id, arr) {
 }
 function cfgResetVeiculo() {
   document.getElementById("cfg_veic_form")?.reset();
+  ["cfg_veic_renavam", "cfg_veic_chassi", "cfg_veic_tipo_vinculo"].forEach(campo => {
+    const el = document.getElementById(campo);
+    if (el) delete el.dataset.loadedValue;
+  });
   cfgSet("cfg_veic_doc_id", "");
   cfgSet("cfg_veic_tipo", "Cavalo");
   cfgSet("cfg_veic_status", "ativo");   // todo veículo novo nasce ativo
@@ -6030,6 +6110,18 @@ async function cfgSaveVeiculo(event) {
     );
     if (veiculoDuplicado) return showToast(`A frota ${frota} já está cadastrada.`, "error");
     const statusAtivo = normalizeStatusAtivo(cfgVal("cfg_veic_status") || "ativo");
+    /* [CORREÇÃO CADASTRO/VEÍCULOS] Trava anti-apagamento: numa edição, campo
+       vazio só grava vazio se ele tinha chegado preenchido na tela (ou seja, o
+       usuário apagou de propósito). Se veio vazio do banco, mantém o que já
+       está lá em vez de sobrescrever com "". */
+    const docIdAtual = cfgVal("cfg_veic_doc_id");
+    const registroAtual = docIdAtual ? cfgCache.veiculos.find(x => x.id === docIdAtual) : null;
+    const cfgCampoPreservado = (inputId, valorDigitado, valorGravado) => {
+      if (valorDigitado) return valorDigitado;
+      if (!registroAtual) return "";
+      const carregou = document.getElementById(inputId)?.dataset.loadedValue || "";
+      return carregou ? "" : (valorGravado || "");
+    };
     const payload = {
       tipo,
       placa,
@@ -6038,9 +6130,9 @@ async function cfgSaveVeiculo(event) {
       subtipo: tipo === "Carreta" ? cfgUpper(cfgVal("cfg_veic_subtipo")) : "",
       ano,
       filial: cfgVal("cfg_veic_filial"),
-      renavam: cfgVal("cfg_veic_renavam") || "",
-      chassi: cfgUpper(cfgVal("cfg_veic_chassi")) || "",
-      tipo_vinculo: cfgVal("cfg_veic_tipo_vinculo") || "",
+      renavam: cfgCampoPreservado("cfg_veic_renavam", normalizeRenavam(cfgVal("cfg_veic_renavam")), registroAtual?.renavam),
+      chassi: cfgCampoPreservado("cfg_veic_chassi", cfgUpper(cfgVal("cfg_veic_chassi")), registroAtual?.chassi),
+      tipo_vinculo: cfgCampoPreservado("cfg_veic_tipo_vinculo", normalizeTipoVinculo(cfgVal("cfg_veic_tipo_vinculo")), registroAtual?.tipo_vinculo),
       /* Campo compartilhado com o CPK › Depreciação (fonte única do status). */
       status_ativo: statusAtivo,
       status_ativo_atualizado_em: new Date().toISOString(),
@@ -6075,14 +6167,29 @@ function cfgEditVeiculo(id) {
   cfgSet("cfg_veic_modelo", v.modelo || "");
   cfgSet("cfg_veic_subtipo", v.subtipo || "");
   cfgSet("cfg_veic_ano", cfgAnoFormatoExibicao(v.ano));
-  cfgSet("cfg_veic_filial", v.filial || "");
   cfgSet("cfg_veic_renavam", v.renavam || "");
   cfgSet("cfg_veic_chassi", v.chassi || "");
-  cfgSet("cfg_veic_tipo_vinculo", v.tipo_vinculo || "");
+  /* selects: preenchidos pelo setter tolerante (ver cfgSetSelect) */
+  cfgSetSelect("cfg_veic_filial", v.filial || "");
+  cfgSetSelect("cfg_veic_tipo_vinculo", v.tipo_vinculo || "");
   cfgSet("cfg_veic_status", normalizeStatusAtivo(v.status_ativo));
+  /* [CORREÇÃO CADASTRO/VEÍCULOS] Marca o que realmente chegou preenchido na
+     abertura da edição. Se o campo vier vazio do banco e o usuário salvar sem
+     mexer, o gravador NÃO sobrescreve o valor existente com "" (ver
+     cfgSaveVeiculo) — evita apagar renavam/chassi sem querer. */
+  ["cfg_veic_renavam", "cfg_veic_chassi", "cfg_veic_tipo_vinculo"].forEach(campo => {
+    const el = document.getElementById(campo);
+    if (el) el.dataset.loadedValue = el.value || "";
+  });
   const frotaInput = document.getElementById("cfg_veic_frota");
   if (frotaInput) frotaInput.dataset.autoGenerated = "false";
   cfgVehicleTipoChange();
+  /* Diagnóstico: se o registro não tem renavam/chassi em NENHUMA grafia, o dado
+     não está no Firebase — o console mostra as chaves reais do documento. */
+  if (!v.renavam || !v.chassi) {
+    console.warn("[cadastros] veículo sem renavam/chassi após normalização:", v.placa || v.id,
+      "| chaves gravadas no Firebase:", Object.keys(v).join(", "));
+  }
   document.getElementById("cfg_veic_form")?.scrollIntoView({ behavior:"smooth", block:"start" });
 }
 async function cfgDeleteVeiculo(id) {
