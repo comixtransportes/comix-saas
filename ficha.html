@@ -366,7 +366,7 @@ select option{color:var(--black)}
 .loading-state{text-align:center;padding:40px 20px;color:var(--gray);font-size:13px}
 
 /* ═══ TOAST ═══ */
-.toast{position:fixed;bottom:calc(28px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--black);color:white;padding:11px 22px;border-radius:24px;font-size:12px;font-weight:700;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9999;white-space:nowrap;max-width:90vw;text-align:center}
+.toast{position:fixed;bottom:calc(28px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);background:var(--black);color:white;padding:11px 22px;border-radius:24px;font-size:12px;font-weight:700;opacity:0;transition:opacity .3s;pointer-events:none;z-index:9999;white-space:pre-wrap;word-break:break-word;line-height:1.35;max-width:90vw;text-align:center}
 .toast.show{opacity:1}
 .toast.error{background:var(--red)}
 .toast.success{background:var(--green)}
@@ -847,6 +847,74 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
   if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(firebaseConfig);
   const auth    = firebase.auth();
   const db      = firebase.firestore();
+
+  /* ══════════════════════════════════════════════════════════════════════
+     FIX — "addDoc() called with invalid data. Data must be an object…"
+     ao salvar a ficha DENTRO do portal (index.html), em iframe.
+
+     Causa: no bootstrap acima a ficha REUSA o SDK do parent quando está
+     embutida (window.firebase = window.parent.firebase). Isso é proposital
+     — mantém uma sessão de auth única para todos os módulos do Atlas.
+     Efeito colateral: o payload é criado no realm do IFRAME, mas quem valida
+     é o SDK do PARENT. A validação do Firestore usa
+        Object.getPrototypeOf(obj) === Object.prototype
+     e cada janela tem o SEU próprio Object/Array. Objeto legítimo do iframe
+     é lido pelo SDK do parent como "a custom Object object" → write abortado.
+     Leitura não passa por essa validação, por isso só a GRAVAÇÃO quebrava
+     (e só no portal — abrindo ficha.html direto sempre funcionou).
+
+     Solução: reconstruir o payload com Object/Array do realm dono do SDK
+     antes de qualquer write. Instâncias do próprio SDK (Timestamp,
+     FieldValue, GeoPoint, Blob, DocumentReference) passam intactas.
+     Bônus: campos `undefined` são descartados — outra causa clássica de
+     "invalid data" que ficava mascarada por este mesmo erro.
+     ══════════════════════════════════════════════════════════════════════ */
+  const FB_WIN = (function(){
+    try{
+      if (window.self !== window.top && window.parent && window.parent.firebase === window.firebase) return window.parent;
+    }catch(_){}
+    return window;
+  })();
+
+  function fsIsSdkValue(v){
+    try{
+      const FS = FB_WIN.firebase && FB_WIN.firebase.firestore;
+      if (!FS) return false;
+      return (FS.Timestamp         && v instanceof FS.Timestamp)
+          || (FS.FieldValue        && v instanceof FS.FieldValue)
+          || (FS.GeoPoint          && v instanceof FS.GeoPoint)
+          || (FS.Blob              && v instanceof FS.Blob)
+          || (FS.DocumentReference && v instanceof FS.DocumentReference);
+    }catch(_){ return false; }
+  }
+
+  function fsPortValue(v){
+    if (v === undefined || typeof v === "function") return undefined;
+    if (v === null || typeof v !== "object") return v;
+    if (fsIsSdkValue(v)) return v;
+    if (Object.prototype.toString.call(v) === "[object Date]") return new FB_WIN.Date(v.getTime());
+    if (Array.isArray(v)) {
+      const out = new FB_WIN.Array();
+      for (let i = 0; i < v.length; i++) {
+        const c = fsPortValue(v[i]);
+        out.push(c === undefined ? null : c); // array do Firestore não aceita buraco
+      }
+      return out;
+    }
+    const out = new FB_WIN.Object();
+    Object.keys(v).forEach(function(k){
+      const c = fsPortValue(v[k]);
+      if (c !== undefined) out[k] = c;
+    });
+    return out;
+  }
+
+  /* Envelope obrigatório de TODO write: add() / set() / batch.set() */
+  function fsData(v){
+    const ported = fsPortValue(v);
+    return (ported === undefined || ported === null || typeof ported !== "object") ? new FB_WIN.Object() : ported;
+  }
+
   // Supabase Storage usado somente para salvar as imagens dos canhotos
   const SUPABASE_URL = "https://onomvgnudbgywvtgetfe.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_SpcPe4Fch43LIwK7ox-jIQ_YbbBf5_g";
@@ -1043,12 +1111,12 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
   async function comprasSalvarEstadoUsuario(estado) {
     if (!currentUser) throw new Error("Usuário não autenticado");
     const clean = comprasCloneState(estado);
-    await db.collection("relatorios").doc(comprasUserDocId()).set({
+    await db.collection("relatorios").doc(comprasUserDocId()).set(fsData({
       ...comprasOwnerPayload({ comprasTipo: "state_user" }),
       state: clean,
       stateUpdatedAtClient: new Date().toISOString(),
       stateVersion: Date.now()
-    }, { merge: true });
+    }), { merge: true });
     return clean;
   }
 
@@ -1130,7 +1198,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       const batch = db.batch();
       ops.slice(i, i + chunkSize).forEach(op => {
         if (op.type === 'delete') batch.delete(op.ref);
-        if (op.type === 'set') batch.set(op.ref, op.data, { merge: true });
+        if (op.type === 'set') batch.set(op.ref, fsData(op.data), { merge: true });
       });
       await batch.commit();
     }
@@ -1303,7 +1371,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
           };
         });
       }
-      const ref = await db.collection("relatorios").add(payload);
+      const ref = await db.collection("relatorios").add(fsData(payload));
       return ref.id;
     },
     buscarRelatorios: async function(filtros) {
@@ -1390,8 +1458,8 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         await comprasSalvarEstadoUsuario(clean);
         Promise.allSettled([
           comprasSalvarEstadoPorRegistros(clean),
-          db.collection("relatorios").doc(COMPRAS_DOC_LEGACY).set(payload, { merge: true }),
-          db.collection("compras_sistema").doc("estado").set(payload, { merge: true })
+          db.collection("relatorios").doc(COMPRAS_DOC_LEGACY).set(fsData(payload), { merge: true }),
+          db.collection("compras_sistema").doc("estado").set(fsData(payload), { merge: true })
         ]).then(function(results) {
           const failed = results.filter(r => r.status === "rejected");
           if (failed.length) console.warn("COMIX Compras: espelho legado parcialmente indisponível.", failed.map(r => r.reason));
@@ -1400,8 +1468,8 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       } catch(primaryError) {
         const fallbackWrites = await Promise.allSettled([
           comprasSalvarEstadoPorRegistros(clean),
-          db.collection("relatorios").doc(COMPRAS_DOC_LEGACY).set(payload, { merge: true }),
-          db.collection("compras_sistema").doc("estado").set(payload, { merge: true })
+          db.collection("relatorios").doc(COMPRAS_DOC_LEGACY).set(fsData(payload), { merge: true }),
+          db.collection("compras_sistema").doc("estado").set(fsData(payload), { merge: true })
         ]);
         const ok = fallbackWrites.some(r => r.status === "fulfilled");
         if (!ok) {
@@ -1455,10 +1523,10 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         }
       }
       if (docId) {
-        await db.collection(collectionName).doc(docId).set(payload, { merge: true });
+        await db.collection(collectionName).doc(docId).set(fsData(payload), { merge: true });
         return docId;
       }
-      const ref = await db.collection(collectionName).add({ ...payload, createdAt: firebase.firestore.Timestamp.now() });
+      const ref = await db.collection(collectionName).add(fsData({ ...payload, createdAt: firebase.firestore.Timestamp.now() }));
       return ref.id;
     },
     adminExcluir: async function(collectionName, id) {
@@ -1468,11 +1536,11 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     },
     adminBloquearUsuario: async function(id, bloqueado) {
       assertAdminAccess();
-      await db.collection("usuarios").doc(id).set({
+      await db.collection("usuarios").doc(id).set(fsData({
         bloqueado: !!bloqueado,
         status: bloqueado ? "bloqueado" : "ativo",
         updatedAt: firebase.firestore.Timestamp.now()
-      }, { merge: true });
+      }), { merge: true });
     },
     gerarNumeroSequencial: async function() {
       const snap = await db.collection("relatorios").get();
