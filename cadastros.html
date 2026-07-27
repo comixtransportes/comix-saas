@@ -458,6 +458,12 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 .cfg-item-title{font-size:14px;font-weight:850;color:var(--text)}
 .cfg-item-sub{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.45}
 .cfg-pill{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:10px;font-weight:850;margin:3px 4px 0 0}
+/* Status do ativo (compartilhado com o CPK › Depreciação) */
+.cfg-st{display:inline-flex;align-items:center;border-radius:999px;padding:2px 8px;font-size:10px;font-weight:850;letter-spacing:.02em;vertical-align:middle}
+.cfg-st-ativo{background:var(--green-l);color:var(--green)}
+.cfg-st-vendido{background:var(--amber);color:var(--amber-d)}
+.cfg-st-baixado{background:var(--red-l);color:var(--red)}
+.cfg-st-inativo{background:#eceff3;color:var(--muted)}
 .cfg-pill-admin{background:var(--blue-l);color:var(--blue)}
 .cfg-pill-ok{background:var(--green-l);color:var(--green)}
 .cfg-pill-block{background:var(--red-l);color:var(--red)}
@@ -651,6 +657,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
               <div class="f"><label>Chassi</label><input id="cfg_veic_chassi" placeholder="Chassi" maxlength="17" oninput="cfgUppercaseInput(this)"></div>
               <div class="f"><label>Tipo (vínculo)</label><select id="cfg_veic_tipo_vinculo" onchange="cfgVehicleFrotaAutoFill(true)"><option value="">— Selecione —</option><option value="FROTA">Próprio/Frota</option><option value="AGREGADO">Agregado</option></select></div>
               <div class="f"><label>Unidade</label><select id="cfg_veic_filial"><option value="">Selecione</option></select></div>
+              <div class="f"><label>Status do ativo</label><select id="cfg_veic_status" title="Mesmo campo do CPK › Depreciação. Alterar aqui atualiza lá. Somente 'Ativo' gera custo de depreciação no CPK."><option value="ativo">Ativo</option><option value="vendido">Vendido</option><option value="baixado">Baixado</option><option value="inativo">Inativo</option></select></div>
             </div>
             <div class="cfg-actions">
               <button class="cfg-save" type="submit">Salvar veículo</button>
@@ -1458,6 +1465,28 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       const ref = await db.collection(collectionName).add({ ...payload, createdAt: firebase.firestore.Timestamp.now() });
       return ref.id;
     },
+    /* Status do ativo — espelho no CPK.
+       A fonte única do status é o campo status_ativo aqui do cadastro, mas o
+       módulo CPK mantém uma cópia dentro do registro de depreciação
+       (cpk_lancamentos/DEPRECIACAO → veiculos[PLACA].status). O merge é
+       aninhado: toca SOMENTE o status daquela placa, nenhum outro parâmetro
+       de depreciação (valor de compra, período, método) é alterado.
+       Placa sem registro de depreciação não é criada aqui — o CPK já resolve
+       o status pelo cadastro, e inventar um registro vazio estragaria o
+       indicador de base preenchida da aba Depreciação. */
+    espelharStatusDepreciacaoCPK: async function(placa, status) {
+      assertAdminAccess();
+      const p = String(placa || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (!p) return { espelhado: false, motivo: "sem-placa" };
+      const ref = db.collection("cpk_lancamentos").doc("DEPRECIACAO");
+      const snap = await ref.get();
+      const dados = snap.exists ? (snap.data() || {}) : {};
+      const rec = (dados.veiculos || {})[p];
+      if (!rec) return { espelhado: false, motivo: "sem-registro-de-depreciacao" };
+      if (String(rec.status || "ativo") === status) return { espelhado: false, motivo: "ja-igual" };
+      await ref.set({ veiculos: { [p]: { status } } }, { merge: true });
+      return { espelhado: true };
+    },
     adminExcluir: async function(collectionName, id) {
       assertAdminAccess();
       assertAllowedAdminCollection(collectionName);
@@ -1587,9 +1616,23 @@ function sortByField(a, b, field) {
   return String(a[field] || "").localeCompare(String(b[field] || ""), "pt-BR", { sensitivity: "base" });
 }
 
+/* Status do ativo — campo compartilhado com o CPK (aba Depreciação).
+   Fonte única: coleção 'veiculos', campo status_ativo. Sem valor gravado o
+   veículo é considerado ATIVO (padrão de toda a frota já cadastrada). */
+function normalizeStatusAtivo(value) {
+  const n = String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  if (/VEND/.test(n)) return "vendido";
+  if (/BAIX/.test(n)) return "baixado";
+  if (/INATIV|DESATIV/.test(n)) return "inativo";
+  return "ativo";
+}
+function statusAtivoLabel(value) {
+  return { ativo: "Ativo", vendido: "Vendido", baixado: "Baixado", inativo: "Inativo" }[normalizeStatusAtivo(value)];
+}
+
 function normalizeOperationalVehicle(v) {
   const placa = upperText(v.placa || v.id);
-  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial) };
+  return { ...v, tipo: normalizeTipoVeiculo(v.tipo), placa, frota: upperText(v.frota), modelo: upperText(v.modelo), subtipo: upperText(v.subtipo), filial: upperText(v.filial), status_ativo: normalizeStatusAtivo(v.status_ativo) };
 }
 
 function normalizeOperationalDriver(m) {
@@ -5758,7 +5801,10 @@ function cfgValidarItemImportacaoVeiculo(item) {
       modelo: cfgUpper(item.modelo),
       subtipo: tipo === "Carreta" ? cfgUpper(item.subtipo) : "",
       ano,
-      filial: cfgUpper(item.filial)
+      filial: cfgUpper(item.filial),
+      /* Toda importação entra como ativo — o status é ajustado depois aqui
+         ou pelo CPK › Depreciação (mesmo campo, mesma informação). */
+      status_ativo: normalizeStatusAtivo(item.status_ativo || item.status || "ativo")
     }
   };
 }
@@ -5939,8 +5985,10 @@ function cfgRenderVeiculoList(id, arr) {
   }
   list.innerHTML = arr.map(v => {
     const anoExibicao = cfgAnoFormatoExibicao(v.ano);
+    const st = normalizeStatusAtivo(v.status_ativo);
+    const badge = `<span class="cfg-st cfg-st-${st}">${statusAtivoLabel(st)}</span>`;
     return `<div class="cfg-list-item">
-    <div class="cfg-item-title">${cfgEscape(v.frota || "Sem frota")} · ${cfgEscape(v.placa || "")}</div>
+    <div class="cfg-item-title">${cfgEscape(v.frota || "Sem frota")} · ${cfgEscape(v.placa || "")} ${badge}</div>
     <div class="cfg-item-sub">${cfgEscape(v.modelo || "")}${v.subtipo ? " · " + cfgEscape(v.subtipo) : ""}${anoExibicao ? " · Ano " + cfgEscape(anoExibicao) : ""}${v.filial ? " · Unidade " + cfgEscape(v.filial) : ""}</div>
     <div class="cfg-item-actions">
       <button class="cfg-small" type="button" onclick="cfgEditVeiculo(decodeURIComponent('${cfgCode(v.id)}'))">Editar</button>
@@ -5953,6 +6001,7 @@ function cfgResetVeiculo() {
   document.getElementById("cfg_veic_form")?.reset();
   cfgSet("cfg_veic_doc_id", "");
   cfgSet("cfg_veic_tipo", "Cavalo");
+  cfgSet("cfg_veic_status", "ativo");   // todo veículo novo nasce ativo
   const frotaInput = document.getElementById("cfg_veic_frota");
   if (frotaInput) frotaInput.dataset.autoGenerated = "true";
   cfgVehicleTipoChange();
@@ -5971,6 +6020,7 @@ async function cfgSaveVeiculo(event) {
     cfgUpper(v.frota) === frota && v.id !== cfgVal("cfg_veic_doc_id")
   );
   if (veiculoDuplicado) return showToast(`A frota ${frota} já está cadastrada.`, "error");
+  const statusAtivo = normalizeStatusAtivo(cfgVal("cfg_veic_status") || "ativo");
   const payload = {
     tipo,
     placa,
@@ -5981,11 +6031,24 @@ async function cfgSaveVeiculo(event) {
     filial: cfgVal("cfg_veic_filial"),
     renavam: cfgVal("cfg_veic_renavam") || "",
     chassi: cfgUpper(cfgVal("cfg_veic_chassi")) || "",
-    tipo_vinculo: cfgVal("cfg_veic_tipo_vinculo") || ""
+    tipo_vinculo: cfgVal("cfg_veic_tipo_vinculo") || "",
+    /* Campo compartilhado com o CPK › Depreciação (fonte única do status). */
+    status_ativo: statusAtivo,
+    status_ativo_atualizado_em: new Date().toISOString(),
+    status_ativo_atualizado_por: (currentUser && currentUser.email) || "",
+    status_ativo_origem: "cadastros"
   };
   try {
     await cfgSave("veiculos", cfgVal("cfg_veic_doc_id") || placa, payload);
-    showToast("Veículo salvo no Firebase.", "success");
+    /* Espelho no registro de depreciação do CPK — não bloqueia o salvamento
+       do veículo: o cadastro já é a fonte única e o CPK lê de lá. */
+    let avisoEspelho = "";
+    try {
+      await window._FB.espelharStatusDepreciacaoCPK(placa, statusAtivo);
+    } catch (err) {
+      avisoEspelho = " (status não replicado no CPK: " + (err.message || err) + ")";
+    }
+    showToast("Veículo salvo no Firebase." + avisoEspelho, avisoEspelho ? "warning" : "success");
     await cfgRefreshVeiculos();
     cfgResetVeiculo();
   } catch (err) {
@@ -6006,6 +6069,7 @@ function cfgEditVeiculo(id) {
   cfgSet("cfg_veic_renavam", v.renavam || "");
   cfgSet("cfg_veic_chassi", v.chassi || "");
   cfgSet("cfg_veic_tipo_vinculo", v.tipo_vinculo || "");
+  cfgSet("cfg_veic_status", normalizeStatusAtivo(v.status_ativo));
   const frotaInput = document.getElementById("cfg_veic_frota");
   if (frotaInput) frotaInput.dataset.autoGenerated = "false";
   cfgVehicleTipoChange();
