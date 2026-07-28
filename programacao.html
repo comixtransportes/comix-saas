@@ -152,6 +152,38 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
 .vg-iv{font-size:11.5px;font-weight:600;margin-top:1px;word-break:break-word}
 .vg-iv.miss{color:var(--red)}
 .vg-a{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.vg-pl{font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:var(--gray);font-weight:500;letter-spacing:-.2px}
+
+/* ═══ GRADE AGRUPADA · UNIDADE › CLIENTE › VIAGENS ═══ */
+.gr-uni{border:1px solid var(--gray-l);border-radius:var(--r);background:var(--gray-bg);margin-bottom:12px;overflow:hidden}
+.gr-uni-hd{display:flex;align-items:center;gap:8px;padding:8px 11px;background:var(--black);color:#fff;cursor:pointer;user-select:none}
+.gr-uni-ti{font-size:11.5px;font-weight:800;text-transform:uppercase;letter-spacing:.6px}
+.gr-uni-sub{font-size:10px;opacity:.72;font-weight:500}
+.gr-uni-bd{padding:9px}
+.gr-cli{border:1px solid var(--gray-l);border-radius:var(--r-sm);background:var(--white);margin-bottom:9px;overflow:hidden}
+.gr-cli:last-child{margin-bottom:0}
+.gr-cli-hd{display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--purple-l);border-bottom:1px solid var(--purple-b);cursor:pointer;user-select:none}
+.gr-cli-ti{font-size:12px;font-weight:800;color:var(--purple);line-height:1.2;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gr-cli-sub{font-size:9.5px;color:var(--gray);font-weight:600;white-space:nowrap}
+.gr-cli-bd{padding:9px}
+.gr-cli-bd .vg:last-child{margin-bottom:0}
+.gr-cnt{margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0}
+.gr-cx{font-size:12px;opacity:.7;transition:transform .15s;display:inline-block}
+.gr-col .gr-cx{transform:rotate(-90deg)}
+.gr-col .gr-uni-bd,.gr-col .gr-cli-bd{display:none}
+
+/* ═══ BARRA DE ORDENAÇÃO DA GRADE ═══ */
+.ord-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.ord-wrap{position:relative;display:inline-flex}
+.ord-pop{display:none;position:absolute;z-index:60;top:calc(100% + 5px);left:0;width:250px;background:var(--white);border:1px solid var(--gray-l);border-radius:var(--r-sm);box-shadow:0 12px 32px rgba(0,0,0,.18);padding:9px}
+.ord-pop.on{display:block}
+.ord-lb{font-size:9.5px;font-weight:700;color:var(--gray);text-transform:uppercase;letter-spacing:.4px;margin:7px 0 4px}
+.ord-lb:first-child{margin-top:0}
+.ord-op{display:block;width:100%;text-align:left;border:1px solid var(--gray-ll);background:var(--white);border-radius:var(--r-xs);padding:6px 8px;font-size:11.5px;font-family:inherit;color:var(--black);cursor:pointer;margin-bottom:4px}
+.ord-op:hover{background:var(--gray-bg)}
+.ord-op.on{background:var(--purple-l);border-color:var(--purple-b);color:var(--purple);font-weight:700}
+.ord-pop select,.ord-pop input[type=text]{width:100%;font-size:11.5px;padding:6px 8px;margin-bottom:4px}
+.ord-tag{font-size:10px;color:var(--gray);font-weight:600}
 
 /* ═══ VALIDAÇÃO ═══ */
 .val{border-radius:var(--r-xs);padding:7px 9px;margin-top:7px;font-size:11.5px;line-height:1.45;border:1px solid}
@@ -347,6 +379,32 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
           <span class="tot" id="tot-grade">0</span>
         </div>
         <div class="panel-bd">
+          <!-- Ordenação/filtro da grade — fica ACIMA do card de unidade -->
+          <div class="ord-bar">
+            <div class="ord-wrap">
+              <button type="button" class="btn btn-sm" id="ordBtn" onclick="prgToggleOrdenar(event)">
+                <span>⇅</span> Ordenar
+              </button>
+              <div class="ord-pop" id="ordPop">
+                <div class="ord-lb">Ordenar viagens por</div>
+                <div id="ordOpcoes"></div>
+                <div class="ord-lb">Filtrar</div>
+                <select id="ordFCliente" onchange="renderGrade()"><option value="">Todos os clientes</option></select>
+                <select id="ordFMotorista" onchange="renderGrade()"><option value="">Todos os motoristas</option></select>
+                <input type="text" id="ordBusca" placeholder="Buscar frota, placa, produto…" oninput="renderGrade()">
+                <button type="button" class="ord-op" onclick="prgLimparOrdem(event)">Limpar filtros</button>
+              </div>
+            </div>
+            <div class="ord-wrap">
+              <button type="button" class="btn btn-sm" id="motBtn" onclick="prgToggleMotoristas(event)"
+                      title="Copia a agenda completa do dia de um motorista">📋 Dia do motorista</button>
+              <div class="ord-pop" id="motPop">
+                <div class="ord-lb">Copiar o dia inteiro de</div>
+                <div id="motLista"></div>
+              </div>
+            </div>
+            <span class="ord-tag" id="ordTag"></span>
+          </div>
           <div class="drop" id="drop" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropDemanda(event)">
             <div id="lista-grade"></div>
           </div>
@@ -691,6 +749,8 @@ const ST = {
   /* Listas derivadas da SZB: produtos, remetentes e destinatários com a UF
      predominante de cada um — é isso que preenche a UF automaticamente. */
   szbIdx: { produtos:[], remetentes:[], destinatarios:[], loaded:false },
+  /* Ordenação/filtro da Grade do dia (barra acima do card de unidade). */
+  grade: { ordem:'antigo', fCliente:'', fMotorista:'', busca:'', colapsados:{} },
   editDemandaId: null,
   conjViagemId: null,
   conjUnidade: null,
@@ -860,6 +920,27 @@ function categoriaVeiculo(tipo){
   if(t.includes('carreta')) return 'carreta';
   return 'cavalo';
 }
+
+/* ═══ IDENTIFICAÇÃO DO VEÍCULO ═══
+   Regra do módulo: onde aparece número de frota, aparece a placa ao lado.
+   Nunca só o número — quem lê a grade precisa identificar o caminhão no pátio. */
+function fmtPlaca(p){
+  const s=up(p).replace(/[^A-Z0-9]/g,'');
+  if(s.length===7) return s.slice(0,3)+'-'+s.slice(3);
+  return up(p);
+}
+function rotuloVeic(frota,placa){
+  const f=String(frota==null?'':frota).trim(), p=placa?fmtPlaca(placa):'';
+  if(f && p) return f+' · '+p;
+  return f || p || '';
+}
+function rotuloVeicHtml(frota,placa){
+  const f=String(frota==null?'':frota).trim(), p=placa?fmtPlaca(placa):'';
+  if(f && p) return esc(f)+' <span class="vg-pl">'+esc(p)+'</span>';
+  return esc(f||p||'—');
+}
+function rotuloConjunto(c){ return c?rotuloVeic(c.cavalo_frota,c.cavalo_placa):''; }
+function rotuloVeiculo(v){ return v?rotuloVeic(v.frota,v.placa):''; }
 
 /* Minutos desde 00:00 — para checar sobreposição de janelas. */
 function hhmm(v){
@@ -1360,6 +1441,26 @@ function conjuntosDaUnidade(uni,opts){
 function veiculoPorId(id){ return ST.cad.veiculos.find(v=>v.id===id)||null; }
 function compressorPorId(id){ return ST.cad.compressores.find(c=>c.id===id)||null; }
 
+/* Viagens ativas do mesmo cavalo no dia, ordenadas pelo carregamento.
+   O caminhão pode rodar várias vezes por dia — o que não pode é rodar duas
+   viagens em horários sobrepostos, e disso cuida o motor de validação. */
+function viagensDoCavalo(cavId,exceto){
+  if(!cavId) return [];
+  return ST.viagens
+    .filter(v=>v.cavalo_id===cavId && v.status!=='cancelada' && v.id!==exceto)
+    .sort((a,b)=>{
+      const A=hhmm(a.prev_carregamento), B=hhmm(b.prev_carregamento);
+      return (A==null?99999:A)-(B==null?99999:B);
+    });
+}
+/* Existe alguma janela livre para encaixar este cavalo? */
+function cavaloLivreNaJanela(cavId,ini,fim,exceto){
+  const jIni=hhmm(ini), jFim=hhmm(fim);
+  if(jIni==null) return !viagensDoCavalo(cavId,exceto).length;   // sem horário: só encaixa se o cavalo estiver livre
+  return !viagensDoCavalo(cavId,exceto).some(o=>
+    sobrepoe(jIni,jFim,hhmm(o.prev_carregamento),hhmm(o.prev_retorno)||hhmm(o.prev_descarga)));
+}
+
 /* Status efetivo do compressor — MESMA regra do módulo Frota:
    em manutenção → manutencao; alocado em cavalo → operando; senão → estoque. */
 function statusCompressor(cp){
@@ -1435,9 +1536,15 @@ function validarViagem(v){
     const oIni=hhmm(o.prev_carregamento), oFim=hhmm(o.prev_retorno)||hhmm(o.prev_descarga);
     const choca = sobrepoe(jIni,jFim,oIni,oFim);
     const rotulo = o.numero||('viagem '+String(o.id).slice(0,6));
+    /* Multiviagem é permitida: o mesmo cavalo pode rodar quantas vezes couberem
+       no dia. O que bloqueia é a SOBREPOSIÇÃO de horário. Quando falta horário
+       nas duas viagens não dá para afirmar conflito — mas também não dá para
+       descartá-lo, então vira alerta em vez de informação. */
     if(v.cavalo_id && o.cavalo_id===v.cavalo_id){
-      if(choca) B('Cavalo já programado','O cavalo está na programação '+rotulo+' em horário sobreposto.','Ajuste o horário ou troque o cavalo.');
-      else I('Cavalo com outra viagem','Mesmo cavalo também na programação '+rotulo+' neste dia.');
+      const cavRot=rotuloVeic(v.cavalo_frota,v.cavalo_placa)||'cavalo';
+      if(choca) B('Cavalo já programado','O cavalo '+cavRot+' está na programação '+rotulo+' em horário sobreposto.','Ajuste o horário ou troque o cavalo.');
+      else if(jIni==null||oIni==null) A('Horário indefinido em viagem repetida','O cavalo '+cavRot+' também roda na programação '+rotulo+' hoje e ao menos uma delas está sem horário de carregamento.','Preencha os horários das duas viagens para garantir que não se sobrepõem.');
+      else I('Cavalo em multiviagem','O cavalo '+cavRot+' também roda na programação '+rotulo+' hoje, em horário que não conflita.');
     }
     if(v.motorista_id && o.motorista_id===v.motorista_id && choca)
       B('Motorista já programado','O motorista está na programação '+rotulo+' em horário sobreposto.','Ajuste o horário ou troque o motorista.');
@@ -1503,6 +1610,15 @@ async function carregarChecklists(){
    ═══════════════════════════════════════════════════════════════ */
 function renderTudo(){ renderKpis(); renderPendentes(); renderGrade(); renderRecursos(); renderDemandas(); renderDisp(); renderChipDia(); try{ renderTransferencias(); }catch(_){} try{ renderPainel(); }catch(_){} }
 
+/* Os filtros das abas são atributos inline (onchange/oninput) e resolvem no
+   escopo GLOBAL — como todo o módulo vive dentro de uma IIFE, essas funções
+   precisam ser publicadas explicitamente, senão o filtro não dispara. */
+window.renderGrade=()=>renderGrade();
+window.renderDemandas=()=>renderDemandas();
+window.renderDisp=()=>renderDisp();
+window.renderTransferencias=()=>{ try{ renderTransferencias(); }catch(_){} };
+window.renderIndicadores=()=>{ try{ renderIndicadores(); }catch(_){} };
+
 function renderKpis(){
   const vs=ST.viagens.filter(v=>v.status!=='cancelada');
   let semCav=0,semMot=0,semComp=0,blk=0;
@@ -1555,73 +1671,463 @@ function renderPendentes(){
   }).join('');
 }
 
-function renderGrade(){
-  const vs=ST.viagens.filter(v=>v.status!=='cancelada')
-    .sort((a,b)=>String(a.prev_carregamento||'99:99').localeCompare(String(b.prev_carregamento||'99:99')));
-  document.getElementById('tot-grade').textContent=vs.length+'';
-  const el=document.getElementById('lista-grade');
-  if(!vs.length){ el.innerHTML='<div class="empty">Grade vazia.<br>Arraste uma demanda da coluna à esquerda para programar.</div>'; return; }
+/* ═══ ORDENAÇÃO DA GRADE ═══
+   Uma viagem sem horário vai para o fim em qualquer critério de tempo — ela
+   ainda não tem posição no dia e não pode empurrar quem já tem. */
+const ORDENS=[
+  {id:'antigo',    lb:'Carregamento — mais cedo primeiro'},
+  {id:'novo',      lb:'Carregamento — mais tarde primeiro'},
+  {id:'entrega',   lb:'Próximos a serem entregues'},
+  {id:'cliente',   lb:'Cliente (A → Z)'},
+  {id:'motorista', lb:'Motorista (A → Z)'},
+  {id:'criacao',   lb:'Ordem de criação'}
+];
+function ordemLabel(id){ const o=ORDENS.find(x=>x.id===id); return o?o.lb:ORDENS[0].lb; }
+function chaveTempo(v,campo){ const m=hhmm(v[campo]); return m==null?999999:m; }
+function ordenarViagens(vs){
+  const o=ST.grade.ordem||'antigo';
+  const arr=vs.slice();
+  const porCarga=(a,b)=>chaveTempo(a,'prev_carregamento')-chaveTempo(b,'prev_carregamento');
+  if(o==='novo')      arr.sort((a,b)=>chaveTempo(b,'prev_carregamento')-chaveTempo(a,'prev_carregamento'));
+  else if(o==='entrega') arr.sort((a,b)=>(chaveTempo(a,'prev_descarga')-chaveTempo(b,'prev_descarga'))||porCarga(a,b));
+  else if(o==='cliente') arr.sort((a,b)=>String(clienteDaViagem(a)).localeCompare(String(clienteDaViagem(b)),'pt-BR')||porCarga(a,b));
+  else if(o==='motorista') arr.sort((a,b)=>String(a.motorista_nome||'zzz').localeCompare(String(b.motorista_nome||'zzz'),'pt-BR')||porCarga(a,b));
+  else if(o==='criacao') arr.sort((a,b)=>String(a.criado_em||'').localeCompare(String(b.criado_em||'')));
+  else arr.sort(porCarga);
+  return arr;
+}
+function clienteDaViagem(v){
+  const d=ST.demandas.find(x=>x.id===v.demanda_id)||{};
+  return String(d.cliente||'Sem cliente').trim()||'Sem cliente';
+}
+function viagensDaGrade(){
+  let vs=ST.viagens.filter(v=>v.status!=='cancelada');
+  const fc=ST.grade.fCliente, fm=ST.grade.fMotorista, bq=norm(ST.grade.busca||'');
+  if(fc) vs=vs.filter(v=>norm(clienteDaViagem(v))===norm(fc));
+  if(fm) vs=vs.filter(v=>norm(v.motorista_nome||'')===norm(fm));
+  if(bq) vs=vs.filter(v=>{
+    const d=ST.demandas.find(x=>x.id===v.demanda_id)||{};
+    return norm([v.numero,v.cavalo_frota,v.cavalo_placa,v.motorista_nome,d.cliente,d.produto,d.pedido,
+      d.local_coleta,d.local_entrega,v.rota_codigo].filter(Boolean).join(' ')).includes(bq);
+  });
+  return ordenarViagens(vs);
+}
 
-  el.innerHTML=vs.map(v=>{
-    const dem=ST.demandas.find(d=>d.id===v.demanda_id)||{};
-    const vals=validarViagem(v);
-    const blk=temBloqueio(vals);
-    const cls = blk?'blk':(vals.some(x=>x.nivel==='alerta')?'pend':'ok');
-    const c1=v.carreta1_id?veiculoPorId(v.carreta1_id):null;
-    const cp=v.compressor_id?compressorPorId(v.compressor_id):null;
-    return '<div class="vg '+cls+'">'
-      +'<div class="vg-h"><div>'
-        +'<div class="vg-n">'+esc(v.numero||'—')+'</div>'
-        +'<div class="vg-t">'+esc(dem.cliente||'—')+' · '+esc(dem.produto||'—')+'</div>'
-        +'<div class="dcard-s">'+esc(dem.local_coleta||'—')+' → '+esc(dem.local_entrega||'—')+'</div>'
-      +'</div><div style="text-align:right">'
-        +'<span class="chip '+(blk?'c-rd':stChip(v.status||'pre_programada'))+'">'+esc(stLabel(v.status||'pre_programada'))+'</span>'
-        +(v.alterado_apos_fechamento?'<div style="margin-top:4px"><span class="chip c-or">alteração após fechamento</span></div>':'')
-        +'</div></div>'
-      +'<div class="vg-g">'
-        +item('Cavalo', v.cavalo_frota||v.cavalo_placa, !v.cavalo_id)
-        +item('Motorista', v.motorista_nome, !v.motorista_nome)
-        +item('Carreta', c1?(c1.frota||c1.placa):'', !v.carreta1_id)
-        +item('Compressor', cp?cp.numero:(compressorDoCaminhao(dem)?'':'do cliente'), compressorDoCaminhao(dem)&&!v.compressor_id)
-        +item('Carregamento', v.prev_carregamento, false)
-        +item('Descarga', v.prev_descarga, false)
+/* Grade hierárquica: UNIDADE › CLIENTE › VIAGENS.
+   O mesmo cliente pode receber várias viagens no dia; o mesmo cavalo pode
+   aparecer em mais de uma viagem, desde que em horários que não se sobreponham
+   (a checagem de conflito é do motor de validação, não da montagem da tela). */
+function renderGrade(){
+  lerControlesOrdem();
+  const vs=viagensDaGrade();
+  const totAtivas=ST.viagens.filter(v=>v.status!=='cancelada').length;
+  document.getElementById('tot-grade').textContent = (vs.length===totAtivas)?(totAtivas+'') : (vs.length+' de '+totAtivas);
+  montarControlesOrdem();
+
+  const el=document.getElementById('lista-grade');
+  if(!vs.length){
+    el.innerHTML='<div class="empty">'+(totAtivas
+      ? 'Nenhuma viagem atende ao filtro atual.<br>Ajuste em <b>Ordenar</b>.'
+      : 'Grade vazia.<br>Arraste uma demanda da coluna à esquerda para programar.')+'</div>';
+    return;
+  }
+
+  /* Agrupa preservando a ordem já aplicada. */
+  const unis=[];
+  const mapU=new Map();
+  vs.forEach(v=>{
+    const u=v.unidade_slug||'—';
+    if(!mapU.has(u)){ const g={uni:u,clientes:[],mapC:new Map(),total:0}; mapU.set(u,g); unis.push(g); }
+    const gu=mapU.get(u); gu.total++;
+    const cl=clienteDaViagem(v);
+    if(!gu.mapC.has(cl)){ const gc={cliente:cl,viagens:[]}; gu.mapC.set(cl,gc); gu.clientes.push(gc); }
+    gu.mapC.get(cl).viagens.push(v);
+  });
+  unis.sort((a,b)=>UNIS.indexOf(a.uni)-UNIS.indexOf(b.uni));
+
+  el.innerHTML=unis.map(gu=>{
+    const kU='U:'+gu.uni;
+    const colU=ST.grade.colapsados[kU]?' gr-col':'';
+    const ton=gu.clientes.reduce((s,gc)=>s+gc.viagens.reduce((t,v)=>{
+      const d=ST.demandas.find(x=>x.id===v.demanda_id)||{}; return t+(Number(d.quantidade_prevista)||0);
+    },0),0);
+    return '<div class="gr-uni'+colU+'">'
+      +'<div class="gr-uni-hd" onclick="prgToggleGrupo(\''+esc(kU)+'\')">'
+        +'<span class="gr-cx">▾</span>'
+        +'<span class="gr-uni-ti">'+esc(gu.uni)+' · '+esc(UNI_LABEL[gu.uni]||'')+'</span>'
+        +'<span class="gr-cnt">'
+          +'<span class="gr-uni-sub">'+gu.clientes.length+' cliente(s) · '+gu.total+' viagem(ns)'
+          +(ton?' · '+num(ton,1)+' t':'')+'</span>'
+        +'</span>'
       +'</div>'
-      +vals.map(x=>'<div class="val val-'+(x.nivel==='bloqueio'?'b':x.nivel==='alerta'?'a':'i')+'">'
-          +'<span class="val-ti">'+esc(x.titulo)+'</span>'+esc(x.msg)
-          +(x.acao?'<span class="val-ac">→ '+esc(x.acao)+'</span>':'')+'</div>').join('')
-      +'<div class="vg-a">'
-        +'<button class="btn btn-sm btn-primary" onclick="abrirConjunto(\''+esc(v.id)+'\')">Conjunto / horários</button>'
-        +'<button class="btn btn-sm '+(blk?'':'btn-ok')+'" '+(blk?'disabled title="Resolva os bloqueios para liberar"':'')+' onclick="liberarViagem(\''+esc(v.id)+'\')">Liberar</button>'
-        +'<button class="btn btn-sm" onclick="abrirStatus(\''+esc(v.id)+'\')">Status</button>'
-        +'<button class="btn btn-sm" onclick="abrirReprog(\''+esc(v.id)+'\')">Reprogramar</button>'
-      +'</div></div>';
+      +'<div class="gr-uni-bd">'+gu.clientes.map(gc=>{
+        const kC='C:'+gu.uni+'|'+gc.cliente;
+        const colC=ST.grade.colapsados[kC]?' gr-col':'';
+        const blks=gc.viagens.filter(v=>temBloqueio(validarViagem(v))).length;
+        const tc=gc.viagens.reduce((t,v)=>{
+          const d=ST.demandas.find(x=>x.id===v.demanda_id)||{}; return t+(Number(d.quantidade_prevista)||0);
+        },0);
+        return '<div class="gr-cli'+colC+'">'
+          +'<div class="gr-cli-hd" onclick="prgToggleGrupo(\''+esc(kC)+'\')">'
+            +'<span class="gr-cx">▾</span>'
+            +'<span class="gr-cli-ti">'+esc(gc.cliente)+'</span>'
+            +'<span class="gr-cnt">'
+              +(blks?'<span class="chip c-rd">'+blks+' com bloqueio</span>':'')
+              +'<span class="gr-cli-sub">'+gc.viagens.length+' viagem(ns)'+(tc?' · '+num(tc,1)+' t':'')+'</span>'
+            +'</span>'
+          +'</div>'
+          +'<div class="gr-cli-bd">'+gc.viagens.map(cardViagem).join('')+'</div>'
+        +'</div>';
+      }).join('')+'</div>'
+    +'</div>';
   }).join('');
 }
+
+function cardViagem(v){
+  const dem=ST.demandas.find(d=>d.id===v.demanda_id)||{};
+  const vals=validarViagem(v);
+  const blk=temBloqueio(vals);
+  const cls = blk?'blk':(vals.some(x=>x.nivel==='alerta')?'pend':'ok');
+  const c1=v.carreta1_id?veiculoPorId(v.carreta1_id):null;
+  const cp=v.compressor_id?compressorPorId(v.compressor_id):null;
+  /* Quantas vezes este mesmo cavalo roda hoje — o número deixa explícito que
+     o caminhão foi programado mais de uma vez no dia, em horários distintos. */
+  const nCav = v.cavalo_id ? ST.viagens.filter(o=>o.status!=='cancelada'&&o.cavalo_id===v.cavalo_id).length : 0;
+  const iCav = v.cavalo_id ? ST.viagens.filter(o=>o.status!=='cancelada'&&o.cavalo_id===v.cavalo_id)
+                 .sort((a,b)=>chaveTempo(a,'prev_carregamento')-chaveTempo(b,'prev_carregamento'))
+                 .findIndex(o=>o.id===v.id)+1 : 0;
+  /* Quantas viagens o MOTORISTA tem hoje — define se vale oferecer a cópia do
+     dia inteiro no próprio card (com uma viagem só, o botão ao lado já basta). */
+  const nMot = String(v.motorista_nome||'').trim() ? viagensDoMotorista(v.motorista_nome).length : 0;
+  return '<div class="vg '+cls+'">'
+    +'<div class="vg-h"><div>'
+      +'<div class="vg-n">'+esc(v.numero||'—')+'</div>'
+      +'<div class="vg-t">'+esc(dem.produto||'—')+(dem.quantidade_prevista?' · '+num(dem.quantidade_prevista,1)+' t':'')+'</div>'
+      +'<div class="dcard-s">'+esc(dem.local_coleta||'—')+' → '+esc(dem.local_entrega||'—')+'</div>'
+    +'</div><div style="text-align:right">'
+      +'<span class="chip '+(blk?'c-rd':stChip(v.status||'pre_programada'))+'">'+esc(stLabel(v.status||'pre_programada'))+'</span>'
+      +(nCav>1?'<div style="margin-top:4px"><span class="chip c-bl" title="Este cavalo roda '+nCav+' vezes hoje">viagem '+iCav+' de '+nCav+'</span></div>':'')
+      +(v.alterado_apos_fechamento?'<div style="margin-top:4px"><span class="chip c-or">alteração após fechamento</span></div>':'')
+      +'</div></div>'
+    +'<div class="vg-g">'
+      +itemHtml('Cavalo', rotuloVeicHtml(v.cavalo_frota,v.cavalo_placa), !v.cavalo_id)
+      +item('Motorista', v.motorista_nome, !v.motorista_nome)
+      +itemHtml('Carreta', c1?rotuloVeicHtml(c1.frota,c1.placa):'—', !v.carreta1_id)
+      +item('Compressor', cp?cp.numero:(compressorDoCaminhao(dem)?'':'do cliente'), compressorDoCaminhao(dem)&&!v.compressor_id)
+      +item('Carregamento', v.prev_carregamento, false)
+      +item('Descarga', v.prev_descarga, false)
+    +'</div>'
+    +vals.map(x=>'<div class="val val-'+(x.nivel==='bloqueio'?'b':x.nivel==='alerta'?'a':'i')+'">'
+        +'<span class="val-ti">'+esc(x.titulo)+'</span>'+esc(x.msg)
+        +(x.acao?'<span class="val-ac">→ '+esc(x.acao)+'</span>':'')+'</div>').join('')
+    +'<div class="vg-a">'
+      +'<button class="btn btn-sm btn-primary" onclick="abrirConjunto(\''+esc(v.id)+'\')">Conjunto / horários</button>'
+      +'<button class="btn btn-sm '+(blk?'':'btn-ok')+'" '+(blk?'disabled title="Resolva os bloqueios para liberar"':'')+' onclick="liberarViagem(\''+esc(v.id)+'\')">Liberar</button>'
+      +'<button class="btn btn-sm" onclick="abrirStatus(\''+esc(v.id)+'\')">Status</button>'
+      +'<button class="btn btn-sm" onclick="abrirReprog(\''+esc(v.id)+'\')">Reprogramar</button>'
+      +'<button class="btn btn-sm" title="Copia o texto desta viagem para colar no WhatsApp do motorista" onclick="copiarViagemWhats(\''+esc(v.id)+'\',event)">📋 Copiar p/ WhatsApp</button>'
+      +(nMot>1?'<button class="btn btn-sm" title="Copia as '+nMot+' viagens de '+esc(v.motorista_nome||'')+' hoje numa mensagem só" onclick="copiarDiaMotorista(\''+esc(v.id)+'\',event)">📋 Dia do motorista ('+nMot+')</button>':'')
+    +'</div></div>';
+}
+
+/* ═══ CONTROLES DE ORDENAÇÃO ═══ */
+function lerControlesOrdem(){
+  const g=id=>{ const e=document.getElementById(id); return e?String(e.value||''):null; };
+  const c=g('ordFCliente'); if(c!==null) ST.grade.fCliente=c;
+  const m=g('ordFMotorista'); if(m!==null) ST.grade.fMotorista=m;
+  const b=g('ordBusca'); if(b!==null) ST.grade.busca=b;
+}
+function montarControlesOrdem(){
+  const box=document.getElementById('ordOpcoes');
+  if(box) box.innerHTML=ORDENS.map(o=>'<button type="button" class="ord-op'+(ST.grade.ordem===o.id?' on':'')+'" '
+    +'onclick="prgSetOrdem(\''+o.id+'\',event)">'+esc(o.lb)+'</button>').join('');
+
+  const ativas=ST.viagens.filter(v=>v.status!=='cancelada');
+  const opts=(el,valores,atual,vazio)=>{
+    if(!el) return;
+    el.innerHTML='<option value="">'+vazio+'</option>'
+      +valores.map(x=>'<option value="'+esc(x)+'"'+(norm(x)===norm(atual)?' selected':'')+'>'+esc(x)+'</option>').join('');
+    el.value = valores.find(x=>norm(x)===norm(atual)) || '';
+  };
+  const clientes=[...new Set(ativas.map(clienteDaViagem))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  const motoristas=[...new Set(ativas.map(v=>v.motorista_nome).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  opts(document.getElementById('ordFCliente'),clientes,ST.grade.fCliente,'Todos os clientes');
+  opts(document.getElementById('ordFMotorista'),motoristas,ST.grade.fMotorista,'Todos os motoristas');
+  const busca=document.getElementById('ordBusca'); if(busca && busca.value!==ST.grade.busca) busca.value=ST.grade.busca||'';
+
+  const tag=document.getElementById('ordTag');
+  if(tag){
+    const fs=[];
+    if(ST.grade.fCliente) fs.push('cliente: '+ST.grade.fCliente);
+    if(ST.grade.fMotorista) fs.push('motorista: '+ST.grade.fMotorista);
+    if(ST.grade.busca) fs.push('busca: '+ST.grade.busca);
+    tag.textContent=ordemLabel(ST.grade.ordem)+(fs.length?'  ·  '+fs.join('  ·  '):'');
+  }
+}
+window.prgToggleOrdenar=function(e){
+  if(e) e.stopPropagation();
+  const p=document.getElementById('ordPop'); if(!p) return;
+  const abrir=!p.classList.contains('on');
+  fecharPops('ordPop');
+  p.classList.toggle('on',abrir);
+  if(abrir) montarControlesOrdem();
+};
+window.prgSetOrdem=function(id,e){ if(e) e.stopPropagation(); ST.grade.ordem=id; renderGrade(); };
+window.prgLimparOrdem=function(e){
+  if(e) e.stopPropagation();
+  ST.grade.fCliente=''; ST.grade.fMotorista=''; ST.grade.busca='';
+  const b=document.getElementById('ordBusca'); if(b) b.value='';
+  renderGrade();
+};
+window.prgToggleGrupo=function(k){
+  ST.grade.colapsados[k]=!ST.grade.colapsados[k];
+  renderGrade();
+};
+/* Os dois popovers da barra (Ordenar e Dia do motorista) fecham ao clique fora
+   e são mutuamente exclusivos — dois painéis abertos sobre a grade atrapalham. */
+const POPS=[['ordPop','ordBtn'],['motPop','motBtn']];
+function fecharPops(exceto){
+  POPS.forEach(([pid])=>{ if(pid===exceto) return; const p=document.getElementById(pid); if(p) p.classList.remove('on'); });
+}
+document.addEventListener('click',function(e){
+  POPS.forEach(([pid,bid])=>{
+    const p=document.getElementById(pid);
+    if(!p||!p.classList.contains('on')) return;
+    if(p.contains(e.target)) return;
+    const b=document.getElementById(bid);
+    if(b&&b.contains(e.target)) return;
+    p.classList.remove('on');
+  });
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   TEXTO PARA O WHATSAPP DO MOTORISTA
+   Duas saídas: UMA viagem (botão do card) e o DIA INTEIRO do
+   motorista (botão da barra). Ambas em texto puro — cola em
+   qualquer lugar, sem depender de integração.
+   ═══════════════════════════════════════════════════════════════ */
+function numBr(v,d){ return num(v,d).replace('.',','); }
+function dataBr(iso){ const p=String(iso||'').split('-'); return p.length===3?(p[2]+'/'+p[1]+'/'+p[0]):String(iso||''); }
+const DOW=['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
+function diaSemana(iso){ try{ return DOW[isoParaDate(iso).getDay()]||''; }catch(_){ return ''; } }
+function localTxt(l,uf){ return [String(l||'').trim(),up(uf||'')].filter(Boolean).join('/'); }
+
+/* Blocos de uma viagem, sem cabeçalho — reaproveitados pelas duas saídas.
+   opts.omitirVeiculo evita repetir cavalo e carreta em todas as viagens
+   quando o motorista roda o dia inteiro no mesmo conjunto. */
+function linhasViagem(v,opts){
+  opts=opts||{};
+  const dem=ST.demandas.find(d=>d.id===v.demanda_id)||{};
+  const c1=v.carreta1_id?veiculoPorId(v.carreta1_id):null;
+  const c2=v.carreta2_id?veiculoPorId(v.carreta2_id):null;
+  const cp=v.compressor_id?compressorPorId(v.compressor_id):null;
+  const L=[];
+  const add=(rot,val)=>{ const s=String(val==null?'':val).trim(); if(s&&s!=='—') L.push(rot+': '+s); };
+
+  if(!opts.omitirVeiculo){
+    add('Cavalo', rotuloVeic(v.cavalo_frota,v.cavalo_placa));
+    add('Carreta', c1?rotuloVeic(c1.frota,c1.placa):'');
+    add('Carreta 2', c2?rotuloVeic(c2.frota,c2.placa):'');
+    add('Compressor', cp?('C'+cp.numero):(compressorDoCaminhao(dem)?'PENDENTE':'do cliente'));
+    if(L.length) L.push('');
+  }
+  add('Cliente', dem.cliente);
+  add('Produto', [dem.produto, dem.quantidade_prevista?numBr(dem.quantidade_prevista,1)+' t':''].filter(Boolean).join(' · '));
+  add('Pedido', dem.pedido);
+  add('Carregar em', localTxt(dem.local_coleta,dem.uf_origem));
+  add('Janela de carga', [dem.janela_carga_ini,dem.janela_carga_fim].filter(Boolean).join(' às '));
+  add('Descarregar em', localTxt(dem.local_entrega,dem.uf_destino));
+  add('Janela de descarga', [dem.janela_desc_ini,dem.janela_desc_fim].filter(Boolean).join(' às '));
+  add('Rota', v.rota_codigo||dem.rota_codigo);
+  const ki=v.km_ida||dem.km_ida, kv=v.km_volta||dem.km_volta;
+  add('KM', ki?(ki+' km ida'+(kv?' · '+kv+' km volta':'')):'');
+  const hs=[['Carregamento',v.prev_carregamento],['Saída',v.prev_saida],['Chegada no cliente',v.prev_chegada],
+            ['Descarga',v.prev_descarga],['Retorno',v.prev_retorno]].filter(x=>String(x[1]||'').trim());
+  if(hs.length){ L.push(''); L.push('Horários: '+hs.map(x=>x[0]+' '+x[1]).join(' · ')); }
+  if(String(dem.observacoes||'').trim()) L.push('Obs.: '+String(dem.observacoes).trim());
+  return L;
+}
+
+/* UMA viagem. */
+function textoViagemWhats(v){
+  const L=[];
+  L.push('*PROGRAMAÇÃO COMIX · '+dataBr(v.data||ST.data)+'*');
+  L.push('Viagem '+(v.numero||'—')+' · Unidade '+(v.unidade_slug||'—'));
+  if(String(v.motorista_nome||'').trim()) L.push('Motorista: '+v.motorista_nome);
+  L.push('');
+  L.push.apply(L,linhasViagem(v));
+  L.push('');
+  L.push('Status: '+stLabel(v.status||'pre_programada'));
+  return L.join('\n').replace(/\n{3,}/g,'\n\n');
+}
+
+/* Viagens ativas de um motorista no dia carregado, na ordem do relógio. */
+function viagensDoMotorista(nome){
+  const alvo=norm(nome);
+  if(!alvo) return [];
+  return ST.viagens
+    .filter(v=>v.status!=='cancelada' && norm(v.motorista_nome)===alvo)
+    .sort((a,b)=>chaveTempo(a,'prev_carregamento')-chaveTempo(b,'prev_carregamento'));
+}
+const ORD_PT=['1ª','2ª','3ª','4ª','5ª','6ª','7ª','8ª','9ª','10ª'];
+
+/* O DIA INTEIRO do motorista, numa mensagem só. Quando o conjunto é o mesmo
+   nas várias viagens ele aparece uma vez no cabeçalho; se o motorista troca de
+   cavalo no meio do dia, cada viagem carrega o seu. */
+function textoDiaMotorista(nome){
+  const vs=viagensDoMotorista(nome);
+  if(!vs.length) return '';
+  const dt=dataBr(ST.data), ds=diaSemana(ST.data);
+  const cavs=[...new Set(vs.map(v=>rotuloVeic(v.cavalo_frota,v.cavalo_placa)).filter(Boolean))];
+  const mesmoConj = cavs.length===1
+    && new Set(vs.map(v=>String(v.carreta1_id||''))).size===1
+    && new Set(vs.map(v=>String(v.compressor_id||''))).size===1;
+  const ton=vs.reduce((t,v)=>{ const d=ST.demandas.find(x=>x.id===v.demanda_id)||{}; return t+(Number(d.quantidade_prevista)||0); },0);
+
+  const L=[];
+  L.push('*PROGRAMAÇÃO COMIX · '+dt+(ds?' ('+ds+')':'')+'*');
+  L.push('*'+String(nome||'').trim().toUpperCase()+'*');
+  L.push('Unidade '+([...new Set(vs.map(v=>v.unidade_slug).filter(Boolean))].join('/')||'—')
+        +' · '+vs.length+(vs.length>1?' viagens':' viagem')
+        +(ton?' · '+numBr(ton,1)+' t no dia':''));
+  if(mesmoConj){
+    const v0=vs[0];
+    const c1=v0.carreta1_id?veiculoPorId(v0.carreta1_id):null;
+    const c2=v0.carreta2_id?veiculoPorId(v0.carreta2_id):null;
+    const cp=v0.compressor_id?compressorPorId(v0.compressor_id):null;
+    const dem0=ST.demandas.find(d=>d.id===v0.demanda_id)||{};
+    L.push('Cavalo: '+cavs[0]);
+    if(c1) L.push('Carreta: '+rotuloVeic(c1.frota,c1.placa)+(c2?' + '+rotuloVeic(c2.frota,c2.placa):''));
+    L.push('Compressor: '+(cp?('C'+cp.numero):(compressorDoCaminhao(dem0)?'PENDENTE':'do cliente')));
+  }
+
+  vs.forEach((v,i)=>{
+    L.push('');
+    L.push('━━━━━━━━━━');
+    L.push('*'+(ORD_PT[i]||(i+1)+'ª')+' VIAGEM · '+(v.prev_carregamento||'horário a definir')+'*');
+    L.push('Nº '+(v.numero||'—')+' · '+stLabel(v.status||'pre_programada'));
+    L.push.apply(L,linhasViagem(v,{omitirVeiculo:mesmoConj}));
+  });
+
+  /* Intervalos entre uma viagem e a próxima — é o que o motorista mais pergunta. */
+  const janelas=[];
+  for(let i=0;i<vs.length-1;i++){
+    const fim=hhmm(vs[i].prev_retorno)||hhmm(vs[i].prev_descarga);
+    const ini=hhmm(vs[i+1].prev_carregamento);
+    if(fim!=null && ini!=null && ini>fim) janelas.push(minParaHora(fim)+' às '+minParaHora(ini));
+  }
+  if(janelas.length){ L.push(''); L.push('Intervalo entre viagens: '+janelas.join(' · ')); }
+
+  L.push('');
+  L.push('Qualquer alteração, avise a programação.');
+  return L.join('\n').replace(/\n{3,}/g,'\n\n');
+}
+
+/* ═══ CÓPIA PARA A ÁREA DE TRANSFERÊNCIA ═══
+   O Atlas roda em iframe: navigator.clipboard pode estar bloqueado, então a
+   cadeia é clipboard → execCommand → prompt manual. Nunca falha em silêncio. */
+async function copiarTexto(txt,rotulo){
+  let ok=false;
+  try{
+    if(navigator.clipboard && window.isSecureContext){ await navigator.clipboard.writeText(txt); ok=true; }
+  }catch(_){ ok=false; }
+  if(!ok){
+    try{
+      const ta=document.createElement('textarea');
+      ta.value=txt; ta.setAttribute('readonly','');
+      ta.style.cssText='position:fixed;top:0;left:0;opacity:0';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0,txt.length);
+      ok=document.execCommand('copy'); document.body.removeChild(ta);
+    }catch(_){ ok=false; }
+  }
+  if(ok) toast((rotulo||'Texto')+' copiado — cole no WhatsApp','ok');
+  else window.prompt('Copie o texto (Ctrl+C):',txt);
+  return ok;
+}
+window.copiarViagemWhats=async function(vid,e){
+  if(e) e.stopPropagation();
+  const v=ST.viagens.find(x=>x.id===vid); if(!v) return;
+  await copiarTexto(textoViagemWhats(v),'Viagem');
+};
+/* Recebe o ID de UMA viagem e copia o dia inteiro do motorista dela — passar o
+   id evita escapar nomes com apóstrofo dentro do onclick. */
+window.copiarDiaMotorista=async function(vid,e){
+  if(e) e.stopPropagation();
+  const v=ST.viagens.find(x=>x.id===vid); if(!v) return;
+  const nome=String(v.motorista_nome||'').trim();
+  if(!nome){ toast('Viagem sem motorista definido','err'); return; }
+  const vs=viagensDoMotorista(nome);
+  const txt=textoDiaMotorista(nome);
+  if(!txt){ toast('Nenhuma viagem para este motorista','err'); return; }
+  fecharPops();
+  await copiarTexto(txt,'Dia de '+nome+' ('+vs.length+(vs.length>1?' viagens)':' viagem)'));
+};
+
+/* Lista de motoristas com programação no dia — cada um com o total de viagens
+   e a faixa de horário, para o programador conferir antes de disparar. */
+function montarListaMotoristas(){
+  const el=document.getElementById('motLista'); if(!el) return;
+  const mapa=new Map();
+  ST.viagens.filter(v=>v.status!=='cancelada').forEach(v=>{
+    const n=String(v.motorista_nome||'').trim();
+    if(!n) return;
+    const k=norm(n);
+    if(!mapa.has(k)) mapa.set(k,{nome:n,vs:[]});
+    mapa.get(k).vs.push(v);
+  });
+  const linhas=[...mapa.values()].sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR'));
+  const semMot=ST.viagens.filter(v=>v.status!=='cancelada'&&!String(v.motorista_nome||'').trim()).length;
+  if(!linhas.length){
+    el.innerHTML='<div class="rota-sug-empty">Nenhuma viagem com motorista definido neste dia.</div>';
+    return;
+  }
+  el.innerHTML=linhas.map(l=>{
+    const vs=l.vs.slice().sort((a,b)=>chaveTempo(a,'prev_carregamento')-chaveTempo(b,'prev_carregamento'));
+    const hs=vs.map(v=>v.prev_carregamento||'s/ hora').join(' · ');
+    return '<button type="button" class="ord-op" onclick="copiarDiaMotorista(\''+esc(vs[0].id)+'\',event)">'
+      +'📋 '+esc(l.nome)+'  <span class="ord-tag">'+vs.length+(vs.length>1?' viagens':' viagem')+' · '+esc(hs)+'</span>'
+      +'</button>';
+  }).join('')
+  +(semMot?'<div class="rota-sug-empty">'+semMot+' viagem(ns) ainda sem motorista — não entram na lista.</div>':'');
+}
+window.prgToggleMotoristas=function(e){
+  if(e) e.stopPropagation();
+  const p=document.getElementById('motPop'); if(!p) return;
+  const abrir=!p.classList.contains('on');
+  fecharPops('motPop');
+  p.classList.toggle('on',abrir);
+  if(abrir) montarListaMotoristas();
+};
 function item(l,v,miss){
   return '<div class="vg-i"><div class="vg-il">'+esc(l)+'</div><div class="vg-iv'+(miss?' miss':'')+'">'+esc(v||'—')+'</div></div>';
+}
+/* Mesma célula, porém com o valor já escapado pelo chamador (usada quando o
+   rótulo carrega marcação, como número de frota + placa em fonte mono). */
+function itemHtml(l,html,miss){
+  return '<div class="vg-i"><div class="vg-il">'+esc(l)+'</div><div class="vg-iv'+(miss?' miss':'')+'">'+(html||'—')+'</div></div>';
 }
 
 function renderRecursos(){
   const conj=conjuntosDaUnidade(uniAtual());
-  const usados=new Set(ST.viagens.filter(v=>v.status!=='cancelada').map(v=>v.cavalo_id));
   document.getElementById('tot-res').textContent=conj.length+'';
   const el=document.getElementById('lista-res');
   if(!conj.length){ el.innerHTML='<div class="empty">Nenhum conjunto nesta filial.<br>Verifique a alocação no módulo Frota.</div>'; return; }
   el.innerHTML=conj.map(c=>{
     const d=c.disponibilidade;
-    const emUso=usados.has(c.cavalo_id);
+    const nv=viagensDoCavalo(c.cavalo_id).length;
     let dot='d-ok',txt='disponível';
     if(d==='manutencao'){dot='d-bad';txt='manutenção';}
     else if(d==='indisponivel'){dot='d-off';txt='indisponível';}
     else if(d==='reserva'){dot='d-warn';txt='reserva';}
-    else if(emUso){dot='d-warn';txt='programado';}
+    else if(nv){dot='d-warn';txt=nv+(nv>1?' viagens':' viagem');}
     const partes=[];
-    if(c.carreta1) partes.push(c.carreta1.frota||c.carreta1.placa);
-    if(c.carreta2) partes.push(c.carreta2.frota||c.carreta2.placa);
+    if(c.carreta1) partes.push(rotuloVeiculo(c.carreta1));
+    if(c.carreta2) partes.push(rotuloVeiculo(c.carreta2));
     if(c.compressor) partes.push('C'+c.compressor.numero);
     return '<div class="res"><span class="res-d '+dot+'"></span><div class="res-b">'
-      +'<div class="res-t">'+esc(c.cavalo_frota||c.cavalo_placa)+'</div>'
+      +'<div class="res-t">'+esc(rotuloConjunto(c))+'</div>'
       +'<div class="res-s">'+esc(c.motorista||'sem motorista')+(partes.length?' · '+esc(partes.join(' + ')):'')+'</div>'
+      +(nv?'<div class="res-s">'+esc(viagensDoCavalo(c.cavalo_id).map(o=>o.prev_carregamento||'s/ hora').join(' · '))+'</div>':'')
       +'</div><span class="chip '+(dot==='d-ok'?'c-gn':dot==='d-bad'?'c-rd':dot==='d-warn'?'c-am':'c-gy')+'">'+txt+'</span></div>';
   }).join('');
 }
@@ -1660,8 +2166,8 @@ function renderDisp(){
 
   if(tipo==='conjunto'){
     linhas=conjuntosDaUnidade(uni).map(c=>({
-      t:c.cavalo_frota||c.cavalo_placa,
-      s:(c.motorista||'sem motorista')+' · '+[c.carreta1&&(c.carreta1.frota||c.carreta1.placa),c.carreta2&&(c.carreta2.frota||c.carreta2.placa),c.compressor&&('C'+c.compressor.numero)].filter(Boolean).join(' + '),
+      t:rotuloConjunto(c),
+      s:(c.motorista||'sem motorista')+' · '+[c.carreta1&&rotuloVeiculo(c.carreta1),c.carreta2&&rotuloVeiculo(c.carreta2),c.compressor&&('C'+c.compressor.numero)].filter(Boolean).join(' + '),
       st:c.disponibilidade||'operando'
     }));
   } else if(tipo==='compressor'){
@@ -1673,7 +2179,7 @@ function renderDisp(){
   } else {
     linhas=ST.cad.veiculos.filter(v=>v.categoria===tipo)
       .filter(v=>{ const al=ST.cad.alocacoes[v.id]||{}; return !uni||(al.unidade_slug||v.unidade_slug)===uni; })
-      .map(v=>({t:v.frota||v.placa,s:v.placa+' · '+(v.modelo||v.subtipo||''),st:(ST.cad.alocacoes[v.id]||{}).disponibilidade||'—'}));
+      .map(v=>({t:rotuloVeiculo(v),s:(v.modelo||v.subtipo||'—'),st:(ST.cad.alocacoes[v.id]||{}).disponibilidade||'—'}));
   }
   if(bq) linhas=linhas.filter(l=>norm(l.t+' '+l.s).includes(bq));
   const t=document.getElementById('tot-disp'); if(t) t.textContent=linhas.length+' registro(s)';
@@ -1709,11 +2215,19 @@ async function programarDemanda(demandaId){
   /* Em "Todas", quem manda é a filial da PRÓPRIA demanda — nunca a do filtro. */
   const uni=d.unidade_slug||uniAtual()||'SC';
   const usados=new Set(ST.viagens.filter(v=>v.status!=='cancelada').map(v=>v.cavalo_id));
-  const cand=conjuntosDaUnidade(uni).filter(c=>
-    !usados.has(c.cavalo_id) &&
+  /* Sugestão de conjunto em duas passadas:
+     1ª — conjuntos ainda ociosos no dia;
+     2ª — conjuntos JÁ programados, mas com a janela desta demanda livre. O
+          mesmo caminhão pode rodar várias viagens no dia; o que não se admite
+          é sobreposição de horário, checada em cavaloLivreNaJanela(). */
+  const aptos=conjuntosDaUnidade(uni).filter(c=>
     !['manutencao','indisponivel'].includes(c.disponibilidade) &&
     (!compressorDoCaminhao(d) || c.compressor_id));
-  const c=cand[0]||null;
+  const ociosos=aptos.filter(c=>!usados.has(c.cavalo_id));
+  const reaproveitaveis=aptos.filter(c=>usados.has(c.cavalo_id)
+    && cavaloLivreNaJanela(c.cavalo_id, d.janela_carga_ini, d.janela_desc_fim||d.janela_carga_fim));
+  const c=ociosos[0]||reaproveitaveis[0]||null;
+  const reuso = !!(c && usados.has(c.cavalo_id));
 
   const v={
     numero: gerarNumero(uni),
@@ -1735,17 +2249,28 @@ async function programarDemanda(demandaId){
     if(await diaFechado()) v.alterado_apos_fechamento=true;
     const ref=await db.collection('programacao_viagens').add(paraFirestore(v));
     ST.viagens.push({id:ref.id,...v});
-    await auditar('viagem_criada',ref.id,{demanda:d.id,conjunto:c?c.cavalo_frota:'sem conjunto'},uni);
+    await auditar('viagem_criada',ref.id,{demanda:d.id,conjunto:c?rotuloConjunto(c):'sem conjunto'},uni);
     renderTudo();
-    toast(c?('Programada em '+(c.cavalo_frota||c.cavalo_placa)):'Programada sem conjunto — defina os recursos','ok');
+    toast(c?('Programada em '+rotuloConjunto(c)+(reuso?' — 2ª viagem do dia, confira os horários':'')):'Programada sem conjunto — defina os recursos','ok');
   }catch(e){
     console.error('[Programação] programarDemanda',e);
     toast(erroFirestore(e,'programacao_viagens'),'err');
   }
 }
 function gerarNumero(uni){
-  const seq=String(ST.viagens.length+1).padStart(4,'0');
-  return ST.data.replace(/-/g,'').slice(0,6)+'-'+(uni||uniAtual()||'SC')+'-'+seq;
+  /* Com várias viagens do mesmo cavalo no dia, o contador não pode ser o total
+     de viagens (canceladas deixariam buracos e repetiriam número). Usa o maior
+     sequencial já emitido para a unidade no dia + 1. */
+  const u=(uni||uniAtual()||'SC');
+  const pre=ST.data.replace(/-/g,'').slice(0,6)+'-'+u+'-';
+  let maior=0;
+  ST.viagens.forEach(v=>{
+    const n=String(v.numero||'');
+    if(n.indexOf(pre)!==0) return;
+    const s=parseInt(n.slice(pre.length),10);
+    if(Number.isFinite(s) && s>maior) maior=s;
+  });
+  return pre+String(maior+1).padStart(4,'0');
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -2208,10 +2733,16 @@ window.abrirConjunto=function(vid){
       +'<option value="">— sem cavalo —</option>'
       +conj.map(c=>{
           const bloq=['manutencao','indisponivel'].includes(c.disponibilidade);
-          const lbl=(c.cavalo_frota||c.cavalo_placa)+' · '+(c.motorista||'sem motorista')+(bloq?'  ['+c.disponibilidade+']':'');
+          /* O cavalo já programado NÃO sai da lista: o mesmo caminhão pode
+             rodar várias vezes no dia. O rótulo mostra quantas viagens ele já
+             tem e em que horários, para o programador escolher outra faixa. */
+          const outras=viagensDoCavalo(c.cavalo_id,vid);
+          const marc=outras.length?('  ['+outras.length+'ª+ viagem · '+outras.map(o=>o.prev_carregamento||'s/ hora').join(', ')+']'):'';
+          const lbl=rotuloConjunto(c)+' · '+(c.motorista||'sem motorista')+(bloq?'  ['+c.disponibilidade+']':'')+marc;
           return opt(c.cavalo_id,lbl,v.cavalo_id);
         }).join('')+'</select>'
-      +'<span class="f-hint">A composição vem de <b>alocacao_frota</b>. Trocar carreta ou compressor é feito no módulo Frota.</span></div>'
+      +'<span class="f-hint">A composição vem de <b>alocacao_frota</b>. Trocar carreta ou compressor é feito no módulo Frota. '
+      +'O mesmo cavalo pode ser programado várias vezes no dia, desde que os horários não se sobreponham.</span></div>'
     +'<div id="prevConj"></div>'
     +'<div class="val val-i" style="margin-top:10px"><span class="val-ti">Motorista</span>'
       +'Vem do conjunto montado no módulo Frota. Para trocar o motorista, altere a alocação lá — '
@@ -2240,12 +2771,19 @@ window.previewConjunto=function(){
   const c=conjuntosDaUnidade(ST.conjUnidade||uniAtual()).find(x=>x.cavalo_id===id);
   if(!c){ el.innerHTML=''; return; }
   const cp=c.compressor;
+  const outras=viagensDoCavalo(id,ST.conjViagemId);
   el.innerHTML='<div class="vg-g" style="margin:0">'
-    +item('Carreta 1', c.carreta1?(c.carreta1.frota||c.carreta1.placa):'', !c.carreta1_id)
-    +item('Carreta 2', c.carreta2?(c.carreta2.frota||c.carreta2.placa):'—', false)
+    +item('Carreta 1', c.carreta1?rotuloVeiculo(c.carreta1):'', !c.carreta1_id)
+    +item('Carreta 2', c.carreta2?rotuloVeiculo(c.carreta2):'—', false)
     +item('Compressor', cp?('C'+cp.numero+' · '+statusCompressor(cp)):'', !c.compressor_id)
     +item('Disponibilidade', c.disponibilidade||'operando', ['manutencao','indisponivel'].includes(c.disponibilidade))
-    +'</div>';
+    +'</div>'
+    +(outras.length?('<div class="val val-i" style="margin-top:9px"><span class="val-ti">Agenda deste cavalo hoje</span>'
+      +outras.map(o=>{
+          const dm=ST.demandas.find(d=>d.id===o.demanda_id)||{};
+          return (o.prev_carregamento||'--:--')+' → '+(o.prev_retorno||o.prev_descarga||'--:--')+'  ·  '+(dm.cliente||'—')+' ('+(o.numero||'')+')';
+        }).map(t=>esc(t)).join('<br>')
+      +'<span class="val-ac">→ escolha uma faixa de horário que não se sobreponha às viagens acima.</span></div>'):'');
 };
 
 window.salvarConjunto=async function(){
@@ -2280,7 +2818,7 @@ window.salvarConjunto=async function(){
     }
     await ref.update(paraFirestore(upd));
     Object.assign(v,upd);
-    await auditar('conjunto_alterado',vid,{cavalo:upd.cavalo_frota||'—',motorista:upd.motorista_nome||'—'});
+    await auditar('conjunto_alterado',vid,{cavalo:rotuloVeic(upd.cavalo_frota,upd.cavalo_placa)||'—',motorista:upd.motorista_nome||'—'});
     fecharConjunto(); renderTudo(); toast('Conjunto atualizado','ok');
   }catch(e){ console.error(e); toast('Falha ao salvar o conjunto','err'); }
   btn.disabled=false;
@@ -2422,7 +2960,7 @@ function calcularImpacto(v, novoRetornoMin){
     if(ini < fim){
       out.push({
         viagem:o,
-        recurso: mesmoCavalo?('cavalo '+(v.cavalo_frota||v.cavalo_placa||'')):('motorista '+(v.motorista_nome||'')),
+        recurso: mesmoCavalo?('cavalo '+rotuloVeic(v.cavalo_frota,v.cavalo_placa)):('motorista '+(v.motorista_nome||'')),
         atrasoMin: fim-ini
       });
     }
@@ -2502,7 +3040,7 @@ window.abrirReprog=function(vid){
   document.getElementById('bdRep').innerHTML=
     '<div class="sec">Viagem</div>'
     +'<div class="dcard" style="cursor:default"><div class="dcard-t">'+esc(v.numero||'—')+' · '+esc(dem.cliente||'—')+'</div>'
-      +'<div class="dcard-s">'+esc(v.cavalo_frota||v.cavalo_placa||'sem cavalo')+' · '+esc(v.motorista_nome||'sem motorista')+'</div>'
+      +'<div class="dcard-s">'+esc(rotuloVeic(v.cavalo_frota,v.cavalo_placa)||'sem cavalo')+' · '+esc(v.motorista_nome||'sem motorista')+'</div>'
       +'<div class="dcard-s">Carregamento '+esc(v.prev_carregamento||'—')+' · Descarga '+esc(v.prev_descarga||'—')+' · Retorno '+esc(v.prev_retorno||'—')+'</div></div>'
     +'<div class="sec">Ocorrência</div>'
     +'<div class="fg">'
@@ -2900,8 +3438,8 @@ window.montarRecursosTransf=function(){
   const sel=document.getElementById('trRec'); if(!sel) return;
   const cs=conjuntosDaUnidade(dona,{ignorarCessao:true});
   sel.innerHTML='<option value="">— selecione —</option>'+cs.map(c=>{
-    const partes=[c.carreta1&&(c.carreta1.frota||c.carreta1.placa),c.compressor&&('C'+c.compressor.numero)].filter(Boolean).join(' + ');
-    const lbl=(c.cavalo_frota||c.cavalo_placa)+(partes?' · '+partes:'')+(c.motorista?' · '+c.motorista:'');
+    const partes=[c.carreta1&&rotuloVeiculo(c.carreta1),c.compressor&&('C'+c.compressor.numero)].filter(Boolean).join(' + ');
+    const lbl=rotuloConjunto(c)+(partes?' · '+partes:'')+(c.motorista?' · '+c.motorista:'');
     const bloq=['manutencao','indisponivel'].includes(c.disponibilidade);
     return '<option value="'+esc(c.cavalo_id)+'" data-lb="'+esc(lbl)+'">'+esc(lbl)+(bloq?'  ['+c.disponibilidade+']':'')+'</option>';
   }).join('');
