@@ -2846,7 +2846,10 @@ function cpkBuildDerivIndex(){
       if(cpkPlacaIgnorada(placa)) continue;
       if(cpkPlacaReceitaCompl(placa)){
         // FSC0000 (Carta Frete Complementar): unidade pela Operacao da linha do SZB.
-        rows.push({ k:0, placa, mes:_mesL, uniC:cpkUnidadeReceitaSZB(SF.op(r),SF.frota(r),placa), fat:SF.fat(r) });
+        // A Carta Frete Complementar também é classificada por vínculo: ela pode
+        // ser de viagem PRÓPRIA ou de AGREGADO, e só a própria é receita do CPK.
+        rows.push({ k:0, placa, mes:_mesL, uniC:cpkUnidadeReceitaSZB(SF.op(r),SF.frota(r),placa),
+                    vinc:cpkVinculoReceitaSZB(SF.frota(r),placa), fat:SF.fat(r) });
         continue;
       }
       const frotaSZB=SF.frota(r);
@@ -2931,6 +2934,10 @@ function cpkCalculate(){
   CPK.receitaComplementarFil={}; // idem, quebrada por filial (uniC) p/ reconciliar o card por filial
   CPK.receitaComplementarFilBruta={}; // espelho BRUTO por filial (base da coluna Impostos por filial)
   CPK.receitaComplementarBruta=0; // espelho BRUTO do complementar (auditoria)
+  CPK.complAgregBruta=0;          // Cartas Frete Complementar de AGREGADO — receita que NÃO é do CPK
+  CPK.complAgregFilBruta={};      // idem por filial (só auditoria — nunca entra em receita/imposto)
+  CPK.complIndefBruta=0;          // complementar sem Frota legível: mantida como própria, mas sinalizada
+  CPK.complIndefQtd=0;
 
   // Fator líquido por filial: receita_liquida = fat × (1 − aliq[fil]).
   // Aplicado no NÍVEL DO CT-E, não na agregação: assim placa, rota,
@@ -2996,6 +3003,19 @@ function cpkCalculate(){
       if(f.placa) continue;
       if(scope.size&&d.uniC&&!scope.has(d.uniC)) continue;
       const _uc=d.uniC||'';
+      // ── AGREGADO FORA DA BASE PRÓPRIA (regra 07/2026, correção) ──────────
+      // A Carta Frete Complementar entrava na receita SEM passar pelo filtro de
+      // vínculo — era o único ponto do módulo onde faturamento de agregado se
+      // misturava à receita própria e, por consequência, era tributado como
+      // própria. Agora só entra o que a coluna Frota do SZB marca como própria.
+      // 'indefinido' (Frota em branco) é MANTIDO como próprio — dropar receita
+      // por causa de coluna vazia seria pior que o erro — mas fica sinalizado.
+      if(d.vinc==='agregado'){
+        CPK.complAgregBruta += d.fat;
+        CPK.complAgregFilBruta[_uc]=(CPK.complAgregFilBruta[_uc]||0)+d.fat;
+        continue;
+      }
+      if(d.vinc==='indefinido'){ CPK.complIndefBruta += d.fat; CPK.complIndefQtd++; }
       const _fl=fatLiq(d.fat, _uc||scopeArr[0], d.mes);   // mesma alíquota da filial do CT-e, no mês do CT-e
       CPK.receitaComplementar      += _fl;
       CPK.receitaComplementarBruta += d.fat;
@@ -3947,6 +3967,8 @@ function cpkRenderAlertas(){
     out.push(['ok',`<b>Custo de capital = Depreciação</b> (${cpkFmt(pool.dep||0)}), por placa e quando cadastrada. O Custo de Equipamentos da premissa (${cpkFmt(pool.ceDre||0)}) <b>não entra no CPK</b> (regra 07/2026 — valor não verdadeiro que puxava o CPK para cima). Base de Depreciação: <b>${st.preenchidos||0}/${st.elegiveis||0}</b> ativos preenchidos (${cpkFmtPct((st.pct||0)*100,0)})${(st.pendentes&&st.pendentes.length)?' — pendentes (sem custo de capital até preencher): '+st.pendentes.slice(0,6).join(', ')+(st.pendentes.length>6?'…':''):''}.`]);
   }
   if(d.semKm&&d.semKm.length) out.push(['nd',`${d.semKm.length} placa(s) com receita mas sem KM (nem importado, nem via SZY). Importe os KM na aba Dados para um CPK fiel. Ex.: ${d.semKm.slice(0,6).join(', ')}${d.semKm.length>6?'…':''}`]);
+  if((CPK.complAgregBruta||0)>0) out.push(['ok',`Foram <b>excluídas</b> da receita própria <b>${cpkFmt(CPK.complAgregBruta)}</b> de Cartas Frete Complementar marcadas como <b>AGREGADO</b> na coluna Frota do SZB. Esse faturamento não é receita da frota própria e, portanto, <b>não gera imposto no CPK</b> — o tributo correspondente segue no Mapinha, com o agregado.`]);
+  if((CPK.complIndefQtd||0)>0) out.push(['nd',`<b>${CPK.complIndefQtd}</b> Carta(s) Frete Complementar (${cpkFmt(CPK.complIndefBruta)}) estão <b>sem Frota legível</b> no SZB e foram mantidas como <b>próprias</b>. Se alguma for de agregado, está inflando a receita própria e o imposto. Corrija a coluna Frota no Protheus.`]);
   if((CPK.receitaComplementar||0)>0) out.push(['ok',`A Receita do topo inclui <b>${cpkFmt(CPK.receitaComplementar)}</b> de Cartas Frete Complementar (placa ${[...CPK_PLACAS_RECEITA_COMPL].join(', ')}): valor <b>real</b> somado ao total, mas <b>fora</b> da análise por placa/rota/cliente. Por isso a soma das placas (${cpkFmt(CPK.receitaPlacas||0)}) fica abaixo da Receita total. A placa de controle AAA9999 é descartada integralmente.`]);
   if(d.semCadastro&&d.semCadastro.length) out.push(['nd',`${d.semCadastro.length} placa(s) rodando sem cadastro em Cadastros: ${d.semCadastro.slice(0,6).join(', ')}${d.semCadastro.length>6?'…':''}. Tratadas pela classificação do SZB.`]);
   if(d.indefinidas&&d.indefinidas.length) out.push(['nd',`${d.indefinidas.length} placa(s) com vínculo indefinido foram ignoradas (não classificadas como Frota nem Agregado).`]);
