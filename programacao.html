@@ -283,11 +283,26 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
 .vg-f.miss svg{color:var(--red);opacity:1}
 .vg-f.soft{color:var(--gray);font-weight:500}
 .vg-rt{font-size:10.5px;color:var(--gray);flex:1 1 165px;min-width:118px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* Destinatário — o campo mais importante da linha: negrito, antes do trecho. */
-.vg-dest{font-size:11.5px;font-weight:700;color:var(--black);letter-spacing:-.1px;flex:0 1 auto;max-width:190px;
+/* ═══ CAVALO + DESTINATÁRIO ═══
+   Coluna de duas linhas: a placa em cima, o destinatário logo abaixo dela e
+   alinhado à esquerda com ela. É a única parte da faixa que empilha — o resto
+   da linha continua horizontal, como pedido. O recuo casa com o ícone do
+   cavalo, para o nome nascer embaixo do texto e não embaixo do ícone. */
+.vg-cav{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;
+  flex:0 1 auto;min-width:0;max-width:200px;justify-content:center}
+.vg-cav .vg-f{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+/* Destinatário — o campo mais importante da linha, em negrito, sob a placa. */
+.vg-dest{display:block;font-size:11.5px;font-weight:700;color:var(--black);letter-spacing:-.1px;
+  max-width:100%;line-height:1.15;padding-left:17px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vg-line.blk .vg-dest{color:var(--red)}
-@media(max-width:900px){.vg-dest{max-width:100%}}
+/* Na linha pendente não existe placa: ali o destinatário segue inline, sem o
+   recuo do ícone do cavalo. */
+.gp-row .vg-dest{padding-left:0;flex:0 1 auto;max-width:190px}
+@media(max-width:900px){.vg-cav{max-width:100%}.gp-row .vg-dest{max-width:100%}}
+/* Tipo de frete: CIF e FOB com cores distintas — a diferença é lida de relance. */
+.chip.tf-cif{background:#eef2fb;color:#33499b;border-color:#c9d5f0}
+.chip.tf-fob{background:#fdf1e6;color:#a2570d;border-color:#f2d5b0}
 .vg-tail{margin-left:auto;display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:flex-end}
 .vg-line .vg-a{margin-top:0;gap:3px}
 .vg-line .vg-a .btn{padding:1px 5px;font-size:9.5px;line-height:1.7}
@@ -463,6 +478,32 @@ body.dnd-conj .gr-uni{outline:1px dashed var(--gray-l);outline-offset:2px}
 #ovDem .f{gap:2px}
 #ovDem .f label{font-size:9.5px}
 #ovDem .f-hint{font-size:9.5px;line-height:1.25}
+
+/* ═══ ALINHAMENTO DOS CAMPOS ═══
+   O desalinhamento vinha de cada campo ser uma pilha independente: quando o
+   rótulo quebrava em duas linhas ("Local de carregamento (remetente)") ou o
+   texto de ajuda existia só num deles, o input do vizinho subia. Com subgrid,
+   rótulo, campo e ajuda passam a ser TRÊS FAIXAS da mesma grade — todos os
+   inputs da linha nascem na mesma altura, independente do tamanho do rótulo.
+   Sem suporte a subgrid, o fallback abaixo reserva duas linhas de rótulo e
+   chega no mesmo resultado nos campos reais do formulário. */
+#ovDem .fg{align-items:stretch}
+#ovDem .fg > .f > label{min-height:2.1em;display:flex;align-items:flex-end}
+@supports (grid-template-rows: subgrid){
+  #ovDem .fg{grid-auto-rows:auto}
+  /* Cada campo vira uma subgrade de 3 faixas: rótulo · controle · ajuda.
+     O row-gap de 2px vale DENTRO do campo; o gap de 8px da .fg continua
+     separando uma dupla de campos da seguinte. */
+  #ovDem .fg > .f{display:grid;grid-template-rows:subgrid;grid-row:span 3;row-gap:2px}
+  #ovDem .fg > .f > label{min-height:0;align-items:flex-end}
+  /* Controle encostado no topo da própria faixa: campo sem texto de ajuda não
+     estica o input para preencher a faixa vazia do vizinho. */
+  #ovDem .fg > .f > input,
+  #ovDem .fg > .f > select,
+  #ovDem .fg > .f > .rota-cbx{align-self:start}
+}
+/* Observações é o único campo que cresce de propósito. */
+#ovDem .fg > .f > textarea{align-self:stretch;min-height:92px}
 #ovDem input[type=date],#ovDem select,#ovDem input[type=text],#ovDem input[type=number],#ovDem input[type=time],#ovDem textarea{padding:6px 8px}
 
 /* Busca de rota no formulário: filtra por código, origem, destino, cidade e filial. */
@@ -574,11 +615,15 @@ body.dnd-conj .gr-uni{outline:1px dashed var(--gray-l);outline-offset:2px}
 
       <!-- ═══ FILTRO DE FILIAL ═══ "Todas" é opção do próprio filtro: o
            consolidado deixou de depender de um segundo seletor de escopo. -->
-      <select class="sel" id="selUnid" onchange="onScopeChange()">
+      <!-- "Todas" é a PRIMEIRA opção e vem marcada no HTML: o módulo abre no
+           consolidado mesmo antes do JS rodar. autocomplete="off" impede que o
+           navegador restaure a filial escolhida na sessão anterior (era isso
+           que fazia a tela voltar em SC no recarregamento). -->
+      <select class="sel" id="selUnid" autocomplete="off" onchange="onScopeChange()">
+        <option value="ALL" selected>Todas</option>
         <option value="SC">SC</option>
         <option value="PR">PR</option>
         <option value="SP">SP</option>
-        <option value="ALL">Todas</option>
       </select>
     </div>
   </div>
@@ -752,7 +797,14 @@ body.dnd-conj .gr-uni{outline:1px dashed var(--gray-l);outline-offset:2px}
               <datalist id="dlProduto"></datalist>
               <span class="f-hint" id="hProduto">Produtos já carregados na tabela SZB.</span></div>
             <div class="f"><label>Pedido</label><input type="text" id="dPedido"></div>
-            <div class="f"><label>Quantidade prevista (t) <span class="f-hint">referencial — quem define é a carreta</span></label><input type="number" id="dQtd" step="0.01" min="0"></div>
+            <div class="f"><label>Tipo de frete *</label>
+              <select id="dTipoFrete">
+                <option value="CIF">CIF — frete por conta do remetente</option>
+                <option value="FOB">FOB — frete por conta do destinatário</option>
+              </select>
+              <span class="f-hint">Vai no card da viagem e na mensagem do WhatsApp.</span></div>
+            <div class="f"><label>Quantidade prevista (t)</label><input type="number" id="dQtd" step="0.01" min="0">
+              <span class="f-hint">Referencial — quem define é a carreta.</span></div>
           </div>
 
           <div class="sec">Origem e destino</div>
@@ -1036,7 +1088,9 @@ const PERF = {
    O dia (demandas + viagens) recarrega ao trocar unidade/data.
    ═══════════════════════════════════════════════════════════════ */
 const ST = {
-  unidade: 'SC',
+  /* O módulo abre SEMPRE no consolidado: "Todas". Só o perfil de unidade
+     (lu_sc/lu_pr/lu_sp) sobrescreve isso, porque ele enxerga uma filial só. */
+  unidade: 'ALL',
   data: hojeISO(),
   cad: { veiculos:[], alocacoes:{}, compressores:[], motoristas:[], rotas:[], loaded:false },
   os: { porVeiculo:{}, loaded:false },
@@ -1398,6 +1452,10 @@ let booted=false;
 async function boot(){
   if(booted) return; booted=true;                 // proteção contra múltiplas inicializações
   PERF.mark('prog:boot:start');
+  /* ABERTURA DO MÓDULO: sempre "Todas". Só o perfil de unidade (lu_sc/lu_pr/
+     lu_sp) fixa uma filial — nesse caso o select está travado e ST.unidade já
+     veio preenchido. Fora isso, qualquer valor herdado é descartado aqui. */
+  if(!document.getElementById('selUnid').disabled) ST.unidade='ALL';
   document.getElementById('selUnid').value=ST.unidade;
   document.getElementById('selData').value=ST.data;
   prgUpdateDiaLabel();
@@ -1834,7 +1892,7 @@ async function carregarDia(opts){
 }
 
 window.onScopeChange=function(){
-  ST.unidade=document.getElementById('selUnid').value||'SC';
+  ST.unidade=document.getElementById('selUnid').value||'ALL';
   ST.data=document.getElementById('selData').value||hojeISO();
   ST.grade.expandido=null;
   prgUpdateDiaLabel();
@@ -2348,6 +2406,19 @@ function remetenteDaViagem(v){
 function destinatarioDaDemanda(d){
   return String((d&&(d.destinatario||d.local_entrega))||'').trim()||'—';
 }
+/* CIF (remetente paga) ou FOB (destinatário paga). Demandas criadas antes do
+   campo existir não têm o dado — nesse caso a pastilha simplesmente não sai,
+   em vez de mentir um padrão que ninguém escolheu. */
+function tipoFreteDaDemanda(d){
+  const t=up(String((d&&d.tipo_frete)||'').trim());
+  return (t==='CIF'||t==='FOB') ? t : '';
+}
+function chipTipoFrete(d){
+  const t=tipoFreteDaDemanda(d);
+  if(!t) return '';
+  return '<span class="chip tf-'+t.toLowerCase()+'" title="Tipo de frete: '+t
+    +(t==='CIF'?' — por conta do remetente':' — por conta do destinatário')+'">'+t+'</span>';
+}
 function viagensDaGrade(){
   let vs=ST.viagens.filter(v=>v.status!=='cancelada');
   const fc=ST.grade.fCliente, fm=ST.grade.fMotorista, bq=norm(ST.grade.busca||'');
@@ -2527,6 +2598,7 @@ function linhaPendente(d){
     +'<span class="vg-rt" title="'+esc((d.local_coleta||'')+' → '+(d.local_entrega||''))+'">'
       +esc(d.local_coleta||'—')+' → '+esc(d.local_entrega||'—')+'</span>'
     +'<span class="vg-tail">'
+      +chipTipoFrete(d)
       +(todasFiliais()?'<span class="chip c-gy">'+esc(d.unidade_slug||'—')+'</span>':'')
       +(pr?'<span class="chip '+pr+'">'+esc(d.prioridade)+'</span>':'')
       +(d.recorrencia_id?'<span class="chip c-pu" title="'+esc(rotuloRecorrencia(d.recorrencia||{}))+'">recorrente</span>':'')
@@ -2609,18 +2681,24 @@ function cardViagem(v){
            amarelo, e não um produto genérico. */
         +(nivelDe('prod')&&g?'<span class="vg-gn">'+esc(g.nome||'grupo')+'</span>':'')
       +'</span>'
-      +campo('cav',  IC.cav,  cavTxt, 'Cavalo')
+      /* ═══ CAVALO + DESTINATÁRIO ═══
+         O destinatário deixou de flutuar no meio da faixa: ele agora fica
+         ANCORADO logo abaixo da placa, na mesma coluna. Quem varre a grade lê
+         de cima para baixo — placa, depois quem recebe a carga — em vez de
+         caçar o nome horizontalmente entre compressor e trecho. O cliente
+         continua no balão, que não era o dado procurado primeiro. */
+      +'<span class="vg-cav">'
+        +campo('cav', IC.cav, cavTxt, 'Cavalo')
+        +'<span class="vg-dest" title="Destinatário'+esc(dem.cliente?(' · cliente: '+dem.cliente):'')+'">'
+          +esc(destinatarioDaDemanda(dem))+'</span>'
+      +'</span>'
       +campo('carr', IC.carr, c1?rotuloVeicHtml(c1.frota,c1.placa):'sem carreta', 'Carreta')
       +campo('mot',  IC.mot,  esc(v.motorista_nome||'sem motorista'), 'Motorista')
       +campo('comp', IC.comp, compTxt, 'Compressor', !cp)
-      /* O DESTINATÁRIO vem antes do trecho e em negrito: é o dado que a
-         operação procura primeiro na linha. O cliente, que deixou de ser o
-         título do subcard, continua acessível no balão. */
-      +'<span class="vg-dest" title="Destinatário'+esc(dem.cliente?(' · cliente: '+dem.cliente):'')+'">'
-        +esc(destinatarioDaDemanda(dem))+'</span>'
       +'<span class="vg-rt" title="'+esc((dem.local_coleta||'')+' → '+(dem.local_entrega||''))+'">'
         +esc(dem.local_coleta||'—')+' → '+esc(dem.local_entrega||'—')+'</span>'
       +'<span class="vg-tail">'
+        +chipTipoFrete(dem)
         +(geral.length?'<span class="vg-al '+(nivelDe('geral')||'info')+'"'+tipDe('geral')+'>!</span>':'')
         +(nCav>1?'<span class="chip c-bl" title="Este cavalo roda '+nCav+' vezes hoje">'+iCav+'/'+nCav+'</span>':'')
         +(v.alterado_apos_fechamento?'<span class="chip c-or" title="Alteração após o fechamento do dia">alterada</span>':'')
@@ -2789,6 +2867,10 @@ function linhasViagem(v,opts){
      engatada, e ela pode mudar depois da programação. */
   add('Produto', dem.produto);
   add('Pedido', dem.pedido);
+  /* CIF/FOB vai na mensagem porque muda quem responde pelo frete no destino —
+     é a primeira pergunta que aparece quando a nota chega diferente. */
+  const tf=tipoFreteDaDemanda(dem);
+  if(tf) add('Tipo de frete', tf+(tf==='CIF'?' (remetente)':' (destinatário)'));
   add('Carregar em', localTxt(dem.local_coleta,dem.uf_origem));
   add('Janela de carga', [dem.janela_carga_ini,dem.janela_carga_fim].filter(Boolean).join(' às '));
   add('Descarregar em', localTxt(dem.local_entrega,dem.uf_destino));
@@ -3387,6 +3469,7 @@ window.abrirDemanda=function(){
   document.getElementById('dUnid').value=uniAtual()||'SC';
   document.getElementById('dData').value=ST.data;
   document.getElementById('dComp').value='caminhao';
+  document.getElementById('dTipoFrete').value='CIF';
   document.getElementById('dFrota').value='ambas';
   document.getElementById('dPrio').value='normal';
   document.getElementById('dStatus').value='aguardando';
@@ -3406,6 +3489,7 @@ window.editarDemanda=function(id){
   set('dPedido',d.pedido); set('dQtd',d.quantidade_prevista); set('dOrigem',d.local_coleta); set('dUfO',d.uf_origem);
   set('dDestino',d.local_entrega); set('dUfD',d.uf_destino); set('dJcIni',d.janela_carga_ini); set('dJcFim',d.janela_carga_fim);
   set('dJdIni',d.janela_desc_ini); set('dJdFim',d.janela_desc_fim); set('dComp',d.compressor_origem||(d.exige_compressor==='nao'?'cliente':'caminhao'));
+  set('dTipoFrete',d.tipo_frete||'CIF');
   set('dFrota',d.tipo_frota_permitido||'ambas'); set('dPrio',d.prioridade||'normal'); set('dStatus',d.status||'aguardando');
   set('dObs',d.observacoes);
   /* Editar uma ocorrência NÃO recria a série: a recorrência fica travada e a
@@ -3725,6 +3809,7 @@ window.salvarDemanda=async function(){
     km_volta:rota&&Number(rota.kmVolta||rota.kmIda||rota.km)>0?Number(rota.kmVolta||rota.kmIda||rota.km):null,
     janela_carga_ini:g('dJcIni')||null, janela_carga_fim:g('dJcFim')||null,
     janela_desc_ini:g('dJdIni')||null, janela_desc_fim:g('dJdFim')||null,
+    tipo_frete:up(g('dTipoFrete'))||'CIF',
     compressor_origem:g('dComp'), tipo_frota_permitido:g('dFrota'),
     prioridade:g('dPrio'), status:g('dStatus'), observacoes:g('dObs'),
     atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||''
