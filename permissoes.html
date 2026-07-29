@@ -162,6 +162,13 @@ html,body{height:100%;font-family:var(--f);color:var(--tx);font-size:13px;backgr
 .toast{position:fixed;bottom:16px;right:16px;z-index:999;background:var(--hd);color:var(--ht);border-radius:var(--r);padding:10px 14px;font-size:11px;font-weight:500;box-shadow:0 8px 32px rgba(0,0,0,.3);transform:translateY(120%);transition:transform .22s;max-width:320px;pointer-events:none}
 .toast.on{transform:translateY(0)}.toast.gn{border-left:3px solid #34d399}.toast.am{border-left:3px solid #f59e0b}.toast.rd{border-left:3px solid #f87171}
 
+.sync-banner{display:none;align-items:center;gap:10px;padding:8px 14px;font-size:11px;font-weight:600;border-bottom:1px solid var(--bd)}
+.sync-banner.on{display:flex}
+.sync-banner.load{background:var(--ac-bg);color:var(--ac);border-bottom-color:var(--ac-bd)}
+.sync-banner.err{background:var(--rd-bg);color:var(--rd);border-bottom-color:var(--rd-bd)}
+.sync-banner button{border:1px solid currentColor;background:transparent;color:inherit;border-radius:var(--r);padding:3px 9px;font:inherit;font-size:10px;cursor:pointer}
+.tb-btn[disabled],.tb-btn[disabled]:hover{opacity:.45;cursor:not-allowed;filter:grayscale(.6)}
+
 /* ── Modals ── */
 .modal-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:990;align-items:center;justify-content:center;padding:16px}
 .modal-ov.on{display:flex}
@@ -209,15 +216,17 @@ html,body{height:100%;font-family:var(--f);color:var(--tx);font-size:13px;backgr
       <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
       Copiar de
     </button>
-    <button class="tb-btn" onclick="saveAllPermissions()" title="Regravar todos os perfis válidos no mesmo formato">
+    <button class="tb-btn" id="btn-padronizar" disabled onclick="saveAllPermissions()" title="Regravar todos os perfis válidos no mesmo formato">
       <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/></svg>
       Padronizar Firebase
     </button>
-    <button class="tb-btn primary" onclick="openSaveConfirm()">
+    <button class="tb-btn primary" id="btn-salvar" disabled onclick="openSaveConfirm()">
       <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
       Salvar (Ctrl+S)
     </button>
   </div>
+
+  <div class="sync-banner" id="sync-banner"></div>
 
   <div class="content">
 
@@ -728,15 +737,77 @@ function toFirestorePlain(obj) {
   }));
 }
 
+/* ══ AUTH GATE ══
+   O Firebase restaura a sessao (IndexedDB) de forma ASSINCRONA. Sem esperar,
+   o primeiro get() do Firestore sai com request.auth == null, as rules negam
+   e a tela cai silenciosamente nos DEFAULTS — foi essa a causa do
+   "salva e volta ao anterior". Toda leitura/escrita agora passa por aqui. */
+let _authPromise = null;
+function waitForAuth(timeoutMs = 10000) {
+  if (_authPromise) return _authPromise;
+  _authPromise = new Promise(resolve => {
+    let done = false, unsub = null;
+    const finish = u => {
+      if (done) return;
+      done = true;
+      try { if (unsub) unsub(); } catch(e){}
+      resolve(u || null);
+    };
+    try {
+      if (!window.firebase || !window.firebase.auth) return finish(null);
+      const auth = window.firebase.auth();
+      if (auth.currentUser) return finish(auth.currentUser);
+      unsub = auth.onAuthStateChanged(u => finish(u));
+      setTimeout(() => finish(auth.currentUser), timeoutMs);
+    } catch(e) { finish(null); }
+  });
+  return _authPromise;
+}
+
+/* Estado da carga: 'loading' | 'ok' | 'local' | 'error'.
+   Enquanto nao for 'ok'/'local', gravar e PROIBIDO — salvar em cima de uma
+   carga que falhou sobrescreveria a configuracao real com os DEFAULTS. */
+let cloudState = 'loading';
+
+function setSyncState(state, msg) {
+  cloudState = state;
+  const b   = document.getElementById('sync-banner');
+  const bs  = document.getElementById('btn-salvar');
+  const bp  = document.getElementById('btn-padronizar');
+  const ok  = (state === 'ok' || state === 'local');
+  if (bs) bs.disabled = !ok;
+  if (bp) bp.disabled = !ok;
+  if (!b) return;
+  if (ok) { b.className = 'sync-banner'; b.innerHTML = ''; return; }
+  b.className = 'sync-banner on ' + (state === 'error' ? 'err' : 'load');
+  b.innerHTML = (state === 'error')
+    ? `<span>⚠️ ${msg || 'Não foi possível ler as permissões do Firebase.'} A gravação está bloqueada para não sobrescrever a configuração real.</span>
+       <button onclick="reloadPerms()">Tentar novamente</button>`
+    : `<span>⏳ ${msg || 'Carregando permissões do Firebase…'}</span>`;
+}
+
+async function reloadPerms() {
+  setSyncState('loading', 'Recarregando permissões…');
+  USER_TYPES.forEach(ut => {
+    perms[ut.id] = normalizePermissions(ut.id, DEFAULTS[ut.id] || {telas:{},cadastros:{},acoes:{},botoes:{},filiais:{}});
+  });
+  await loadStorage();
+  renderActivePanel();
+  updateAllCounts();
+}
+
 /* ══ INIT ══ */
 document.addEventListener('DOMContentLoaded', async () => {
   USER_TYPES.forEach(ut => {
     perms[ut.id] = normalizePermissions(ut.id, DEFAULTS[ut.id] || {telas:{},cadastros:{},acoes:{},botoes:{},filiais:{}});
   });
-  await loadStorage();
+  setSyncState('loading');
   renderProfileBar();
-  selectType('admin');
-  loadFiliais();       // auto-pull filiais do sistema
+  selectType('admin');   // pinta a tela na hora, com os defaults
+  loadFiliais();         // auto-pull filiais do sistema
+  await loadStorage();   // espera auth + Firestore
+  renderActivePanel();   // repinta ja com o que veio do banco
+  updateAllCounts();
 });
 
 /* ══ PROFILE SELECTOR BAR — horizontal ══ */
@@ -1159,29 +1230,57 @@ function openSaveConfirm() {
 
 async function savePermissions() {
   closeModal('modal-save');
+  if (!canSave()) return;
   try {
     if (!VALID_PROFILE_IDS.includes(sel)) throw new Error('Perfil inválido.');
     const payload = buildPermissionPayload(sel);
     perms[sel] = payload.permissoes;
-    if (fsdb) await fsdb.collection('permissoes').doc(sel).set(toFirestorePlain(payload), {merge:true});
-    else localStorage.setItem(`perm_${sel}`, JSON.stringify(payload));
+    if (fsdb) {
+      await waitForAuth();
+      // mergeFields: grava o mapa 'permissoes' INTEIRO (substitui), em vez do
+      // deep-merge do {merge:true}, que deixava chaves removidas ressuscitarem.
+      await fsdb.collection('permissoes').doc(sel)
+        .set(toFirestorePlain(payload), {mergeFields:['tipo','permissoes','atualizadoEm','atualizadoPor','schema']});
+    } else {
+      localStorage.setItem(`perm_${sel}`, JSON.stringify(payload));
+    }
     addLog('sistema','SALVO',true);
     showToast(`Permissões de "${USER_TYPES.find(u=>u.id===sel)?.label||sel}" salvas em permissoes/${sel}.`,'gn');
     try { window.parent.postMessage({type:'PERM_UPDATED',tipo:sel,permissoes:perms[sel]},'*'); } catch(e){}
   } catch(err) {
-    showToast('Erro ao salvar: '+(err.message||'verifique a conexão.'),'rd');
+    console.error('[permissoes] erro ao salvar:', err);
+    showToast('Erro ao salvar: '+describeFsError(err),'rd');
   }
 }
 
+function canSave() {
+  if (cloudState === 'ok' || cloudState === 'local') return true;
+  showToast(cloudState === 'loading'
+    ? 'Aguarde: as permissões ainda estão sendo carregadas do Firebase.'
+    : 'Gravação bloqueada: a leitura do Firebase falhou. Recarregue antes de salvar.', 'rd');
+  return false;
+}
+
+function describeFsError(err) {
+  const code = err && err.code ? String(err.code) : '';
+  if (code.includes('permission-denied')) return 'sem permissão no Firestore (sessão expirada — recarregue o portal e faça login novamente).';
+  if (code.includes('unauthenticated'))   return 'sessão não autenticada — recarregue o portal e faça login novamente.';
+  if (code.includes('unavailable'))       return 'Firestore indisponível — verifique a conexão.';
+  return (err && err.message) || 'verifique a conexão.';
+}
+
 async function saveAllPermissions() {
+  if (!canSave()) return;
   if (!confirm('Padronizar permissões no Firebase para todos os perfis válidos?\n\nPerfis gravados: '+VALID_PROFILE_IDS.join(', '))) return;
   try {
+    if (fsdb) await waitForAuth();
     const batch = fsdb ? fsdb.batch() : null;
     VALID_PROFILE_IDS.forEach(profileId => {
       const payload = buildPermissionPayload(profileId);
       perms[profileId] = payload.permissoes;
       if (batch) {
-        batch.set(fsdb.collection('permissoes').doc(profileId), toFirestorePlain(payload), {merge:true});
+        batch.set(fsdb.collection('permissoes').doc(profileId), toFirestorePlain(payload),
+          {mergeFields:['tipo','permissoes','atualizadoEm','atualizadoPor','schema']});
       } else {
         localStorage.setItem(`perm_${profileId}`, JSON.stringify(payload));
       }
@@ -1192,24 +1291,38 @@ async function saveAllPermissions() {
     try { window.parent.postMessage({type:'PERM_UPDATED',tipo:'ALL',perfis:VALID_PROFILE_IDS},'*'); } catch(e){}
     addLog('sistema','PADRONIZAÇÃO FIREBASE',true);
   } catch(err) {
-    showToast('Erro ao padronizar: '+(err.message||'verifique a conexão.'),'rd');
+    console.error('[permissoes] erro ao padronizar:', err);
+    showToast('Erro ao padronizar: '+describeFsError(err),'rd');
   }
 }
 
 /* ══ LOAD STORAGE ══ */
 async function loadStorage() {
   if (fsdb) {
+    const user = await waitForAuth();
+    if (!user) {
+      console.warn('[permissoes] sem sessão autenticada ao carregar.');
+      setSyncState('error', 'Sessão não autenticada.');
+      return;
+    }
     try {
-      const snap = await fsdb.collection('permissoes').get();
+      const snap = await fsdb.collection('permissoes').get({source:'server'});
+      let achou = 0;
       snap.forEach(doc => {
         if (!VALID_PROFILE_IDS.includes(doc.id)) return;
         const data = doc.data() || {};
-        if (data.permissoes) perms[doc.id] = normalizePermissions(doc.id, data.permissoes);
+        if (data.permissoes) { perms[doc.id] = normalizePermissions(doc.id, data.permissoes); achou++; }
       });
+      console.log('[permissoes] carregados do Firestore:', achou, 'perfis');
+      setSyncState('ok');
       updateAllCounts();
-    } catch(e){}
+    } catch(e) {
+      console.error('[permissoes] falha ao carregar do Firestore:', e);
+      setSyncState('error', describeFsError(e));
+    }
     return;
   }
+  setSyncState('local', '');
   USER_TYPES.forEach(ut => {
     try {
       const s = localStorage.getItem(`perm_${ut.id}`);
