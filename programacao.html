@@ -283,23 +283,25 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
 .vg-f.miss svg{color:var(--red);opacity:1}
 .vg-f.soft{color:var(--gray);font-weight:500}
 .vg-rt{font-size:10.5px;color:var(--gray);flex:1 1 165px;min-width:118px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* ═══ CAVALO + DESTINATÁRIO ═══
-   Coluna de duas linhas: a placa em cima, o destinatário logo abaixo dela e
-   alinhado à esquerda com ela. É a única parte da faixa que empilha — o resto
-   da linha continua horizontal, como pedido. O recuo casa com o ícone do
-   cavalo, para o nome nascer embaixo do texto e não embaixo do ícone. */
-.vg-cav{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;
-  flex:0 1 auto;min-width:0;max-width:200px;justify-content:center}
-.vg-cav .vg-f{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+/* ═══ CARRETA + MOTORISTA + DESTINATÁRIO ═══
+   Coluna de duas linhas: em cima a placa da CARRETA e o nome do motorista,
+   embaixo o destinatário, alinhado à esquerda com eles. O cavalo voltou a ser
+   um campo horizontal simples — o destinatário não pende mais dele. O recuo
+   casa com o ícone da carreta, para o nome nascer embaixo do texto e não
+   embaixo do ícone. */
+.vg-cm{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;
+  flex:0 1 auto;min-width:0;max-width:330px;justify-content:center}
+.vg-cm-top{display:inline-flex;align-items:center;gap:9px;max-width:100%;min-width:0}
+.vg-cm .vg-f{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 /* Destinatário — o campo mais importante da linha, em negrito, sob a placa. */
 .vg-dest{display:block;font-size:11.5px;font-weight:700;color:var(--black);letter-spacing:-.1px;
   max-width:100%;line-height:1.15;padding-left:17px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vg-line.blk .vg-dest{color:var(--red)}
 /* Na linha pendente não existe placa: ali o destinatário segue inline, sem o
-   recuo do ícone do cavalo. */
+   recuo do ícone da carreta. */
 .gp-row .vg-dest{padding-left:0;flex:0 1 auto;max-width:190px}
-@media(max-width:900px){.vg-cav{max-width:100%}.gp-row .vg-dest{max-width:100%}}
+@media(max-width:900px){.vg-cm{max-width:100%}.gp-row .vg-dest{max-width:100%}}
 /* Tipo de frete: CIF e FOB com cores distintas — a diferença é lida de relance. */
 .chip.tf-cif{background:#eef2fb;color:#33499b;border-color:#c9d5f0}
 .chip.tf-fob{background:#fdf1e6;color:#a2570d;border-color:#f2d5b0}
@@ -1106,7 +1108,7 @@ const ST = {
   com: { clientes:[], rotas:[], rotasSZY:[], rotasAtlas:[], loaded:false, erro:null, erroRotas:null },
   /* Listas derivadas da SZB: produtos, remetentes e destinatários com a UF
      predominante de cada um — é isso que preenche a UF automaticamente. */
-  szbIdx: { produtos:[], remetentes:[], destinatarios:[], loaded:false },
+  szbIdx: { produtos:[], remetentes:[], destinatarios:[], remIdx:null, desIdx:null, loaded:false },
   /* Ordenação/filtro da Grade do dia (barra acima do card de unidade).
      `expandido` guarda a unidade aberta lateralmente em tela cheia. */
   grade: { ordem:'antigo', fCliente:'', fMotorista:'', busca:'', colapsados:{}, expandido:null },
@@ -1797,8 +1799,36 @@ function indexarSZB(){
   ST.szbIdx.produtos      = ordena([...prod.values()].map(e=>({nome:e.nome,ops:e.ops,n:e.n})));
   ST.szbIdx.remetentes    = finaliza(rem);
   ST.szbIdx.destinatarios = finaliza(des);
+  ST.szbIdx.remIdx        = mapaSZB(ST.szbIdx.remetentes);
+  ST.szbIdx.desIdx        = mapaSZB(ST.szbIdx.destinatarios);
   ST.szbIdx.loaded=true;
   atualizarListasSeAberto();
+  /* A grade normalmente desenha ANTES da SZB terminar de indexar. Como agora
+     ela mostra o NOME do remetente e do destinatário (resolvido por esse
+     índice), a tela é repintada assim que o índice fica pronto. */
+  try{ renderAba(abaAtiva()); }catch(_){}
+}
+
+/* Dois caminhos de busca para o mesmo cadastro: pelo NOME (o que a tela mostra)
+   e pelo MUNICÍPIO (o que demandas antigas — e as que nasceram de uma rota —
+   gravaram por engano no lugar do nome). Cidade com mais de um remetente fica
+   marcada como ambígua e não resolve sozinha: nesse caso o valor gravado é
+   mostrado como está, em vez de chutar um cadastro. */
+function mapaSZB(lista){
+  const porNome=new Map(), porMun=new Map();
+  (lista||[]).forEach(e=>{
+    porNome.set(norm(e.nome),e);
+    const m=norm(e.municipio); if(!m) return;
+    porMun.set(m, porMun.has(m) ? null : e);
+  });
+  return {porNome,porMun};
+}
+function achaSZBLocal(idx,valor){
+  const bruto=String(valor||'').trim();
+  const k=norm(bruto);
+  if(!k||!idx) return {nome:bruto,municipio:bruto};
+  const e=idx.porNome.get(k) || idx.porMun.get(k);
+  return e ? {nome:e.nome, municipio:e.municipio||bruto} : {nome:bruto,municipio:bruto};
 }
 function atualizarListasSeAberto(){
   const ov=document.getElementById('ovDem');
@@ -2398,13 +2428,29 @@ function clienteDaViagem(v){
 /* A grade passou a ser organizada pelo REMETENTE (local de carregamento): é
    ele que define a fila do carregamento e o deslocamento do conjunto. O
    cliente continua vivo no filtro, na ordenação e no balão da linha. */
+function remetenteDaDemanda(d){
+  const bruto=String((d&&(d.remetente||d.local_coleta))||'').trim();
+  if(!bruto) return 'Sem remetente';
+  return achaSZBLocal(ST.szbIdx.remIdx,bruto).nome||'Sem remetente';
+}
 function remetenteDaViagem(v){
-  const d=ST.demandas.find(x=>x.id===v.demanda_id)||{};
-  return String(d.remetente||d.local_coleta||'Sem remetente').trim()||'Sem remetente';
+  return remetenteDaDemanda(ST.demandas.find(x=>x.id===v.demanda_id)||{});
 }
 /* O destinatário é o dado mais consultado da linha: quem recebe a carga. */
 function destinatarioDaDemanda(d){
-  return String((d&&(d.destinatario||d.local_entrega))||'').trim()||'—';
+  const bruto=String((d&&(d.destinatario||d.local_entrega))||'').trim();
+  if(!bruto) return '—';
+  return achaSZBLocal(ST.szbIdx.desIdx,bruto).nome||'—';
+}
+/* Cidade fica no TRECHO, nome fica no destaque: o campo "X → Y" da faixa passa
+   a mostrar município, e não mais o mesmo texto que já está em cima. */
+function municipioOrigem(d){
+  return String((d&&d.municipio_origem)||'').trim()
+    || achaSZBLocal(ST.szbIdx.remIdx,(d&&(d.remetente||d.local_coleta))||'').municipio || '';
+}
+function municipioDestino(d){
+  return String((d&&d.municipio_destino)||'').trim()
+    || achaSZBLocal(ST.szbIdx.desIdx,(d&&(d.destinatario||d.local_entrega))||'').municipio || '';
 }
 /* CIF (remetente paga) ou FOB (destinatário paga). Demandas criadas antes do
    campo existir não têm o dado — nesse caso a pastilha simplesmente não sai,
@@ -2595,8 +2641,8 @@ function linhaPendente(d){
       +(g?'<i class="vg-gd"></i>':'')+esc(d.produto||'—')+'</span>'
     +'<span class="gp-cli">'+esc(d.cliente||'—')+'</span>'
     +'<span class="vg-dest" title="Destinatário">'+esc(destinatarioDaDemanda(d))+'</span>'
-    +'<span class="vg-rt" title="'+esc((d.local_coleta||'')+' → '+(d.local_entrega||''))+'">'
-      +esc(d.local_coleta||'—')+' → '+esc(d.local_entrega||'—')+'</span>'
+    +'<span class="vg-rt" title="'+esc((municipioOrigem(d)||'')+' → '+(municipioDestino(d)||''))+'">'
+      +esc(municipioOrigem(d)||'—')+' → '+esc(municipioDestino(d)||'—')+'</span>'
     +'<span class="vg-tail">'
       +chipTipoFrete(d)
       +(todasFiliais()?'<span class="chip c-gy">'+esc(d.unidade_slug||'—')+'</span>':'')
@@ -2681,22 +2727,23 @@ function cardViagem(v){
            amarelo, e não um produto genérico. */
         +(nivelDe('prod')&&g?'<span class="vg-gn">'+esc(g.nome||'grupo')+'</span>':'')
       +'</span>'
-      /* ═══ CAVALO + DESTINATÁRIO ═══
-         O destinatário deixou de flutuar no meio da faixa: ele agora fica
-         ANCORADO logo abaixo da placa, na mesma coluna. Quem varre a grade lê
-         de cima para baixo — placa, depois quem recebe a carga — em vez de
-         caçar o nome horizontalmente entre compressor e trecho. O cliente
-         continua no balão, que não era o dado procurado primeiro. */
-      +'<span class="vg-cav">'
-        +campo('cav', IC.cav, cavTxt, 'Cavalo')
+      +campo('cav', IC.cav, cavTxt, 'Cavalo')
+      /* ═══ CARRETA + MOTORISTA + DESTINATÁRIO ═══
+         O destinatário desceu do cavalo: ele agora fica ANCORADO abaixo da
+         placa da carreta e do nome do motorista — é esse trio que anda junto na
+         conferência (o que puxa, quem dirige, quem recebe). O cliente continua
+         no balão, que não era o dado procurado primeiro. */
+      +'<span class="vg-cm">'
+        +'<span class="vg-cm-top">'
+          +campo('carr', IC.carr, c1?rotuloVeicHtml(c1.frota,c1.placa):'sem carreta', 'Carreta')
+          +campo('mot',  IC.mot,  esc(v.motorista_nome||'sem motorista'), 'Motorista')
+        +'</span>'
         +'<span class="vg-dest" title="Destinatário'+esc(dem.cliente?(' · cliente: '+dem.cliente):'')+'">'
           +esc(destinatarioDaDemanda(dem))+'</span>'
       +'</span>'
-      +campo('carr', IC.carr, c1?rotuloVeicHtml(c1.frota,c1.placa):'sem carreta', 'Carreta')
-      +campo('mot',  IC.mot,  esc(v.motorista_nome||'sem motorista'), 'Motorista')
       +campo('comp', IC.comp, compTxt, 'Compressor', !cp)
-      +'<span class="vg-rt" title="'+esc((dem.local_coleta||'')+' → '+(dem.local_entrega||''))+'">'
-        +esc(dem.local_coleta||'—')+' → '+esc(dem.local_entrega||'—')+'</span>'
+      +'<span class="vg-rt" title="'+esc((municipioOrigem(dem)||'')+' → '+(municipioDestino(dem)||''))+'">'
+        +esc(municipioOrigem(dem)||'—')+' → '+esc(municipioDestino(dem)||'—')+'</span>'
       +'<span class="vg-tail">'
         +chipTipoFrete(dem)
         +(geral.length?'<span class="vg-al '+(nivelDe('geral')||'info')+'"'+tipDe('geral')+'>!</span>':'')
@@ -2871,9 +2918,14 @@ function linhasViagem(v,opts){
      é a primeira pergunta que aparece quando a nota chega diferente. */
   const tf=tipoFreteDaDemanda(dem);
   if(tf) add('Tipo de frete', tf+(tf==='CIF'?' (remetente)':' (destinatário)'));
-  add('Carregar em', localTxt(dem.local_coleta,dem.uf_origem));
+  /* Quem carrega e quem recebe vão pelo NOME do cadastro, com a cidade/UF logo
+     atrás: o motorista precisa dos dois — o nome para se apresentar na portaria
+     e a cidade para se localizar. */
+  const remN=remetenteDaDemanda(dem), desN=destinatarioDaDemanda(dem);
+  const juntar=(nome,mun,uf)=>[(nome==='Sem remetente'||nome==='—')?'':nome, localTxt(mun,uf)].filter(Boolean).join(' — ');
+  add('Carregar em', juntar(remN,municipioOrigem(dem),dem.uf_origem));
   add('Janela de carga', [dem.janela_carga_ini,dem.janela_carga_fim].filter(Boolean).join(' às '));
-  add('Descarregar em', localTxt(dem.local_entrega,dem.uf_destino));
+  add('Descarregar em', juntar(desN,municipioDestino(dem),dem.uf_destino));
   add('Janela de descarga', [dem.janela_desc_ini,dem.janela_desc_fim].filter(Boolean).join(' às '));
   add('Rota', v.rota_codigo||dem.rota_codigo);
   const ki=v.km_ida||dem.km_ida, kv=v.km_volta||dem.km_volta;
@@ -2893,8 +2945,10 @@ function textoViagemWhats(v){
   if(String(v.motorista_nome||'').trim()) L.push('Motorista: '+v.motorista_nome);
   L.push('');
   L.push.apply(L,linhasViagem(v));
+  /* O status é controle interno da programação — para o motorista ele só gera
+     pergunta. As duas saídas (uma viagem e o dia inteiro) fecham igual. */
   L.push('');
-  L.push('Status: '+stLabel(v.status||'pre_programada'));
+  L.push('Qualquer alteração, avise a programação.');
   return L.join('\n').replace(/\n{3,}/g,'\n\n');
 }
 
@@ -2940,7 +2994,7 @@ function textoDiaMotorista(nome){
     L.push('');
     L.push('━━━━━━━━━━');
     L.push('*'+(ORD_PT[i]||(i+1)+'ª')+' VIAGEM · '+(v.prev_carregamento||'horário a definir')+'*');
-    L.push('Nº '+(v.numero||'—')+' · '+stLabel(v.status||'pre_programada'));
+    L.push('Nº '+(v.numero||'—'));
     L.push.apply(L,linhasViagem(v,{omitirVeiculo:mesmoConj}));
   });
 
@@ -3677,11 +3731,23 @@ function rotaDemandaSelecionada(){
   const id=String((document.getElementById('dRota')||{}).value||'');
   return ST.com.rotas.find(r=>String(r.id)===id)||null;
 }
+/* A rota é CIDADE → CIDADE; remetente e destinatário são CADASTROS. Escolher a
+   rota não pode mais carimbar o nome da cidade no campo do remetente — era daí
+   que nasciam os cards com "JAGUARUNA" no lugar de quem carrega. A rota só
+   preenche a UF e, quando a cidade tem um único cadastro na SZB, sugere o nome
+   correspondente no campo que ainda estiver vazio. */
 window.onRotaDemanda=function(){
   const r=rotaDemandaSelecionada(); if(!r) return;
   const set=(id,v)=>{ const e=document.getElementById(id); if(e&&v!=null&&String(v)!=='') e.value=v; };
-  set('dOrigem',r.origem); set('dUfO',r.ufOrigem);
-  set('dDestino',r.destino); set('dUfD',r.ufDestino);
+  const sugere=(id,idx,cidade)=>{
+    const e=document.getElementById(id); if(!e||String(e.value||'').trim()) return;
+    const c=norm(cidade); if(!c||!idx) return;
+    const alvo=idx.porMun.get(c);
+    if(alvo) e.value=alvo.nome;
+  };
+  set('dUfO',r.ufOrigem); set('dUfD',r.ufDestino);
+  sugere('dOrigem', ST.szbIdx.remIdx, r.origem);
+  sugere('dDestino',ST.szbIdx.desIdx, r.destino);
 };
 
 /* UF automática: a partir do nome escolhido, usa a UF predominante da SZB. */
