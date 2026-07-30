@@ -239,6 +239,11 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
   box-shadow:inset 0 0 0 1.4px rgba(255,255,255,.6), 0 0 0 .5px rgba(0,0,0,.15)}
 .gr-cli-ti{font-size:11.5px;font-weight:700;line-height:1.25;min-width:0;overflow-wrap:anywhere;
   color:color-mix(in srgb,var(--rc,#1a1a1a) 78%,#101010)}
+/* Remetente que não casou com nenhum cadastro da SZB: o texto na tela é o que a
+   demanda gravou (quase sempre a cidade). Fica em itálico cinza, igual ao
+   destinatário não resolvido, para o card nunca passar cidade por cadastro. */
+.gr-cli-ti.und{color:var(--gray);font-weight:600;font-style:italic}
+.gr-cli-dot.und{background:transparent;box-shadow:inset 0 0 0 1.5px var(--gray-l)}
 .gr-cli-sub{font-size:9px;color:var(--gray);font-weight:600;white-space:nowrap}
 .gr-cli-bd{padding:7px 8px}
 .gr-cli-bd .vg:last-child{margin-bottom:0}
@@ -1410,7 +1415,7 @@ const ST = {
   com: { clientes:[], rotas:[], rotasSZY:[], rotasAtlas:[], loaded:false, erro:null, erroRotas:null },
   /* Listas derivadas da SZB: produtos, remetentes e destinatários com a UF
      predominante de cada um — é isso que preenche a UF automaticamente. */
-  szbIdx: { produtos:[], remetentes:[], destinatarios:[], remIdx:null, desIdx:null, pares:null, loaded:false },
+  szbIdx: { produtos:[], remetentes:[], destinatarios:[], remIdx:null, desIdx:null, pares:null, paresRem:null, loaded:false },
   /* Ordenação/filtro da Grade do dia (barra acima do card de unidade).
      `expandido` guarda a unidade aberta lateralmente em tela cheia. */
   grade: { ordem:'antigo', fRemetente:'', fMotorista:'', busca:'', colapsados:{}, expandido:null },
@@ -2077,7 +2082,7 @@ async function carregarComercial(){
    que preenche "UF origem" e "UF destino" sozinha ao escolher o nome.
    ═══════════════════════════════════════════════════════════════ */
 function indexarSZB(){
-  const prod=new Map(), rem=new Map(), des=new Map(), pares=new Map();
+  const prod=new Map(), rem=new Map(), des=new Map(), pares=new Map(), paresRem=new Map();
   const addLoc=(map,nome,uf,mun,op)=>{
     const k=norm(nome); if(!k) return;
     let e=map.get(k);
@@ -2099,6 +2104,13 @@ function indexarSZB(){
        cidade com 12 destinatários, o remetente costuma entregar em um só. */
     const kr=norm(r['Nome Remeten']||''), km=norm(r['Local Entreg']||''), nd=up(r['Nome Destina']||'').trim();
     if(kr&&km&&nd){ const kk=kr+'|'+km; let s=pares.get(kk); if(!s){ s=new Set(); pares.set(kk,s); } s.add(nd); }
+    /* PAR INVERSO — quem CARREGA naquela cidade quando a entrega é para este
+       destinatário. É o desempate mais forte no outro sentido: numa cidade com
+       vários remetentes, o par destinatário → cidade de coleta costuma apontar
+       um só. Sem ele, demandas que guardaram a cidade no lugar do cadastro
+       ficam sem nome de remetente. */
+    const kd=norm(r['Nome Destina']||''), kmc=norm(r['Local Coleta']||''), nr=up(r['Nome Remeten']||'').trim();
+    if(kd&&kmc&&nr){ const kk=kd+'|'+kmc; let s=paresRem.get(kk); if(!s){ s=new Set(); paresRem.set(kk,s); } s.add(nr); }
   });
   const topo=o=>Object.keys(o).sort((a,b)=>o[b]-o[a])[0]||'';
   const ordena=a=>a.sort((x,y)=>x.nome.localeCompare(y.nome,'pt-BR'));
@@ -2112,6 +2124,7 @@ function indexarSZB(){
   ST.szbIdx.remIdx        = mapaSZB(ST.szbIdx.remetentes);
   ST.szbIdx.desIdx        = mapaSZB(ST.szbIdx.destinatarios);
   ST.szbIdx.pares         = pares;
+  ST.szbIdx.paresRem      = paresRem;
   ST.szbIdx.loaded=true;
   atualizarListasSeAberto();
   /* A grade normalmente desenha ANTES da SZB terminar de indexar. Como agora
@@ -2739,14 +2752,70 @@ function clienteDaViagem(v){
 /* A grade passou a ser organizada pelo REMETENTE (local de carregamento): é
    ele que define a fila do carregamento e o deslocamento do conjunto. O
    cliente continua vivo no filtro, na ordenação e no balão da linha. */
-function remetenteDaDemanda(d){
+/* ═══ RESOLUÇÃO DO REMETENTE ═══ (30/07/2026)
+   O subcard tem de mostrar EXATAMENTE o cadastro que a tela Nova Demanda
+   oferece no campo "Local de carregamento (remetente)" — a mesma lista da SZB,
+   nunca a cidade. Demandas antigas (e as que nasceram de uma rota, antes da
+   correção do onRotaDemanda) gravaram o MUNICÍPIO nesse campo: era daí que
+   saía "SANTANA DE PARNAIBA" encabeçando o card como se fosse remetente, sem
+   existir na lista do formulário.
+
+   O nome é então reconstruído pelo histórico da SZB em camadas, da mais segura
+   para a menos — a mesma escada já usada no destinatário:
+     1. o valor já é um cadastro de remetente conhecido;
+     2. a cidade inteira só tem um remetente no histórico (UF desempata antes);
+     3. dentro da cidade, um único remetente atende a unidade da demanda;
+     4. dentro da cidade, um único remetente casa com o cliente da demanda;
+     5. o par destinatário → cidade de coleta só tem um remetente no histórico;
+     6. o cliente da demanda é, ele mesmo, um cadastro de remetente.
+   Nenhuma camada aceita empate: havendo dois candidatos o resolvedor desiste e
+   devolve ok:false — a cidade continua na tela, mas em cinza e com aviso, para
+   ninguém confundir local de coleta com quem carrega. */
+function remetenteResolvido(d){
+  const lista=ST.szbIdx.remetentes||[], idx=ST.szbIdx.remIdx;
   const bruto=String((d&&(d.remetente||d.local_coleta))||'').trim();
-  if(!bruto) return 'Sem remetente';
-  return achaSZBLocal(ST.szbIdx.remIdx,bruto).nome||'Sem remetente';
+  if(!bruto) return {nome:'Sem remetente',ok:false};
+  const k=norm(bruto);
+  const porNome=idx&&idx.porNome.get(k);
+  if(porNome) return {nome:porNome.nome,ok:true};
+
+  const uf=norm((d&&d.uf_origem)||'');
+  let naCidade=lista.filter(e=>norm(e.municipio)===k);
+  if(uf && naCidade.length>1){
+    const c=naCidade.filter(e=>norm(e.uf)===uf); if(c.length) naCidade=c;
+  }
+  if(naCidade.length===1) return {nome:naCidade[0].nome,ok:true};
+
+  const uni=String((d&&d.unidade_slug)||'').trim();
+  if(uni && naCidade.length>1){
+    const c=naCidade.filter(e=>e.ops&&e.ops.has(uni));
+    if(c.length===1) return {nome:c[0].nome,ok:true};
+    if(c.length) naCidade=c;
+  }
+
+  const cli=norm((d&&d.cliente)||'');
+  const casaCli=n=>{ const x=norm(n); return !!cli && x.length>2 && (x.includes(cli)||cli.includes(x)); };
+  if(cli){ const c=naCidade.filter(e=>casaCli(e.nome)); if(c.length===1) return {nome:c[0].nome,ok:true}; }
+
+  /* Par INVERSO do histórico. Usa o valor GRAVADO do destinatário, não o
+     resolvedor dele — os dois resolvedores não podem ficar se chamando. */
+  const kd=norm(String((d&&(d.destinatario||d.local_entrega))||'').trim());
+  if(kd && ST.szbIdx.paresRem){
+    const s=ST.szbIdx.paresRem.get(kd+'|'+k);
+    if(s && s.size===1) return {nome:[...s][0],ok:true};
+    if(s && cli){ const c=[...s].filter(casaCli); if(c.length===1) return {nome:c[0],ok:true}; }
+    if(s && naCidade.length>1){
+      const c=naCidade.filter(e=>s.has(e.nome)); if(c.length===1) return {nome:c[0].nome,ok:true};
+    }
+  }
+  if(cli){ const c=lista.filter(e=>casaCli(e.nome)); if(c.length===1) return {nome:c[0].nome,ok:true}; }
+  return {nome:bruto,ok:false};
 }
-function remetenteDaViagem(v){
-  return remetenteDaDemanda(ST.demandas.find(x=>x.id===v.demanda_id)||{});
+function remetenteDaDemanda(d){ return remetenteResolvido(d).nome; }
+function remetenteResolvidoDaViagem(v){
+  return remetenteResolvido(ST.demandas.find(x=>x.id===v.demanda_id)||{});
 }
+function remetenteDaViagem(v){ return remetenteResolvidoDaViagem(v).nome; }
 /* ═══ COR DO REMETENTE ═══ (30/07/2026)
    Cada local de carregamento recebe uma cor fixa, derivada do próprio nome. Ser
    FIXA é o ponto: o remetente é reconhecido pela cor de um dia para o outro e de
@@ -2814,8 +2883,16 @@ function destinatarioDaDemanda(d){ return destinatarioResolvido(d).nome; }
 /* Cidade fica no TRECHO, nome fica no destaque: o campo "X → Y" da faixa passa
    a mostrar município, e não mais o mesmo texto que já está em cima. */
 function municipioOrigem(d){
-  return String((d&&d.municipio_origem)||'').trim()
-    || achaSZBLocal(ST.szbIdx.remIdx,(d&&(d.remetente||d.local_coleta))||'').municipio || '';
+  const m=String((d&&d.municipio_origem)||'').trim(); if(m) return m;
+  /* Resolvido o cadastro, a cidade do trecho vem DELE — e não do texto que a
+     demanda guardou. Assim o card mostra "quem carrega" em cima e "de onde
+     sai" no trecho, sem repetir a mesma palavra nos dois lugares. */
+  const r=remetenteResolvido(d);
+  if(r.ok && ST.szbIdx.remIdx){
+    const e=ST.szbIdx.remIdx.porNome.get(norm(r.nome));
+    if(e && e.municipio) return e.municipio;
+  }
+  return achaSZBLocal(ST.szbIdx.remIdx,(d&&(d.remetente||d.local_coleta))||'').municipio || '';
 }
 function municipioDestino(d){
   return String((d&&d.municipio_destino)||'').trim()
@@ -2926,8 +3003,8 @@ function renderGrade(){
   };
   vs.forEach(v=>{
     const gu=gU(v.unidade_slug||'—'); gu.total++;
-    const rm=remetenteDaViagem(v);
-    if(!gu.mapC.has(rm)){ const gc={remetente:rm,viagens:[],pend:[]}; gu.mapC.set(rm,gc); gu.clientes.push(gc); }
+    const rr=remetenteResolvidoDaViagem(v), rm=rr.nome;
+    if(!gu.mapC.has(rm)){ const gc={remetente:rm,ok:rr.ok,viagens:[],pend:[]}; gu.mapC.set(rm,gc); gu.clientes.push(gc); }
     gu.mapC.get(rm).viagens.push(v);
   });
   /* A demanda ainda sem conjunto não fica mais numa caixa à parte no topo da
@@ -2937,8 +3014,8 @@ function renderGrade(){
   pend.forEach(d=>{
     const gu=gU(d.unidade_slug||uniAtual()||'—');
     gu.pend.push(d);
-    const rm=remetenteDaDemanda(d);
-    if(!gu.mapC.has(rm)){ const gc={remetente:rm,viagens:[],pend:[]}; gu.mapC.set(rm,gc); gu.clientes.push(gc); }
+    const rr=remetenteResolvido(d), rm=rr.nome;
+    if(!gu.mapC.has(rm)){ const gc={remetente:rm,ok:rr.ok,viagens:[],pend:[]}; gu.mapC.set(rm,gc); gu.clientes.push(gc); }
     gu.mapC.get(rm).pend.push(d);
   });
   unis.sort((a,b)=>UNIS.indexOf(a.uni)-UNIS.indexOf(b.uni));
@@ -2990,10 +3067,13 @@ function renderGrade(){
           /* A referência do remetente é VIAGEM, nunca tonelada: o mesmo produto,
              saindo do mesmo remetente, muda de peso conforme a carreta que puxa. */
           return '<div class="gr-cli'+colC+'" style="--rc:'+rc+'">'
-            +'<div class="gr-cli-hd" onclick="prgToggleGrupo(\''+esc(kC)+'\')" title="Local de carregamento (remetente): '+esc(gc.remetente)+'">'
+            +'<div class="gr-cli-hd" onclick="prgToggleGrupo(\''+esc(kC)+'\')" title="'
+              +esc(gc.ok===false
+                ? 'Local de carregamento não identificado na SZB — mostrando o que a demanda gravou ("'+gc.remetente+'"). Abra a demanda e escolha o remetente no campo "Local de carregamento".'
+                : 'Local de carregamento (remetente): '+gc.remetente)+'">'
               +'<span class="gr-cx">▾</span>'
-              +'<span class="gr-cli-dot"></span>'
-              +'<span class="gr-cli-ti">'+esc(gc.remetente)+'</span>'
+              +'<span class="gr-cli-dot'+(gc.ok===false?' und':'')+'"></span>'
+              +'<span class="gr-cli-ti'+(gc.ok===false?' und':'')+'">'+esc(gc.remetente)+'</span>'
               +'<span class="gr-cnt">'
                 +(blks?'<span class="chip c-rd">'+blks+' bloq</span>':'')
                 +(np?'<span class="chip c-am">'+np+' a programar</span>':'')
@@ -4001,8 +4081,16 @@ window.editarDemanda=function(id){
   document.getElementById('tiDem').textContent='Editar Demanda';
   const set=(k,v)=>{ const e=document.getElementById(k); if(e) e.value=v==null?'':v; };
   set('dUnid',d.unidade_slug); set('dData',d.data); set('dCliente',d.cliente); set('dProduto',d.produto);
-  set('dPedido',d.pedido); set('dQtd',d.quantidade_prevista); set('dOrigem',d.local_coleta); set('dUfO',d.uf_origem);
-  set('dDestino',d.local_entrega); set('dUfD',d.uf_destino); set('dJcIni',d.janela_carga_ini); set('dJcFim',d.janela_carga_fim);
+  set('dPedido',d.pedido); set('dQtd',d.quantidade_prevista);
+  /* AUTOCORREÇÃO NA EDIÇÃO: se a demanda guardou a cidade no lugar do cadastro
+     e o resolvedor conseguiu identificar quem é, o campo já abre com o NOME do
+     remetente/destinatário da SZB. Salvar a demanda grava o dado certo e o
+     registro para de depender do resolvedor. Sem certeza, o valor original
+     continua na tela — o resolvedor não chuta cadastro. */
+  const rrEd=remetenteResolvido(d), drEd=destinatarioResolvido(d);
+  set('dOrigem', rrEd.ok?rrEd.nome:d.local_coleta); set('dUfO',d.uf_origem);
+  set('dDestino', drEd.ok?drEd.nome:d.local_entrega); set('dUfD',d.uf_destino);
+  set('dJcIni',d.janela_carga_ini); set('dJcFim',d.janela_carga_fim);
   set('dJdIni',d.janela_desc_ini); set('dJdFim',d.janela_desc_fim); set('dComp',d.compressor_origem||(d.exige_compressor==='nao'?'cliente':'caminhao'));
   set('dTipoFrete',d.tipo_frete||'CIF');
   set('dFrota',d.tipo_frota_permitido||'ambas'); set('dPrio',d.prioridade||'normal'); set('dStatus',d.status||'aguardando');
