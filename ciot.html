@@ -278,7 +278,11 @@ function money(n){return Number(n||0).toLocaleString('pt-BR',{style:'currency',c
 function maskMoney(el){let d=String(el.value||'').replace(/\D/g,'').replace(/^0+(?=\d)/,'');if(!d){el.value='';return;}while(d.length<3)d='0'+d;const cents=d.slice(-2),int=d.slice(0,-2).replace(/\B(?=(\d{3})+(?!\d))/g,'.');el.value='R$ '+int+','+cents;}
 function parseMoneyBR(s){const d=String(s||'').replace(/\D/g,'');return d?Number(d)/100:0;}
 function kg(n){return Number(n||0).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2})+' kg';}
-function fmtDateBR(iso){if(!iso)return''; const d=new Date(iso); if(!isNaN(d))return d.toLocaleDateString('pt-BR'); const m=String(iso).match(/(\d{4})-(\d{2})-(\d{2})/); return m?`${m[3]}/${m[2]}/${m[1]}`:iso;}
+// v13.7 — BUG DE FUSO CORRIGIDO. "2026-07-15" era lido por new Date() como meia-noite UTC e
+// toLocaleDateString('pt-BR') devolvia 14/07/2026 (UTC-3): a data escolhida na conferência chegava ao
+// robô um dia antes. Agora a data-só (aaaa-mm-dd) é convertida pelo TEXTO, sem passar por new Date();
+// new Date() fica só para timestamps completos (dhEmi do CT-e, que tem hora e fuso).
+function fmtDateBR(iso){if(!iso)return''; const s=String(iso); const m=s.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m)return `${m[3]}/${m[2]}/${m[1]}`; const b=s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if(b)return s; const d=new Date(s); if(!isNaN(d))return d.toLocaleDateString('pt-BR'); const m2=s.match(/(\d{4})-(\d{2})-(\d{2})/); return m2?`${m2[3]}/${m2[2]}/${m2[1]}`:s;}
 function isoDateOnly(iso){if(!iso)return''; const m=String(iso).match(/(\d{4})-(\d{2})-(\d{2})/); return m?`${m[1]}-${m[2]}-${m[3]}`:'';}
 function toast(msg,tp=''){const t=$('toast');t.textContent=msg;t.className='toast on '+tp;clearTimeout(window.__tt);window.__tt=setTimeout(()=>t.className='toast',3500)}
 function log(msg,tp='info'){const el=$('log');const d=document.createElement('div');d.className=tp;d.textContent='['+new Date().toLocaleTimeString('pt-BR')+'] '+msg;el.appendChild(d);el.scrollTop=el.scrollHeight;}
@@ -823,7 +827,38 @@ function bridgeAttrReady(){
   return read(document)||(()=>{try{return read(window.top&&window.top.document);}catch(_){return null;}})();
 }
 function pingChromeExtension(){return new Promise(resolve=>{const fast=bridgeAttrReady();if(fast)return resolve(fast);const nonce='ciot_ping_'+Date.now()+'_'+Math.random().toString(36).slice(2);let done=false;const handler=ev=>{const m=ev.data||{};if(m&&((m.type==='COMIX_AUTO_EFRETE_PONG'&&m.nonce===nonce)||m.type==='COMIX_AUTO_EFRETE_BRIDGE_READY')){done=true;window.removeEventListener('message',handler);resolve({ok:true,version:m.version||'—',href:m.href||''})}};window.addEventListener('message',handler);try{window.postMessage({type:'COMIX_AUTO_EFRETE_PING',nonce},'*'); if(window.parent&&window.parent!==window) window.parent.postMessage({type:'COMIX_AUTO_EFRETE_PING',nonce},'*');}catch(_){}setTimeout(()=>{if(!done){window.removeEventListener('message',handler);resolve(bridgeAttrReady()||{ok:false})}},1400)})}
-function sendTaskToChromeExtension(task){return new Promise(resolve=>{const nonce='ciot_'+Date.now()+'_'+Math.random().toString(36).slice(2);let done=false;const handler=ev=>{const m=ev.data||{};if(m&&m.type==='COMIX_AUTO_EFRETE_ACK'&&m.nonce===nonce){done=true;window.removeEventListener('message',handler);resolve(!!m.ok)}};window.addEventListener('message',handler);try{window.postMessage({type:'COMIX_AUTO_EFRETE_TASK',nonce,task},'*'); if(window.parent&&window.parent!==window) window.parent.postMessage({type:'COMIX_AUTO_EFRETE_TASK',nonce,task},'*');}catch(_){resolve(false)}setTimeout(()=>{if(!done){window.removeEventListener('message',handler);resolve(false)}},2200)})}
+function __sendTaskRawToChromeExtension(task){return new Promise(resolve=>{const nonce='ciot_'+Date.now()+'_'+Math.random().toString(36).slice(2);let done=false;const handler=ev=>{const m=ev.data||{};if(m&&m.type==='COMIX_AUTO_EFRETE_ACK'&&m.nonce===nonce){done=true;window.removeEventListener('message',handler);resolve(!!m.ok)}};window.addEventListener('message',handler);try{window.postMessage({type:'COMIX_AUTO_EFRETE_TASK',nonce,task},'*'); if(window.parent&&window.parent!==window) window.parent.postMessage({type:'COMIX_AUTO_EFRETE_TASK',nonce,task},'*');}catch(_){resolve(false)}setTimeout(()=>{if(!done){window.removeEventListener('message',handler);resolve(false)}},2200)})}
+/* v13.7 — DETECÇÃO (não trava) DA VERSÃO DA EXTENSÃO.
+   Motivo: o ciot.html é publicado para todos de uma vez, mas a extensão é instalada máquina a máquina.
+   Até aqui o Atlas não conseguia sequer SABER quem estava atrasado: o atlas-bridge reportava a string
+   fixa '11.11.0' há várias versões. Agora o bridge devolve a versão real do manifest e a Central CIOT
+   mostra no status quem está abaixo do mínimo.
+   COMPORTAMENTO ESCOLHIDO: quem estiver atualizado ganha as correções; quem não estiver segue
+   funcionando exatamente como antes (data do dia vinda do EFrete, município pelo casamento antigo).
+   Nada é bloqueado. Se um dia for preciso EXIGIR a versão, basta ROBO_BLOQUEIA_DESATUALIZADA = true. */
+const ROBO_VERSAO_MINIMA='13.7.0';
+const ROBO_BLOQUEIA_DESATUALIZADA=false;
+let __roboAvisoLogado=false;
+function cmpVer(a,b){const pa=String(a||'').split('.').map(n=>parseInt(n,10)||0),pb=String(b||'').split('.').map(n=>parseInt(n,10)||0);for(let i=0;i<Math.max(pa.length,pb.length);i++){const d=(pa[i]||0)-(pb[i]||0);if(d)return d<0?-1:1}return 0}
+function roboDesatualizado(v){const s=String(v||'').trim();if(!s||s==='—')return false;return cmpVer(s,ROBO_VERSAO_MINIMA)<0}
+// Status informativo: o chip continua VERDE (a extensão está conectada e funcional), só ganha a nota
+// de que existe versão mais nova e o que ela corrige.
+function avisoRoboDesatualizado(v){
+  const msg='Extensão conectada, versão '+(v||'?')+' — há a v'+ROBO_VERSAO_MINIMA+' disponível. '
+    +'Nesta versão o robô segue funcionando normalmente, mas mantém o comportamento antigo: usa a data do dia do EFrete (ignora a data de início/fim definida aqui), pode escolher o município errado quando o nome existe em mais de um estado e pode deixar o destino vazio quando origem = destino. '
+    +'Para atualizar: chrome://extensions → botão Atualizar, e recarregue a aba do EFrete e esta página.';
+  try{setRobotChip('Auto EFrete — extensão conectada (v'+(v||'?')+', atualização disponível)','ok');const el=$('robotStatus');if(el)el.innerHTML=esc(msg);}catch(_){}
+  return msg;
+}
+async function sendTaskToChromeExtension(task){
+  const p=await pingChromeExtension();
+  if(p&&p.ok&&roboDesatualizado(p.version)){
+    // Só registra no log (uma vez por sessão) — sem toast e sem bloquear, para não atrapalhar o lote.
+    if(!__roboAvisoLogado){__roboAvisoLogado=true;log('Extensão Auto EFrete na v'+p.version+' (disponível a v'+ROBO_VERSAO_MINIMA+'). O robô vai rodar com o comportamento antigo: data do dia do EFrete, município sem conferência de UF e destino sem confirmação quando origem = destino.','warn');}
+    if(ROBO_BLOQUEIA_DESATUALIZADA){toast('Extensão desatualizada (v'+p.version+') — atualize para a v'+ROBO_VERSAO_MINIMA,'warn');return false;}
+  }
+  return __sendTaskRawToChromeExtension(task);
+}
 async function sendAutoEfrete(){const item=saveFormToItem();if(!item)return;computeStatus(item);if(item.pendencias.length){toast('Existem pendências antes do Auto EFrete','warn');renderAll();return;}await saveSelected();const task=buildTask(item);const extOk=await sendTaskToChromeExtension(task);if(extOk){item.status='preenchendo';item.robotJobId='chrome-extension';item.updatedAt=new Date().toISOString();state.selected=item.id||item.chaveCte||item.numeroCte;await fsSet(CIOT_COLLECTION,item.chaveCte,item);toast('Tarefa enviada para a extensão Auto EFrete','ok');log('Auto EFrete Extensão recebeu CT-e '+item.numeroCte,'ok');renderAll();return;}toast('Extensão Auto EFrete não respondeu. Recarregue a extensão e o Atlas.','warn');log('Extensão Auto EFrete não respondeu ao envio do CT-e '+(item.numeroCte||''),'warn');renderAll();}
 function downloadSelectedTask(){const item=saveFormToItem();if(!item)return;downloadJSON(buildTask(item),`auto-efrete-${item.numeroCte||item.id}.json`)}
 
@@ -963,10 +998,10 @@ async function advanceBatch(emittedItem,slug,opts){
 function downloadJSON(obj,name){const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 let __robotWatch=null;
 function setRobotChip(text,cls){['robotChip','robotChipAuto'].forEach(id=>{const el=$(id);if(el){el.textContent=text;el.className='chip '+cls;}});}
-async function checkRobot(opts){const r=await pingChromeExtension();if(r.ok){setRobotChip('Auto EFrete — extensão conectada','ok');$('robotStatus').innerHTML=`Extensão conectada. Versão: <b>${r.version||'—'}</b>.`;if(__robotWatch){clearInterval(__robotWatch);__robotWatch=null;}return true}setRobotChip('Auto EFrete — extensão não detectada','warn');$('robotStatus').innerHTML='A extensão COMIX Auto EFrete Autônomo não respondeu nesta aba. Recarregue a extensão em chrome://extensions (botão recarregar) — o status reconecta sozinho em alguns segundos. Se persistir, atualize o Atlas com Ctrl + Shift + R.';
+async function checkRobot(opts){const r=await pingChromeExtension();if(r.ok){setRobotChip('Auto EFrete — extensão conectada','ok');if(roboDesatualizado(r.version)){avisoRoboDesatualizado(r.version);}else{$('robotStatus').innerHTML=`Extensão conectada. Versão: <b>${r.version||'—'}</b>.`;}if(__robotWatch){clearInterval(__robotWatch);__robotWatch=null;}return true}setRobotChip('Auto EFrete — extensão não detectada','warn');$('robotStatus').innerHTML='A extensão COMIX Auto EFrete Autônomo não respondeu nesta aba. Recarregue a extensão em chrome://extensions (botão recarregar) — o status reconecta sozinho em alguns segundos. Se persistir, atualize o Atlas com Ctrl + Shift + R.';
 // Auto-recuperação: continua tentando em segundo plano. Assim, quando você recarrega a extensão
 // ou o bridge fica pronto, o chip vira "conectada" sozinho, sem precisar atualizar a página.
-if(!(opts&&opts.noWatch)&&!__robotWatch){let tries=0;__robotWatch=setInterval(async()=>{tries++;const rr=await pingChromeExtension();if(rr.ok){setRobotChip('Auto EFrete — extensão conectada','ok');$('robotStatus').innerHTML=`Extensão conectada. Versão: <b>${rr.version||'—'}</b>.`;clearInterval(__robotWatch);__robotWatch=null;}else if(tries>=30){clearInterval(__robotWatch);__robotWatch=null;}},2000);}
+if(!(opts&&opts.noWatch)&&!__robotWatch){let tries=0;__robotWatch=setInterval(async()=>{tries++;const rr=await pingChromeExtension();if(rr.ok){setRobotChip('Auto EFrete — extensão conectada','ok');if(roboDesatualizado(rr.version)){avisoRoboDesatualizado(rr.version);}else{$('robotStatus').innerHTML=`Extensão conectada. Versão: <b>${rr.version||'—'}</b>.`;}clearInterval(__robotWatch);__robotWatch=null;}else if(tries>=30){clearInterval(__robotWatch);__robotWatch=null;}},2000);}
 return false}
 function prettyEmail(e){e=String(e||'').trim();if(!e)return '';const local=e.split('@')[0];return local.replace(/[._-]+/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
 function histUserLabel(i){return i.ciotByName||i.emitidoByName||i.updatedByName||i.createdByName||prettyEmail(i.ciotBy||i.emitidoBy||i.updatedBy||i.createdBy)||'—';}
