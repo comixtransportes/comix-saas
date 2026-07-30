@@ -614,8 +614,20 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
             </div>
             <div class="fr">
               <div class="f"><label>UID Firebase Auth <span class="req">*</span></label><input id="cfg_user_uid" placeholder="Cole o UID do Firebase Authentication" required style="border-color:var(--blue-b)"><span class="err-msg show" style="color:var(--blue);font-size:10px">Acesse Firebase → Authentication → copie o UID do usuário</span></div>
-              <div class="f"><label>Tipo de usuário</label><select id="cfg_user_perfil"><option value="admin">admin</option><option value="gestor">gestor</option><option value="comprador">comprador</option><option value="motorista" selected="">motorista</option><option value="lu_sc">lu_sc — LU Santa Catarina</option><option value="lu_pr">lu_pr — LU Paraná</option><option value="lu_sp">lu_sp — LU São Paulo</option><option value="lr">lr — Líder Regional</option><option value="lm">lm — Líder Manutenção</option><option value="consulta">consulta</option><option value="assist">assist — Assistente</option></select></div>
+              <div class="f"><label>Tipo de usuário</label><select id="cfg_user_perfil" onchange="cfgUserPerfilChange()"><option value="admin">admin</option><option value="gestor">gestor</option><option value="comprador">comprador</option><option value="motorista" selected="">motorista</option><option value="lu_sc">lu_sc — LU Santa Catarina</option><option value="lu_pr">lu_pr — LU Paraná</option><option value="lu_sp">lu_sp — LU São Paulo</option><option value="lr">lr — Líder Regional</option><option value="lm">lm — Líder Manutenção</option><option value="consulta">consulta</option><option value="assist">assist — Assistente</option></select></div>
               <div class="f"><label>Status</label><select id="cfg_user_bloqueado"><option value="false">Ativo</option><option value="true">Bloqueado</option></select></div>
+            </div>
+            <div class="cfg-hidden" id="cfg_user_mot_wrap">
+              <div class="cfg-note">Perfil <b>motorista</b>: os dados abaixo criam/atualizam automaticamente o registro na aba <b>Motoristas</b> ao salvar. O CPF é a chave do cadastro.</div>
+              <div class="fr">
+                <div class="f"><label>Unidade</label><select id="cfg_user_mot_filial"><option value="">Selecione</option></select></div>
+                <div class="f"><label>CPF <span class="req">*</span></label><input id="cfg_user_mot_cpf" placeholder="000.000.000-00" oninput="cfgCpfMask(this)"></div>
+                <div class="f"><label>Data de nascimento</label><input type="date" id="cfg_user_mot_nascimento"></div>
+              </div>
+              <div class="fr">
+                <div class="f"><label>Código do país</label><select id="cfg_user_mot_pais"></select></div>
+                <div class="f"><label>Telefone celular</label><input id="cfg_user_mot_celular" placeholder="(00) 00000-0000" oninput="cfgPhoneMask(this)"></div>
+              </div>
             </div>
             <div class="fr">
               <div class="f"><label>Observações</label><textarea id="cfg_user_obs" placeholder="Observações administrativas"></textarea></div>
@@ -1950,7 +1962,7 @@ function openAdminSection(section) {
 }
 async function cfgLoadSection(section) {
   try {
-    if (section === "usuarios") await cfgRefreshUsuarios();
+    if (section === "usuarios") { await cfgRefreshUsuarios(); await cfgUserPerfilChange(); }
     if (section === "veiculos") await cfgRefreshVeiculos();
     if (section === "motoristas") {
       cfgInitPaisSelect();
@@ -2189,6 +2201,58 @@ function cfgResetUsuario() {
   cfgSet("cfg_user_doc_id", "");
   cfgSet("cfg_user_bloqueado", "false");
   cfgSet("cfg_user_perfil", "motorista");
+  cfgSet("cfg_user_mot_filial", "");
+  cfgSet("cfg_user_mot_cpf", "");
+  cfgSet("cfg_user_mot_nascimento", "");
+  cfgSet("cfg_user_mot_pais", "BR");
+  cfgSet("cfg_user_mot_celular", "");
+  cfgUserPerfilChange();
+}
+
+/* ══ USUÁRIO COM PERFIL MOTORISTA ══════════════════════════════════════
+   Quando o Tipo de usuário é "motorista", o form de Usuários expande os
+   campos operacionais do motorista (unidade, CPF, nascimento, país e
+   celular). Ao salvar, o mesmo payload usado em cfgSaveMotorista é
+   gravado em `motoristas` com o CPF (só dígitos) como ID do documento —
+   exatamente a mesma regra da aba Motoristas, então editar num lugar
+   atualiza o outro. */
+function cfgUserIsMotorista() {
+  return String(cfgVal("cfg_user_perfil") || "").toLowerCase() === "motorista";
+}
+async function cfgUserPerfilChange() {
+  const isMot = cfgUserIsMotorista();
+  document.getElementById("cfg_user_mot_wrap")?.classList.toggle("cfg-hidden", !isMot);
+  const cpf = document.getElementById("cfg_user_mot_cpf");
+  if (cpf) cpf.required = isMot;
+  if (!isMot) return;
+  cfgInitPaisSelect("cfg_user_mot_pais");
+  /* A aba Usuários pode ser aberta sem passar por Filiais/Motoristas —
+     carrega as unidades sob demanda para o select não ficar vazio. */
+  if (!cfgCache.filiais.length) {
+    try { await cfgRefreshFiliais(false); } catch(e) {}
+  } else {
+    cfgLoadUnidadeSelects();
+  }
+}
+async function cfgFillUsuarioMotorista(u) {
+  if (!cfgUserIsMotorista()) return;
+  if (!cfgCache.motoristas.length) {
+    try {
+      cfgCache.motoristas = (await cfgList("motoristas")).map(cfgNormalizeMotorista).sort((a,b)=>cfgSortByName(a,b,"nome"));
+    } catch(e) {}
+  }
+  const cpfNum = cfgDigits(u.cpfNumeros || u.motoristaId || u.cpf || "");
+  const email = String(u.email || "").toLowerCase();
+  const m = cfgCache.motoristas.find(x =>
+    (cpfNum && (x.id === cpfNum || cfgDigits(x.cpfNumeros || x.cpf || "") === cpfNum)) ||
+    (u.uid && x.uid && x.uid === u.uid) ||
+    (email && String(x.email || "").toLowerCase() === email)
+  ) || {};
+  cfgSetSelect("cfg_user_mot_filial", m.filial || u.filial || "");
+  cfgSet("cfg_user_mot_cpf", m.cpf || u.cpf || "");
+  cfgSet("cfg_user_mot_nascimento", m.dataNascimento || u.dataNascimento || "");
+  cfgSetSelect("cfg_user_mot_pais", m.codigoPais || u.codigoPais || "BR");
+  cfgSet("cfg_user_mot_celular", m.celular || u.celular || "");
 }
 async function cfgSaveUsuario(event) {
   event.preventDefault();
@@ -2217,18 +2281,53 @@ async function cfgSaveUsuario(event) {
     status: cfgVal("cfg_user_bloqueado") === "true" ? "bloqueado" : "ativo",
     observacoes: cfgVal("cfg_user_obs")
   };
+  /* Perfil motorista → monta também o doc da coleção `motoristas`, com o
+     mesmo formato de cfgSaveMotorista (ID = CPF só com dígitos). */
+  let motPayload = null;
+  if (cfgUserIsMotorista()) {
+    const cpf = cfgVal("cfg_user_mot_cpf");
+    const cpfNumeros = cfgDigits(cpf);
+    if (cpfNumeros.length !== 11) return showToast("Informe um CPF válido (11 dígitos) para o usuário motorista.", "error");
+    if (!payload.nome) return showToast("Informe o nome — ele é obrigatório no cadastro de motoristas.", "error");
+    motPayload = {
+      filial: cfgVal("cfg_user_mot_filial"),
+      nome: payload.nome,
+      cpf,
+      cpfNumeros,
+      dataNascimento: cfgVal("cfg_user_mot_nascimento"),
+      codigoPais: cfgVal("cfg_user_mot_pais") || "BR",
+      celular: cfgVal("cfg_user_mot_celular"),
+      email,
+      observacoes: cfgVal("cfg_user_obs"),
+      uid
+    };
+    /* Espelha no doc do usuário para o Editar reabrir preenchido */
+    payload.motoristaId = cpfNumeros;
+    payload.cpf = cpf;
+    payload.cpfNumeros = cpfNumeros;
+    payload.filial = motPayload.filial;
+    payload.dataNascimento = motPayload.dataNascimento;
+    payload.codigoPais = motPayload.codigoPais;
+    payload.celular = motPayload.celular;
+  }
   try {
     /* Sempre salva com UID como ID do documento */
     const docId = cfgVal("cfg_user_doc_id") || uid;
     await cfgSave("usuarios", docId, payload);
-    showToast("Usuário salvo no Firebase.", "success");
+    if (motPayload) await cfgSave("motoristas", motPayload.cpfNumeros, motPayload);
+    showToast(motPayload ? "Usuário salvo e motorista sincronizado no Firebase." : "Usuário salvo no Firebase.", "success");
     cfgResetUsuario();
     await cfgRefreshUsuarios();
+    if (motPayload) {
+      cfgCache.motoristas = (await cfgList("motoristas")).map(cfgNormalizeMotorista).sort((a,b)=>cfgSortByName(a,b,"nome"));
+      syncOperationalFromCfg("motoristas");
+      if (cfgCurrentSection === "motoristas") cfgRenderMotoristas();
+    }
   } catch (err) {
     showToast(err.message || "Erro ao salvar usuário.", "error");
   }
 }
-function cfgEditUsuario(id) {
+async function cfgEditUsuario(id) {
   const u = cfgCache.usuarios.find(x => x.id === id);
   if (!u) return;
   cfgSet("cfg_user_doc_id", u.id);
@@ -2239,6 +2338,8 @@ function cfgEditUsuario(id) {
   cfgSet("cfg_user_bloqueado", (u.bloqueado === true || u.status === "bloqueado") ? "true" : "false");
   cfgSet("cfg_user_obs", u.observacoes || "");
   document.getElementById("cfg_user_form")?.scrollIntoView({ behavior:"smooth", block:"start" });
+  await cfgUserPerfilChange();
+  await cfgFillUsuarioMotorista(u);
 }
 async function cfgToggleUsuario(id, bloqueado) {
   if (!cfgRequireAdmin()) return;
@@ -6205,10 +6306,12 @@ async function cfgDeleteVeiculo(id) {
 }
 
 /* Motoristas */
-function cfgInitPaisSelect() {
-  if (cfgPaisInicializado) return;
-  const select = document.getElementById("cfg_mot_pais");
-  if (!select) return;
+function cfgInitPaisSelect(selectId) {
+  /* Usado pela aba Motoristas e pelo bloco motorista da aba Usuários —
+     por isso o controle de "já preenchi" é por select, não global. */
+  const ids = selectId ? [selectId] : ["cfg_mot_pais", "cfg_user_mot_pais"];
+  const alvos = ids.map(id => document.getElementById(id)).filter(el => el && el.dataset.paisInit !== "1");
+  if (!alvos.length) return;
   const dial = { BR:"+55", AR:"+54", CL:"+56", UY:"+598", PY:"+595", BO:"+591", PE:"+51", CO:"+57", VE:"+58", EC:"+593", US:"+1", CA:"+1", MX:"+52", PT:"+351", ES:"+34", FR:"+33", DE:"+49", IT:"+39", GB:"+44", IE:"+353", NL:"+31", BE:"+32", CH:"+41", AT:"+43", SE:"+46", NO:"+47", DK:"+45", FI:"+358", CN:"+86", JP:"+81", KR:"+82", IN:"+91", AU:"+61", NZ:"+64", ZA:"+27", AO:"+244", MZ:"+258" };
   let codes = ["BR","AR","CL","UY","PY","BO","PE","CO","VE","EC","US","CA","MX","PT","ES","FR","DE","IT","GB","IE","NL","BE","CH","AT","SE","NO","DK","FI","CN","JP","KR","IN","AU","NZ","ZA","AO","MZ"];
   try {
@@ -6218,11 +6321,16 @@ function cfgInitPaisSelect() {
   } catch(e) {}
   let nomes = null;
   try { nomes = new Intl.DisplayNames(["pt-BR"], { type: "region" }); } catch(e) {}
-  select.innerHTML = codes.map(code => {
+  const html = codes.map(code => {
     const nome = nomes ? nomes.of(code) : code;
     const sufixo = dial[code] ? " (" + dial[code] + ")" : "";
     return `<option value="${code}" ${code==="BR" ? "selected" : ""}>${code} — ${cfgEscape(nome)}${sufixo}</option>`;
   }).join("");
+  alvos.forEach(select => {
+    select.innerHTML = html;
+    select.value = "BR";
+    select.dataset.paisInit = "1";
+  });
   cfgPaisInicializado = true;
 }
 async function cfgRefreshMotoristas() {
@@ -6336,7 +6444,7 @@ function cfgLoadUnidadeSelects() {
     const label = (f.sigla ? f.sigla + " — " : "") + (f.nome || f.id);
     return `<option value="${cfgEscape(value)}">${cfgEscape(label)}</option>`;
   }).join("");
-  ["cfg_veic_filial","cfg_mot_filial"].forEach(id => {
+  ["cfg_veic_filial","cfg_mot_filial","cfg_user_mot_filial"].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     const cur = el.value;
