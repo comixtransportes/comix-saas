@@ -335,6 +335,28 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
 .vg-st:focus-visible{outline:2px solid var(--purple);outline-offset:1px}
 .vg-ped{display:inline-flex;align-items:center;font-family:var(--pd-m);font-size:9.5px;font-weight:400;
   color:var(--gray);white-space:nowrap;flex:none;letter-spacing:-.2px}
+/* ═══ SELETOR DE STATUS ═══ (31/07/2026)
+   O <select> de vinte linhas saiu. Cada status virou uma opção com o gatilho
+   escrito embaixo: o programador lê POR QUE aquele degrau existe antes de
+   passar por cima dele. */
+.st-now{display:flex;gap:9px;align-items:flex-start;padding:9px 10px;border-radius:var(--r-xs);
+  background:var(--bg-2,#f7f7f9);border:1px solid var(--line,#e6e6ea)}
+.st-now-tx{font-size:11px;line-height:1.45;color:var(--gray)}
+.st-ops{display:flex;flex-direction:column;gap:5px}
+.st-op{display:flex;align-items:center;gap:9px;width:100%;text-align:left;cursor:pointer;
+  padding:8px 10px;border-radius:var(--r-xs);border:1px solid var(--line,#e6e6ea);
+  background:#fff;font-family:inherit;transition:border-color .13s ease,background .13s ease}
+.st-op:hover{border-color:var(--purple-b);background:var(--purple-l)}
+.st-op.on{border-color:var(--purple);background:var(--purple-l);box-shadow:inset 0 0 0 1px var(--purple)}
+.st-op-dot{width:9px;height:9px;border-radius:50%;flex:none;border:1px solid}
+.st-op-tx{display:flex;flex-direction:column;min-width:0;gap:1px}
+.st-op-tx b{font-size:12px;font-weight:600;letter-spacing:-.1px;color:var(--black)}
+.st-op-tx i{font-style:normal;font-size:10.5px;line-height:1.35;color:var(--gray)}
+.st-op-ck{margin-left:auto;color:var(--purple);font-weight:700;font-size:13px;flex:none}
+/* Viagem cancelada: continua na grade, mas apagada — está lá para ser lida e,
+   se for o caso, revertida, não para disputar atenção com o que vai rodar. */
+.vg-off{opacity:.5;filter:grayscale(.85)}
+.vg-off:hover{opacity:.8;filter:grayscale(.35)}
 .vg-ped b{font-weight:500;color:var(--black)}
 /* ═══ PLACAS NA MESMA LINHA ═══
    Cavalo e carretas deixam de morar em blocos diferentes: são um conjunto só,
@@ -1001,7 +1023,13 @@ body.dnd-conj .gr-uni{outline:1px dashed var(--gray-l);outline-offset:2px}
                 <div id="motLista"></div>
               </div>
             </div>
+            <!-- ═══ CADEIA DE STATUS ═══ A grade se atualiza sozinha de hora em
+                 hora. Este botão é para quando o CT-e acabou de sair e ninguém
+                 quer esperar o relógio. -->
+            <button type="button" class="btn btn-sm" id="syncBtn" onclick="sincronizarStatusAgora()"
+                    title="Confere agora os CT-e da SZB e os canhotos da Ficha operacional — a grade faz isso sozinha a cada hora">↻ Atualizar status</button>
             <span class="ord-tag" id="ordTag"></span>
+            <span class="ord-tag" id="syncTag" title="Última leitura da SZB e dos canhotos"></span>
           </div>
           <div class="drop" id="drop" ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropDemanda(event)">
             <div id="lista-grade"></div>
@@ -1507,6 +1535,13 @@ const ST = {
   /* Listas derivadas da SZB: produtos, remetentes e destinatários com a UF
      predominante de cada um — é isso que preenche a UF automaticamente. */
   szbIdx: { produtos:[], remetentes:[], destinatarios:[], clientes:[], colCliente:'', remIdx:null, desIdx:null, pares:null, paresRem:null, clientePorRem:null, clientePorDes:null, clientePorPar:null, loaded:false },
+  /* ═══ MOTOR DE STATUS AUTOMÁTICO (31/07/2026) ═══
+     `ctrcIdx`  · CT-e da SZB indexados por placa + tipo de frete
+     `canhotos` · CTRC → canhoto baixado na Ficha operacional
+     `sync`     · relógio do ciclo automático (uma passada por hora) */
+  ctrcIdx: null,
+  canhotos: { loaded:false, key:'', idx:new Map(), erro:null, em:0 },
+  sync: { rodando:false, em:0 },
   /* Ordenação/filtro da Grade do dia (barra acima do card de unidade).
      `expandido` guarda a unidade aberta lateralmente em tela cheia. */
   grade: { ordem:'antigo', fRemetente:'', fMotorista:'', busca:'', colapsados:{}, expandido:null },
@@ -1875,6 +1910,10 @@ async function boot(){
   carregarComercial().catch(()=>{});
   carregarSZB().then(indexarSZB).catch(()=>{});
   carregarGrupos().catch(()=>{});
+  /* Cadeia de status: uma passada assim que a grade aparece e, a partir daí,
+     de hora em hora. Não segura a tela — chega e repinta. */
+  sincronizarStatus().catch(()=>{});
+  agendarSincronizacao();
   PERF.measure('prog:boot','prog:boot:start');
 }
 
@@ -2389,6 +2428,9 @@ async function carregarDia(opts){
   carregarEstadoDia();
   if(!ST.transfLoaded) carregarTransferencias().then(()=>{ ST.transfLoaded=true; });
   garantirTira();
+  /* Trocar de dia refaz o cruzamento: o CT-e e o canhoto do dia carregado
+     podem já existir na base e ainda não ter subido para a viagem. */
+  if(typeof sincronizarStatus==='function') sincronizarStatus().catch(()=>{});
 }
 
 window.onScopeChange=function(){
@@ -3079,7 +3121,12 @@ function chipTipoFrete(d){
     +(t==='CIF'?' — por conta do remetente':' — por conta do destinatário')+'">'+t+'</span>';
 }
 function viagensDaGrade(){
-  let vs=ST.viagens.filter(v=>v.status!=='cancelada');
+  /* CANCELADO virou status de TELA (31/07/2026), não sumiço: o programador o
+     escolhe na pastilha e precisa continuar vendo a linha para voltar atrás.
+     Quem some da base é o botão X (excluirViagem) — esse sim é destrutivo.
+     A viagem cancelada continua fora de `viagemViva`, então não segura cavalo,
+     motorista nem capacidade. */
+  let vs=ST.viagens.slice();
   /* O filtro que separa a grade é o LOCAL DE CARREGAMENTO (remetente) — o mesmo
      critério dos subcards. O cliente continua vivo na ordenação e na busca. */
   const fc=ST.grade.fRemetente, fm=ST.grade.fMotorista, bq=norm(ST.grade.busca||'');
@@ -3126,6 +3173,7 @@ function demandasPendentes(){
 function statsUnidade(gu){
   const r={blq:0,semCav:0,semMot:0,semComp:0};
   gu.clientes.forEach(gc=>gc.viagens.forEach(v=>{
+    if(!viagemViva(v)) return;     // cancelada/entregue não pendura alerta na unidade
     if(temBloqueio(valida(v))) r.blq++;
     if(!v.cavalo_id) r.semCav++;
     if(!v.motorista_id&&!v.motorista_nome) r.semMot++;
@@ -3295,6 +3343,12 @@ function linhaPendente(d){
     +'<span class="gp-hr" title="Janela de carregamento">'+esc(jan||'--:--')+'</span>'
     +'<span class="gp-prod"'+(g?' title="Grupo de carga: '+esc(g.nome||'')+'"':'')+'>'
       +(g?'<i class="vg-gd"></i>':'')+esc(d.produto||'—')
+      /* STATUS · a demanda nasce RECEBIDA e mostra isso desde a primeira linha,
+         antes mesmo de existir viagem. A pastilha é o botão de alterar. */
+      +'<button type="button" class="vg-st '+stChip(d.status_op||ST_INICIAL)+'"'
+        +' title="'+esc(stTitulo({status:d.status_op||ST_INICIAL,status_auto:d.status_auto,status_manual:d.status_manual}))+'"'
+        +' aria-label="Alterar status" onclick="abrirStatusDemanda(\''+esc(d.id)+'\',event)">'
+        +esc(stLabel(d.status_op||ST_INICIAL))+'</button>'
       +(d.pedido?'<span class="vg-ped" title="Pedido do cliente">#'+esc(d.pedido)+'</span>':'')+'</span>'
     +'<span class="gp-cli">'+esc(d.cliente||'—')+'</span>'
     +(function(){ const dr=destinatarioResolvido(d);
@@ -3394,7 +3448,8 @@ function cardViagem(v){
     : 'sem carreta';
   const geral   = porCampo.geral||[];
 
-  return '<div class="vg vg-line '+cls+'" data-vg="'+esc(v.id)+'"'
+  const off=String(v.status||'')==='cancelada';
+  return '<div class="vg vg-line '+cls+(off?' vg-off':'')+'" data-vg="'+esc(v.id)+'"'
     +' ondragover="conjOver(event)" ondragleave="conjLeave(event)"'
     +' ondrop="conjDrop(event,\''+esc(v.unidade_slug||'')+'\',\'vg\',\''+esc(v.id)+'\')"'
     +(g?' style="--gc:'+esc(corGrupo(g))+'"':'')+'>'
@@ -3423,10 +3478,10 @@ function cardViagem(v){
         +(g?'<i class="vg-gd'+(nivelDe('prod')?' warn':'')+'"></i>':'')
         +'<span class="vg-tx">'+esc(dem.produto||'—')+'</span>'
         /* STATUS · a pastilha É o botão de Atualizar status (30/07/2026). */
-        +'<button type="button" class="vg-st '+stChip(v.status||'pre_programada')+'"'
-          +' title="Status: '+esc(stLabel(v.status||'pre_programada'))+' — clique para alterar"'
+        +'<button type="button" class="vg-st '+stChip(v.status||ST_INICIAL)+'"'
+          +' title="'+esc(stTitulo(v))+'"'
           +' aria-label="Alterar status" onclick="abrirStatus(\''+esc(v.id)+'\',event)">'
-          +esc(stLabel(v.status||'pre_programada'))+'</button>'
+          +esc(stLabel(v.status||ST_INICIAL))+'</button>'
         /* PEDIDO · o número que o cliente cobra por telefone, junto do status. */
         +(dem.pedido?'<span class="vg-ped" title="Pedido do cliente">#'+esc(dem.pedido)+'</span>':'')
       +'</span>'
@@ -4083,7 +4138,12 @@ window.dropDemanda=async function(e){
 
 /* Estados em que a viagem ainda está sendo planejada — é deles que ela sai
    para "liberada" no instante em que o cavalo é escolhido. */
-const PLAN_STATUS=['demanda_recebida','em_analise','pre_programada','aguardando_confirmacao',
+/* Status inicial da cadeia: a demanda nasce RECEBIDA. Antes o carimbo de
+   nascimento era 'pre_programada' — que hoje só existe como legado. */
+const ST_INICIAL='demanda_recebida';
+/* Estados dos quais colocar o cavalo faz a viagem virar PROGRAMADA. Inclui o
+   'em_fila' (manual) e todo o legado de planejamento. */
+const PLAN_STATUS=['demanda_recebida','em_fila','em_analise','pre_programada','aguardando_confirmacao',
                    'confirmada','conjunto_definido','motorista_comunicado'];
 
 /* Traduz um conjunto da Frota nos campos que a viagem grava. Usado pelo
@@ -4118,8 +4178,8 @@ async function aplicarConjuntoEmViagem(vid,c){
      ele continua gritando no campo pintado da linha, que é onde a operação
      enxerga o problema — o status passa a dizer só que o conjunto foi dado. */
   let liberou=false;
-  if(upd.cavalo_id && PLAN_STATUS.indexOf(String(v.status||'pre_programada'))>=0){
-    upd.status='liberada'; upd.status_em=new Date().toISOString(); liberou=true;
+  if(upd.cavalo_id && PLAN_STATUS.indexOf(String(v.status||ST_INICIAL))>=0){
+    Object.assign(upd, carimbarAuto('liberada')); liberou=true;
   }
   try{
     await db.collection('programacao_viagens').doc(vid).update(paraFirestore(upd));
@@ -4160,7 +4220,7 @@ async function programarDemanda(demandaId, extra){
     km_ida:d.km_ida||null, km_volta:d.km_volta||null,
     prev_carregamento:d.janela_carga_ini||null, prev_saida:null, prev_chegada:null,
     prev_descarga:d.janela_desc_ini||null, prev_retorno:null,
-    status:'pre_programada', reservado:false,
+    status:ST_INICIAL, status_auto:ST_INICIAL, reservado:false,
     versao:1, criado_em:new Date().toISOString(), criado_por:(currentUser&&currentUser.email)||'',
     atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||''
   };
@@ -4173,8 +4233,8 @@ async function programarDemanda(demandaId, extra){
   if(v.cavalo_id){
     try{ await carregarChecklists(); }catch(_){}
     nBloq=validarViagem(v).filter(x=>x.nivel==='bloqueio').length;
-    if(PLAN_STATUS.indexOf(String(v.status||'pre_programada'))>=0){
-      v.status='liberada'; v.status_em=new Date().toISOString();
+    if(PLAN_STATUS.indexOf(String(v.status||ST_INICIAL))>=0){
+      Object.assign(v, carimbarAuto('liberada'));
     }
   }
 
@@ -4182,6 +4242,13 @@ async function programarDemanda(demandaId, extra){
     if(await diaFechado()) v.alterado_apos_fechamento=true;
     const ref=await db.collection('programacao_viagens').add(paraFirestore(v));
     ST.viagens.push({id:ref.id,...v});
+    /* Novo degrau automático: se a demanda estava marcada à mão (em fila,
+       cancelada), o carimbo cai — quem manda agora é a viagem. */
+    if(d.status_manual||d.status_op){
+      const limpo={status_op:ST_INICIAL,status_auto:ST_INICIAL,status_manual:null,status_manual_em:null};
+      db.collection('programacao_demandas').doc(d.id).update(paraFirestore(limpo)).catch(()=>{});
+      Object.assign(d,limpo);
+    }
     await auditar('viagem_criada',ref.id,{
       demanda:d.id,
       conjunto:v.cavalo_id?(rotuloVeic(v.cavalo_frota,v.cavalo_placa)||'—'):'sem cavalo'
@@ -5107,6 +5174,11 @@ window.salvarDemanda=async function(){
     prioridade:g('dPrio'), status:g('dStatus'), observacoes:g('dObs'),
     atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||''
   });
+  /* ═══ DEGRAU 1 DA CADEIA ═══ Criar a demanda JÁ é o primeiro status: ela
+     nasce RECEBIDA. `status_op` é o campo operacional da nova cadeia e não se
+     mistura com o `status` antigo (aguardando/confirmada), que continua
+     servindo à aba Demandas. Na edição, o carimbo existente é preservado. */
+  if(!ST.editDemandaId){ payload.status_op=ST_INICIAL; payload.status_auto=ST_INICIAL; }
 
   try{
     if(ST.editDemandaId){
@@ -5243,7 +5315,7 @@ window.abrirConjuntoDemanda=function(demandaId){
     motorista_id:null, motorista_nome:null,
     prev_carregamento:d.janela_carga_ini||'', prev_saida:'', prev_chegada:'',
     prev_descarga:d.janela_desc_ini||'', prev_retorno:'',
-    reservado:false, status:'pre_programada', versao:1
+    reservado:false, status:ST_INICIAL, versao:1
   };
   montarModalConjunto(ST.conjDraft,true);
 };
@@ -5474,15 +5546,18 @@ window.salvarConjunto=async function(){
      carimbo e devolve a viagem ao planejamento. */
   try{ await carregarChecklists(); }catch(_){ /* checklist é enriquecimento: sua falha não impede salvar */ }
   const PLAN=PLAN_STATUS;
-  const stAtual=String(v.status||'pre_programada');
+  const stAtual=String(v.status||ST_INICIAL);
   let liberouAgora=false, bloqueios=[];
   if(upd.cavalo_id){
     bloqueios=validarViagem(Object.assign({},v,upd)).filter(x=>x.nivel==='bloqueio');
     if(PLAN.indexOf(stAtual)>=0){
-      upd.status='liberada'; upd.status_em=new Date().toISOString(); liberouAgora=true;
+      Object.assign(upd, carimbarAuto('liberada')); liberouAgora=true;
     }
-  } else if(stAtual==='liberada'){
-    upd.status='pre_programada'; upd.status_em=new Date().toISOString();
+  } else if(stAtual==='liberada'||stAtual==='em_rota'){
+    /* Tirar o cavalo desfaz o carimbo: sem placa não há como casar o CT-e,
+       então a viagem volta ao degrau 1 da cadeia. */
+    Object.assign(upd, carimbarAuto(ST_INICIAL));
+    upd.ctrc_numero=null; upd.ctrc_em=null;
   }
 
   /* ═══ MODO CRIAÇÃO ═══
@@ -5626,53 +5701,357 @@ async function auditar(tipo,alvo,dados,uni){
    programador pode saltar (com auditoria) quando a realidade exigir.
    ═══════════════════════════════════════════════════════════════ */
 const FLUXO=[
-  {id:'demanda_recebida',       lb:'Demanda recebida',        g:'plan'},
-  {id:'em_analise',             lb:'Em análise',              g:'plan'},
-  {id:'pre_programada',         lb:'Pré-programada',          g:'plan'},
-  {id:'aguardando_confirmacao', lb:'Aguardando confirmação',  g:'plan'},
-  {id:'confirmada',             lb:'Confirmada',              g:'plan'},
-  {id:'conjunto_definido',      lb:'Conjunto definido',       g:'plan'},
-  {id:'motorista_comunicado',   lb:'Motorista comunicado',    g:'plan'},
+  /* ═══ CADEIA AUTOMÁTICA (31/07/2026) ═══
+     Quatro degraus, cada um com um gatilho real na operação. Nenhum deles é
+     digitado — o programador só lê o resultado:
+
+       1 · a demanda nasce ......................... Demanda recebida
+       2 · o cavalo entra na demanda ............... Programada
+       3 · sai o CT-e na SZB com os MESMOS cliente,
+           local de carregamento, local de descarga,
+           tipo de frete e placa do cavalo ......... Em rota de entrega
+       4 · a Ficha operacional baixa o canhoto
+           daquele CTRC ............................ Entregue                */
+  {id:'demanda_recebida',       lb:'Demanda recebida',        g:'plan', auto:1},
   /* O id 'liberada' é mantido para não invalidar o histórico já gravado no
      Firestore; o que a operação lê é o rótulo: PROGRAMADA. Ele é carimbado
      sozinho no instante em que o cavalo entra na demanda. */
-  {id:'liberada',               lb:'Programada',              g:'lib'},
-  {id:'deslocamento',           lb:'Deslocamento p/ carregamento', g:'exec'},
-  {id:'aguardando_carregamento',lb:'Aguardando carregamento', g:'exec'},
-  {id:'em_carregamento',        lb:'Em carregamento',         g:'exec'},
-  {id:'carregado',              lb:'Carregado',               g:'exec'},
-  {id:'em_transito',            lb:'Em trânsito',             g:'exec'},
-  {id:'no_cliente',             lb:'No cliente',              g:'exec'},
-  {id:'aguardando_descarga',    lb:'Aguardando descarga',     g:'exec'},
-  {id:'em_descarga',            lb:'Em descarga',             g:'exec'},
-  {id:'descarga_concluida',     lb:'Descarga concluída',      g:'exec'},
-  {id:'retorno',                lb:'Retorno',                 g:'exec'},
-  {id:'concluida',              lb:'Entregue',                g:'fim'},
-  {id:'reprogramada',           lb:'Reprogramada',            g:'fim'},
-  {id:'cancelada',              lb:'Cancelada',               g:'fim'}
+  {id:'liberada',               lb:'Programada',              g:'lib',  auto:2},
+  {id:'em_rota',                lb:'Em rota de entrega',      g:'exec', auto:3},
+  {id:'concluida',              lb:'Entregue',                g:'fim',  auto:4},
+
+  /* ═══ MANUAIS ═══ Não têm gatilho: são carimbados à mão pelo programador e
+     valem até a PRÓXIMA atualização automática, que passa por cima deles sem
+     pedir licença (regra explícita do módulo). */
+  {id:'em_fila',                lb:'Em fila de espera',       g:'man',  manual:true},
+  {id:'cancelada',              lb:'Cancelado',               g:'fim',  manual:true},
+
+  /* ═══ LEGADO ═══ Fora do seletor. Existem só para que um documento antigo do
+     Firestore continue tendo rótulo legível na tela e na auditoria; o motor
+     automático normaliza cada um deles no primeiro ciclo. */
+  {id:'em_analise',             lb:'Em análise',              g:'plan', legado:true},
+  {id:'pre_programada',         lb:'Pré-programada',          g:'plan', legado:true},
+  {id:'aguardando_confirmacao', lb:'Aguardando confirmação',  g:'plan', legado:true},
+  {id:'confirmada',             lb:'Confirmada',              g:'plan', legado:true},
+  {id:'conjunto_definido',      lb:'Conjunto definido',       g:'plan', legado:true},
+  {id:'motorista_comunicado',   lb:'Motorista comunicado',    g:'plan', legado:true},
+  {id:'deslocamento',           lb:'Deslocamento p/ carregamento', g:'exec', legado:true},
+  {id:'aguardando_carregamento',lb:'Aguardando carregamento', g:'exec', legado:true},
+  {id:'em_carregamento',        lb:'Em carregamento',         g:'exec', legado:true},
+  {id:'carregado',              lb:'Carregado',               g:'exec', legado:true},
+  {id:'em_transito',            lb:'Em trânsito',             g:'exec', legado:true},
+  {id:'no_cliente',             lb:'No cliente',              g:'exec', legado:true},
+  {id:'aguardando_descarga',    lb:'Aguardando descarga',     g:'exec', legado:true},
+  {id:'em_descarga',            lb:'Em descarga',             g:'exec', legado:true},
+  {id:'descarga_concluida',     lb:'Descarga concluída',      g:'exec', legado:true},
+  {id:'retorno',                lb:'Retorno',                 g:'exec', legado:true},
+  {id:'reprogramada',           lb:'Reprogramada',            g:'fim',  legado:true}
 ];
 const ST_IDX={}; FLUXO.forEach((f,i)=>ST_IDX[f.id]=i);
+/* O que o seletor mostra: os quatro automáticos, na ordem da operação, mais os
+   dois manuais. O legado nunca é oferecido — só traduzido. */
+const ST_SELECIONAVEIS=FLUXO.filter(f=>!f.legado);
+/* Os dois carimbos que só existem pela mão do programador. */
+const ST_MANUAIS=FLUXO.filter(f=>f.manual).map(f=>f.id);
 function stLabel(id){ const f=FLUXO.find(x=>x.id===id); return f?f.lb:(id||'—'); }
 function stGrupo(id){ const f=FLUXO.find(x=>x.id===id); return f?f.g:'plan'; }
 function stChip(id){
   const g=stGrupo(id);
   return g==='fim'?(id==='concluida'?'c-gn':id==='cancelada'?'c-gy':'c-or')
-       : g==='exec'?'c-bl' : g==='lib'?'c-pu' : 'c-am';
+       : g==='exec'?'c-bl' : g==='lib'?'c-pu' : g==='man'?'c-or' : 'c-am';
 }
 /* Tom do ÍCONE de status no canto do card. A pastilha escrita saiu da faixa —
    repetia em texto, viagem a viagem, o que a cor já diz. Aqui a cor vive no
    ícone e o nome do status vai no title. */
 function stTom(id){
-  const s=id||'pre_programada', g=stGrupo(s);
+  const s=id||ST_INICIAL, g=stGrupo(s);
   return g==='fim' ? (s==='concluida'?'t-ok':'t-off')
-       : g==='exec' ? 't-run' : g==='lib' ? 't-lib' : 't-plan';
+       : g==='exec' ? 't-run' : g==='lib' ? 't-lib' : g==='man' ? 't-off' : 't-plan';
 }
-/* Próximo status natural do fluxo (pula os finais). */
-function proximoStatus(id){
-  const i=ST_IDX[id]; if(i==null) return 'pre_programada';
-  const nx=FLUXO[i+1];
-  return (nx && nx.g!=='fim')?nx.id:null;
+/* Balão da pastilha: além do rótulo, diz DE ONDE veio o status. Um carimbo
+   manual precisa se anunciar como tal — ele tem prazo de validade. */
+function stTitulo(v){
+  const s=String((v&&v.status)||ST_INICIAL);
+  const man=v&&v.status_manual&&String(v.status_manual)===s;
+  return 'Status: '+stLabel(s)
+    +(man?' · marcado à mão — a próxima atualização automática substitui'
+         :' · automático')
+    +(v&&v.ctrc_numero?' · CTRC '+v.ctrc_numero:'')
+    +' — clique para alterar';
 }
+/* Campos que todo carimbo AUTOMÁTICO grava junto. Fixar aqui evita que um
+   caminho (arraste, tela de conjunto, criação) esqueça de limpar o manual. */
+function carimbarAuto(id){
+  const agora=new Date().toISOString();
+  return { status:id, status_auto:id, status_em:agora, status_auto_em:agora,
+           status_manual:null, status_manual_em:null };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MOTOR DE STATUS AUTOMÁTICO   (31/07/2026)
+
+   A cadeia inteira roda sozinha. O programador não digita status —
+   ele só corrige, quando a realidade foge do trilho, e essa correção
+   dura até o próximo evento automático.
+
+     1 · demanda criada                      → Demanda recebida
+     2 · cavalo aplicado                     → Programada
+     3 · CT-e na SZB com os MESMOS
+         cliente + local de carregamento +
+         local de descarga + tipo de frete +
+         placa do cavalo                     → Em rota de entrega
+     4 · canhoto baixado na Ficha
+         operacional para aquele CTRC        → Entregue
+
+   Regra do carimbo manual: ele vale enquanto o degrau automático não
+   MUDAR. Assim que o motor calcula um degrau diferente do último que
+   ele mesmo carimbou, o manual é descartado sem cerimônia.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Número de CTRC comparável entre a SZB ('000042075') e a Ficha ('42075'). */
+function ctrcKey(n){ const s=String(n==null?'':n).replace(/\D/g,'').replace(/^0+/,''); return s||''; }
+
+/* Comparação de nome tolerante ao corte de 30 caracteres do export do
+   Protheus: "SAINT-GOBAIN DO BRASIL PRODUTOS" chega truncado, e a demanda
+   guarda a mesma versão truncada — mas exportações diferentes cortam em
+   pontos diferentes. Prefixo comum resolve sem afrouxar o critério. */
+function mesmoNomeSZB(a,b){
+  const x=norm(a).replace(/\s+/g,' '), y=norm(b).replace(/\s+/g,' ');
+  if(!x||!y) return false;
+  if(x===y) return true;
+  const m=Math.min(x.length,y.length);
+  return m>=10 && x.slice(0,m)===y.slice(0,m);
+}
+
+/* Índice de CT-e por PLACA + TIPO DE FRETE — os dois campos mais baratos de
+   discriminar. Cliente, remetente e destinatário são conferidos depois, em
+   cima de uma lista já curta. */
+function indexarCtrcSZB(){
+  const idx=new Map();
+  /* Os nomes de coluna do export do Protheus variam em espaço e pontuação
+     entre gerações. colunaSZB() resolve o nome REAL — sem isso um "Tipo
+     Frete  " com dois espaços derrubaria o casamento inteiro em silêncio. */
+  const C={
+    cli: (ST.szbIdx&&ST.szbIdx.colCliente)||colunaSZB(['Nome Cli Dev','NomeCliDev','Nome Cli. Dev.'])||'Nome Cli Dev',
+    num: colunaSZB(['Numero CTRC','NumeroCTRC','Nro CTRC'])||'Numero CTRC',
+    emi: colunaSZB(['Dt. Emissao','Dt Emissao','Data Emissao'])||'Dt. Emissao',
+    can: colunaSZB(['Dt Cancel','Dt. Cancel','Data Cancel'])||'Dt Cancel',
+    plc: colunaSZB(['Placa Veicul','Placa Veiculo','Placa'])||'Placa Veicul',
+    tfr: colunaSZB(['Tipo Frete','TipoFrete'])||'Tipo Frete',
+    rem: colunaSZB(['Nome Remeten','Nome Remetente'])||'Nome Remeten',
+    des: colunaSZB(['Nome Destina','Nome Destinatario'])||'Nome Destina',
+    ope: colunaSZB(['Operacao','Operação'])||'Operacao'
+  };
+  (ST.szb.rows||[]).forEach(r=>{
+    if(r[C.can]) return;                             // CT-e cancelado não move status
+    const pk=placaKey(r[C.plc]); if(!pk) return;
+    const k=pk+'|'+up(r[C.tfr]||'');
+    let a=idx.get(k); if(!a){ a=[]; idx.set(k,a); }
+    a.push({
+      numero:String(r[C.num]||'').trim(),
+      chave:ctrcKey(r[C.num]),
+      data:String(r[C.emi]||'').slice(0,10),
+      cliente:String(r[C.cli]||'').trim(),
+      remetente:String(r[C.rem]||'').trim(),
+      destinatario:String(r[C.des]||'').trim(),
+      op:opParaSlug(r[C.ope])
+    });
+  });
+  ST.ctrcIdx=idx;
+  ST.ctrcCols=C;
+}
+
+/* Acha o CT-e que corresponde a esta viagem. Os CINCO campos são obrigatórios:
+   um casamento parcial move o status errado, e status errado na grade é pior
+   do que status parado. `usados` garante exclusividade — o mesmo cavalo pode
+   rodar a mesma rota duas vezes no dia, e são dois CT-e distintos. */
+function casarCTRC(v,dem,usados){
+  if(!ST.ctrcIdx) return null;
+  const pk=placaKey(v.cavalo_placa); if(!pk) return null;
+  const tf=up(dem.tipo_frete||'CIF');
+  const cands=ST.ctrcIdx.get(pk+'|'+tf); if(!cands||!cands.length) return null;
+
+  const cli=dem.cliente||'';
+  const rem=dem.remetente||dem.local_coleta||'';
+  const des=dem.destinatario||dem.local_entrega||'';
+  if(!norm(cli)||!norm(rem)||!norm(des)) return null;
+
+  /* Janela de emissão: o dia da demanda e o seguinte. O CT-e sai no
+     carregamento, mas uma carga do fim da tarde é faturada no dia seguinte. */
+  const d0=v.data||ST.data, d1=isoSoma(d0,1);
+  const ok=cands.filter(c=>
+        !usados.has(c.chave)
+     && (c.data===d0||c.data===d1)
+     && mesmoNomeSZB(c.cliente,cli)
+     && mesmoNomeSZB(c.remetente,rem)
+     && mesmoNomeSZB(c.destinatario,des));
+  if(!ok.length) return null;
+  /* Mesmo dia primeiro; depois o CT-e de número menor — ordem de emissão. */
+  ok.sort((a,b)=> (a.data===d0?0:1)-(b.data===d0?0:1) || String(a.numero).localeCompare(String(b.numero)));
+  return ok[0];
+}
+
+/* ═══ CANHOTOS DA FICHA OPERACIONAL ═══
+   A Ficha grava em `relatorios`; cada relatório traz um array `entregas`, e é
+   ali que mora o canhoto (tem_canhoto/canhoto_url) e o CTRC baixado. Array não
+   é consultável no Firestore, então varremos por FAIXA DE DATA — consulta de
+   campo único, sem índice composto — e montamos o índice CTRC → canhoto.
+   A janela é larga de propósito: canhoto costuma chegar dias depois da viagem. */
+async function carregarCanhotos(forcar){
+  const ini=isoSoma(ST.data,-20), fim=isoSoma(ST.data,60);
+  const key=ini+'_'+fim;
+  if(!forcar && ST.canhotos.loaded && ST.canhotos.key===key) return;
+  try{
+    const snap=await db.collection('relatorios')
+      .where('data','>=',ini).where('data','<=',fim).get();
+    const idx=new Map();
+    snap.docs.forEach(doc=>{
+      const r=doc.data()||{};
+      if(r.__comprasEstado) return;
+      (r.entregas||[]).forEach(e=>{
+        if(!e || !(e.tem_canhoto||e.canhoto_url)) return;
+        const k=ctrcKey(e.ctrc)||ctrcKey(r.ctrc_v);
+        if(!k) return;
+        idx.set(k,{ ficha:doc.id, oc:r.numero_ocorrencia||'',
+                    em:e.dt_baixa||e.data||r.data||'', placa:r.placa_cv||'' });
+      });
+    });
+    ST.canhotos={loaded:true,key,idx,erro:null,em:Date.now()};
+  }catch(e){
+    /* Sem permissão de leitura em `relatorios` a cadeia simplesmente para no
+       degrau 3 — nada quebra, e o erro fica visível no console. */
+    console.warn('[Programação] canhotos indisponíveis',e);
+    ST.canhotos={loaded:true,key,idx:(ST.canhotos&&ST.canhotos.idx)||new Map(),
+                 erro:String(e&&e.message||e),em:Date.now()};
+  }
+}
+
+/* ═══ O CICLO ═══ */
+let ST_SYNC_TIMER=null;
+async function sincronizarStatus(opts){
+  opts=opts||{};
+  if(ST.sync.rodando) return;
+  ST.sync.rodando=true;
+  try{
+    await carregarSZB(opts.forcar);
+    if(opts.forcar || !ST.szbIdx.loaded){ try{ indexarSZB(); }catch(_){} }
+    if(opts.forcar || !ST.ctrcIdx) indexarCtrcSZB();
+    await carregarCanhotos(opts.forcar);
+
+    const agora=new Date().toISOString();
+    /* Viagem VIVA primeiro: se um CT-e servir para duas linhas, quem está de pé
+       fica com ele — a cancelada não rouba o vínculo de quem vai rodar. */
+    const vs=ST.viagens.filter(v=>v && v.id)
+      .slice().sort((a,b)=>(viagemViva(b)?1:0)-(viagemViva(a)?1:0));
+    const usados=new Set();
+    /* Vínculo já gravado é reserva: um CT-e não troca de dono entre ciclos. */
+    vs.forEach(v=>{ const k=ctrcKey(v.ctrc_numero); if(k) usados.add(k); });
+
+    const mudancas=[];
+    vs.forEach(v=>{
+      const dem=ST.demandas.find(d=>d.id===v.demanda_id)||{};
+      let auto=ST_INICIAL, ctrc=v.ctrc_numero||null;
+
+      if(v.cavalo_id) auto='liberada';
+
+      /* Degrau 3 — o CT-e. Se já houver vínculo gravado, ele vale; senão,
+         procura um novo na base. */
+      let alvo=null;
+      if(v.cavalo_id){
+        if(ctrc){ alvo={chave:ctrcKey(ctrc),numero:ctrc}; }
+        else {
+          const c=casarCTRC(v,dem,usados);
+          if(c){ alvo=c; ctrc=c.numero; usados.add(c.chave); }
+        }
+      }
+      if(alvo) auto='em_rota';
+
+      /* Degrau 4 — o canhoto. */
+      const canh=alvo?ST.canhotos.idx.get(alvo.chave):null;
+      if(canh) auto='concluida';
+
+      const upd={};
+      const autoAnt=v.status_auto||null;
+      const stAtual=String(v.status||'');
+      const primeira=!autoAnt;
+
+      if(ctrc && v.ctrc_numero!==ctrc){ upd.ctrc_numero=ctrc; upd.ctrc_em=agora; }
+      if(canh && !v.canhoto_ficha_id){ upd.canhoto_ficha_id=canh.ficha; upd.canhoto_em=canh.em||agora; }
+
+      if(primeira && ST_MANUAIS.indexOf(stAtual)>=0){
+        /* Documento antigo já cancelado à mão: o motor toma nota do degrau
+           automático, mas respeita o carimbo existente neste primeiro ciclo. */
+        upd.status_auto=auto; upd.status_auto_em=agora;
+        upd.status_manual=stAtual; upd.status_manual_em=v.status_em||agora;
+      } else if(auto!==autoAnt){
+        /* NOVA atualização automática: manda, e o manual cai. */
+        Object.assign(upd, carimbarAuto(auto));
+        if(stAtual===auto){ delete upd.status; delete upd.status_em; }
+      } else if(!v.status_manual && stAtual!==auto){
+        upd.status=auto; upd.status_em=agora;
+      }
+
+      if(Object.keys(upd).length) mudancas.push({v,upd});
+    });
+
+    if(!mudancas.length){
+      ST.sync.em=Date.now(); pintarSyncTag();
+      if(opts.aviso) toast(ST.canhotos.erro
+        ? 'Nada mudou · canhotos da Ficha indisponíveis nesta sessão'
+        : 'Nada a atualizar — a grade já reflete a base','ok');
+      return;
+    }
+
+    /* Gravação em lote — o Firestore aceita 500 por batch; 400 dá folga. */
+    let gravou=0;
+    for(let i=0;i<mudancas.length;i+=400){
+      const lote=db.batch();
+      mudancas.slice(i,i+400).forEach(m=>{
+        lote.update(db.collection('programacao_viagens').doc(m.v.id), paraFirestore(m.upd));
+      });
+      try{ await lote.commit(); gravou+=Math.min(400,mudancas.length-i); }
+      catch(e){ console.warn('[Programação] sincronização de status',e); }
+    }
+    if(gravou){
+      mudancas.forEach(m=>Object.assign(m.v,m.upd));
+      aposMutacao(); renderTudo();
+      if(opts.aviso) toast(mudancas.length+' status atualizado(s) pela base','ok');
+    }
+    ST.sync.em=Date.now();
+  }catch(e){
+    console.warn('[Programação] sincronizarStatus',e);
+  }finally{ ST.sync.rodando=false; try{ pintarSyncTag(); }catch(_){} }
+}
+
+/* Carimbo da última leitura, na barra da grade. Um motor que roda sozinho
+   precisa dizer QUANDO rodou — senão vira fé. */
+function pintarSyncTag(){
+  const el=document.getElementById('syncTag'); if(!el) return;
+  if(!ST.sync.em){ el.textContent=''; return; }
+  const d=new Date(ST.sync.em);
+  const hh=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+  el.textContent='status lidos '+hh
+    +(ST.canhotos.erro?' · canhotos indisponíveis':'')
+    +(ST.szb.rows&&ST.szb.rows.length?'':' · SZB fora do ar');
+}
+
+/* ═══ RELÓGIO ═══ A grade se atualiza sozinha DE HORA EM HORA. Ao voltar para
+   a aba depois de horas fora, roda na hora — timer de background em aba oculta
+   é adiado pelo navegador e chegaria atrasado. */
+const SYNC_INTERVALO=60*60*1000;
+function agendarSincronizacao(){
+  if(ST_SYNC_TIMER) clearInterval(ST_SYNC_TIMER);
+  ST_SYNC_TIMER=setInterval(()=>{ sincronizarStatus({forcar:true}); }, SYNC_INTERVALO);
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden) return;
+    if(Date.now()-(ST.sync.em||0) >= SYNC_INTERVALO) sincronizarStatus({forcar:true});
+  });
+}
+/* Atalho manual, para quando o CT-e acabou de sair e ninguém quer esperar. */
+window.sincronizarStatusAgora=function(){
+  toast('Conferindo CT-e e canhotos na base…','ok');
+  return sincronizarStatus({forcar:true,aviso:true});
+};
 
 /* ═══════════════════════════════════════════════════════════════
    MOTOR DE IMPACTO
@@ -5711,49 +6090,128 @@ function minParaHora(m){
 /* ═══════════════════════════════════════════════════════════════
    MODAL · STATUS
    ═══════════════════════════════════════════════════════════════ */
-let stViagemId=null;
+let stViagemId=null, stDemandaId=null;
+
+/* Uma tela só, dois donos: a viagem já criada e a demanda que ainda espera
+   cavalo. Nos dois casos o que se altera é o MESMO campo `status` — o que muda
+   é a coleção onde ele mora. */
+function stAlvo(){
+  if(stDemandaId) return ST.demandas.find(x=>x.id===stDemandaId)||null;
+  return ST.viagens.find(x=>x.id===stViagemId)||null;
+}
+function stColecao(){ return stDemandaId?'programacao_demandas':'programacao_viagens'; }
+/* Na demanda pendente o operacional mora em `status_op`: o campo `status`
+   antigo (aguardando/confirmada/programada) continua servindo à aba Demandas
+   e não pode ser sequestrado por esta tela. */
+function stCampo(){ return stDemandaId?'status_op':'status'; }
+function stValor(o){ return o?String(o[stCampo()]||ST_INICIAL):ST_INICIAL; }
+
+function montarStatusModal(){
+  const o=stAlvo(); if(!o) return;
+  const atual=stValor(o);
+  const auto=String(o.status_auto||'');
+  const man=String(o.status_manual||'');
+  const ehDem=!!stDemandaId;
+
+  const linha=f=>{
+    const sel=f.id===atual;
+    return '<button type="button" class="st-op'+(sel?' on':'')+'" data-st="'+esc(f.id)+'"'
+      +' onclick="stEscolher(\''+esc(f.id)+'\')">'
+      +'<span class="st-op-dot '+stChip(f.id)+'"></span>'
+      +'<span class="st-op-tx"><b>'+esc(f.lb)+'</b>'
+        +'<i>'+esc(f.manual?'manual · vale até a próxima atualização automática'
+              :ST_GATILHO[f.id]||'automático')+'</i></span>'
+      +(sel?'<span class="st-op-ck">✓</span>':'')
+    +'</button>';
+  };
+
+  document.getElementById('bdSt').innerHTML=
+    '<div class="st-now">'
+      +'<span class="chip '+stChip(atual)+'">'+esc(stLabel(atual))+'</span>'
+      +'<span class="st-now-tx">'
+        +(man===atual&&man
+            ? 'Carimbado à mão. A próxima atualização automática desta '+(ehDem?'demanda':'viagem')+' substitui.'
+            : 'Carimbado pela automação'+(auto?' · último degrau lido: '+esc(stLabel(auto)):'')+'.')
+        +(o.ctrc_numero?'<br>CT-e vinculado: <b>'+esc(o.ctrc_numero)+'</b>':'')
+      +'</span>'
+    +'</div>'
+    +'<div class="sec">Cadeia automática</div>'
+    +'<div class="st-ops">'+ST_SELECIONAVEIS.filter(f=>!f.manual).map(linha).join('')+'</div>'
+    +'<div class="sec">Marcação manual</div>'
+    +'<div class="st-ops">'+ST_SELECIONAVEIS.filter(f=>f.manual).map(linha).join('')+'</div>'
+    +'<div class="val val-i" style="margin-top:10px"><span class="val-ti">Como a automação trata isto</span>'
+      +'O status escolhido aqui vale enquanto a operação não avançar sozinha. '
+      +'Assim que a base registrar um novo degrau — cavalo aplicado, CT-e emitido ou canhoto baixado — '
+      +'o carimbo automático entra por cima da escolha manual.</div>'
+    +'<div class="f full" style="margin-top:10px"><label>Observação (opcional)</label><textarea id="stObs" rows="2"></textarea></div>'
+    +'<input type="hidden" id="stNovo" value="'+esc(atual)+'">';
+}
+/* Gatilho de cada degrau, em uma linha — é o que responde "por que está assim". */
+const ST_GATILHO={
+  demanda_recebida:'ao criar a demanda',
+  liberada:'ao aplicar o cavalo',
+  em_rota:'ao sair o CT-e com os mesmos cliente, carregamento, descarga, tipo de frete e placa',
+  concluida:'ao dar baixa do canhoto na Ficha operacional'
+};
+window.stEscolher=function(id){
+  const h=document.getElementById('stNovo'); if(h) h.value=id;
+  document.querySelectorAll('#bdSt .st-op').forEach(b=>{
+    const on=b.dataset.st===id;
+    b.classList.toggle('on',on);
+    const ck=b.querySelector('.st-op-ck');
+    if(on && !ck){ const s=document.createElement('span'); s.className='st-op-ck'; s.textContent='✓'; b.appendChild(s); }
+    if(!on && ck) ck.remove();
+  });
+};
 window.abrirStatus=function(vid,e){
   if(e && e.stopPropagation) e.stopPropagation();
-  const v=ST.viagens.find(x=>x.id===vid); if(!v) return;
-  stViagemId=vid;
-  const atual=v.status||'pre_programada';
-  const prox=proximoStatus(atual);
-  document.getElementById('bdSt').innerHTML=
-    '<div class="f full" style="margin-bottom:10px"><label>Status atual</label>'
-      +'<div><span class="chip '+stChip(atual)+'">'+esc(stLabel(atual))+'</span></div></div>'
-    +'<div class="f full"><label>Novo status</label><select id="stNovo">'
-      +FLUXO.filter(f=>f.g!=='fim'||f.id==='concluida').map(f=>
-        '<option value="'+f.id+'"'+(f.id===(prox||atual)?' selected':'')+'>'+esc(f.lb)+'</option>').join('')
-      +'</select><span class="f-hint">O avanço sugerido é o próximo passo do fluxo. Saltos são permitidos e ficam registrados na auditoria.</span></div>'
-    +'<div class="f full" style="margin-top:10px"><label>Observação (opcional)</label><textarea id="stObs" rows="2"></textarea></div>';
+  if(!ST.viagens.some(x=>x.id===vid)) return;
+  stViagemId=vid; stDemandaId=null;
+  montarStatusModal();
   document.getElementById('ovSt').classList.add('active');
 };
-window.fecharStatus=function(){ document.getElementById('ovSt').classList.remove('active'); stViagemId=null; };
+/* Demanda ainda sem cavalo: a pastilha dela também é clicável — é ali que o
+   programador marca "em fila de espera" ou cancela sem apagar o registro. */
+window.abrirStatusDemanda=function(did,e){
+  if(e && e.stopPropagation) e.stopPropagation();
+  if(!ST.demandas.some(x=>x.id===did)) return;
+  stDemandaId=did; stViagemId=null;
+  montarStatusModal();
+  document.getElementById('ovSt').classList.add('active');
+};
+window.fecharStatus=function(){
+  document.getElementById('ovSt').classList.remove('active');
+  stViagemId=null; stDemandaId=null;
+};
 window.salvarStatus=async function(){
-  const v=ST.viagens.find(x=>x.id===stViagemId); if(!v) return;
+  const o=stAlvo(); if(!o) return;
   const novo=(document.getElementById('stNovo')||{}).value;
   const obs=String((document.getElementById('stObs')||{}).value||'').trim();
   if(!novo) return;
   const btn=document.getElementById('btnSalvarSt'); btn.disabled=true;
-  const salto = Math.abs((ST_IDX[novo]||0)-(ST_IDX[v.status]||0))>1;
+  const campoSt=stCampo();
+  const antes=String(o[campoSt]||ST_INICIAL);
   /* Carimba o horário real da etapa — assim os tempos previsto × realizado
      nascem da própria operação, sem digitação extra do programador. */
-  const CARIMBO={ em_carregamento:'real_carregamento', carregado:'real_saida',
-                  em_transito:'real_saida', no_cliente:'real_chegada',
-                  em_descarga:'real_descarga', descarga_concluida:'real_descarga',
-                  retorno:'real_retorno', concluida:'real_retorno' };
-  const campo=CARIMBO[novo];
+  const CARIMBO={ em_rota:'real_saida', concluida:'real_retorno' };
+  const campo=stDemandaId?null:CARIMBO[novo];
   const agora=new Date();
   const hhmmAgora=String(agora.getHours()).padStart(2,'0')+':'+String(agora.getMinutes()).padStart(2,'0');
   try{
-    const upd={ status:novo, status_em:new Date().toISOString(),
-      versao:Number(v.versao||1)+1,
-      atualizado_em:new Date().toISOString(), atualizado_por:(currentUser&&currentUser.email)||'' };
-    if(campo && !v[campo]) upd[campo]=hhmmAgora;   // não sobrescreve carimbo já feito
-    if(await diaFechado()) upd.alterado_apos_fechamento=true;
-    await db.collection('programacao_viagens').doc(v.id).update(paraFirestore(upd));
-    Object.assign(v,upd);
-    await auditar('status_alterado',v.id,{de:v.status,para:novo,salto,obs});
+    const upd={ versao:Number(o.versao||1)+1,
+      atualizado_em:agora.toISOString(), atualizado_por:(currentUser&&currentUser.email)||'' };
+    upd[campoSt]=novo;
+    upd.status_em=agora.toISOString();
+    /* Escolher exatamente o degrau que a automação já calculou não é override:
+       é concordar com ela. Nesse caso o marcador manual sai. */
+    if(String(o.status_auto||'')===novo){ upd.status_manual=null; upd.status_manual_em=null; }
+    else { upd.status_manual=novo; upd.status_manual_em=agora.toISOString(); }
+    if(campo && !o[campo]) upd[campo]=hhmmAgora;   // não sobrescreve carimbo já feito
+    if(!stDemandaId && await diaFechado()) upd.alterado_apos_fechamento=true;
+    await db.collection(stColecao()).doc(o.id).update(paraFirestore(upd));
+    Object.assign(o,upd);
+    await auditar('status_alterado',o.id,{de:antes,para:novo,origem:'manual',
+      alvo:stDemandaId?'demanda':'viagem',obs});
     fecharStatus(); renderTudoApos();
     toast('Status: '+stLabel(novo),'ok');
   }catch(e){ console.error(e); toast('Falha ao atualizar status','err'); }
@@ -6679,12 +7137,18 @@ function opParaSlug(op){
 function placaKey(p){ return String(p==null?'':p).toUpperCase().replace(/[^A-Z0-9]/g,''); }
 
 /* Carrega a SZB pelo portal (mesma base compartilhada dos demais módulos). */
-async function carregarSZB(){
-  if(ST.szb.loaded) return;
+async function carregarSZB(forcar){
+  if(ST.szb.loaded && !forcar) return;
   PERF.mark('prog:szb:start');
   try{
     let ref=null;
     if(window.parent && window.parent!==window){
+      /* Na recarga horária a base é buscada de novo no portal: o CT-e emitido
+         depois do último carregamento só existe lá. Sem `forcar`, aproveita a
+         referência que o portal já tem em memória. */
+      if(forcar && typeof window.parent.atlasLoadBaseFromFirestoreShared==='function'){
+        try{ await window.parent.atlasLoadBaseFromFirestoreShared('szb'); }catch(_){}
+      }
       if(typeof window.parent.atlasGetDataReference==='function') ref=window.parent.atlasGetDataReference('szb');
       if(!ref && typeof window.parent.atlasLoadBaseFromFirestoreShared==='function'){
         await window.parent.atlasLoadBaseFromFirestoreShared('szb');
