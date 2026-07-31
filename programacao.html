@@ -1516,8 +1516,10 @@ const PERF = {
    O dia (demandas + viagens) recarrega ao trocar unidade/data.
    ═══════════════════════════════════════════════════════════════ */
 const ST = {
-  /* O módulo abre SEMPRE no consolidado: "Todas". Só o perfil de unidade
-     (lu_sc/lu_pr/lu_sp) sobrescreve isso, porque ele enxerga uma filial só. */
+  /* O módulo abre SEMPRE no consolidado: "Todas" — para TODOS os perfis.
+     A Programação é a exceção do Atlas: quem tem acesso à tela enxerga as três
+     unidades + "Todas", inclusive os líderes de unidade (lu_sc/lu_pr/lu_sp).
+     A grade é planejada em conjunto e trocar recurso entre filiais é rotina. */
   unidade: 'ALL',
   data: hojeISO(),
   cad: { veiculos:[], alocacoes:{}, compressores:[], motoristas:[], rotas:[], loaded:false },
@@ -1860,10 +1862,11 @@ auth.onAuthStateChanged(async function(user){
       return;
     }
     currentPerfil = p ? (p.perfil||p.tipo||'motorista') : 'usuario';
-    /* Perfil de unidade abre já na própria unidade. */
-    const m={lu_sc:'SC',lu_pr:'PR',lu_sp:'SP'};
-    if(m[currentPerfil]) ST.unidade=m[currentPerfil];
-    configurarSelectUnidade(m[currentPerfil]||null);
+    /* PROGRAMAÇÃO É EXCEÇÃO (31/07/2026): os líderes de unidade (lu_sc, lu_pr,
+       lu_sp) NÃO ficam presos à própria filial aqui. Quem tem a tela liberada
+       vê as três unidades + "Todas", independentemente da filial de origem.
+       Por isso o select nunca é travado neste módulo. */
+    configurarSelectUnidade(null);
   }catch(e){ currentPerfil='motorista'; console.warn('Programação: erro ao buscar perfil',e); }
 
   document.getElementById('scr_login').classList.remove('active');
@@ -1874,26 +1877,30 @@ auth.onAuthStateChanged(async function(user){
 /* ═══════════════════════════════════════════════════════════════
    BOOT
    ═══════════════════════════════════════════════════════════════ */
-/* Perfil de unidade enxerga só a própria filial — sem a opção "Todas". */
-function configurarSelectUnidade(unicaUnidade){
+/* Na Programação TODO perfil com acesso à tela enxerga as três unidades mais o
+   consolidado "Todas" — não há recorte por filial de origem (diferente do que
+   acontece nas demais telas do Atlas). O parâmetro continua existindo só por
+   compatibilidade com chamadas antigas; ele não trava mais nada. */
+function configurarSelectUnidade(_unicaUnidade){
   const sel=document.getElementById('selUnid'); if(!sel) return;
-  if(unicaUnidade){
-    sel.innerHTML='<option value="'+unicaUnidade+'">'+unicaUnidade+'</option>';
-    sel.value=unicaUnidade;
-    sel.disabled=true;
-  } else {
-    sel.value=ST.unidade;
-  }
+  sel.innerHTML='<option value="ALL">Todas</option>'
+              + '<option value="SC">SC</option>'
+              + '<option value="PR">PR</option>'
+              + '<option value="SP">SP</option>';
+  sel.disabled=false;
+  sel.removeAttribute('disabled');
+  if(!['ALL','SC','PR','SP'].includes(ST.unidade)) ST.unidade='ALL';
+  sel.value=ST.unidade;
 }
 
 let booted=false;
 async function boot(){
   if(booted) return; booted=true;                 // proteção contra múltiplas inicializações
   PERF.mark('prog:boot:start');
-  /* ABERTURA DO MÓDULO: sempre "Todas". Só o perfil de unidade (lu_sc/lu_pr/
-     lu_sp) fixa uma filial — nesse caso o select está travado e ST.unidade já
-     veio preenchido. Fora isso, qualquer valor herdado é descartado aqui. */
-  if(!document.getElementById('selUnid').disabled) ST.unidade='ALL';
+  /* ABERTURA DO MÓDULO: sempre "Todas", para qualquer perfil — inclusive os
+     líderes de unidade. Nenhum valor herdado da sessão anterior sobrevive. */
+  configurarSelectUnidade(null);
+  ST.unidade='ALL';
   document.getElementById('selUnid').value=ST.unidade;
   document.getElementById('selData').value=ST.data;
   prgUpdateDiaLabel();
