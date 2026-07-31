@@ -1895,7 +1895,14 @@ async function carregarCadastros(){
       id:d.id, placa:up(v.placa), frota:String(v.frota||'').trim(),
       categoria:categoriaVeiculo(v.tipo), subtipo:v.subtipo||'', modelo:v.modelo||'',
       unidade_slug:slugUnidade(v.filial), filial:v.filial||'',
-      motorista:v.motorista||'', vinculo:v.vinculo||v.tipo_vinculo||''
+      motorista:v.motorista||'', vinculo:v.vinculo||v.tipo_vinculo||'',
+      /* ═══ CICLO DE VIDA (31/07/2026) ═══
+         `status_ativo` é a fonte única do Cadastros › Veículos:
+         ativo | vendido | baixado | inativo (sem valor gravado = ativo).
+         Sem esse campo aqui, um cavalo BAIXADO/INATIVO continuava caindo no
+         painel Conjuntos como "disponível". */
+      status_ativo:String(v.status_ativo||'').trim().toLowerCase(),
+      ativo_flag:(v.ativo===false?false:true)
     };
   });
 
@@ -2498,7 +2505,7 @@ window.tiraHoje=function(){
 function conjuntosDaUnidade(uni,opts){
   opts=opts||{};
   const out=[];
-  ST.cad.veiculos.filter(v=>v.categoria==='cavalo').forEach(cav=>{
+  ST.cad.veiculos.filter(v=>v.categoria==='cavalo' && veiculoAtivo(v)).forEach(cav=>{
     const al=ST.cad.alocacoes[cav.id]||{};
     const slug = al.unidade_slug || cav.unidade_slug;
     if(uni && !opts.ignorarCessao){
@@ -2526,6 +2533,15 @@ function conjuntosDaUnidade(uni,opts){
   return out.sort((a,b)=>String(a.cavalo_frota||a.cavalo_placa).localeCompare(String(b.cavalo_frota||b.cavalo_placa),'pt-BR',{numeric:true}));
 }
 function veiculoPorId(id){ return ST.cad.veiculos.find(v=>v.id===id)||null; }
+/* Só veículo ATIVO é recurso programável. Vendido, baixado ou inativo continua
+   existindo em ST.cad.veiculos (para as viagens antigas ainda mostrarem placa e
+   frota), mas nunca entra nas listas de disponibilidade e de seleção. */
+function veiculoAtivo(v){
+  if(!v) return false;
+  if(v.ativo_flag===false) return false;
+  const s=String(v.status_ativo||'').trim().toLowerCase();
+  return s==='' || s==='ativo';
+}
 function compressorPorId(id){ return ST.cad.compressores.find(c=>c.id===id)||null; }
 /* Rótulo do compressor — identificação do cadastro; série como segunda opção.
    Sem nenhuma das duas, mostra traço: id de documento não identifica nada. */
@@ -2643,6 +2659,17 @@ function validarViagem(v){
   if(disp==='manutencao')   B('Cavalo em manutenção','O cavalo está marcado como EM MANUTENÇÃO na Frota.','Escolha outro conjunto ou aguarde a liberação.','cav');
   if(disp==='indisponivel') B('Cavalo indisponível','O cavalo está marcado como INDISPONÍVEL na Frota.','Escolha outro conjunto.','cav');
   if(disp==='reserva')      A('Cavalo em reserva','O cavalo está em reserva na Frota.','Confirme com o responsável antes de liberar.','cav');
+
+  /* 3b · Ciclo de vida do ativo (fonte: Cadastros › Veículos › status_ativo).
+     Vale para a viagem que já estava programada quando o veículo foi baixado. */
+  if(cav && !veiculoAtivo(cav))
+    B('Cavalo fora de operação','O cavalo está como '+((cav.status_ativo||'inativo').toUpperCase())+' no Cadastros.','Escolha outro conjunto ou reative o veículo no Cadastros.','cav');
+  [[v.carreta1_id,'Carreta 1'],[v.carreta2_id,'Carreta 2']].forEach(([cid,rot])=>{
+    if(!cid) return;
+    const cr=veiculoPorId(cid);
+    if(cr && !veiculoAtivo(cr))
+      B(rot+' fora de operação','A '+rot.toLowerCase()+' está como '+((cr.status_ativo||'inativo').toUpperCase())+' no Cadastros.','Troque a carreta ou reative o veículo no Cadastros.','carr');
+  });
 
   /* 4 · Compressor em manutenção (fonte: compressores + alocacao_frota) */
   if(v.compressor_id){
@@ -3996,7 +4023,7 @@ function renderDisp(){
     linhas=ST.cad.motoristas.filter(m=>!uni||m.unidade_slug===uni)
       .map(m=>({t:m.nome,s:'unidade '+(m.unidade_slug||'—'),st:'disponivel'}));
   } else {
-    linhas=ST.cad.veiculos.filter(v=>v.categoria===tipo)
+    linhas=ST.cad.veiculos.filter(v=>v.categoria===tipo && veiculoAtivo(v))
       .filter(v=>{ const al=ST.cad.alocacoes[v.id]||{}; return !uni||(al.unidade_slug||v.unidade_slug)===uni; })
       .map(v=>({t:rotuloVeiculo(v),s:(v.modelo||v.subtipo||'—'),st:(ST.cad.alocacoes[v.id]||{}).disponibilidade||'—'}));
   }
@@ -5236,7 +5263,7 @@ function fonteCarretasConjunto(campoId){
     if(o.id===ST.conjViagemId || !viagemViva(o)) return;
     [o.carreta1_id,o.carreta2_id].forEach(cid=>{ if(cid && !emUso[cid]) emUso[cid]=o; });
   });
-  return carretasCadastradas(null).map(cr=>{
+  return carretasCadastradas(null,{manterIds:[atual,irmao]}).map(cr=>{
     const dono=cavaloDaCarreta(cr.id);
     const al=ST.cad.alocacoes[cr.id]||{};
     const uniC=al.unidade_slug||cr.unidade_slug||'—';
@@ -5276,7 +5303,8 @@ window.previewConjunto=function(manterCarreta){
     if(o.id===ST.conjViagemId || !viagemViva(o)) return;
     [o.carreta1_id,o.carreta2_id].forEach(cid=>{ if(cid && !emUso[cid]) emUso[cid]=o; });
   });
-  const todas=carretasCadastradas(null);
+  const todas=carretasCadastradas(null,{manterIds:[v.carreta1_id,v.carreta2_id,
+    c?c.carreta1_id:'', c?c.carreta2_id:'']});
   const montaSel=(elId,atual)=>{
     if(!document.getElementById(elId)) return;
     cbxInit(elId+'Busca',{
@@ -6805,8 +6833,12 @@ function indexarGrupos(){
 function grupoDoProduto(nome){ const k=norm(nome); return k?(ST.grupos.porProduto[k]||null):null; }
 function gruposDoProduto(nome){ const k=norm(nome); return k?((ST.grupos.gruposPorProduto||{})[k]||[]):[]; }
 function corGrupo(g){ return (g&&g.cor)||'#888780'; }
-function carretasCadastradas(uni){
-  return ST.cad.veiculos.filter(v=>v.categoria==='carreta').filter(v=>{
+function carretasCadastradas(uni,opts){
+  /* `manter` guarda as carretas que JÁ estão na viagem sendo editada: mesmo que
+     tenham sido baixadas no cadastro depois de programadas, elas continuam
+     visíveis para não sumirem sozinhas do conjunto já montado. */
+  const manter={}; ((opts||{}).manterIds||[]).forEach(id=>{ if(id) manter[id]=1; });
+  return ST.cad.veiculos.filter(v=>v.categoria==='carreta' && (veiculoAtivo(v)||manter[v.id])).filter(v=>{
     if(!uni) return true;
     const al=ST.cad.alocacoes[v.id]||{};
     return (al.unidade_slug||v.unidade_slug)===uni;
