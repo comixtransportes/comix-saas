@@ -1048,10 +1048,17 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     }
     return out;
   }
-  function assertAdminAccess() {
-    if (currentPerfil !== "admin") {
-      throw new Error("Acesso restrito ao perfil admin");
-    }
+  function adminCollectionPermissionKey(collectionName) {
+    return ({usuarios:'cad_usuarios',veiculos:'cad_veiculos',motoristas:'cad_motoristas',filiais:'cad_filiais',centros_custo:'cad_centros_custo',notificacoes_eventos:'cad_notificacoes',email_queue:'cad_notificacoes'})[collectionName] || null;
+  }
+  function assertAdminAccess(collectionName, action, buttonKey) {
+    if (currentPerfil === "admin") return true;
+    const ap = window.AtlasPermissions;
+    const cadKey = adminCollectionPermissionKey(collectionName);
+    if (!ap || !ap.loaded || !cadKey || !ap.can('cadastros', cadKey, false)) throw new Error("Acesso não autorizado a este cadastro.");
+    if (action && !ap.can('acoes', action, false)) throw new Error("Ação bloqueada pelas permissões do perfil.");
+    if (buttonKey && !ap.can('botoes', buttonKey, false)) throw new Error("Função bloqueada pelas permissões do perfil.");
+    return true;
   }
   function assertAllowedAdminCollection(collectionName) {
     // notificacoes_eventos: configuração de eventos de e-mail do Atlas (somente admin).
@@ -1452,7 +1459,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 
     /* ── CRUD administrativo — usado apenas pelo menu Configurações */
     adminListar: async function(collectionName) {
-      assertAdminAccess();
+      assertAdminAccess(collectionName, 'visualizar');
       assertAllowedAdminCollection(collectionName);
       const snap = await db.collection(collectionName).get();
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -1465,7 +1472,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     },
     adminSalvar: async function(collectionName, id, dados) {
-      assertAdminAccess();
+      assertAdminAccess(collectionName, id ? 'editar' : 'criar', 'btn_salvar');
       assertAllowedAdminCollection(collectionName);
       const payload = normalizeAdminPayload(collectionName, { ...(dados || {}), updatedAt: firebase.firestore.Timestamp.now() });
       if (collectionName === "usuarios" && payload.email) {
@@ -1502,7 +1509,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
        o status pelo cadastro, e inventar um registro vazio estragaria o
        indicador de base preenchida da aba Depreciação. */
     espelharStatusDepreciacaoCPK: async function(placa, status) {
-      assertAdminAccess();
+      assertAdminAccess('veiculos', 'editar', 'btn_salvar');
       const p = String(placa || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
       if (!p) return { espelhado: false, motivo: "sem-placa" };
       const ref = db.collection("cpk_lancamentos").doc("DEPRECIACAO");
@@ -1515,12 +1522,12 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
       return { espelhado: true };
     },
     adminExcluir: async function(collectionName, id) {
-      assertAdminAccess();
+      assertAdminAccess(collectionName, 'excluir', 'btn_excluir');
       assertAllowedAdminCollection(collectionName);
       await db.collection(collectionName).doc(id).delete();
     },
     adminBloquearUsuario: async function(id, bloqueado) {
-      assertAdminAccess();
+      assertAdminAccess('usuarios', 'editar', 'btn_editar');
       await db.collection("usuarios").doc(id).set({
         bloqueado: !!bloqueado,
         status: bloqueado ? "bloqueado" : "ativo",
@@ -1909,15 +1916,16 @@ window.showToast  = showToast;
 
 // ── _appReady: chamado pelo Firebase após autenticação
 window._appReady = async function(user, perfil) {
-  if (perfil !== "admin") {
+  const embedded = window.self !== window.top;
+  if (perfil !== "admin" && !embedded) {
     showScreen("scr_login");
     const errEl = document.getElementById("li_err");
-    if (errEl) errEl.textContent = "Acesso restrito ao perfil admin.";
-    await window._FB.doLogout();
+    if (errEl) errEl.textContent = "Acesso restrito. Abra o módulo pelo portal Atlas.";
     return;
   }
   showScreen("scr_config_admin");
-  if (typeof openAdminSection === "function") openAdminSection("usuarios");
+  try { if (embedded) window.parent.postMessage({type:'ATLAS_REQUEST_USER'}, '*'); } catch(_) {}
+  setTimeout(() => { if (typeof cfgOpenFirstAllowedSection === 'function') cfgOpenFirstAllowedSection(); }, embedded ? 350 : 0);
 };
 
 </script>
@@ -1928,6 +1936,31 @@ window._appReady = async function(user, perfil) {
 let cfgCurrentSection = "usuarios";
 let cfgPaisInicializado = false;
 const cfgCache = { usuarios: [], veiculos: [], motoristas: [], filiais: [], centrosCusto: [], notifEventoPD: null, notifEventos: [], notifEventoAtual: null };
+
+const CFG_SECTION_PERMS = {usuarios:'cad_usuarios',veiculos:'cad_veiculos',motoristas:'cad_motoristas',filiais:'cad_filiais',centros_custo:'cad_centros_custo',notificacoes:'cad_notificacoes',permissoes:'cad_permissoes'};
+function cfgCanSection(section) {
+  if (cfgIsAdmin()) return true;
+  const ap = window.AtlasPermissions;
+  if (!ap || !ap.loaded) return false;
+  if (section === 'permissoes' && !ap.can('telas','permissoes',false)) return false;
+  return ap.can('cadastros', CFG_SECTION_PERMS[section], false) && ap.can('acoes','visualizar',false);
+}
+function cfgApplySectionPermissions() {
+  Object.keys(CFG_SECTION_PERMS).forEach(sec => {
+    const el = document.getElementById('cfg_tab_'+sec);
+    if (el) el.style.display = cfgCanSection(sec) ? '' : 'none';
+  });
+  if (!cfgCanSection(cfgCurrentSection)) cfgOpenFirstAllowedSection();
+}
+function cfgOpenFirstAllowedSection() {
+  const first = Object.keys(CFG_SECTION_PERMS).find(cfgCanSection);
+  if (first) openAdminSection(first);
+  else {
+    showScreen('scr_config_admin');
+    document.querySelectorAll('.cfg-section, .cfg-section-perm').forEach(sec => sec.classList.remove('active'));
+    if (typeof showToast === 'function') showToast('Nenhuma seção de Cadastros foi liberada para este perfil.', 'error');
+  }
+}
 
 function cfgIsAdmin() {
   return !!(window._FB && typeof window._FB.getCurrentPerfil === "function" && window._FB.getCurrentPerfil() === "admin");
@@ -1940,12 +1973,11 @@ function cfgUsuarioEmail() {
   } catch (_) { return ""; }
 }
 
-function cfgRequireAdmin() {
-  if (cfgIsAdmin()) return true;
+function cfgRequireAdmin(section = cfgCurrentSection) {
+  if (cfgIsAdmin() || cfgCanSection(section)) return true;
   const menu = document.getElementById("cfg_menu");
   if (menu) menu.classList.remove("show");
-  if (typeof showToast === "function") showToast("Acesso restrito ao perfil admin.", "error");
-  if (typeof window.goHomeAtlas === "function") window.goHomeAtlas(); else showScreen("scr_login");
+  if (typeof showToast === "function") showToast("Seção não liberada para este perfil.", "error");
   return false;
 }
 function toggleConfigMenu(event) {
@@ -1959,7 +1991,7 @@ document.addEventListener("click", function(event) {
   if (wrap && menu && !wrap.contains(event.target)) menu.classList.remove("show");
 });
 function openAdminSection(section) {
-  if (!cfgRequireAdmin()) return;
+  if (!cfgRequireAdmin(section)) return;
   cfgCurrentSection = section || "usuarios";
   document.getElementById("cfg_menu")?.classList.remove("show");
   showScreen("scr_config_admin");
@@ -2003,6 +2035,7 @@ function onPermissoesLoaded() {
     // Pass Firebase instance reference to iframe if same origin
     if (fr.contentWindow && window.firebase) {
       fr.contentWindow.postMessage({ type: 'FIREBASE_READY' }, '*');
+      if (window.AtlasPermissions?.loaded) fr.contentWindow.postMessage({type:'ATLAS_TAB_PERMS',perfil:window.AtlasPermissions.perfil,permissoes:window.AtlasPermissions.state}, '*');
     }
   } catch(e) {}
 }
@@ -2022,9 +2055,16 @@ window.addEventListener('message', function(event) {
     showToast(`Base ${table?.toUpperCase()} atualizada (${count} registros). Dados recarregados.`, 'success');
   }
 
-  // Quando permissões são salvas, notifica outros módulos
+  if (event.data.type === 'ATLAS_USER' || event.data.type === 'ATLAS_TAB_PERMS') {
+    setTimeout(cfgApplySectionPermissions, 0);
+    const fr = document.getElementById('iframe_permissoes');
+    try { if (fr?.contentWindow) fr.contentWindow.postMessage(event.data, '*'); } catch(_) {}
+  }
+
+  // Quando permissões são salvas, notifica o portal principal e outros módulos.
   if (event.data.type === 'PERM_UPDATED') {
     showToast(`Permissões de "${event.data.tipo}" atualizadas com sucesso.`, 'success');
+    try { if (window.top && window.top !== window) window.top.postMessage(event.data, '*'); } catch(_) {}
   }
 });
 function cfgEscape(value) {
@@ -6797,5 +6837,119 @@ function cfgPhoneMask(el) {
 
 
 /* ═══ NAVEGAÇÃO ATLAS ═══ */
+</script>
+
+<script id="atlas-permission-runtime">
+/* ATLAS PERMISSIONS RUNTIME v2 — valida telas, abas, ações e botões recebidos do portal. */
+(function(){
+  'use strict';
+  const MODULE="cadastros";
+  const TAB_ALIASES={"usuarios":["usuarios"],"veiculos":["veiculos"],"motoristas":["motoristas"],"filiais":["filiais"],"centros_custo":["centros_custo","centro de custo"],"notificacoes":["notificacoes"],"permissoes":["permissoes"]};
+  const state={perfil:'',loaded:false,permissoes:{telas:{},cadastros:{},acoes:{},botoes:{},abas:{},filiais:{}}};
+  const own=(o,k)=>!!o&&Object.prototype.hasOwnProperty.call(o,k);
+  const norm=v=>String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim();
+  function can(section,key,fallback=true){
+    if(state.perfil==='admin') return true;
+    const obj=state.permissoes[section]||{};
+    return own(obj,key)?!!obj[key]:fallback;
+  }
+  function setPerms(msg){
+    const full=(msg.permissoes&&msg.permissoes.telas)?msg.permissoes:{
+      telas:msg.telas||{},cadastros:msg.cadastros||{},acoes:msg.acoes||{},botoes:msg.botoes||{},abas:msg.abas||{},filiais:msg.filiais||{}
+    };
+    state.perfil=String(msg.perfil||full.perfil||state.perfil||'').toLowerCase();
+    state.permissoes={telas:full.telas||{},cadastros:full.cadastros||{},acoes:full.acoes||{},botoes:full.botoes||{},abas:full.abas||{},filiais:full.filiais||{}};
+    state.loaded=true;
+    api.perfil=state.perfil; api.state=state.permissoes; api.loaded=true;
+    scheduleApply();
+    window.dispatchEvent(new CustomEvent('atlas:permissions-changed',{detail:api}));
+  }
+  function elementToken(el){
+    return norm([el.id,el.className,el.getAttribute?.('data-tab'),el.getAttribute?.('data-view'),el.getAttribute?.('data-page'),el.getAttribute?.('onclick'),el.getAttribute?.('title'),el.getAttribute?.('aria-label'),el.textContent].filter(Boolean).join(' '));
+  }
+  function isTab(el){
+    const c=norm(el.className), oc=norm(el.getAttribute?.('onclick'));
+    return /(^| )(tab|cfg tab|nav tab)( |$)/.test(c)||el.hasAttribute?.('data-tab')||/switchtab|showtab|openadminsection|navto|settab|showpage/.test(oc);
+  }
+  function applyTabs(){
+    const modulePerms=(state.permissoes.abas||{})[MODULE];
+    if(!modulePerms||typeof modulePerms!=='object') return;
+    const candidates=document.querySelectorAll('button,a,[role="tab"],[data-tab],.tab,.cfg-tab');
+    candidates.forEach(el=>{
+      if(!isTab(el)) return;
+      const tok=elementToken(el); let matched=null;
+      for(const [key,arr] of Object.entries(TAB_ALIASES)){
+        if(arr.some(a=>tok.includes(norm(a)))){matched=key;break;}
+      }
+      if(!matched) return;
+      const denied=own(modulePerms,matched)&&!modulePerms[matched];
+      el.style.display=denied?'none':'';
+      el.toggleAttribute('data-atlas-tab-denied',denied);
+    });
+  }
+  const RULES=[
+    ['btn_excluir','excluir',/(excluir|remover|apagar|lixeira|delete)/],
+    ['btn_aprovar','aprovar',/(aprovar|aprovacao|approve)/],
+    ['btn_reabrir','editar',/(reabrir|reabertura)/],
+    ['btn_finalizar','editar',/(finalizar|concluir|encerrar|baixar os)/],
+    ['btn_importar','criar',/(importar|upload base|carregar arquivo)/],
+    ['btn_exportar','exportar',/(exportar|excel|csv|baixar planilha|gerar pdf|download)/],
+    ['btn_imprimir','exportar',/(imprimir|impressao)/],
+    ['btn_anexar','editar',/(anexar|anexo|upload foto|adicionar foto)/],
+    ['btn_parametros','editar',/(parametros|configurar|configuracao)/],
+    ['btn_processar','editar',/(processar|calcular|gerar lote|executar)/],
+    ['btn_salvar','editar',/(salvar|gravar|confirmar alteracao|atualizar registro)/],
+    ['btn_editar','editar',/(editar|alterar|corrigir)/],
+    ['btn_novo','criar',/(^| )(novo|nova|adicionar|incluir|criar|abrir o s)( |$)/],
+    ['btn_atualizar','visualizar',/(atualizar|recarregar|sincronizar)/],
+    ['btn_limpar','visualizar',/(limpar filtro|limpar busca|resetar filtro)/],
+    ['btn_filtrar','visualizar',/(filtrar|aplicar filtro|buscar)/],
+    ['btn_detalhes','visualizar',/(detalhes|visualizar|abrir dossie|ver ficha|consultar)/],
+    ['btn_cancelar','cancelar',/(cancelar (os|solicitacao|pedido|viagem|demanda)|cancelamento)/]
+  ];
+  function classify(el){
+    if(!el||isTab(el)) return null;
+    const tok=elementToken(el);
+    if(!tok) return null;
+    for(const r of RULES) if(r[2].test(tok)) return {button:r[0],action:r[1]};
+    return null;
+  }
+  function deniedByRule(rule){
+    if(!rule||state.perfil==='admin') return false;
+    const b=state.permissoes.botoes||{}, a=state.permissoes.acoes||{};
+    return (own(b,rule.button)&&!b[rule.button]) || (own(a,rule.action)&&!a[rule.action]);
+  }
+  function applyButtons(){
+    document.querySelectorAll('button,a.btn,input[type="button"],input[type="submit"],input[type="file"],[role="button"],[onclick]').forEach(el=>{
+      const r=classify(el); if(!r) return;
+      const denied=deniedByRule(r);
+      if(denied){
+        if(!el.hasAttribute('data-atlas-prev-display')) el.setAttribute('data-atlas-prev-display',el.style.display||'');
+        el.style.display='none'; el.setAttribute('data-atlas-perm-denied',r.button+':'+r.action);
+      } else if(el.hasAttribute('data-atlas-perm-denied')){
+        el.style.display=el.getAttribute('data-atlas-prev-display')||'';
+        el.removeAttribute('data-atlas-perm-denied'); el.removeAttribute('data-atlas-prev-display');
+      }
+    });
+  }
+  function applyScreen(){
+    if(state.perfil==='admin'||!state.loaded) return;
+    const telas=state.permissoes.telas||{};
+    if(own(telas,MODULE)&&!telas[MODULE]){
+      let ov=document.getElementById('atlas-permission-denied-overlay');
+      if(!ov){ov=document.createElement('div');ov.id='atlas-permission-denied-overlay';ov.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#f0f2f5;display:flex;align-items:center;justify-content:center;font:600 14px IBM Plex Sans,Arial;color:#192135';ov.innerHTML='<div style="background:#fff;border:1px solid #d1d9e6;border-radius:8px;padding:24px;max-width:440px;text-align:center">Acesso a esta tela não liberado para o perfil atual.</div>';document.body.appendChild(ov);}
+    } else document.getElementById('atlas-permission-denied-overlay')?.remove();
+  }
+  let queued=false;
+  function scheduleApply(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;applyScreen();applyTabs();applyButtons();})}
+  document.addEventListener('click',ev=>{
+    if(!state.loaded)return;
+    const el=ev.target&&ev.target.closest&&ev.target.closest('button,a,input[type="button"],input[type="submit"],input[type="file"],[role="button"],[onclick]');
+    const r=classify(el); if(deniedByRule(r)){ev.preventDefault();ev.stopImmediatePropagation();try{window.showToast?.('Função não liberada para este perfil.','error')}catch(_){}}
+  },true);
+  const api=window.AtlasPermissions={module:MODULE,perfil:'',loaded:false,state:state.permissoes,can,canAction:(k,f=false)=>can('acoes',k,f),canButton:(k,f=false)=>can('botoes',k,f),apply:scheduleApply};
+  window.addEventListener('message',ev=>{const m=ev.data||{};if(m.type==='ATLAS_USER'||m.type==='ATLAS_TAB_PERMS')setPerms(m)});
+  document.addEventListener('DOMContentLoaded',()=>{scheduleApply();try{if(window.parent&&window.parent!==window){window.parent.postMessage({type:'ATLAS_REQUEST_USER'},'*');window.parent.postMessage({type:'ATLAS_REQUEST_TAB_PERMS'},'*')}}catch(_){};new MutationObserver(scheduleApply).observe(document.documentElement,{childList:true,subtree:true});});
+})();
 </script>
 </body></html>
