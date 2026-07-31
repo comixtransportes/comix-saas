@@ -3581,7 +3581,6 @@ function atlasPermKeyForView(viewId) {
   return keys.length ? keys[0] : null;
 }
 function atlasIsViewAllowed(viewId) {
-  if (curPerfil === 'admin') return true;
   const keys = atlasPermKeysForView(viewId);
   if (!keys.length) return true;
   if (!_permsLoaded) { _pendingNav = viewId; return false; }
@@ -3594,6 +3593,7 @@ function atlasIsViewAllowed(viewId) {
    Se o Firestore não responder ou o documento do perfil não existir,
    o portal aplica apenas os perfis reais do sistema. */
 const ATLAS_DEFAULT_TELAS_BY_PROFILE = {
+  admin:     {inicio:true, pd_diario:true, frota:true, financeiro:true, mapinha:true, comercial:true, agregados:true, ciot:true, ficha:true, compras:true, manutencao:true, checklist:true, painel:true, programacao:true, cpk:true, cadastros:true, download_base:true},
   motorista: {inicio:true, dashboard:true, ficha:true, painel:true, checklist:true, abastecimento:true, documentos:true},
   lr:        {inicio:true, dashboard:true, pd_diario:true, financeiro:true, mapinha:true, comercial:true, frota:true, ficha:true, painel:true, programacao:true, compras:true, relatorios:true, cadastros:true, cpk:true, checklist:true, ciot:true},
   lm:        {inicio:true, dashboard:true, pd_diario:true, manutencao:true, pneus:true, checklist:true, documentos:true, frota:true},
@@ -3648,7 +3648,7 @@ async function loadPermissions() {
     }
   } catch(e) { console.warn('[Atlas] falha ao ler permissoes/'+curPerfil, e); }
 
-  if (!loaded && curPerfil !== 'admin') {
+  if (!loaded) {
     const fallback = atlasFallbackPermsFor(curPerfil);
     if (fallback) {
       ATLAS_PERMS = atlasNormalizeLoadedPermissions(fallback);
@@ -3656,7 +3656,7 @@ async function loadPermissions() {
     }
   }
   if (!loaded) ATLAS_PERMS = atlasNormalizeLoadedPermissions({});
-  _dynamicPermsAvailable = curPerfil !== 'admin' && loaded;
+  _dynamicPermsAvailable = loaded;
   _permsLoaded = true;
   applyDynamicPermissions();
   atlasRefreshScopesInOpenFrames();
@@ -3667,7 +3667,7 @@ async function loadPermissions() {
 function atlasWatchCurrentPermissions() {
   try { if (window.__atlasPermUnsub) window.__atlasPermUnsub(); } catch(_) {}
   window.__atlasPermUnsub = null;
-  if (!curUser || curPerfil === 'admin') return;
+  if (!curUser) return;
   try {
     window.__atlasPermUnsub = db.collection('permissoes').doc(curPerfil).onSnapshot(snap => {
       if (!snap.exists) return;
@@ -3779,14 +3779,13 @@ function applyDynamicPermissions() {
   viewIds.forEach(viewId => {
     const btn = document.querySelector(`[data-v="${viewId}"]`);
     if (!btn) return;
-    if (curPerfil === 'admin') { btn.style.display = ''; return; }
     if (!_dynamicPermsAvailable) { btn.style.display = 'none'; return; }
     const keys = atlasPermKeysForView(viewId);
     btn.style.display = keys.some(k => !!telas[k]) ? '' : 'none';
   });
 
   /* Se a view ativa foi bloqueada, navega para a primeira permitida. */
-  if (curPerfil !== 'admin' && _dynamicPermsAvailable) {
+  if (_dynamicPermsAvailable) {
     const currentHash = location.hash.replace('#','') || 'inicio';
     const currentKeys = atlasPermKeysForView(currentHash);
     const currentAllowed = !currentKeys.length || currentKeys.some(k => !!telas[k]);
@@ -4050,7 +4049,7 @@ window.addEventListener('message', function(ev) {
     if (tipoAtualizado === curPerfil || ev.data.tipo === 'ALL') {
       if (ev.data.permissoes && ev.data.permissoes.telas) {
         ATLAS_PERMS = atlasNormalizeLoadedPermissions(ev.data.permissoes);
-        _dynamicPermsAvailable = curPerfil !== 'admin';
+        _dynamicPermsAvailable = true;
         _permsLoaded = true;
         applyDynamicPermissions();
         atlasRefreshScopesInOpenFrames();
