@@ -2196,6 +2196,7 @@ function cfgRenderUsuarios() {
           <div class="cfg-item-sub">${cfgEscape(u.email || "")}${u.uid ? " · UID: " + cfgEscape(u.uid) : ""}</div>
           <span class="cfg-pill cfg-pill-admin">${cfgEscape(perfil)}</span>
           <span class="cfg-pill ${bloqueado ? "cfg-pill-block" : "cfg-pill-ok"}">${bloqueado ? "Bloqueado" : "Ativo"}</span>
+          ${u.uid ? "" : '<span class="cfg-pill cfg-pill-block" title="Sem UID do Firebase Auth: este usuário não pode ser vinculado às alçadas de aprovação da Manutenção.">Sem UID</span>'}
         </div>
       </div>
       <div class="cfg-item-actions">
@@ -2281,14 +2282,20 @@ async function cfgSaveUsuario(event) {
       return;
     }
   }
+  const bloqueado = cfgVal("cfg_user_bloqueado") === "true";
   const payload = {
     nome: cfgUpper(cfgVal("cfg_user_nome")),
     email,
     uid,
     perfil: cfgVal("cfg_user_perfil") || "motorista",
     tipo: cfgVal("cfg_user_perfil") || "motorista",
-    bloqueado: cfgVal("cfg_user_bloqueado") === "true",
-    status: cfgVal("cfg_user_bloqueado") === "true" ? "bloqueado" : "ativo",
+    bloqueado,
+    status: bloqueado ? "bloqueado" : "ativo",
+    /* `ativo` explícito: os outros módulos (Manutenção → Parâmetros, entre
+       outros) filtram aprovadores por este campo. Sem ele gravado, um usuário
+       recém-criado dependia da inferência por `status`/`bloqueado` de cada
+       módulo — e bastava uma divergência para ele sumir da lista de alçadas. */
+    ativo: !bloqueado,
     observacoes: cfgVal("cfg_user_obs")
   };
   /* Perfil motorista → monta também o doc da coleção `motoristas`, com o
@@ -2320,9 +2327,18 @@ async function cfgSaveUsuario(event) {
     payload.codigoPais = motPayload.codigoPais;
     payload.celular = motPayload.celular;
   }
+  /* Guarda de integridade: o mesmo e-mail em dois documentos diferentes faz a
+     resolução por UID/e-mail (usada pelas alçadas de Manutenção) apontar para o
+     registro errado — ou para nenhum. */
+  const docIdAtual = cfgVal("cfg_user_doc_id") || uid;
+  const duplicado = (cfgCache.usuarios || []).find(x =>
+    String(x.email || "").toLowerCase() === email && String(x.id) !== String(docIdAtual));
+  if (duplicado) {
+    return showToast(`Já existe outro cadastro com o e-mail ${email} (documento ${duplicado.id}). Exclua ou corrija o duplicado antes de salvar.`, "error");
+  }
   try {
     /* Sempre salva com UID como ID do documento */
-    const docId = cfgVal("cfg_user_doc_id") || uid;
+    const docId = docIdAtual;
     await cfgSave("usuarios", docId, payload);
     if (motPayload) await cfgSave("motoristas", motPayload.cpfNumeros, motPayload);
     showToast(motPayload ? "Usuário salvo e motorista sincronizado no Firebase." : "Usuário salvo no Firebase.", "success");
