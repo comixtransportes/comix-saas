@@ -874,6 +874,32 @@ const VIEWS = {
   'download-base': {label:'Base',                 chip:'DADOS',       cls:'pu', src:null,                        nav:null,       perfil:null},
 };
 
+/* ══ NORMALIZAÇÃO DE PERFIS ══
+   Documentos antigos podem conter LU, Líder de Unidade, Compras, Administrador
+   ou diferenças de caixa/acentuação. A chave do documento de permissões é
+   sempre uma das chaves canônicas abaixo. */
+function atlasNormalizeProfile(raw, userDoc) {
+  const norm = String(raw || 'motorista').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim().replace(/[\s-]+/g,'_');
+  const aliases = {
+    administrador:'admin', administrator:'admin', adm:'admin',
+    lider_regional:'lr', liderregional:'lr',
+    lider_manutencao:'lm', liderdemanutencao:'lm',
+    assistente:'assist', assistant:'assist',
+    compras:'comprador', buyer:'comprador',
+    leitura:'consulta', somente_leitura:'consulta',
+    user:'usuario'
+  };
+  let perfil = aliases[norm] || norm;
+  if (perfil === 'lu' || perfil === 'lider_unidade' || perfil === 'lider_de_unidade' || perfil === 'liderunidade') {
+    const f = atlasNormText((userDoc && (userDoc.filial || userDoc.unidade || userDoc.estado || userDoc.regional)) || '');
+    if (/^(17)$|\bSC\b|SANTA CATARINA|CAPIVARI/.test(f)) perfil = 'lu_sc';
+    else if (/^(18)$|\bPR\b|PARANA|CURITIBA/.test(f)) perfil = 'lu_pr';
+    else if (/^(0?3)$|\bSP\b|SAO PAULO|OSASCO/.test(f)) perfil = 'lu_sp';
+    else perfil = 'lu_sp'; // compatibilidade com cadastros antigos sem filial
+  }
+  return perfil || 'motorista';
+}
+
 /* ══ AUTH ══ */
 auth.onAuthStateChanged(async user => {
   if (user) {
@@ -886,7 +912,7 @@ auth.onAuthStateChanged(async user => {
         if (!q.empty) doc = q.docs[0].data();
       }
       if (doc && (doc.bloqueado || doc.status==='bloqueado')) { await auth.signOut(); loginErr('Conta bloqueada.'); return; }
-      curPerfil = doc ? (doc.perfil || doc.tipo || 'motorista') : 'motorista';
+      curPerfil = atlasNormalizeProfile(doc ? (doc.perfil || doc.tipo || 'motorista') : 'motorista', doc || {});
       curNome   = doc ? (doc.nome || doc.nome_completo || doc.nomeCompleto || doc.displayName || '') : '';
     } catch(e) { curPerfil = 'motorista'; }
     _authReadyResolve && _authReadyResolve();
@@ -894,6 +920,7 @@ auth.onAuthStateChanged(async user => {
   } else {
     const hadUser = !!curUser;
     curUser = null; curPerfil = 'usuario';
+    try { if (window.__atlasPermUnsub) { window.__atlasPermUnsub(); window.__atlasPermUnsub = null; } } catch(_) {}
     _authReadyResolve && _authReadyResolve();
     if (!hadUser) {
       /* Primeira resolução do auth sem sessão persistida: login legítimo. */
@@ -925,6 +952,7 @@ async function showApp() {
 
   // Carrega as permissões antes de renderizar/navegar para evitar menu visível sem clique funcional.
   await loadPermissions();
+  atlasWatchCurrentPermissions();
   applyPerfil();
 
   const _initHash = location.hash.replace('#','');
@@ -1080,7 +1108,7 @@ function frLoaded(viewId) {
         perfil: curPerfil       || 'motorista',
         nome:   curNome || curUser?.displayName || '',
         scope:  atlasPermissionContext(),
-        permissoes: atlasPermissionContext()
+        permissoes: JSON.parse(JSON.stringify(ATLAS_PERMS || {}))
       }, '*');
       // Envia também permissões de abas se já carregadas
       sendTabPermsToFrame('fr-'+viewId);
@@ -3541,8 +3569,6 @@ function atlasViewPermMap() {
     'programacao':'programacao',
     'cpk':'cpk',
     'cadastros':'config',
-    'permissoes':'config',
-    'gestao_atlas':'config',
     'download_base':'download-base'
   };
 }
@@ -3573,6 +3599,9 @@ const ATLAS_DEFAULT_TELAS_BY_PROFILE = {
   lm:        {inicio:true, dashboard:true, pd_diario:true, manutencao:true, pneus:true, checklist:true, documentos:true, frota:true},
   consulta:  {inicio:true, dashboard:true, pd_diario:true, ficha:true, relatorios:true},
   assist:    {inicio:true, pd_diario:true, frota:true, financeiro:true, mapinha:true, comercial:true, agregados:true, ciot:true, ficha:true, compras:true, manutencao:true, checklist:true, painel:true, programacao:true, cpk:true, cadastros:true},
+  gestor:    {inicio:true, pd_diario:true, frota:true, financeiro:true, mapinha:true, comercial:true, agregados:true, ciot:true, ficha:true, compras:true, manutencao:true, checklist:true, painel:true, programacao:true, cpk:true},
+  comprador: {inicio:true, compras:true},
+  usuario:   {inicio:true},
   lu_sc:     {inicio:true, dashboard:true, pd_diario:true, ficha:true, painel:true, programacao:true, checklist:true, abastecimento:true, cadastros:true, mapinha:true, ciot:true},
   lu_pr:     {inicio:true, dashboard:true, pd_diario:true, ficha:true, painel:true, programacao:true, checklist:true, abastecimento:true, cadastros:true, mapinha:true, ciot:true},
   lu_sp:     {inicio:true, dashboard:true, pd_diario:true, ficha:true, painel:true, programacao:true, checklist:true, abastecimento:true, cadastros:true, mapinha:true, ciot:true},
@@ -3582,49 +3611,75 @@ function atlasFallbackPermsFor(perfil) {
   return telas ? {telas:{...telas}, abas:{}} : null;
 }
 
+function atlasNormalizeLoadedPermissions(saved) {
+  const src = saved && typeof saved === 'object' ? saved : {};
+  return {
+    telas: src.telas && typeof src.telas === 'object' ? {...src.telas} : {},
+    cadastros: src.cadastros && typeof src.cadastros === 'object' ? {...src.cadastros} : {},
+    acoes: src.acoes && typeof src.acoes === 'object' ? {...src.acoes} : {},
+    botoes: src.botoes && typeof src.botoes === 'object' ? {...src.botoes} : {},
+    abas: src.abas && typeof src.abas === 'object' ? JSON.parse(JSON.stringify(src.abas)) : {},
+    filiais: src.filiais && typeof src.filiais === 'object' ? {...src.filiais} : {}
+  };
+}
+function atlasApplyMissingScreenDefaults(normalized, perfil = curPerfil) {
+  const out = normalized || atlasNormalizeLoadedPermissions({});
+  const padraoPerfil = ATLAS_DEFAULT_TELAS_BY_PROFILE[perfil] || {};
+  Object.keys(padraoPerfil).forEach(k => {
+    if (!Object.prototype.hasOwnProperty.call(out.telas, k)) out.telas[k] = !!padraoPerfil[k];
+  });
+  return out;
+}
 async function loadPermissions() {
   let loaded = false;
   _permsLoaded = false;
   _dynamicPermsAvailable = false;
   try {
-    const snap = await db.collection('permissoes').doc(curPerfil).get();
+    const snap = await db.collection('permissoes').doc(curPerfil).get({source:'server'});
     if (snap.exists) {
       const saved = snap.data().permissoes || {};
       if (saved.telas && Object.keys(saved.telas).length > 0) {
-        const telasSalvas = { ...(saved.telas || {}) };
-        /* Migração pontual: documentos antigos foram salvos antes da criação da
-           tela Programação. Só preenche a nova chave quando ela ainda não existe;
-           um valor false definido pelo administrador continua sendo respeitado. */
-        if (!Object.prototype.hasOwnProperty.call(telasSalvas, 'programacao')) {
-          const padraoPerfil = ATLAS_DEFAULT_TELAS_BY_PROFILE[curPerfil] || {};
-          if (Object.prototype.hasOwnProperty.call(padraoPerfil, 'programacao')) {
-            telasSalvas.programacao = !!padraoPerfil.programacao;
-          }
-        }
-        ATLAS_PERMS = {
-          telas: telasSalvas,
-          cadastros: saved.cadastros || {},
-          acoes: saved.acoes || {},
-          botoes: saved.botoes || {},
-          abas: saved.abas || {},
-          filiais: saved.filiais || {}
-        };
+        const normalized = atlasApplyMissingScreenDefaults(atlasNormalizeLoadedPermissions(saved));
+        /* Um false salvo nunca é convertido para true; somente chaves ausentes
+           recebem o padrão compatível do perfil. */
+        ATLAS_PERMS = normalized;
         loaded = true;
       }
     }
-  } catch(e) { /* usa fallback seguro se falhar */ }
+  } catch(e) { console.warn('[Atlas] falha ao ler permissoes/'+curPerfil, e); }
 
   if (!loaded && curPerfil !== 'admin') {
     const fallback = atlasFallbackPermsFor(curPerfil);
     if (fallback) {
-      ATLAS_PERMS = fallback;
+      ATLAS_PERMS = atlasNormalizeLoadedPermissions(fallback);
       loaded = true;
     }
   }
-  if (!loaded) ATLAS_PERMS = {};
+  if (!loaded) ATLAS_PERMS = atlasNormalizeLoadedPermissions({});
   _dynamicPermsAvailable = curPerfil !== 'admin' && loaded;
   _permsLoaded = true;
   applyDynamicPermissions();
+  atlasRefreshScopesInOpenFrames();
+}
+
+/* Listener em tempo real: uma alteração em permissoes/<perfil> passa a valer
+   sem depender do recarregamento do navegador nem da cadeia de iframes. */
+function atlasWatchCurrentPermissions() {
+  try { if (window.__atlasPermUnsub) window.__atlasPermUnsub(); } catch(_) {}
+  window.__atlasPermUnsub = null;
+  if (!curUser || curPerfil === 'admin') return;
+  try {
+    window.__atlasPermUnsub = db.collection('permissoes').doc(curPerfil).onSnapshot(snap => {
+      if (!snap.exists) return;
+      const saved = snap.data().permissoes || {};
+      if (!saved.telas || !Object.keys(saved.telas).length) return;
+      ATLAS_PERMS = atlasApplyMissingScreenDefaults(atlasNormalizeLoadedPermissions(saved));
+      _dynamicPermsAvailable = true;
+      _permsLoaded = true;
+      applyDynamicPermissions();
+      atlasRefreshScopesInOpenFrames();
+    }, err => console.warn('[Atlas] listener de permissões:', err));
+  } catch(e) { console.warn('[Atlas] não foi possível assinar permissões:', e); }
 }
 
 /* ── Helper: verifica se é tipo LU ── */
@@ -3775,6 +3830,10 @@ function sendTabPermsToFrame(frameId) {
   frame.contentWindow.postMessage({
     type: 'ATLAS_TAB_PERMS',
     perfil: curPerfil || 'motorista',
+    permissoes: JSON.parse(JSON.stringify(ATLAS_PERMS || {})),
+    telas: (ATLAS_PERMS && ATLAS_PERMS.telas) || {},
+    cadastros: (ATLAS_PERMS && ATLAS_PERMS.cadastros) || {},
+    acoes: (ATLAS_PERMS && ATLAS_PERMS.acoes) || {},
     abas: abas,
     botoes: botoes,
     filiais: ctx.filiais,
@@ -3789,7 +3848,8 @@ const FRAME_MAP = {
   'manutencao':'fr-manutencao','financeiro':'fr-financeiro','mapinha':'fr-mapinha',
   'pd-diario':'fr-pd-diario','ficha':'fr-ficha','compras':'fr-compras',
   'frota':'fr-frota','painel':'fr-painel','programacao':'fr-programacao','checklist':'fr-checklist','config':'fr-config',
-  'cpk':'fr-cpk','ciot':'fr-ciot','comercial':'fr-comercial'
+  'cpk':'fr-cpk','ciot':'fr-ciot','comercial':'fr-comercial',
+  'agregados':'fr-agregados','inicio':'fr-inicio'
 };
 Object.values(FRAME_MAP).forEach(fid => {
   const fr = document.getElementById(fid);
@@ -3842,6 +3902,21 @@ function atlasBridgeInvalidate(col){
   Object.keys(__atlasBridgeCache).forEach(k => { if(k.split('|')[0] === col) delete __atlasBridgeCache[k]; });
 }
 
+function atlasBridgeAllowedByPermissions(action) {
+  if (curPerfil === 'admin') return true;
+  if (!_permsLoaded || !_dynamicPermsAvailable) return false;
+  const a = (ATLAS_PERMS && ATLAS_PERMS.acoes) || {};
+  const b = (ATLAS_PERMS && ATLAS_PERMS.botoes) || {};
+  const explicit = (obj,key,defaultValue=true) => Object.prototype.hasOwnProperty.call(obj,key) ? !!obj[key] : defaultValue;
+  if (action === 'getCollection' || action === 'getDoc') return explicit(a,'visualizar',true);
+  if (action === 'deleteDoc') return explicit(a,'excluir',false) && explicit(b,'btn_excluir',false);
+  if (action === 'addDoc') return explicit(a,'criar',false) && explicit(b,'btn_salvar',false);
+  if (action === 'setDoc') {
+    return (explicit(a,'editar',false) || explicit(a,'criar',false)) && explicit(b,'btn_salvar',false);
+  }
+  return false;
+}
+
 window.addEventListener('message', async function(ev) {
   const msg = ev.data || {};
   if (msg.type !== 'ATLAS_FIRESTORE_REQUEST') return;
@@ -3858,6 +3933,7 @@ window.addEventListener('message', async function(ev) {
     }
     if (!curUser) throw new Error('Usuário não autenticado no portal.');
     if (!allowed.has(msg.collection)) throw new Error('Coleção não permitida pela ponte.');
+    if (!atlasBridgeAllowedByPermissions(msg.action)) throw new Error('Ação bloqueada pelas permissões do perfil.');
     if (msg.action === 'getCollection') {
       const key = atlasBridgeKey(msg);
       // (1) Cache fresco → responde sem tocar no Firestore.
@@ -3960,7 +4036,7 @@ window.addEventListener('message', function(ev) {
       email: curUser?.email || '', uid: curUser?.uid || '',
       perfil: curPerfil || 'motorista',
       nome: curNome || curUser?.displayName || '',
-      scope: atlasPermissionContext(), permissoes: atlasPermissionContext()
+      scope: atlasPermissionContext(), permissoes: JSON.parse(JSON.stringify(ATLAS_PERMS || {}))
     }, '*'); } catch(_) {} };
     if (curUser) send();
     else authReady.then(() => { if (curUser) send(); });
@@ -3968,8 +4044,18 @@ window.addEventListener('message', function(ev) {
   }
   // Quando permissões são atualizadas, recarregar
   if (ev.data.type === 'PERM_UPDATED') {
-    if (ev.data.tipo === curPerfil || ev.data.tipo === 'ALL') {
-      Promise.resolve(loadPermissions()).then(atlasRefreshScopesInOpenFrames).catch(()=>{});
+    if (ev.data.eventId && window.__atlasLastPermEventId === ev.data.eventId) return;
+    if (ev.data.eventId) window.__atlasLastPermEventId = ev.data.eventId;
+    const tipoAtualizado = atlasNormalizeProfile(ev.data.tipo || '', {});
+    if (tipoAtualizado === curPerfil || ev.data.tipo === 'ALL') {
+      if (ev.data.permissoes && ev.data.permissoes.telas) {
+        ATLAS_PERMS = atlasNormalizeLoadedPermissions(ev.data.permissoes);
+        _dynamicPermsAvailable = curPerfil !== 'admin';
+        _permsLoaded = true;
+        applyDynamicPermissions();
+        atlasRefreshScopesInOpenFrames();
+      }
+      Promise.resolve(loadPermissions()).catch(()=>{});
     }
     toast(`Permissões atualizadas para perfil "${ev.data.tipo}".`, 'gn');
   }
