@@ -1172,7 +1172,7 @@ body.dnd-conj .gr-uni{outline:1px dashed var(--gray-l);outline-offset:2px}
               <span class="f-hint" id="hProduto">Produtos já carregados na tabela SZB.</span></div>
             <div class="f"><label>Pedido</label><input type="text" id="dPedido"></div>
             <div class="f"><label>Tipo de frete *</label>
-              <select id="dTipoFrete">
+              <select id="dTipoFrete" onchange="associarClienteSZB()">
                 <option value="CIF">CIF — frete por conta do remetente</option>
                 <option value="FOB">FOB — frete por conta do destinatário</option>
               </select>
@@ -1506,7 +1506,7 @@ const ST = {
   com: { clientes:[], rotas:[], rotasSZY:[], rotasAtlas:[], loaded:false, erro:null, erroRotas:null },
   /* Listas derivadas da SZB: produtos, remetentes e destinatários com a UF
      predominante de cada um — é isso que preenche a UF automaticamente. */
-  szbIdx: { produtos:[], remetentes:[], destinatarios:[], clientes:[], colCliente:'', remIdx:null, desIdx:null, pares:null, paresRem:null, loaded:false },
+  szbIdx: { produtos:[], remetentes:[], destinatarios:[], clientes:[], colCliente:'', remIdx:null, desIdx:null, pares:null, paresRem:null, clientePorRem:null, clientePorDes:null, clientePorPar:null, loaded:false },
   /* Ordenação/filtro da Grade do dia (barra acima do card de unidade).
      `expandido` guarda a unidade aberta lateralmente em tela cheia. */
   grade: { ordem:'antigo', fRemetente:'', fMotorista:'', busca:'', colapsados:{}, expandido:null },
@@ -2196,6 +2196,15 @@ function colunaSZB(nomes){
 function idLocalSZB(nome,mun,uf){ return [norm(nome),norm(mun),norm(uf)].join('|'); }
 function indexarSZB(){
   const prod=new Map(), rem=new Map(), des=new Map(), cli=new Map(), pares=new Map(), paresRem=new Map();
+  /* Associação automática da Nova Demanda: cada local da SZB aponta para os
+     clientes que já apareceram em "Nome Cli Dev". O par remetente →
+     destinatário serve de desempate, sem criar uma regra paralela à base. */
+  const clientePorRem=new Map(), clientePorDes=new Map(), clientePorPar=new Map();
+  const somaCliente=(map,chave,nome)=>{
+    const n=up(nome).trim(); if(!chave||!norm(n)) return;
+    let cont=map.get(chave); if(!cont){ cont=new Map(); map.set(chave,cont); }
+    cont.set(n,(cont.get(n)||0)+1);
+  };
   /* CLIENTE (31/07/2026): a origem deixou de ser a SA1 e passou a ser a coluna
      "Nome Cli Dev" da própria SZB — quem realmente aparece no CT-e. */
   const COL_CLI=colunaSZB(['Nome Cli Dev','NomeCliDev','Nome Cli. Dev.','Nome Cliente Dev','Nome Cli Dev.','Cli Dev'])||'Nome Cli Dev';
@@ -2216,9 +2225,17 @@ function indexarSZB(){
     const op=opParaSlug(r['Operacao']);
     const p=up(r['Descr Prod']||'');
     if(p){ let e=prod.get(p); if(!e){ e={nome:p,ops:new Set(),n:0}; prod.set(p,e); } e.n++; if(op) e.ops.add(op); }
-    addLoc(rem, r['Nome Remeten'], up(r['Uf Origem']),  up(r['Local Coleta']), op);
-    addLoc(des, r['Nome Destina'], up(r['Uf Destino']), up(r['Local Entreg']), op);
-    addLoc(cli, r[COL_CLI],        up(r['Uf Destino']), up(r['Local Entreg']), op);
+    const nomeRem=up(r['Nome Remeten']||'').trim(), ufRem=up(r['Uf Origem']||'').trim(), munRem=up(r['Local Coleta']||'').trim();
+    const nomeDes=up(r['Nome Destina']||'').trim(), ufDes=up(r['Uf Destino']||'').trim(), munDes=up(r['Local Entreg']||'').trim();
+    const nomeCli=up(r[COL_CLI]||'').trim();
+    addLoc(rem, nomeRem, ufRem, munRem, op);
+    addLoc(des, nomeDes, ufDes, munDes, op);
+    addLoc(cli, nomeCli, ufDes, munDes, op);
+    const kRem=norm(nomeRem)?idLocalSZB(nomeRem,munRem,ufRem):'';
+    const kDes=norm(nomeDes)?idLocalSZB(nomeDes,munDes,ufDes):'';
+    somaCliente(clientePorRem,kRem,nomeCli);
+    somaCliente(clientePorDes,kDes,nomeCli);
+    if(kRem&&kDes) somaCliente(clientePorPar,kRem+'→'+kDes,nomeCli);
     /* PARES DO HISTÓRICO — quem este remetente já atendeu em cada cidade.
        É o desempate mais forte quando a demanda só guardou a cidade: numa
        cidade com 12 destinatários, o remetente costuma entregar em um só. */
@@ -2247,6 +2264,9 @@ function indexarSZB(){
   ST.szbIdx.desIdx        = mapaSZB(ST.szbIdx.destinatarios);
   ST.szbIdx.pares         = pares;
   ST.szbIdx.paresRem      = paresRem;
+  ST.szbIdx.clientePorRem = clientePorRem;
+  ST.szbIdx.clientePorDes = clientePorDes;
+  ST.szbIdx.clientePorPar = clientePorPar;
   ST.szbIdx.loaded=true;
   atualizarListasSeAberto();
   /* A grade normalmente desenha ANTES da SZB terminar de indexar. Como agora
@@ -4200,6 +4220,7 @@ function gerarNumero(uni){
 window.abrirDemanda=function(){
   ST.editDemandaId=null;
   rotaAutoAplicada=false;
+  resetClienteAutomatico();
   document.getElementById('tiDem').textContent='Nova Demanda';
   ['dCliente','dProduto','dPedido','dQtd','dOrigem','dUfO','dDestino','dUfD','dRota','dRotaBusca','dJcIni','dJcFim','dJdIni','dJdFim','dObs']
     .forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
@@ -4222,6 +4243,7 @@ window.editarDemanda=function(id){
   const d=ST.demandas.find(x=>x.id===id); if(!d) return;
   ST.editDemandaId=id;
   rotaAutoAplicada=false;   /* demanda salva já tem rota decidida */
+  resetClienteAutomatico(); /* cliente já salvo é tratado como preenchimento manual */
   document.getElementById('tiDem').textContent='Editar Demanda';
   const set=(k,v)=>{ const e=document.getElementById(k); if(e) e.value=v==null?'':v; };
   set('dUnid',d.unidade_slug); set('dData',d.data); set('dCliente',d.cliente); set('dProduto',d.produto);
@@ -4589,6 +4611,7 @@ window.montarListasDemanda=function(rotaSel){
   cbxInit('dCliente',{
     livre:true, max:14, maxBusca:100, amplo:true, larguraMin:520,
     vazio:'SZB ainda não indexada — pode digitar o cliente mesmo assim.',
+    onPick:resetClienteAutomatico, onFree:resetClienteAutomatico, onClear:resetClienteAutomatico,
     fonte:()=>listaCli.map(c=>({
       id:c.id||idLocalSZB(c.nome,c.municipio,c.uf), nome:c.nome,
       sub:[c.municipio,c.uf].filter(Boolean).join('/'),
@@ -4638,6 +4661,7 @@ window.montarListasDemanda=function(rotaSel){
 
   /* — Rotas (Comercial) — */
   montarSelectRotas(rotaSel);
+  associarClienteSZB();
 };
 
 let rotaSugIdx=-1;
@@ -4769,6 +4793,7 @@ window.onRotaDemanda=function(){
   set('dUfO',r.ufOrigem); set('dUfD',r.ufDestino);
   sugere('dOrigem', ST.szbIdx.remIdx, r.origem);
   sugere('dDestino',ST.szbIdx.desIdx, r.destino);
+  associarClienteSZB();
 };
 
 /* UF automática: a partir do nome escolhido, usa a UF predominante da SZB. */
@@ -4782,13 +4807,68 @@ function acharSZBCampo(id,lista){
   if(escolhido && norm(escolhido.nome)===norm(valor)) return escolhido.ref||escolhido;
   return acharSZB(lista,valor);
 }
+/* Cliente automático pela SZB. Só atua quando o campo Cliente está vazio ou
+   ainda contém o valor que esta própria rotina colocou. Qualquer digitação ou
+   escolha manual do usuário passa a prevalecer e não é sobrescrita. */
+let clienteAutoAplicado=false, clienteAutoValor='';
+function resetClienteAutomatico(){ clienteAutoAplicado=false; clienteAutoValor=''; }
+function chaveLocalEscolhido(e){
+  return e ? (e.id||idLocalSZB(e.nome,e.municipio,e.uf)) : '';
+}
+function clienteManualInformado(){
+  const el=document.getElementById('dCliente');
+  const atual=String((el&&el.value)||'').trim();
+  return !!atual && !(clienteAutoAplicado && norm(atual)===norm(clienteAutoValor));
+}
+function limparClienteAutomatico(){
+  const el=document.getElementById('dCliente');
+  if(clienteAutoAplicado && el && norm(el.value)===norm(clienteAutoValor)){
+    if(CBX.dCliente) cbxDefinir('dCliente',''); else el.value='';
+  }
+  resetClienteAutomatico();
+}
+function clienteAssociadoAoFrete(rem,des,tipo){
+  const kRem=chaveLocalEscolhido(rem), kDes=chaveLocalEscolhido(des);
+  if(!kRem||!kDes) return '';
+  const ehFOB=up(tipo)==='FOB';
+  const mapaBase=ehFOB?ST.szbIdx.clientePorDes:ST.szbIdx.clientePorRem;
+  const chaveBase=ehFOB?kDes:kRem;
+  const base=(mapaBase&&mapaBase.get(chaveBase))||new Map();
+  const par=(ST.szbIdx.clientePorPar&&ST.szbIdx.clientePorPar.get(kRem+'→'+kDes))||new Map();
+  /* Primeiro respeita o local responsável pelo frete (CIF = remetente,
+     FOB = destinatário). O par completo apenas elimina homônimos e desempata. */
+  let nomes=[...base.keys()];
+  if(par.size){
+    const inter=nomes.filter(n=>par.has(n));
+    nomes=inter.length?inter:[...par.keys()];
+  }
+  if(!nomes.length) return '';
+  nomes.sort((a,b)=>(base.get(b)||0)-(base.get(a)||0)
+    || (par.get(b)||0)-(par.get(a)||0)
+    || a.localeCompare(b,'pt-BR'));
+  return nomes[0]||'';
+}
+window.associarClienteSZB=function(){
+  if(clienteManualInformado()) return;
+  const rem=acharSZBCampo('dOrigem',ST.szbIdx.remetentes);
+  const des=acharSZBCampo('dDestino',ST.szbIdx.destinatarios);
+  if(!rem||!des){ limparClienteAutomatico(); return; }
+  const tipo=String((document.getElementById('dTipoFrete')||{}).value||'CIF');
+  const nome=clienteAssociadoAoFrete(rem,des,tipo);
+  if(!nome){ limparClienteAutomatico(); return; }
+  clienteAutoAplicado=true; clienteAutoValor=nome;
+  const el=document.getElementById('dCliente');
+  if(CBX.dCliente) cbxDefinir('dCliente',nome); else if(el) el.value=nome;
+};
 window.onRemetente=function(){
   const e=acharSZBCampo('dOrigem',ST.szbIdx.remetentes);
   if(e && e.uf){ const uf=document.getElementById('dUfO'); if(uf) uf.value=e.uf; }
+  associarClienteSZB();
 };
 window.onDestinatario=function(){
   const e=acharSZBCampo('dDestino',ST.szbIdx.destinatarios);
   if(e && e.uf){ const uf=document.getElementById('dUfD'); if(uf) uf.value=e.uf; }
+  associarClienteSZB();
 };
 
 /* ═══════════════════════════════════════════════════════════════
