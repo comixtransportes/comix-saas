@@ -358,6 +358,9 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
 .vg-off{opacity:.5;filter:grayscale(.85)}
 .vg-off:hover{opacity:.8;filter:grayscale(.35)}
 .vg-ped b{font-weight:500;color:var(--black)}
+/* CT-e · só aparece quando a viagem já está ENTREGUE. Vive colado ao pedido,
+   mesma métrica, com o verde do status final para se distinguir sem pesar. */
+.vg-cte{color:var(--green);font-weight:500}
 /* ═══ PLACAS NA MESMA LINHA ═══
    Cavalo e carretas deixam de morar em blocos diferentes: são um conjunto só,
    lido da esquerda para a direita na ordem em que o comboio anda — cavalo,
@@ -3356,7 +3359,9 @@ function linhaPendente(d){
         +' title="'+esc(stTitulo({status:d.status_op||ST_INICIAL,status_auto:d.status_auto,status_manual:d.status_manual}))+'"'
         +' aria-label="Alterar status" onclick="abrirStatusDemanda(\''+esc(d.id)+'\',event)">'
         +esc(stLabel(d.status_op||ST_INICIAL))+'</button>'
-      +(d.pedido?'<span class="vg-ped" title="Pedido do cliente">#'+esc(d.pedido)+'</span>':'')+'</span>'
+      +(d.pedido?'<span class="vg-ped" title="Pedido do cliente">Pedido_'+esc(d.pedido)+'</span>':'')
+      +(String(d.status_op||'')==='concluida'&&d.ctrc_numero
+          ?'<span class="vg-ped vg-cte" title="CT-e da entrega">CT-e_'+esc(ctrcTexto(d.ctrc_numero))+'</span>':'')+'</span>'
     +'<span class="gp-cli">'+esc(d.cliente||'—')+'</span>'
     +(function(){ const dr=destinatarioResolvido(d);
       return '<span class="vg-dest'+(dr.ok?'':' und')+'" title="'
@@ -3490,7 +3495,11 @@ function cardViagem(v){
           +' aria-label="Alterar status" onclick="abrirStatus(\''+esc(v.id)+'\',event)">'
           +esc(stLabel(v.status||ST_INICIAL))+'</button>'
         /* PEDIDO · o número que o cliente cobra por telefone, junto do status. */
-        +(dem.pedido?'<span class="vg-ped" title="Pedido do cliente">#'+esc(dem.pedido)+'</span>':'')
+        +(dem.pedido?'<span class="vg-ped" title="Pedido do cliente">Pedido_'+esc(dem.pedido)+'</span>':'')
+        /* CT-e · entregue é o único degrau em que o documento fiscal já existe
+           e já foi baixado com canhoto — só aí ele aparece, na frente do pedido. */
+        +(String(v.status||'')==='concluida'&&v.ctrc_numero
+            ?'<span class="vg-ped vg-cte" title="CT-e desta entrega">CT-e_'+esc(ctrcTexto(v.ctrc_numero))+'</span>':'')
       +'</span>'
       /* ═══ PLACAS ═══ Cavalo e carretas na MESMA linha, o comboio inteiro num
          campo só. Qualquer uma delas abre a tela do conjunto. */
@@ -5817,6 +5826,9 @@ function carimbarAuto(id){
 
 /* Número de CTRC comparável entre a SZB ('000042075') e a Ficha ('42075'). */
 function ctrcKey(n){ const s=String(n==null?'':n).replace(/\D/g,'').replace(/^0+/,''); return s||''; }
+/* Como o CT-e é ESCRITO na grade: sem os zeros à esquerda da SZB ('000042075'
+   vira '42075'), que é como a operação fala o número. */
+function ctrcTexto(n){ const s=String(n==null?'':n).trim(); return s.replace(/^0+/,'')||s; }
 
 /* Comparação de nome tolerante ao corte de 30 caracteres do export do
    Protheus: "SAINT-GOBAIN DO BRASIL PRODUTOS" chega truncado, e a demanda
