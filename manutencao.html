@@ -2200,6 +2200,7 @@ async function popularSelectUsuarios() {
       if (cur) sel.value = cur;
     });
     if (typeof renderParametrosAprovacao === 'function') renderParametrosAprovacao();
+    if (typeof atualizarBotoesAprovacaoPainel === 'function') atualizarBotoesAprovacaoPainel();
   } catch(err) {
     console.warn('[Manutenção] Usuários:', err.message);
     if (typeof renderParametrosAprovacao === 'function') renderParametrosAprovacao();
@@ -2339,11 +2340,22 @@ async function resolveAlocacaoUsuario() {
 window.addEventListener('message', function(ev) {
   if (!ev.data || typeof ev.data !== 'object') return;
   if (ev.data.type === 'ATLAS_USER') {
-    ATLAS_CURRENT_USER = { ...ATLAS_CURRENT_USER, ...ev.data };
+    const recebido = mntObjetoUsuario(ev.data);
+    ATLAS_CURRENT_USER = {
+      ...ATLAS_CURRENT_USER,
+      ...recebido,
+      uid: recebido.uid || recebido.userId || recebido.usuarioId || ATLAS_CURRENT_USER.uid || '',
+      id: recebido.id || recebido.usuarioId || ATLAS_CURRENT_USER.id || '',
+      email: recebido.email || recebido.emailUsuario || ATLAS_CURRENT_USER.email || '',
+      nome: recebido.nome || recebido.nomeUsuario || recebido.displayName || ATLAS_CURRENT_USER.nome || '',
+      perfil: recebido.perfil || recebido.role || recebido.papel || ATLAS_CURRENT_USER.perfil || ''
+    };
     applyMntButtonPerms();
     // Com o usuário identificado, resolve a alocação dele
     resolveAlocacaoUsuario();
     loadChecklists();
+    // O painel pode ter sido aberto antes da identificação chegar do index.
+    if (typeof atualizarBotoesAprovacaoPainel === 'function') atualizarBotoesAprovacaoPainel();
   }
   if (ev.data.type === 'ATLAS_TAB_PERMS') {
     setMntButtonPerms(ev.data);
@@ -5131,14 +5143,55 @@ function normalizarParametrosManutencao(raw = {}) {
   return p;
 }
 
+function mntNormalizarIdentidade(valor) {
+  return String(valor || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
+}
+function mntObjetoUsuario(ref) {
+  if (!ref || typeof ref !== 'object') return { chave:ref };
+  const nested = (ref.user && typeof ref.user === 'object') ? ref.user :
+                 (ref.usuarioAtual && typeof ref.usuarioAtual === 'object') ? ref.usuarioAtual : {};
+  return { ...nested, ...ref };
+}
+function mntIdsUsuario(ref) {
+  const u = mntObjetoUsuario(ref);
+  return [u.uid,u.userId,u.usuarioId,u.id,u.chave,u.email,u.emailUsuario,u.login,u.usuario,u.username]
+    .map(mntNormalizarIdentidade).filter(Boolean);
+}
+function mntNomesUsuario(ref) {
+  const u = mntObjetoUsuario(ref);
+  return [u.nome,u.nomeUsuario,u.displayName]
+    .map(mntNormalizarIdentidade).filter(Boolean);
+}
 function mntUsuarioPorChave(key) {
-  const k = String(key || '').trim().toLowerCase();
-  return (MNT_CACHE.usuarios || []).find(u => [u.uid,u.email,u.id].some(v => String(v || '').trim().toLowerCase() === k));
+  const usuarios = MNT_CACHE.usuarios || [];
+  const ids = mntIdsUsuario(key);
+  const porId = usuarios.find(u => mntIdsUsuario(u).some(v => ids.includes(v)));
+  if (porId) return porId;
+
+  // Compatibilidade com parâmetros/OS antigos que tenham salvo apenas o nome.
+  const nomes = mntNomesUsuario(key).concat(typeof key === 'string' ? [mntNormalizarIdentidade(key)] : []).filter(Boolean);
+  const porNome = usuarios.filter(u => mntNomesUsuario(u).some(v => nomes.includes(v)));
+  return porNome.length === 1 ? porNome[0] : null;
 }
 function mntUsuarioAtualCombina(ref) {
-  const valsAtual = [ATLAS_CURRENT_USER.uid, ATLAS_CURRENT_USER.email, ATLAS_CURRENT_USER.id].map(v => String(v || '').trim().toLowerCase()).filter(Boolean);
-  const valsRef = [ref?.uid, ref?.email, ref?.id, ref?.chave, ref].map(v => String(v || '').trim().toLowerCase()).filter(Boolean);
-  return valsAtual.some(v => valsRef.includes(v));
+  const idsAtual = mntIdsUsuario(ATLAS_CURRENT_USER);
+  const idsRef = mntIdsUsuario(ref);
+  if (idsAtual.some(v => idsRef.includes(v))) return true;
+
+  // Resolve os dois lados no cadastro para cobrir UID do Auth diferente do ID do documento.
+  const atualCadastrado = mntUsuarioPorChave(ATLAS_CURRENT_USER);
+  const refCadastrado = mntUsuarioPorChave(ref);
+  if (atualCadastrado && refCadastrado) {
+    const idsA = mntIdsUsuario(atualCadastrado);
+    const idsB = mntIdsUsuario(refCadastrado);
+    if (idsA.some(v => idsB.includes(v))) return true;
+  }
+
+  // Último fallback: nome completo exato, somente quando esse nome identifica um único usuário ativo.
+  const nomesAtual = mntNomesUsuario(ATLAS_CURRENT_USER);
+  const nomesRef = mntNomesUsuario(ref);
+  return nomesAtual.some(nome => nomesRef.includes(nome) &&
+    (MNT_CACHE.usuarios || []).filter(u => mntNomesUsuario(u).includes(nome)).length === 1);
 }
 function mntIniciais(nome) { return String(nome || '?').split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase(); }
 function mntEscapeAttr(s) { return escapeHtml(String(s || '')).replace(/"/g,'&quot;'); }
@@ -5366,6 +5419,21 @@ function usuarioPodeAprovarEtapa(os) {
   const etapa = etapaAtualOS(os);
   if (!etapa) return false;
   return (etapa.aprovadores || []).some(mntUsuarioAtualCombina);
+}
+function atualizarBotoesAprovacaoPainel(osParam) {
+  const os = osParam || (_currentOsId ? OS_DB[_currentOsId] : null);
+  if (!os) return;
+  const btnAprovar = document.getElementById('sp-btn-aprovar');
+  const btnReprovar = document.getElementById('sp-btn-reprovar');
+  const statusNorm = mntNormalizarIdentidade(os.status || '');
+  const statusFinal = /conclu|reprov|cancel/.test(statusNorm);
+  const etapaPendente = etapaAtualOS(os);
+  const podeAprovar = !!etapaPendente && usuarioPodeAprovarEtapa(os) && !statusFinal;
+  if (btnAprovar) {
+    btnAprovar.style.display = podeAprovar ? 'inline-flex' : 'none';
+    btnAprovar.textContent = etapaPendente ? `✓ Aprovar ${etapaPendente.label}` : '✓ Aprovar';
+  }
+  if (btnReprovar) btnReprovar.style.display = podeAprovar ? 'inline-flex' : 'none';
 }
 function isAprovador(osParam) {
   const perfil = String(ATLAS_CURRENT_USER.perfil || '').toLowerCase();
@@ -5872,14 +5940,8 @@ function openPanel(osId) {
     }
   }
 
-  // Botões aprovar/reprovar — visíveis só para aprovadores e OS não finalizadas/reprovadas
-  const btnAprovar  = document.getElementById('sp-btn-aprovar');
-  const btnReprovar = document.getElementById('sp-btn-reprovar');
-  const statusFinal = ['Concluída','Reprovada'].includes(os.status);
-  const etapaPendente = etapaAtualOS(os);
-  const podeAprovar = !!etapaPendente && usuarioPodeAprovarEtapa(os) && !statusFinal;
-  if (btnAprovar)  { btnAprovar.style.display = podeAprovar ? 'inline-flex' : 'none'; btnAprovar.textContent = etapaPendente ? `✓ Aprovar ${etapaPendente.label}` : '✓ Aprovar'; }
-  if (btnReprovar) { btnReprovar.style.display = podeAprovar ? 'inline-flex' : 'none'; }
+  // Botões aprovar/reprovar — visíveis só para o responsável da etapa atual.
+  atualizarBotoesAprovacaoPainel(os);
 
   // Limpar arquivos NF ao abrir nova OS
   _nfFiles[1] = _nfFiles[2] = _nfFiles[3] = null;
