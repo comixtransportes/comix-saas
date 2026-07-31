@@ -7390,5 +7390,119 @@ document.getElementById('tabs').addEventListener('click',e=>{
 
 })();
 </script>
+
+<script id="atlas-permission-runtime">
+/* ATLAS PERMISSIONS RUNTIME v2 — valida telas, abas, ações e botões recebidos do portal. */
+(function(){
+  'use strict';
+  const MODULE="programacao";
+  const TAB_ALIASES={"painel":["painel"],"grade":["grade","grade diaria"],"demandas":["demandas"],"disponibilidade":["disp","disponibilidade"],"grupos":["grupos","grupos de carga"]};
+  const state={perfil:'',loaded:false,permissoes:{telas:{},cadastros:{},acoes:{},botoes:{},abas:{},filiais:{}}};
+  const own=(o,k)=>!!o&&Object.prototype.hasOwnProperty.call(o,k);
+  const norm=v=>String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim();
+  function can(section,key,fallback=true){
+    if(state.perfil==='admin') return true;
+    const obj=state.permissoes[section]||{};
+    return own(obj,key)?!!obj[key]:fallback;
+  }
+  function setPerms(msg){
+    const full=(msg.permissoes&&msg.permissoes.telas)?msg.permissoes:{
+      telas:msg.telas||{},cadastros:msg.cadastros||{},acoes:msg.acoes||{},botoes:msg.botoes||{},abas:msg.abas||{},filiais:msg.filiais||{}
+    };
+    state.perfil=String(msg.perfil||full.perfil||state.perfil||'').toLowerCase();
+    state.permissoes={telas:full.telas||{},cadastros:full.cadastros||{},acoes:full.acoes||{},botoes:full.botoes||{},abas:full.abas||{},filiais:full.filiais||{}};
+    state.loaded=true;
+    api.perfil=state.perfil; api.state=state.permissoes; api.loaded=true;
+    scheduleApply();
+    window.dispatchEvent(new CustomEvent('atlas:permissions-changed',{detail:api}));
+  }
+  function elementToken(el){
+    return norm([el.id,el.className,el.getAttribute?.('data-tab'),el.getAttribute?.('data-view'),el.getAttribute?.('data-page'),el.getAttribute?.('onclick'),el.getAttribute?.('title'),el.getAttribute?.('aria-label'),el.textContent].filter(Boolean).join(' '));
+  }
+  function isTab(el){
+    const c=norm(el.className), oc=norm(el.getAttribute?.('onclick'));
+    return /(^| )(tab|cfg tab|nav tab)( |$)/.test(c)||el.hasAttribute?.('data-tab')||/switchtab|showtab|openadminsection|navto|settab|showpage/.test(oc);
+  }
+  function applyTabs(){
+    const modulePerms=(state.permissoes.abas||{})[MODULE];
+    if(!modulePerms||typeof modulePerms!=='object') return;
+    const candidates=document.querySelectorAll('button,a,[role="tab"],[data-tab],.tab,.cfg-tab');
+    candidates.forEach(el=>{
+      if(!isTab(el)) return;
+      const tok=elementToken(el); let matched=null;
+      for(const [key,arr] of Object.entries(TAB_ALIASES)){
+        if(arr.some(a=>tok.includes(norm(a)))){matched=key;break;}
+      }
+      if(!matched) return;
+      const denied=own(modulePerms,matched)&&!modulePerms[matched];
+      el.style.display=denied?'none':'';
+      el.toggleAttribute('data-atlas-tab-denied',denied);
+    });
+  }
+  const RULES=[
+    ['btn_excluir','excluir',/(excluir|remover|apagar|lixeira|delete)/],
+    ['btn_aprovar','aprovar',/(aprovar|aprovacao|approve)/],
+    ['btn_reabrir','editar',/(reabrir|reabertura)/],
+    ['btn_finalizar','editar',/(finalizar|concluir|encerrar|baixar os)/],
+    ['btn_importar','criar',/(importar|upload base|carregar arquivo)/],
+    ['btn_exportar','exportar',/(exportar|excel|csv|baixar planilha|gerar pdf|download)/],
+    ['btn_imprimir','exportar',/(imprimir|impressao)/],
+    ['btn_anexar','editar',/(anexar|anexo|upload foto|adicionar foto)/],
+    ['btn_parametros','editar',/(parametros|configurar|configuracao)/],
+    ['btn_processar','editar',/(processar|calcular|gerar lote|executar)/],
+    ['btn_salvar','editar',/(salvar|gravar|confirmar alteracao|atualizar registro)/],
+    ['btn_editar','editar',/(editar|alterar|corrigir)/],
+    ['btn_novo','criar',/(^| )(novo|nova|adicionar|incluir|criar|abrir o s)( |$)/],
+    ['btn_atualizar','visualizar',/(atualizar|recarregar|sincronizar)/],
+    ['btn_limpar','visualizar',/(limpar filtro|limpar busca|resetar filtro)/],
+    ['btn_filtrar','visualizar',/(filtrar|aplicar filtro|buscar)/],
+    ['btn_detalhes','visualizar',/(detalhes|visualizar|abrir dossie|ver ficha|consultar)/],
+    ['btn_cancelar','cancelar',/(cancelar (os|solicitacao|pedido|viagem|demanda)|cancelamento)/]
+  ];
+  function classify(el){
+    if(!el||isTab(el)) return null;
+    const tok=elementToken(el);
+    if(!tok) return null;
+    for(const r of RULES) if(r[2].test(tok)) return {button:r[0],action:r[1]};
+    return null;
+  }
+  function deniedByRule(rule){
+    if(!rule||state.perfil==='admin') return false;
+    const b=state.permissoes.botoes||{}, a=state.permissoes.acoes||{};
+    return (own(b,rule.button)&&!b[rule.button]) || (own(a,rule.action)&&!a[rule.action]);
+  }
+  function applyButtons(){
+    document.querySelectorAll('button,a.btn,input[type="button"],input[type="submit"],input[type="file"],[role="button"],[onclick]').forEach(el=>{
+      const r=classify(el); if(!r) return;
+      const denied=deniedByRule(r);
+      if(denied){
+        if(!el.hasAttribute('data-atlas-prev-display')) el.setAttribute('data-atlas-prev-display',el.style.display||'');
+        el.style.display='none'; el.setAttribute('data-atlas-perm-denied',r.button+':'+r.action);
+      } else if(el.hasAttribute('data-atlas-perm-denied')){
+        el.style.display=el.getAttribute('data-atlas-prev-display')||'';
+        el.removeAttribute('data-atlas-perm-denied'); el.removeAttribute('data-atlas-prev-display');
+      }
+    });
+  }
+  function applyScreen(){
+    if(state.perfil==='admin'||!state.loaded) return;
+    const telas=state.permissoes.telas||{};
+    if(own(telas,MODULE)&&!telas[MODULE]){
+      let ov=document.getElementById('atlas-permission-denied-overlay');
+      if(!ov){ov=document.createElement('div');ov.id='atlas-permission-denied-overlay';ov.style.cssText='position:fixed;inset:0;z-index:2147483647;background:#f0f2f5;display:flex;align-items:center;justify-content:center;font:600 14px IBM Plex Sans,Arial;color:#192135';ov.innerHTML='<div style="background:#fff;border:1px solid #d1d9e6;border-radius:8px;padding:24px;max-width:440px;text-align:center">Acesso a esta tela não liberado para o perfil atual.</div>';document.body.appendChild(ov);}
+    } else document.getElementById('atlas-permission-denied-overlay')?.remove();
+  }
+  let queued=false;
+  function scheduleApply(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;applyScreen();applyTabs();applyButtons();})}
+  document.addEventListener('click',ev=>{
+    if(!state.loaded)return;
+    const el=ev.target&&ev.target.closest&&ev.target.closest('button,a,input[type="button"],input[type="submit"],input[type="file"],[role="button"],[onclick]');
+    const r=classify(el); if(deniedByRule(r)){ev.preventDefault();ev.stopImmediatePropagation();try{window.showToast?.('Função não liberada para este perfil.','error')}catch(_){}}
+  },true);
+  const api=window.AtlasPermissions={module:MODULE,perfil:'',loaded:false,state:state.permissoes,can,canAction:(k,f=false)=>can('acoes',k,f),canButton:(k,f=false)=>can('botoes',k,f),apply:scheduleApply};
+  window.addEventListener('message',ev=>{const m=ev.data||{};if(m.type==='ATLAS_USER'||m.type==='ATLAS_TAB_PERMS')setPerms(m)});
+  document.addEventListener('DOMContentLoaded',()=>{scheduleApply();try{if(window.parent&&window.parent!==window){window.parent.postMessage({type:'ATLAS_REQUEST_USER'},'*');window.parent.postMessage({type:'ATLAS_REQUEST_TAB_PERMS'},'*')}}catch(_){};new MutationObserver(scheduleApply).observe(document.documentElement,{childList:true,subtree:true});});
+})();
+</script>
 </body>
 </html>
