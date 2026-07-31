@@ -841,6 +841,12 @@ body.dnd-conj .gr-uni{outline:1px dashed var(--gray-l);outline-offset:2px}
 .cbx-ft{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:5px 10px;border-top:1px solid var(--gray-ll);background:var(--gray-bg);font-size:9.5px;color:var(--gray);white-space:nowrap}
 .cbx-ft b{font-family:var(--pd-m);font-weight:600;color:var(--black)}
 .cbx-empty{padding:11px 10px;font-size:10.5px;color:var(--gray);text-align:center}
+/* Cliente, remetente e destinatário usam uma lista mais larga: o nome fica
+   inteiro (com quebra de linha quando necessário) e a cidade/UF permanece à
+   direita. Os demais comboboxes continuam compactos. */
+.cbx-pop.amplo .cbx-it{align-items:flex-start;min-height:35px;padding-top:6px;padding-bottom:6px}
+.cbx-pop.amplo .cbx-n{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.25;overflow-wrap:anywhere}
+.cbx-pop.amplo .cbx-s{max-width:42%;margin-left:auto;margin-top:1px}
 @media(max-width:1080px){
   .demanda-grid{grid-template-columns:1fr 1fr}
   .dem-col:nth-child(3){grid-column:1/-1;border-left:0;border-top:1px solid var(--gray-ll);padding:12px 2px 0}
@@ -2180,19 +2186,23 @@ function colunaSZB(nomes){
   }
   return null;
 }
+function idLocalSZB(nome,mun,uf){ return [norm(nome),norm(mun),norm(uf)].join('|'); }
 function indexarSZB(){
   const prod=new Map(), rem=new Map(), des=new Map(), cli=new Map(), pares=new Map(), paresRem=new Map();
   /* CLIENTE (31/07/2026): a origem deixou de ser a SA1 e passou a ser a coluna
      "Nome Cli Dev" da própria SZB — quem realmente aparece no CT-e. */
   const COL_CLI=colunaSZB(['Nome Cli Dev','NomeCliDev','Nome Cli. Dev.','Nome Cliente Dev','Nome Cli Dev.','Cli Dev'])||'Nome Cli Dev';
+  /* Um mesmo nome pode existir em várias cidades. A chave anterior usava só o
+     nome e condensava todas as filiais em uma cidade predominante — por isso,
+     por exemplo, MAX MOHR de PIÇARRAS desaparecia da lista. */
   const addLoc=(map,nome,uf,mun,op)=>{
-    const k=norm(nome); if(!k) return;
+    const nm=up(nome).trim(), ufN=up(uf).trim(), munN=up(mun).trim();
+    if(!norm(nm)) return;
+    const k=idLocalSZB(nm,munN,ufN);
     let e=map.get(k);
-    if(!e){ e={nome:up(nome),ufs:{},muns:{},ops:new Set(),n:0}; map.set(k,e); }
+    if(!e){ e={id:k,nome:nm,uf:ufN,municipio:munN,ops:new Set(),n:0}; map.set(k,e); }
     e.n++;
-    if(uf)  e.ufs[uf]=(e.ufs[uf]||0)+1;
-    if(mun) e.muns[mun]=(e.muns[mun]||0)+1;
-    if(op)  e.ops.add(op);
+    if(op) e.ops.add(op);
   };
   (ST.szb.rows||[]).forEach(r=>{
     if(r['Dt Cancel']) return;                                  // CTRC cancelado não gera cadastro
@@ -2215,10 +2225,10 @@ function indexarSZB(){
     const kd=norm(r['Nome Destina']||''), kmc=norm(r['Local Coleta']||''), nr=up(r['Nome Remeten']||'').trim();
     if(kd&&kmc&&nr){ const kk=kd+'|'+kmc; let s=paresRem.get(kk); if(!s){ s=new Set(); paresRem.set(kk,s); } s.add(nr); }
   });
-  const topo=o=>Object.keys(o).sort((a,b)=>o[b]-o[a])[0]||'';
-  const ordena=a=>a.sort((x,y)=>x.nome.localeCompare(y.nome,'pt-BR'));
+  const ordena=a=>a.sort((x,y)=>x.nome.localeCompare(y.nome,'pt-BR')
+    || x.municipio.localeCompare(y.municipio,'pt-BR') || x.uf.localeCompare(y.uf,'pt-BR'));
   const finaliza=m=>ordena([...m.values()].map(e=>({
-    nome:e.nome, uf:topo(e.ufs), municipio:topo(e.muns), ops:e.ops, n:e.n
+    id:e.id, nome:e.nome, uf:e.uf, municipio:e.municipio, ops:e.ops, n:e.n
   })));
 
   ST.szbIdx.produtos      = ordena([...prod.values()].map(e=>({nome:e.nome,ops:e.ops,n:e.n})));
@@ -2246,7 +2256,11 @@ function indexarSZB(){
 function mapaSZB(lista){
   const porNome=new Map(), porMun=new Map();
   (lista||[]).forEach(e=>{
-    porNome.set(norm(e.nome),e);
+    /* Demandas antigas guardam apenas o nome. Para elas, mantém o comportamento
+       anterior usando a ocorrência mais frequente; demandas novas guardam a
+       cidade exata escolhida no combobox. */
+    const kn=norm(e.nome), atual=porNome.get(kn);
+    if(!atual || Number(e.n||0)>Number(atual.n||0)) porNome.set(kn,e);
     const m=norm(e.municipio); if(!m) return;
     porMun.set(m, porMun.has(m) ? null : e);
   });
@@ -4204,7 +4218,10 @@ window.editarDemanda=function(id){
   /* Editar NÃO duplica: "viagens por dia" só existe na criação da demanda. */
   const bxV=document.getElementById('dRecViagensBox'); if(bxV) bxV.style.display='none';
   montarListasDemanda(d.rota_id||d.rota_codigo);
-  ['dCliente','dProduto','dOrigem','dDestino'].forEach(cbxSincronizar);
+  ['dCliente','dProduto'].forEach(cbxSincronizar);
+  const nomeOrig=rrEd.ok?rrEd.nome:d.local_coleta, nomeDest=drEd.ok?drEd.nome:d.local_entrega;
+  cbxDefinirLocal('dOrigem',nomeOrig,d.municipio_origem,d.uf_origem);
+  cbxDefinirLocal('dDestino',nomeDest,d.municipio_destino,d.uf_destino);
   const serie=document.getElementById('dRecSerie');
   if(d.recorrencia_id){
     serie.style.display='';
@@ -4335,7 +4352,8 @@ window.cbxInit=function(id,cfg){
     document.body.appendChild(pop);
   }
   const antes=CBX[id]||{};
-  CBX[id]=Object.assign({max:12,livre:false},cfg||{},{inp:inp,w:w,pop:pop,idx:-1,itens:[],atual:antes.atual||null});
+  CBX[id]=Object.assign({max:12,maxBusca:0,livre:false},cfg||{},{inp:inp,w:w,pop:pop,idx:-1,itens:[],atual:antes.atual||null});
+  pop.classList.toggle('amplo',!!CBX[id].amplo);
   inp.setAttribute('autocomplete','off');
   inp.removeAttribute('list');
   if(inp.dataset.cbx!=='1'){
@@ -4366,12 +4384,14 @@ window.cbxSincronizar=function(id){
 function cbxRender(id){
   const c=CBX[id]; if(!c) return;
   const toks=cbxTokens(c.inp.value), base=cbxFonte(id);
+  const limite=toks.length?(Number(c.maxBusca)||c.max):c.max;
   let achados;
-  if(!toks.length) achados=base.slice(0,c.max);
+  if(!toks.length) achados=base.slice(0,limite);
   else achados=base.map(function(it){ return {it:it,r:cbxRank(it,toks)}; })
       .filter(function(x){ return x.r>=0; })
-      .sort(function(a,b){ return (b.r-a.r) || String(a.it.nome).localeCompare(String(b.it.nome),'pt-BR',{numeric:true}); })
-      .slice(0,c.max).map(function(x){ return x.it; });
+      .sort(function(a,b){ return (b.r-a.r) || String(a.it.nome).localeCompare(String(b.it.nome),'pt-BR',{numeric:true})
+        || String(a.it.sub||'').localeCompare(String(b.it.sub||''),'pt-BR',{numeric:true}); })
+      .slice(0,limite).map(function(x){ return x.it; });
   c.itens=achados; c.idx=-1;
   const lista=c.pop.querySelector('.cbx-list'), ft=c.pop.querySelector('.cbx-ft');
   if(!base.length) lista.innerHTML='<div class="cbx-empty">'+esc(c.vazio||'Nada disponível para buscar.')+'</div>';
@@ -4399,8 +4419,11 @@ function cbxPosicionar(id){
   const c=CBX[id]; if(!c) return;
   const r=c.inp.getBoundingClientRect();
   const vh=(window.visualViewport&&window.visualViewport.height)||window.innerHeight||0;
-  c.pop.style.left=Math.round(r.left)+'px';
-  c.pop.style.width=Math.round(r.width)+'px';
+  const vw=(window.visualViewport&&window.visualViewport.width)||window.innerWidth||0;
+  const largura=c.amplo ? Math.min(Math.max(r.width,Number(c.larguraMin)||520),Math.max(r.width,vw-12)) : r.width;
+  const esquerda=Math.max(6,Math.min(r.left,Math.max(6,vw-largura-6)));
+  c.pop.style.left=Math.round(esquerda)+'px';
+  c.pop.style.width=Math.round(largura)+'px';
   c.pop.style.top='-9999px';
   const h=c.pop.offsetHeight;
   const abaixo=vh-r.bottom-8, acima=r.top-8;
@@ -4428,6 +4451,9 @@ window.cbxFechar=function(id,confirmar){
   const v=String(c.inp.value||'').trim();
   if(!v){ cbxLimpar(id); return; }
   const k=norm(v);
+  /* Com nomes repetidos em cidades diferentes, não substitui a escolha atual
+     pela primeira ocorrência só porque o texto do nome é igual. */
+  if(c.atual && norm(c.atual.nome)===k && !c.atual.off){ c.w.classList.add('ok'); return; }
   const exato=cbxFonte(id).find(function(x){ return norm(x.nome)===k && !x.off; });
   if(exato){ cbxAplicar(id,exato); return; }
   if(c.livre){
@@ -4476,6 +4502,13 @@ window.cbxDefinir=function(id,valor,disparar){
   } else { c.inp.value=c.livre?v:''; cbxSincronizar(id); }
 };
 window.cbxValor=function(id){ const c=CBX[id]; return c&&c.atual?c.atual:null; };
+/* Restaura uma localidade salva pela combinação nome + cidade + UF. Demandas
+   antigas, sem município gravado, continuam abrindo pelo nome como antes. */
+window.cbxDefinirLocal=function(id,nome,mun,uf){
+  const chave=idLocalSZB(nome,mun,uf);
+  const existe=!!cbxFonte(id).find(function(x){ return String(x.id)===chave; });
+  cbxDefinir(id,existe?chave:nome);
+};
 function cbxEscolher(id,i){
   const c=CBX[id]; if(!c) return;
   const it=c.itens[i];
@@ -4527,12 +4560,13 @@ window.montarListasDemanda=function(rotaSel){
        que aparece no CT-e, e é esse nome que a programação precisa casar. — */
   const listaCli=ST.szbIdx.clientes||[];
   cbxInit('dCliente',{
-    livre:true, max:10,
+    livre:true, max:14, maxBusca:100, amplo:true, larguraMin:520,
     vazio:'SZB ainda não indexada — pode digitar o cliente mesmo assim.',
     fonte:()=>listaCli.map(c=>({
-      id:c.nome, nome:c.nome,
-      sub:[[...(c.ops||[])].sort().join(' · '), c.n?(c.n+'x'):''].filter(Boolean).join(' · '),
-      busca:[c.municipio,c.uf].filter(Boolean).join(' ')
+      id:c.id||idLocalSZB(c.nome,c.municipio,c.uf), nome:c.nome,
+      sub:[c.municipio,c.uf].filter(Boolean).join('/'),
+      municipio:c.municipio, uf:c.uf, ref:c,
+      busca:[c.municipio,c.uf,[...(c.ops||[])].sort().join(' '),c.n].filter(Boolean).join(' ')
     }))
   });
   hint('hCliente', !ST.szbIdx.loaded ? 'Carregando os clientes da SZB…'
@@ -4552,15 +4586,22 @@ window.montarListasDemanda=function(rotaSel){
 
   /* — Remetentes e destinatários: SZB inteira, sem recorte por filial — */
   const rem=ST.szbIdx.remetentes||[], des=ST.szbIdx.destinatarios||[];
-  const localItem=r=>({id:r.nome,nome:r.nome,sub:[r.municipio,r.uf].filter(Boolean).join('/'),busca:[r.municipio,r.uf].filter(Boolean).join(' ')});
+  const localItem=r=>({
+    id:r.id||idLocalSZB(r.nome,r.municipio,r.uf), nome:r.nome,
+    sub:[r.municipio,r.uf].filter(Boolean).join('/'),
+    municipio:r.municipio, uf:r.uf, ref:r,
+    busca:[r.municipio,r.uf].filter(Boolean).join(' ')
+  });
   cbxInit('dOrigem',{
-    livre:true, max:10, vazio:'SZB ainda não indexada — pode digitar o remetente.',
+    livre:true, max:14, maxBusca:100, amplo:true, larguraMin:520,
+    vazio:'SZB ainda não indexada — pode digitar o remetente.',
     fonte:()=>rem.map(localItem),
     onPick:()=>{ onRemetente(); rotaAutomatica(); },
     onFree:()=>{ onRemetente(); rotaAutomatica(); }
   });
   cbxInit('dDestino',{
-    livre:true, max:10, vazio:'SZB ainda não indexada — pode digitar o destinatário.',
+    livre:true, max:14, maxBusca:100, amplo:true, larguraMin:520,
+    vazio:'SZB ainda não indexada — pode digitar o destinatário.',
     fonte:()=>des.map(localItem),
     onPick:()=>{ onDestinatario(); rotaAutomatica(); },
     onFree:()=>{ onDestinatario(); rotaAutomatica(); }
@@ -4693,7 +4734,10 @@ window.onRotaDemanda=function(){
     const e=document.getElementById(id); if(!e||String(e.value||'').trim()) return;
     const c=norm(cidade); if(!c||!idx) return;
     const alvo=idx.porMun.get(c);
-    if(alvo) e.value=alvo.nome;
+    if(alvo){
+      if(CBX[id]) cbxDefinir(id,alvo.id||idLocalSZB(alvo.nome,alvo.municipio,alvo.uf));
+      else e.value=alvo.nome;
+    }
   };
   set('dUfO',r.ufOrigem); set('dUfD',r.ufDestino);
   sugere('dOrigem', ST.szbIdx.remIdx, r.origem);
@@ -4705,12 +4749,18 @@ function acharSZB(lista,nome){
   const k=norm(nome); if(!k) return null;
   return lista.find(e=>norm(e.nome)===k)||null;
 }
+function acharSZBCampo(id,lista){
+  const inp=document.getElementById(id), valor=String((inp&&inp.value)||'').trim();
+  const escolhido=cbxValor(id);
+  if(escolhido && norm(escolhido.nome)===norm(valor)) return escolhido.ref||escolhido;
+  return acharSZB(lista,valor);
+}
 window.onRemetente=function(){
-  const e=acharSZB(ST.szbIdx.remetentes,(document.getElementById('dOrigem')||{}).value);
+  const e=acharSZBCampo('dOrigem',ST.szbIdx.remetentes);
   if(e && e.uf){ const uf=document.getElementById('dUfO'); if(uf) uf.value=e.uf; }
 };
 window.onDestinatario=function(){
-  const e=acharSZB(ST.szbIdx.destinatarios,(document.getElementById('dDestino')||{}).value);
+  const e=acharSZBCampo('dDestino',ST.szbIdx.destinatarios);
   if(e && e.uf){ const uf=document.getElementById('dUfD'); if(uf) uf.value=e.uf; }
 };
 
@@ -4762,7 +4812,7 @@ window.rotaAutomatica=function(){
   const limpaAuto=()=>{ if(rotaAutoAplicada){ idEl.value=''; busca.value=''; rotaAutoAplicada=false; } };
   if(!oNome||!dNome){ limpaAuto(); return; }
 
-  const o=acharSZB(ST.szbIdx.remetentes,oNome), d=acharSZB(ST.szbIdx.destinatarios,dNome);
+  const o=acharSZBCampo('dOrigem',ST.szbIdx.remetentes), d=acharSZBCampo('dDestino',ST.szbIdx.destinatarios);
   const oCid=(o&&o.municipio)||'', dCid=(d&&d.municipio)||'';
   if(!oCid||!dCid){
     limpaAuto();
@@ -4927,8 +4977,8 @@ window.salvarDemanda=async function(){
   const rota=ST.com.rotas.find(r=>String(r.id)===rotaId)||null;
   /* Remetente e destinatário vêm da SZB: guardamos também município e UF de
      referência, para o dado nascer completo mesmo sem digitação. */
-  const eRem=acharSZB(ST.szbIdx.remetentes,g('dOrigem'));
-  const eDes=acharSZB(ST.szbIdx.destinatarios,g('dDestino'));
+  const eRem=acharSZBCampo('dOrigem',ST.szbIdx.remetentes);
+  const eDes=acharSZBCampo('dDestino',ST.szbIdx.destinatarios);
   const payload=semUndefined({
     unidade_slug:g('dUnid'), data:g('dData')||ST.data,
     cliente:up(cliente), produto:up(produto), pedido:g('dPedido'),
