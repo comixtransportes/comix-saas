@@ -637,7 +637,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
 
     <!-- ══════════ VISÃO GERAL ══════════ -->
     <div class="cpk-pane on" id="pane-vg">
-      <div class="cpk-info"><span>CPK da <strong>frota própria</strong>. O custo total espelha o <strong>DRE do Mapinha</strong> (Diesel + Custo Operacional + Pessoal + Pedágio + custo de capital), porém <strong>sem os custos operacionais de agregados</strong>: o Fechamento de Agregados, o diesel de agregado (02.02/04.02), e os empréstimos/custos diretos de placa agregada (10/11/12.01) ficam de fora. <strong>Exceção: a Garantia Agregados entra como C.O</strong>, rateada igualmente entre as placas próprias da filial. <strong>Guarda de placa: apenas placas próprias</strong> — lançamento/OS em CC de frota mas com placa agregada (ou vínculo indefinido) fica fora do CPK e vira inconsistência, <strong>exceto</strong>: custo em placa de <strong>carreta da Comix</strong> nos CCs 03.01/06.01/07.01/08.01 é custo da FROTA, diluído entre as placas da filial; e despesa adm (09.01) em <strong>carro de apoio</strong> entra no percentual do rateio diluída na filial onde o carro está alocado no cadastro. <strong>Rateio de compartilhados: custos administrativos (CC 09.01 / mão de obra adm) entram no percentual do rateio vigente (padrão 82%)</strong>, proporção da demanda gerada pela frota própria — calculável e ajustável na <strong>Ferramenta de Rateio</strong> (card na aba Auditoria); o C.P da premissa não recebe o fator (fechamento = operação própria). <strong>Custo de capital: somente a Depreciação por placa, quando cadastrada — o Custo de Equipamentos (premissa) não entra no CPK</strong>. <strong>Pedágio: frota própria</strong> — cada cavalo próprio carrega o próprio pedágio (Valor Cobrado + Vale Comix); o pedágio de <strong>carro de apoio</strong> entra alocado na filial do carro e é rateado entre as placas dela; pedágio de agregado, carreta, placa sem cadastro ou sem placa fica fora do CPK (permanece apenas no DRE do Mapinha). Pessoal no CPK vem do campo Custo Frota 35% da Premissa (CPK); Pedágio, por placa, da aba Pedágios. KM por placa vem da aba <strong>Dados</strong>; sem importação, deriva de SZB×SZY. Receita = CTRC de frota própria no <strong>SZB</strong>. <b>CPK = Custo Total ÷ KM Total.</b></span></div>
+      <div class="cpk-info"><span>CPK da <strong>frota própria</strong>. O custo total espelha o <strong>DRE do Mapinha</strong> (Diesel + Custo Operacional + Pessoal + Pedágio + custo de capital), porém <strong>sem os custos operacionais de agregados</strong>: o Fechamento de Agregados, o diesel de agregado (02.02/04.02), e os empréstimos/custos diretos de placa agregada (10/11/12.01) ficam de fora. <strong>Exceção: a Garantia Agregados entra como C.O</strong>, rateada igualmente entre as placas próprias da filial. <strong>Guarda de placa: apenas placas próprias</strong> — lançamento/OS em CC de frota mas com placa agregada (ou vínculo indefinido) fica fora do CPK e vira inconsistência, <strong>exceto</strong>: custo em placa de <strong>carreta da Comix</strong> nos CCs 03.01/06.01/07.01/08.01 é custo da FROTA, diluído entre as placas da filial; e despesa adm (09.01) em <strong>carro de apoio</strong> entra no percentual do rateio diluída na filial onde o carro está alocado no cadastro. <strong>Rateio de compartilhados: custos administrativos (CC 09.01 / mão de obra adm) entram no percentual do rateio vigente (padrão 82%)</strong>, proporção da demanda gerada pela frota própria — calculável e ajustável na <strong>Ferramenta de Rateio</strong> (card na aba Auditoria); o C.P da premissa não recebe o fator (fechamento = operação própria). <strong>Custo de capital: somente a Depreciação por placa, quando cadastrada — o Custo de Equipamentos (premissa) não entra no CPK</strong>. <strong>Pedágio: frota própria</strong> — cada cavalo próprio carrega o próprio pedágio (Valor Cobrado + Vale Comix); o pedágio de <strong>carro de apoio</strong> entra alocado na filial do carro e é rateado entre as placas dela; pedágio de agregado, carreta, placa sem cadastro ou sem placa fica fora do CPK (permanece apenas no DRE do Mapinha). Pessoal no CPK vem do campo Custo Frota 35% da Premissa (CPK); Pedágio, por placa, da aba Pedágios. KM por placa vem da aba <strong>Dados</strong>, resolvido <strong>mês a mês</strong>: em competência sem base importada o KM daquele mês deriva de SZB×SZY e é somado normalmente — num período de vários meses, custo e KM cobrem sempre os mesmos meses. Receita = CTRC de frota própria no <strong>SZB</strong>. <b>CPK = Custo Total ÷ KM Total.</b></span></div>
 
       <div class="kpi-row" id="vg-kpis"></div>
 
@@ -1183,7 +1183,12 @@ const CPK = {
   custoLedger:[], garantiaAgregFil:{SC:0,PR:0,SP:0}, custoExcluidos:[], custoIncons:[], audit:null, // AUDITORIA
 
   // KM importado (aba Dados) — por mês
-  kmImportMes:null, kmImport:{}, kmImportMeta:null, kmImportLoaded:false,
+  // kmImport        = TOTAL do período por placa (compatibilidade / telas)
+  // kmImportPorMes  = {mes:{placa:km}} — granularidade por competência, usada
+  //                   pelo motor para resolver KM mês a mês (#CPK-KM-PERIODO)
+  // kmImportMeses   = competências do período que TÊM base salva
+  // kmMesesSemBase  = competências do período SEM base (KM cai no SZB×SZY)
+  kmImportMes:null, kmImport:{}, kmImportPorMes:{}, kmImportMeses:[], kmMesesSemBase:[], kmImportMeta:null, kmImportLoaded:false,
   dadosPreview:null,
 
   // resultados calculados
@@ -1769,7 +1774,7 @@ function cpkQuartilBadge(p){
   return '<span class="bdg '+cls+'" title="'+p.rank_fil+'º de '+p.rank_fil_tot+' na filial (por margem/km)">Q'+p.quartil+'</span>';
 }
 function cpkStatusBadge(st){const cfg={saudavel:'bg',atencao:'ba',critico:'br','sem-km':'bm'};const lbl={saudavel:'Saudável',atencao:'Atenção',critico:'Prejuízo','sem-km':'Sem KM'};return `<span class="bdg ${cfg[st]||'bm'}">${lbl[st]||st}</span>`;}
-function cpkFonteBadge(f){const cfg={szy:'ds-szy',szb:'ds-szb',importado:'ds-szc',estimado:'ds-est',pendente:'ds-nd'};const lbl={szy:'SZY',szb:'SZB',importado:'Importado',estimado:'Est.',pendente:'Pendente'};return `<span class="ds-badge ${cfg[f]||'ds-est'}">${lbl[f]||f}</span>`;}
+function cpkFonteBadge(f){const cfg={szy:'ds-szy',szb:'ds-szb',importado:'ds-szc',misto:'ds-est',estimado:'ds-est',pendente:'ds-nd'};const lbl={szy:'SZY',szb:'SZB',importado:'Importado',misto:'Misto',estimado:'Est.',pendente:'Pendente'};return `<span class="ds-badge ${cfg[f]||'ds-est'}">${lbl[f]||f}</span>`;}
 function cpkChartDestroy(id){if(CPK.charts[id]){try{CPK.charts[id].destroy();}catch(_){}delete CPK.charts[id];}}
 
 // ── BOOT / AUTH ────────────────────────────────────────────────────
@@ -2662,22 +2667,28 @@ async function cpkLoadKmImportPeriodo(meses){
   const key=lista.join(',');
   if(CPK.kmImportLoaded && CPK.kmImportKey===key) return;
   CPK.kmImportKey=key; CPK.kmImportMes=lista[lista.length-1];
-  CPK.kmImport={}; CPK.kmImportMeta=null; CPK.kmImportMeses=[]; CPK.kmImportLoaded=false;
+  CPK.kmImport={}; CPK.kmImportPorMes={}; CPK.kmImportMeta=null; CPK.kmImportMeses=[]; CPK.kmMesesSemBase=[]; CPK.kmImportLoaded=false;
   for(const mes of lista){
+    let temBase=false;
     try{
       const doc=await cpkFsGetDoc(CPK_KM_COL,CPK_KM_DOC(mes));
       if(doc&&doc.data&&doc.data.placas){
         const placas=doc.data.placas;
+        const mm={};
         Object.keys(placas).forEach(p=>{
           const pn=cpkNormPlaca(p); const km=cpkNumKm(placas[p].km);
           if(!CPK.kmImport[pn]) CPK.kmImport[pn]={ km:0, bruto:placas[p] };
           CPK.kmImport[pn].km+=km;
           CPK.kmImport[pn].bruto=placas[p];
+          mm[pn]=(mm[pn]||0)+km;                 // KM da placa NAQUELE mês
         });
+        CPK.kmImportPorMes[mes]=mm;
         CPK.kmImportMeses.push(mes);
         CPK.kmImportMeta=doc.data.meta||CPK.kmImportMeta;
+        temBase=true;
       }
     }catch(e){ cpkLog('KM import erro:',e.message); }
+    if(!temBase) CPK.kmMesesSemBase.push(mes);   // mês sem base → KM do mês vem do SZB×SZY
   }
   CPK.kmImportLoaded=true;
 }
@@ -3072,9 +3083,13 @@ function cpkCalculate(){
     // (vem de recFilProp, no nível do CT-e).
     const _uFis=d.uniCad||d.unidade;
     if(!aggP[placa]) aggP[placa]={ placa, frota:cpkVeic(placa)?.frota||d.frotaSZB, motorista:d.motorista, unidade:_uFis, unidadeReceita:d.unidade,
-      tipo:cpkVeic(placa)?.tipo||'', viagens:0, faturamento:0, faturamento_bruto:0, km_szb:0, clientes:{}, rotas:{} };
+      tipo:cpkVeic(placa)?.tipo||'', viagens:0, faturamento:0, faturamento_bruto:0, km_szb:0, km_szb_mes:{}, clientes:{}, rotas:{} };
     const pa=aggP[placa];
     pa.viagens++; pa.faturamento+=fat; pa.faturamento_bruto+=fatBr; pa.km_szb+=d.km;
+    // KM derivado POR COMPETÊNCIA — o motor resolve a fonte de KM mês a mês
+    // (import do mês quando existe base; SZB×SZY no mês sem base). Sem esta
+    // quebra, um período misto perdia o KM dos meses sem base. (#CPK-KM-PERIODO)
+    if(d.mes) pa.km_szb_mes[d.mes]=(pa.km_szb_mes[d.mes]||0)+(+d.km||0);
     if(!pa.unidade&&_uFis)pa.unidade=_uFis; if(!pa.motorista&&d.motorista)pa.motorista=d.motorista;
     pa.clientes[cliente]=(pa.clientes[cliente]||0)+fat;
     if(rota)pa.rotas[rota]=(pa.rotas[rota]||0)+1;
@@ -3084,15 +3099,53 @@ function cpkCalculate(){
   CPK.recFilPropriaBruta=recFilPropBr;
   CPK.diag.recDiverg=recDiverg;
 
-  // 4) KM por placa: se há importação no mês, ela é a fonte AUTORITATIVA (= aba Dados).
-  //    Sem importação, cai no derivado SZB×SZY. Placa com receita e sem KM importado fica flagada.
-  const temImport = Object.keys(CPK.kmImport).length>0;
+  // 4) KM por placa — RESOLVIDO MÊS A MÊS  (#CPK-KM-PERIODO)
+  //    Regra por competência (idêntica à do mês único, aplicada a cada mês do período):
+  //      · mês COM base importada (aba Dados) → a base é a fonte AUTORITATIVA;
+  //        placa fora da base naquele mês fica sem KM no mês (pendente).
+  //      · mês SEM base importada → KM do mês deriva de SZB×SZY.
+  //    O KM da placa no período é a SOMA dessas parcelas mensais.
+  //
+  //    BUG CORRIGIDO: antes existia um único flag `temImport` para o período
+  //    inteiro e o import era lido já somado por placa. Num período misto
+  //    (ex.: abr e mai com base, jun sem base), toda placa que aparecia na base
+  //    de abr/mai entrava por `imp.km>0` e o KM de jun NUNCA era somado — o
+  //    custo somava 3 meses e o KM somava 2, inflando o CPK do acumulado
+  //    (9,82 em vez de 6,60) e o de cada filial, sem que nenhum mês isolado
+  //    estivesse errado.
+  const _mesesPer  = cpkPeriodoMeses();
+  const _mesesKm   = _mesesPer.length ? _mesesPer : (mes?[mes]:[]);
+  const _baseMes   = new Set(CPK.kmImportMeses||[]);
+  const _impMes    = CPK.kmImportPorMes||{};
+  // Fallback defensivo: se o mapa por mês não estiver disponível (carga antiga
+  // em cache), volta ao comportamento agregado para não zerar o KM da tela.
+  const _semMapaMes = !Object.keys(_impMes).length && Object.keys(CPK.kmImport||{}).length>0;
+  const _kmPlacaPeriodo = pa => {
+    if(_semMapaMes){
+      const imp=CPK.kmImport[pa.placa];
+      if(imp&&imp.km>0) return {km:imp.km, fonte:'importado', mesesSem:[]};
+      return {km:0, fonte:'pendente', mesesSem:[]};
+    }
+    let km=0, usouImp=false, usouSzy=false; const mesesSem=[];
+    _mesesKm.forEach(m=>{
+      if(_baseMes.has(m)){
+        const k=+((_impMes[m]||{})[pa.placa])||0;
+        if(k>0){ km+=k; usouImp=true; } else mesesSem.push(m);
+        return;
+      }
+      const k=+((pa.km_szb_mes||{})[m])||0;
+      if(k>0){ km+=k; usouSzy=true; } else mesesSem.push(m);
+    });
+    const fonte = km<=0 ? 'pendente' : (usouImp&&usouSzy ? 'misto' : (usouImp?'importado':'szy'));
+    return {km, fonte, mesesSem};
+  };
+  CPK.diag.kmParcial=[];   // placas com KM em parte dos meses do período
   let totalKm=0;
   Object.values(aggP).forEach(pa=>{
-    const imp=CPK.kmImport[pa.placa];
-    if(imp&&imp.km>0){ pa.km_total=imp.km; pa.fonte_km='importado'; }
-    else if(!temImport && pa.km_szb>0){ pa.km_total=pa.km_szb; pa.fonte_km='szy'; }
-    else { pa.km_total=0; pa.fonte_km='pendente'; if(!cpkEhCarreta(cpkVeic(pa.placa))) CPK.diag.semKm.push(pa.placa); }  // carreta não roda km próprio → não é "sem KM"
+    const r=_kmPlacaPeriodo(pa);
+    pa.km_total=r.km; pa.fonte_km=r.fonte; pa.km_meses_sem=r.mesesSem;
+    if(!(r.km>0)){ if(!cpkEhCarreta(cpkVeic(pa.placa))) CPK.diag.semKm.push(pa.placa); }   // carreta não roda km próprio → não é "sem KM"
+    else if(r.mesesSem.length && _mesesKm.length>1 && !cpkEhCarreta(cpkVeic(pa.placa))) CPK.diag.kmParcial.push(pa.placa);
     totalKm+=pa.km_total;
   });
   // placas importadas que NÃO apareceram no SZB (rodaram sem CTRC no mês) também entram no KM total
@@ -3979,6 +4032,12 @@ function cpkRenderAlertas(){
     out.push(['ok',`<b>Custo de capital = Depreciação</b> (${cpkFmt(pool.dep||0)}), por placa e quando cadastrada. O Custo de Equipamentos da premissa (${cpkFmt(pool.ceDre||0)}) <b>não entra no CPK</b> (regra 07/2026 — valor não verdadeiro que puxava o CPK para cima). Base de Depreciação: <b>${st.preenchidos||0}/${st.elegiveis||0}</b> ativos preenchidos (${cpkFmtPct((st.pct||0)*100,0)})${(st.pendentes&&st.pendentes.length)?' — pendentes (sem custo de capital até preencher): '+st.pendentes.slice(0,6).join(', ')+(st.pendentes.length>6?'…':''):''}.`]);
   }
   if(d.semKm&&d.semKm.length) out.push(['nd',`${d.semKm.length} placa(s) com receita mas sem KM (nem importado, nem via SZY). Importe os KM na aba Dados para um CPK fiel. Ex.: ${d.semKm.slice(0,6).join(', ')}${d.semKm.length>6?'…':''}`]);
+  // ── Período misto de fontes de KM (#CPK-KM-PERIODO) ──────────────────
+  if(cpkPeriodoMulti() && (CPK.kmMesesSemBase||[]).length){
+    const semB=CPK.kmMesesSemBase.map(cpkMesLabel).join(', ');
+    out.push(['nd',`No período selecionado, <b>${CPK.kmMesesSemBase.length} mês(es) não têm base de KM importada</b> (${semB}). O KM desses meses foi derivado de <b>SZB×SZY</b> e somado normalmente ao KM do período — o custo e o KM cobrem os <b>mesmos ${(CPK.filtros.meses||[]).length} meses</b>. Para um CPK acumulado 100% fiel, importe a base de KM desses meses na aba <b>Dados</b>.`]);
+  }
+  if(cpkPeriodoMulti() && d.kmParcial && d.kmParcial.length) out.push(['nd',`${d.kmParcial.length} placa(s) têm KM em apenas parte dos meses do período (rodaram menos meses, ou faltam na base de algum mês): ${d.kmParcial.slice(0,6).join(', ')}${d.kmParcial.length>6?'…':''}. O CPK dessas placas usa só os meses com KM — confira se é rotação real de frota.`]);
   if((CPK.complAgregBruta||0)>0) out.push(['ok',`Foram <b>excluídas</b> da receita própria <b>${cpkFmt(CPK.complAgregBruta)}</b> de Cartas Frete Complementar marcadas como <b>AGREGADO</b> na coluna Frota do SZB. Esse faturamento não é receita da frota própria e, portanto, <b>não gera imposto no CPK</b> — o tributo correspondente segue no Mapinha, com o agregado.`]);
   if((CPK.complIndefQtd||0)>0) out.push(['nd',`<b>${CPK.complIndefQtd}</b> Carta(s) Frete Complementar (${cpkFmt(CPK.complIndefBruta)}) estão <b>sem Frota legível</b> no SZB e foram mantidas como <b>próprias</b>. Se alguma for de agregado, está inflando a receita própria e o imposto. Corrija a coluna Frota no Protheus.`]);
   if((CPK.receitaComplementar||0)>0) out.push(['ok',`A Receita do topo inclui <b>${cpkFmt(CPK.receitaComplementar)}</b> de Cartas Frete Complementar (placa ${[...CPK_PLACAS_RECEITA_COMPL].join(', ')}): valor <b>real</b> somado ao total, mas <b>fora</b> da análise por placa/rota/cliente. Por isso a soma das placas (${cpkFmt(CPK.receitaPlacas||0)}) fica abaixo da Receita total. A placa de controle AAA9999 é descartada integralmente.`]);
@@ -4404,7 +4463,7 @@ function cpkRenderDados(){
   if(av){
     const per=cpkPeriodoMeses();
     av.innerHTML = per.length>1
-      ? ('<div class="cpk-warn">⚠ <span>Período de <b>'+per.length+'</b> meses ('+cpkPeriodoLabel(per)+'): os números abaixo somam '+(CPK.kmImportMeses&&CPK.kmImportMeses.length?('<b>'+CPK.kmImportMeses.length+'</b> base(s) mensal(is) encontrada(s)'):'as bases encontradas')+'. A <b>importação grava só em '+cpkMesLabel(CPK.filtros.mes)+'</b> — selecione um mês único para importar.</span></div>')
+      ? ('<div class="cpk-warn">⚠ <span>Período de <b>'+per.length+'</b> meses ('+cpkPeriodoLabel(per)+'): os números abaixo somam '+(CPK.kmImportMeses&&CPK.kmImportMeses.length?('<b>'+CPK.kmImportMeses.length+'</b> base(s) mensal(is) encontrada(s)'):'as bases encontradas')+((CPK.kmMesesSemBase&&CPK.kmMesesSemBase.length)?(' <b>Sem base importada:</b> '+CPK.kmMesesSemBase.map(cpkMesLabel).join(', ')+' — nesses meses o KM do CPK é derivado de SZB×SZY.'):'')+'. A <b>importação grava só em '+cpkMesLabel(CPK.filtros.mes)+'</b> — selecione um mês único para importar.</span></div>')
       : '';
   }
   const meta=CPK.kmImportMeta, km=CPK.kmImport||{};
