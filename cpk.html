@@ -1857,7 +1857,7 @@ function cpkRankQuartil(placas){
   (placas||[]).forEach(p=>{
     p.rank_fil=null; p.rank_fil_tot=null; p.quartil=null;
     if(p.ehCarreta||p.margem_km==null) return;          // carreta não roda km próprio
-    const f=cpkFilialDe(p,scopeFils)||'—';
+    const f=cpkFilialEscopo(p,scopeFils)||'—';
     (porFil[f]=porFil[f]||[]).push(p);
   });
   Object.values(porFil).forEach(arr=>{
@@ -3333,9 +3333,12 @@ function cpkCalculate(){
     if(aggP[placa])continue;                       // já é linha própria (cavalo / carro de apoio)
     const vc=cpkVeic(placa); if(!vc||!cpkEhCarreta(vc))continue;
     if(!cpkDepVeicEhFrotaPropria(vc,cpkDepTipoFromVeic(vc)))continue;
-    const filC=cpkFilialDe({placa,unidade:vc.unidade},scopeArr);
-    if(scope.size&&filC&&!scope.has(filC))continue;
+    const filFis=cpkFilialDe({placa,unidade:vc.unidade},scopeArr);
+    if(scope.size&&filFis&&!scope.has(filFis))continue;
     if(f.placa)continue;                            // filtro de placa única: sem escopo p/ diluir carreta
+    // Carreta sem filial resolvível gerava a chave null: entrava em depScopeTotal
+    // (headline) e não era lida por nenhuma filial no card. Ancorada no escopo.
+    const filC=cpkFilialEscopo({placa,unidade:vc.unidade},scopeArr);
     depCarretaFil[filC]=(depCarretaFil[filC]||0)+(+depByPlaca[placa]||0);
   }
   CPK.depCarretaFil=depCarretaFil;
@@ -3380,7 +3383,10 @@ function cpkCalculate(){
   // o consolidado passa a ser a soma exata das filiais (sem incongruência).
   const _scopeFils = cpkScopeFiliais();
   const placasPorFil={}; _scopeFils.forEach(f=>placasPorFil[f]=[]);
-  Object.values(aggP).forEach(pa=>{ const f=cpkFilialDe(pa,_scopeFils); if(placasPorFil[f])placasPorFil[f].push(pa.placa); });
+  // cpkFilialEscopo (não cpkFilialDe): placa com filial física fora do escopo
+  // filtrado ficava fora de TODAS as listas — não recebia rateio de resíduo e a
+  // sua depreciação sumia do card da filial, embora contasse no headline.
+  Object.values(aggP).forEach(pa=>{ const f=cpkFilialEscopo(pa,_scopeFils); if(placasPorFil[f])placasPorFil[f].push(pa.placa); });
 
   const recFil={}; let apontTotalAll=0;
   _scopeFils.forEach(f=>{
@@ -3427,7 +3433,7 @@ function cpkCalculate(){
   };
 
   function cpkCustoPlaca(pa){
-    const f=cpkFilialDe(pa,_scopeFils);
+    const f=cpkFilialEscopo(pa,_scopeFils);   // mesma âncora de placasPorFil/igualFil
     const rf=recFil[f]||{}; const ig=igualFil[f]||0;
     const g=balde=>{ const rc=rf[balde]; return rc?((rc.placed[pa.placa]||0)+rc.residuo*ig):0; };
     const diesel=g('diesel'), co=g('co'), cp=g('cp'), ce=g('ce'), ped=g('ped');
@@ -3707,14 +3713,30 @@ function cpkFilialDe(p,scopeFils){
   if(!u && scopeFils && scopeFils.length===1) u=scopeFils[0];
   return u||null;
 }
+// Filial de DESTINO dentro do escopo — âncora de reconciliação (#CPK-FIL-ESCOPO).
+// cpkFilialDe resolve a filial FÍSICA da placa (SZB → cadastro → apontamento).
+// Quando o usuário filtra uma filial, uma placa pode entrar no escopo pela
+// RECEITA (Operacao do CT-e = SC) e ainda assim resolver para outra filial
+// física (cadastro em PR). Nesse caso o KM e a depreciação dela entravam no
+// headline (CPK.totalKm / CPK.pool) mas não caíam em NENHUM card — e o CPK da
+// Visão Geral divergia do CPK da filial (ex.: 6,09 no topo × 6,39 no card).
+// Regra: filial resolvida fora do escopo (ou indefinida) cai na 1ª filial do
+// escopo — mesmo destino que já era dado à placa órfã. Sem filtro, o escopo é
+// SC+PR+SP e nada muda: a função devolve exatamente cpkFilialDe.
+function cpkFilialEscopo(p,scopeFils){
+  const fils=(scopeFils&&scopeFils.length)?scopeFils:cpkScopeFiliais();
+  const u=cpkFilialDe(p,fils);
+  return (u&&fils.indexOf(u)>=0)?u:fils[0];
+}
 function cpkAggFilial(scopeOnly){
   const scopeFils=cpkScopeFiliais();
   const mk=()=>({km:0,rec:0,custo:0,placas:0,saud:0,aten:0,crit:0,semkm:0});
   const map={SC:mk(),PR:mk(),SP:mk()};
   CPK.aggPlaca.forEach(p=>{
-    // Placa órfã real (sem unidade/cadastro/apontamento) cai na 1ª filial do escopo,
+    // Placa órfã real (sem unidade/cadastro/apontamento) — E placa cuja filial
+    // física está FORA do escopo filtrado — caem na 1ª filial do escopo,
     // garantindo que a soma do KM dos cards = KM Total do headline (sem placa perdida).
-    let u=cpkFilialDe(p,scopeFils); if(!u)u=scopeFils[0]; if(!map[u])return;
+    const u=cpkFilialEscopo(p,scopeFils); if(!map[u])return;
     const m=map[u]; m.km+=p.km_total||0;   // receita NÃO vem daqui (ver recFilPropria abaixo)
     if(p.ehCarreta) return;   // carreta não roda km próprio → não entra na contagem de placas por status
     m.placas++;
@@ -6793,7 +6815,7 @@ function cpkAudPorPlaca(){
     const c=p.custo_comp||{diesel:0,co:0,cp:0,ce:0,ped:0,dep:0,garantia:0,total:p.custo_total||0};
     const cap=modoDep?(+c.dep||0):(+c.ce||0);
     const gar=+c.garantia||0, coDir=(+c.co||0)-gar;
-    const fil=cpkFilialDe(p,fils)||'—';
+    const fil=cpkFilialEscopo(p,fils)||'—';
     const resultado=(+p.faturamento||0)-(+p.custo_total||0);
     const mgT=resultado>=0?'var(--gn)':'var(--rd)';
     const obs=[]; if(gar>0)obs.push('Recebeu '+cpkFmt(gar)+' de Garantia Agregados por rateio da filial '+fil+'.');
