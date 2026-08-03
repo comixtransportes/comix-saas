@@ -553,6 +553,8 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 .aud-fl label{font-size:9px;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;font-weight:700}
 .aud-fl select{border:1px solid var(--bd);border-radius:4px;padding:4px 8px;font-family:var(--f);font-size:11.5px;background:var(--sf);color:var(--tx);height:27px;outline:none;cursor:pointer}
 .aud-scope{margin-left:auto;font-size:10.5px;color:var(--mu);align-self:center;font-family:var(--m)}
+.aud-xls{align-self:center;font-size:10.5px;height:26px;opacity:.75;white-space:nowrap}
+.aud-xls:hover{opacity:1;border-color:var(--ac);color:var(--ac)}
 .aud-resumo{display:block;line-height:1.55}
 .aud-resumo b{color:var(--tx)}
 .cpk-card .ck-frm{font-size:9px;color:var(--mu);margin-top:3px;line-height:1.35;font-style:italic}
@@ -1117,6 +1119,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
           </select>
         </div>
         <span class="aud-scope" id="aud-scope"></span>
+        <button class="btn-sec aud-xls" onclick="cpkExportMemoria()" title="Baixar a memória de cálculo completa em Excel — headline, conferências, rateio, custo por placa, todos os CT-e e lançamentos do período/escopo atuais">⤓ Memória (.xlsx)</button>
       </div>
 
       <div class="kpi-row" id="aud-cards" style="grid-template-columns:repeat(auto-fill,minmax(215px,1fr))"></div>
@@ -3113,6 +3116,26 @@ function cpkCalculate(){
   //      (placa/cliente/rota) e agregamos — exatamente como antes.
   const derivRows = cpkBuildDerivIndex();
   const aggP={}, viagens=[];
+  // ── MEMÓRIA POR CT-E (#CPK-MEMORIA-XLSX) ────────────────────────────
+  // Registra CADA linha do SZB do período com o destino que ela teve no
+  // cálculo — filial da receita, filial da placa, imposto aplicado e, quando
+  // ficou de fora, o motivo. É a base da aba CT-e do Excel de memória de
+  // cálculo: lá nada é recalculado, só transcrito.
+  const cteRows=[];
+  const _cteReg=(d,o)=>{
+    cteRows.push(Object.assign({
+      tipo:(d.k===0?'Carta Frete Complementar':'CT-e'),
+      mes:d.mes||'', ctrc:d.ctrc||'', serie:d.serie||'', dtEmis:d.dtEmis||'',
+      filSZB:d.filSZB||'', operacao:d.opSZB||'', placa:d.placa||'', frotaSZB:d.frotaSZB||'',
+      motorista:d.motorista||'', vinculo:d.vinc||'', vincCad:d.vincCad||'',
+      uniSZB:(d.k===0?(d.uniC||''):(d.unidade||'')), uniCad:d.uniCad||'',
+      cliente:d.cliente||'', rota:d.rota||'', rotaResolvida:d.rota_resolvida||'',
+      origem:d.localColeta||'', ufO:d.ufO||'', destino:d.localEntreg||'', ufD:d.ufD||'',
+      tipoFrete:d.tipoFrete||'', km:+d.km||0, fonteKm:d.fonte_km||'',
+      filialReceita:'', filialPlaca:'', valorBruto:+d.fat||0, aliq:null, imposto:0, valorLiquido:0,
+      naReceita:'não', naPlaca:'não', situacao:'', regra:''
+    },o||{}));
+  };
   // Endereço físico da placa resolvido UMA vez por placa (#CPK-FIL-HOME):
   // a 1ª linha manda, igual ao que aggP guarda em pa.unidade — assim a placa
   // nunca fica dividida entre duas filiais dentro do mesmo cálculo.
@@ -3138,7 +3161,7 @@ function cpkCalculate(){
       // escopo: entrava em TODOS os filtros e era roteada para a 1ª filial de
       // cada escopo — contada 3× na soma dos filtros. Endereço fixo agora.
       const _uc=d.uniC||FILIAIS_PADRAO[0];
-      if(scope.size&&!scope.has(_uc)) continue;
+      if(scope.size&&!scope.has(_uc)){ _cteReg(d,{filialReceita:_uc,situacao:'Fora do escopo — outra filial'}); continue; }
       // ── AGREGADO FORA DA BASE PRÓPRIA (regra 07/2026, correção) ──────────
       // A Carta Frete Complementar entrava na receita SEM passar pelo filtro de
       // vínculo — era o único ponto do módulo onde faturamento de agregado se
@@ -3149,6 +3172,8 @@ function cpkCalculate(){
       if(d.vinc==='agregado'){
         CPK.complAgregBruta += d.fat;
         CPK.complAgregFilBruta[_uc]=(CPK.complAgregFilBruta[_uc]||0)+d.fat;
+        _cteReg(d,{filialReceita:_uc,situacao:'Complementar de AGREGADO — fora da receita do CPK',
+          regra:'A Carta Frete Complementar entra na receita do CPK apenas quando a coluna Frota do SZB a classifica como própria.'});
         continue;
       }
       if(d.vinc==='indefinido'){ CPK.complIndefBruta += d.fat; CPK.complIndefQtd++; }
@@ -3157,6 +3182,9 @@ function cpkCalculate(){
       CPK.receitaComplementarBruta += d.fat;
       CPK.receitaComplementarFil[_uc]=(CPK.receitaComplementarFil[_uc]||0)+_fl;
       CPK.receitaComplementarFilBruta[_uc]=(CPK.receitaComplementarFilBruta[_uc]||0)+d.fat;
+      _cteReg(d,{ filialReceita:_uc, aliq:_aliqDe(_uc,d.mes)*100, imposto:d.fat-_fl, valorLiquido:_fl,
+        naReceita:'sim', situacao:(d.vinc==='indefinido'?'Complementar sem Frota legível — mantida como própria':'Complementar própria — receita sem placa/KM'),
+        regra:'Receita real sem placa: entra no total e na filial, não na tabela por placa.' });
       continue;
     }
     const placa=d.placa;
@@ -3179,7 +3207,7 @@ function cpkCalculate(){
     const _fRev=d.uPre||_home;
     const inRec = !scope.size || scope.has(_fRev);
     const inPla = !scope.size || scope.has(_home);
-    if(!inRec && !inPla) continue;
+    if(!inRec && !inPla){ _cteReg(d,{filialReceita:_fRev,filialPlaca:_home,situacao:'Fora do escopo — outra filial'}); continue; }
     // Divergência cadastro × SZB no CT-e (registrada ANTES do filtro de vínculo,
     // p/ capturar também os CT-es próprios de placa hoje agregada — que sem a
     // correção seriam silenciosamente excluídos). Não altera a receita.
@@ -3188,15 +3216,27 @@ function cpkCalculate(){
         vincSZB:d.vinc, vincCad:d.vincCad, uniSZB:d.unidade, uniCad:d.uniCad, valor:+d.fat||0,
         tipo:(d.vincCad&&d.vincCad!==d.vinc)?'vinculo':'unidade' });
     }
-    if(d.vinc!=='proprio'){ if(d.vinc==='indefinido'&&!CPK.diag.indefinidas.includes(placa))CPK.diag.indefinidas.push(placa); continue; }
+    if(d.vinc!=='proprio'){
+      if(d.vinc==='indefinido'&&!CPK.diag.indefinidas.includes(placa))CPK.diag.indefinidas.push(placa);
+      _cteReg(d,{filialReceita:_fRev,filialPlaca:_home,
+        situacao:(d.vinc==='agregado'?'Agregado — fora do CPK':'Vínculo indefinido no SZB — fora do CPK'),
+        regra:'O CPK considera apenas CT-e cuja coluna Frota do SZB marca a viagem como própria.'});
+      continue;
+    }
 
     const rota=d.rota, cliente=d.cliente;
-    if(f.cliente&&!cpkNormStr(cliente).includes(cpkNormStr(f.cliente)))continue;
-    if(f.rota&&!(rota.includes(cpkPadRota(f.rota))||cpkNormStr(d.localEntreg).includes(cpkNormStr(f.rota))))continue;
+    if(f.cliente&&!cpkNormStr(cliente).includes(cpkNormStr(f.cliente))){ _cteReg(d,{filialReceita:_fRev,filialPlaca:_home,situacao:'Fora do filtro de cliente'}); continue; }
+    if(f.rota&&!(rota.includes(cpkPadRota(f.rota))||cpkNormStr(d.localEntreg).includes(cpkNormStr(f.rota)))){ _cteReg(d,{filialReceita:_fRev,filialPlaca:_home,situacao:'Fora do filtro de rota'}); continue; }
 
     // Receita LÍQUIDA de impostos, no nível do CT-e (alíquota da filial da RECEITA).
     const fatBr=d.fat;
     const fat=fatLiq(fatBr, _fRev, d.mes);
+    _cteReg(d,{ filialReceita:_fRev, filialPlaca:_home, aliq:_aliqDe(_fRev,d.mes)*100,
+      imposto:fatBr-fat, valorLiquido:fat, naReceita:(inRec?'sim':'não'), naPlaca:(inPla?'sim':'não'),
+      situacao:( (inRec&&inPla) ? 'Receita e placa nesta filial'
+               : inRec ? ('Receita desta filial · a placa é da filial '+_home)
+                       : ('Placa desta filial · a receita foi para a filial '+_fRev) ),
+      regra:'Receita segue a operação do CT-e; KM/custo seguem a filial física da placa.' });
 
     // ── ESCOPO DA RECEITA: CT-e + rotas/clientes seguem a Operacao ──────
     if(inRec){
@@ -3231,6 +3271,7 @@ function cpkCalculate(){
   // Publica a receita por filial (CT-e level) e as divergências para a Auditoria.
   CPK.recFilPropria=recFilProp;
   CPK.recFilPropriaBruta=recFilPropBr;
+  CPK.cteRows=cteRows;                 // memória por CT-e (#CPK-MEMORIA-XLSX)
   CPK.diag.recDiverg=recDiverg;
 
   // 4) KM por placa — RESOLVIDO MÊS A MÊS  (#CPK-KM-PERIODO)
@@ -6804,6 +6845,409 @@ function _audImpTag(fonte){
   const cls = fonte==='mes'?'inc' : fonte==='anterior'?'inc0' : fonte==='misto'?'inc0' : 'exc';
   const txt = fonte==='mes'?'do mês' : fonte==='anterior'?'estimada' : fonte==='misto'?'mista (período)' : 'ausente';
   return '<span class="aud-tag '+cls+'">'+txt+'</span>';
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  MEMÓRIA DE CÁLCULO EM EXCEL  (#CPK-MEMORIA-XLSX)
+//  Gera um .xlsx com TUDO que compõe os números da tela, no período e no
+//  escopo vigentes: headline, conferências de fechamento, DRE por filial,
+//  rateio balde a balde, custo por placa aberto, CADA CT-e do SZB com o
+//  destino que teve, lançamentos do Mapinha (incluídos e excluídos com o
+//  motivo), KM mês a mês, depreciação, impostos, rotas, clientes,
+//  inconsistências e as regras aplicadas.
+//  Nada é recalculado aqui: só transcreve o que o motor já decidiu.
+// ══════════════════════════════════════════════════════════════════════
+const CPK_XF={ m:'#,##0.00', k:'#,##0', r:'#,##0.0000', p:'#,##0.0"%"' };
+
+function _xNum(v){ return (v==null||v===''||isNaN(v))?null:+v; }
+function _xSheet(aoa, cols, fmt, headRows){
+  const ws=XLSX.utils.aoa_to_sheet(aoa, {cellDates:false});
+  if(cols) ws['!cols']=cols;
+  const hr=(headRows==null?1:headRows);
+  const ref=XLSX.utils.decode_range(ws['!ref']||'A1');
+  if(fmt) for(let R=hr; R<=ref.e.r; R++) for(const c in fmt){
+    const ad=XLSX.utils.encode_cell({r:R,c:+c}); const cell=ws[ad];
+    if(cell && cell.t==='n') cell.z=fmt[c];
+  }
+  if(hr===1 && ref.e.r>=1) ws['!autofilter']={ref:XLSX.utils.encode_range({s:{r:0,c:0},e:{r:ref.e.r,c:ref.e.c}})};
+  return ws;
+}
+function _xW(){ return Array.prototype.slice.call(arguments).map(n=>({wch:n})); }
+// {c0:fmt, c1:fmt...} para um intervalo contínuo de colunas
+function _xRange(ini,fim,f){ const o={}; for(let i=ini;i<=fim;i++)o[i]=f; return o; }
+
+function cpkExportMemoria(){
+  if(typeof XLSX==='undefined'){ cpkToast('Biblioteca de Excel ainda carregando — tente novamente em alguns segundos.'); return; }
+  if(!CPK.ready){ cpkToast('Aguarde o cálculo terminar para exportar a memória.'); return; }
+  try{ cpkToast('Montando a memória de cálculo…'); }catch(_){}
+
+  const meses   = cpkPeriodoMeses();
+  const escopo  = cpkScopeFiliais();
+  const unidade = CPK.filtros.unidade||'';
+  const pool    = CPK.poolBreak||{};
+  const T       = cpkVpkTotais();
+  const filsVpk = cpkVpkFiliais();
+  const cards   = cpkAggFilial(true);
+  const cardBy  = {}; cards.forEach(c=>cardBy[c.sigla]=c);
+  const audit   = CPK.audit||{};
+  const depBy   = audit.depByPlaca||{};
+  const depCarr = audit.depCarretaFil||{};
+  const plsFil  = audit.placasPorFil||{};
+  const igual   = audit.igualFil||{};
+  const recFil  = audit.recFil||{};
+  const ledger  = CPK.custoLedger||[];
+  const ctes    = CPK.cteRows||[];
+  const wb      = XLSX.utils.book_new();
+  const add     = (nome,ws)=>XLSX.utils.book_append_sheet(wb, ws, nome.slice(0,31));
+  const per     = cpkPeriodoLabel(meses);
+  const escTxt  = unidade? ('Filial '+unidade) : 'Consolidado (SC+PR+SP)';
+  const somaObj = o=>Object.values(o||{}).reduce((s,v)=>s+(+v||0),0);
+
+  // ══ 1. RESUMO ═════════════════════════════════════════════════════
+  {
+    const L=[];
+    const sec=t=>L.push([],[t]);
+    const kv=(a,b,c)=>L.push([a,b,c==null?'':c]);
+    L.push(['MEMÓRIA DE CÁLCULO — CPK / VPK DA FROTA PRÓPRIA']);
+    L.push(['Comix Transportes · módulo CPK (cpk.html)']);
+    L.push([]);
+    kv('Gerado em', new Date().toLocaleString('pt-BR'));
+    kv('Gerado por', (CPK.user&&CPK.user.email)||'—');
+    kv('Período', per);
+    kv('Competências somadas', meses.join(', '));
+    kv('Escopo', escTxt);
+    kv('Modo de custo de capital', CPK.capModo==='dep'?'Depreciação por placa (C.E da premissa não entra)':'C.E da premissa');
+    kv('Fator de rateio administrativo (%)', _xNum(typeof cpkRateioPct==='function'?cpkRateioPct():82));
+    sec('RESULTADO DO PERÍODO');
+    L.push(['Linha','Valor (R$)','Por km (R$/km)']);
+    kv('Receita bruta (CT-e próprios + complementares)', _xNum(T.recBr), _xNum(T.vpkBr));
+    kv('(–) Impostos', _xNum(-T.imp), _xNum(T.impKm!=null?-T.impKm:null));
+    kv('= Receita líquida', _xNum(T.recLq), _xNum(T.vpkLq));
+    kv('(–) Custo total', _xNum(-T.custo), _xNum(T.cpk!=null?-T.cpk:null));
+    kv('= RESULTADO LÍQUIDO', _xNum(T.resLq), _xNum(T.resLqKm));
+    kv('Resultado BRUTO (antes de impostos)', _xNum(T.resBr), _xNum(T.resBrKm));
+    kv('Margem líquida %', _xNum(T.margLq));
+    kv('Margem de contribuição (rec. líq. − diesel/C.O/pedágio)', _xNum(T.mc), _xNum(T.mcKm));
+    sec('KM E TAXAS');
+    kv('KM total', _xNum(T.km));
+    kv('CPK — custo ÷ km', _xNum(T.cpk));
+    kv('VPK bruto — receita bruta ÷ km', _xNum(T.vpkBr));
+    kv('VPK líquido — receita líquida ÷ km', _xNum(T.vpkLq));
+    kv('Placas próprias no escopo', (CPK.aggPlaca||[]).filter(p=>!p.ehCarreta).length);
+    kv('Placas com KM', (CPK.aggPlaca||[]).filter(p=>p.km_total>0).length);
+    kv('Custo apontado por placa (medido)', _xNum(CPK.cobertura?CPK.cobertura.medidoPct*100:null));
+    sec('COMPOSIÇÃO DO CUSTO TOTAL');
+    L.push(['Balde','Valor (R$)','% do custo','Por km (R$/km)']);
+    const comp=[['Diesel / Combustível',pool.diesel],['Custo Operacional (inclui Garantia Agregados)',pool.co],
+      ['Pessoal (C.P — Premissa CPK, Custo Frota 35%)',pool.cp],['Pedágio',pool.ped],
+      ['Depreciação (custo de capital)',pool.dep]];
+    comp.forEach(c=>L.push([c[0],_xNum(c[1]),_xNum(T.custo>0?(+c[1]||0)/T.custo*100:null),_xNum(T.km>0?(+c[1]||0)/T.km:null)]));
+    L.push(['CUSTO TOTAL',_xNum(T.custo),_xNum(100),_xNum(T.cpk)]);
+    L.push([]);
+    L.push(['Referência (não entra no CPK): C.E da premissa',_xNum(pool.ceDre)]);
+    L.push(['Dentro do C.O: Garantia Agregados (rateada entre as placas próprias)',_xNum(pool.garantiaAgreg)]);
+    add('Resumo', _xSheet(L,_xW(58,22,20,18),_xRange(1,3,CPK_XF.m),0));
+  }
+
+  // ══ 2. CONFERÊNCIA ════════════════════════════════════════════════
+  {
+    const L=[['#','Verificação','Valor A','Valor B','Diferença','Situação','O que isso prova']];
+    let i=0;
+    const chk=(nome,a,b,obs,tol)=>{
+      const d=(+a||0)-(+b||0);
+      L.push([++i,nome,_xNum(a),_xNum(b),_xNum(d),Math.abs(d)<=(tol==null?0.02:tol)?'OK':'DIVERGE',obs||'']);
+    };
+    const somaCards=k=>cards.reduce((s,c)=>s+(+c[k]||0),0);
+    chk('Soma do KM dos cards por filial = KM total do headline', somaCards('km'), T.km,
+        'Nenhuma placa perdida nem contada duas vezes na quebra por filial.');
+    chk('Soma do custo dos cards por filial = custo total', somaCards('custo'), T.custo,
+        'O custo de cada filial fecha com o custo consolidado.');
+    chk('Soma da receita líquida dos cards = receita líquida do headline', somaCards('rec'), T.recLq,
+        'A receita do topo é a mesma que aparece filial a filial.');
+    chk('Soma do custo de TODAS as placas = custo total', (CPK.aggPlaca||[]).reduce((s,p)=>s+(+p.custo_total||0),0), T.custo,
+        'Todo real do DRE foi entregue a alguma placa — sem sobra e sem vazamento.');
+    chk('Receita das placas + receita sem placa + complementares = receita líquida',
+        (CPK.aggPlaca||[]).reduce((s,p)=>s+(+p.faturamento||0),0) + (+CPK.receitaForaPlaca||0) + (+CPK.receitaComplementar||0),
+        T.recLq, 'A tabela por placa e a receita da filial reconciliam pelas duas exceções conhecidas.');
+    chk('Receita bruta − impostos = receita líquida', T.recBr-T.imp, T.recLq,
+        'A dedução de imposto foi aplicada uma única vez, no nível do CT-e.');
+    chk('CPK × KM total = custo total', (T.cpk||0)*(T.km||0), T.custo, 'O CPK exibido é exatamente custo ÷ km.', 1);
+    chk('Diesel + C.O + C.P + Pedágio + Depreciação = custo total',
+        (+pool.diesel||0)+(+pool.co||0)+(+pool.cp||0)+(+pool.ped||0)+(+pool.dep||0), T.custo,
+        'A composição do custo não tem linha faltando nem sobrando.');
+    // ledger × DRE, balde a balde (só quando a memória linha a linha está carregada)
+    const ledSoma=(bal)=>ledger.filter(r=>r.incluido&&r.balde===bal&&escopo.indexOf(r.fil)>=0)
+      .reduce((s,r)=>s+(+r.valorConsiderado||0),0);
+    const chkLed=(nome,a,b,obs)=>{
+      if(!ledger.length){ L.push([++i,nome,null,_xNum(b),null,'N/D',
+        'Lançamentos linha a linha não carregados nesta sessão — use ↻ na barra superior e exporte de novo.']); return; }
+      chk(nome,a,b,obs);
+    };
+    chkLed('Lançamentos de Diesel considerados = Diesel do DRE', ledSoma('diesel'), pool.diesel,
+        'Cada real de diesel do custo tem lançamento correspondente na aba Lançamentos.');
+    chkLed('Lançamentos de C.O considerados = C.O do DRE', ledSoma('co'), pool.co,
+        'Idem para o custo operacional (a Garantia Agregados está incluída).');
+    const pedApont=escopo.reduce((s,f)=>s+somaObj(((CPK.apontaCustos||{}).ped||{})[f]),0);
+    chkLed('Pedágio apontado por placa + pedágio diluído = Pedágio do DRE', pedApont+ledSoma('ped'), pool.ped,
+        'Cavalo próprio carrega o próprio pedágio; carro de apoio é diluído na filial.');
+    const depPlacas=Object.keys(depBy).filter(pl=>(CPK.aggPlaca||[]).some(p=>p.placa===pl)).reduce((s,pl)=>s+(+depBy[pl]||0),0);
+    chk('Depreciação das placas + depreciação de carreta diluída = Depreciação do custo',
+        depPlacas+somaObj(depCarr), pool.dep, 'O custo de capital veio só do cadastro de depreciação.');
+    const cteRec=ctes.filter(c=>c.naReceita==='sim').reduce((s,c)=>s+(+c.valorLiquido||0),0);
+    chk('Soma dos CT-e marcados como receita = receita líquida do headline', cteRec, T.recLq,
+        'Cada real de receita tem um CT-e nominal na aba CT-e.');
+    const cteRecBr=ctes.filter(c=>c.naReceita==='sim').reduce((s,c)=>s+(+c.valorBruto||0),0);
+    chk('Soma bruta dos CT-e de receita = receita bruta do headline', cteRecBr, T.recBr,
+        'Idem, antes de imposto.');
+    chk('Soma do KM das placas = KM total', (CPK.aggPlaca||[]).reduce((s,p)=>s+(+p.km_total||0),0), T.km,
+        'O KM do headline é a soma do KM resolvido placa a placa.', 1);
+    L.push([]);
+    L.push(['Tolerância aplicada: R$ 0,02 (arredondamento). "DIVERGE" indica que a linha merece investigação na aba correspondente.']);
+    add('Conferência', _xSheet(L,_xW(5,62,20,20,16,12,66),_xRange(2,4,CPK_XF.m)));
+  }
+
+  // ══ 3. FILIAIS ════════════════════════════════════════════════════
+  {
+    const L=[['Filial','Placas','KM','Receita bruta','(–) Impostos','Alíquota efetiva','Receita líquida',
+      'Diesel','C.O (s/ Garantia)','Garantia Agregados','C.P (Premissa)','Pedágio','Depreciação','Custo total',
+      'CPK','VPK bruto','VPK líquido','Resultado bruto','Res. bruto/km','Resultado líquido','Res. líq./km','Margem líq.']];
+    filsVpk.forEach(f=>{
+      const cf=(CPK.custoFilial||{})[f.sigla]||{};
+      const gar=+(CPK.garantiaAgregFil||{})[f.sigla]||0;
+      const dep=(plsFil[f.sigla]||[]).reduce((s,p)=>s+(+depBy[p]||0),0)+(+depCarr[f.sigla]||0);
+      L.push([f.sigla, f.placas, _xNum(f.km), _xNum(f.recBr), _xNum(f.imp), _xNum(f.aliq!=null?f.aliq*100:null), _xNum(f.recLq),
+        _xNum(cf.diesel), _xNum((+cf.co||0)-gar), _xNum(gar), _xNum(cf.cp), _xNum(cf.ped), _xNum(dep), _xNum(f.custo),
+        _xNum(f.cpk), _xNum(f.vpkBr), _xNum(f.vpkLq), _xNum(f.resBr), _xNum(f.resBrKm), _xNum(f.resLq), _xNum(f.resLqKm), _xNum(f.margLq)]);
+    });
+    const S=(k)=>filsVpk.reduce((s,f)=>s+(+f[k]||0),0);
+    L.push(['TOTAL', S('placas'), _xNum(S('km')), _xNum(S('recBr')), _xNum(S('imp')),
+      _xNum(T.aliqEf), _xNum(S('recLq')), _xNum(pool.diesel), _xNum((+pool.co||0)-(+pool.garantiaAgreg||0)),
+      _xNum(pool.garantiaAgreg), _xNum(pool.cp), _xNum(pool.ped), _xNum(pool.dep), _xNum(T.custo),
+      _xNum(T.cpk), _xNum(T.vpkBr), _xNum(T.vpkLq), _xNum(T.resBr), _xNum(T.resBrKm), _xNum(T.resLq), _xNum(T.resLqKm), _xNum(T.margLq)]);
+    add('Filiais', _xSheet(L,_xW(8,8,13,16,15,15,16,15,17,17,15,13,14,16,10,12,12,16,13,16,13,12),
+      Object.assign(_xRange(2,4,CPK_XF.m),{5:CPK_XF.p},_xRange(6,13,CPK_XF.m),_xRange(14,20,CPK_XF.m),{21:CPK_XF.p})));
+  }
+
+  // ══ 4. RATEIO ═════════════════════════════════════════════════════
+  {
+    const L=[['Filial','Balde','DRE da filial','Apontado por placa','% apontado','Resíduo (sem placa)',
+      'Placas na filial','Resíduo por placa','Apontamento excedeu o DRE?','Como o resíduo é dividido']];
+    const NOME={diesel:'Diesel',co:'C.O',cp:'C.P / Pessoal',ce:'C.E (não entra)',ped:'Pedágio'};
+    escopo.forEach(f=>{
+      const cf=(CPK.custoFilial||{})[f]||{};
+      const n=(plsFil[f]||[]).length, ig=+igual[f]||0;
+      ['diesel','co','cp','ped'].forEach(b=>{
+        const rc=((recFil[f]||{})[b])||{A:0,residuo:0,pct:0,excedeu:false};
+        L.push([f, NOME[b], _xNum(b==='ce'?0:cf[b]), _xNum(rc.A), _xNum((rc.pct||0)*100), _xNum(rc.residuo),
+          n, _xNum((rc.residuo||0)*ig), rc.excedeu?'SIM':'não', 'Igualmente entre as '+n+' placas da filial']);
+      });
+      const depD=(plsFil[f]||[]).reduce((s,p)=>s+(+depBy[p]||0),0);
+      L.push([f,'Depreciação (direta)',_xNum(depD),_xNum(depD),_xNum(100),_xNum(0),n,_xNum(0),'não','Custo direto da placa — sem rateio']);
+      L.push([f,'Depreciação de carreta',_xNum(+depCarr[f]||0),_xNum(0),_xNum(0),_xNum(+depCarr[f]||0),n,_xNum((+depCarr[f]||0)*ig),'não','Carreta não roda km próprio — diluída entre as placas']);
+    });
+    L.push([]);
+    L.push(['Leitura: cada placa recebe o que foi APONTADO nela (diesel/C.O/pedágio com placa e a própria depreciação) mais uma parte igual do RESÍDUO da filial dela.']);
+    L.push(['Quando o apontamento supera o DRE, os valores apontados são normalizados proporcionalmente para preservar o total do DRE (coluna "excedeu").']);
+    add('Rateio', _xSheet(L,_xW(8,22,16,18,12,18,10,18,22,46),
+      Object.assign(_xRange(2,3,CPK_XF.m),{4:CPK_XF.p},{5:CPK_XF.m},{7:CPK_XF.m})));
+  }
+
+  // ══ 5. PLACAS ═════════════════════════════════════════════════════
+  {
+    const L=[['Filial','Placa','Frota','Tipo','Carreta?','Motorista','Viagens','KM','Fonte do KM','Meses sem KM',
+      'Receita bruta','(–) Impostos','Receita líquida','Diesel','C.O (s/ Garantia)','Garantia rateada','C.P rateado',
+      'Pedágio','Depreciação','Custo total','CPK','VPK bruto','VPK líquido','Resultado bruto','Res. bruto/km',
+      'Resultado líquido','Res. líq./km','Margem líq.','Status','Cliente principal','Rota principal']];
+    const FKM={importado:'Base importada (aba Dados)',szy:'SZB × SZY',misto:'Misto (import + SZB×SZY)',pendente:'Sem KM'};
+    const ST={saudavel:'Saudável',atencao:'Atenção',critico:'Prejuízo','sem-km':'Sem KM'};
+    (CPK.aggPlaca||[]).slice().sort((a,b)=>(b.custo_total||0)-(a.custo_total||0)).forEach(p=>{
+      const c=p.custo_comp||{}; const gar=+c.garantia||0;
+      const recBr=(+p.faturamento_bruto||0)>0?(+p.faturamento_bruto):(+p.faturamento||0);
+      const recLq=+p.faturamento||0, imp=Math.max(0,recBr-recLq), km=+p.km_total||0, custo=+p.custo_total||0;
+      L.push([cpkFilialEscopo(p,escopo), p.placa, p.frota||'', p.tipo||'', p.ehCarreta?'SIM':'não', p.motorista||'',
+        p.viagens||0, _xNum(km), FKM[p.fonte_km]||p.fonte_km||'', (p.km_meses_sem||[]).join(' '),
+        _xNum(recBr), _xNum(imp), _xNum(recLq), _xNum(c.diesel), _xNum((+c.co||0)-gar), _xNum(gar), _xNum(c.cp),
+        _xNum(c.ped), _xNum(c.dep), _xNum(custo), _xNum(p.cpk), _xNum(km>0?recBr/km:null), _xNum(km>0?recLq/km:null),
+        _xNum(recBr-custo), _xNum(km>0?(recBr-custo)/km:null), _xNum(recLq-custo), _xNum(km>0?(recLq-custo)/km:null),
+        _xNum(p.margem_pct), ST[p.status]||p.status||'', p.cliente_princ||'', p.rota_princ||'']);
+    });
+    add('Placas', _xSheet(L,_xW(7,10,8,16,9,22,8,12,24,14,15,14,15,14,16,15,14,13,13,15,10,12,12,15,13,16,13,12,11,28,14),
+      Object.assign({7:CPK_XF.k},_xRange(10,19,CPK_XF.m),_xRange(20,26,CPK_XF.m),{27:CPK_XF.p})));
+  }
+
+  // ══ 6. CT-E (todas as linhas do SZB no período) ═══════════════════
+  {
+    const L=[['Tipo','Competência','Nº CT-e','Série','Emissão','Filial SZB','Operação','Placa','Frota SZB','Motorista',
+      'Vínculo (SZB)','Vínculo (cadastro)','Unid. SZB','Unid. cadastro','Cliente','Rota','Rota resolvida',
+      'Origem','UF O','Destino','UF D','Tipo frete','KM','Fonte KM','Valor bruto','Alíquota','Imposto','Valor líquido',
+      'Filial da receita','Filial da placa','Entra na receita?','Entra na placa?','Situação','Regra aplicada']];
+    ctes.forEach(c=>L.push([c.tipo,c.mes,c.ctrc,c.serie,c.dtEmis,c.filSZB,c.operacao,c.placa,c.frotaSZB,c.motorista,
+      c.vinculo,c.vincCad,c.uniSZB,c.uniCad,c.cliente,c.rota,c.rotaResolvida,c.origem,c.ufO,c.destino,c.ufD,c.tipoFrete,
+      _xNum(c.km),c.fonteKm,_xNum(c.valorBruto),_xNum(c.aliq),_xNum(c.imposto),_xNum(c.valorLiquido),
+      c.filialReceita,c.filialPlaca,c.naReceita,c.naPlaca,c.situacao,c.regra]));
+    add('CT-e', _xSheet(L,_xW(20,12,12,7,12,10,12,10,10,22,13,15,11,13,28,10,14,20,6,20,6,12,10,12,14,10,13,14,13,13,13,13,40,60),
+      Object.assign({22:CPK_XF.k},{24:CPK_XF.m},{25:CPK_XF.p},{26:CPK_XF.m},{27:CPK_XF.m})));
+  }
+
+  // ══ 7. LANÇAMENTOS (Mapinha / OS / Pedágios) ══════════════════════
+  {
+    const L=[['Filial','Fonte','Centro de custo','Descrição do CC','Placa','Balde','Valor original','Valor considerado',
+      'Entrou no custo?','Fator de rateio','Garantia Agregados?','Diluído na filial?','Motivo / regra de decisão','Regra completa']];
+    const NOME={diesel:'Diesel',co:'C.O',cp:'C.P',ce:'C.E',ped:'Pedágio'};
+    ledger.filter(r=>!r.fil||escopo.indexOf(r.fil)>=0).forEach(r=>{
+      L.push([r.fil||'', r.fonte||'', r.cod||'', r.nome||'', r.placa||'', NOME[r.balde]||r.balde||'',
+        _xNum(r.valorOrig), _xNum(r.valorConsiderado), r.incluido?'SIM':'não', _xNum(r.fator!=null?r.fator:1),
+        r.garantia?'SIM':'não', r.dilui?'SIM':'não', r.motivo||'', r.regra||'']);
+    });
+    L.push([]);
+    L.push(['C.P / Pessoal não tem lançamento: vem do campo "Custo Frota 35%" da Premissa (CPK) do fechamento.']);
+    L.push(['Pedágio de cavalo próprio não gera linha aqui — é apontamento direto na placa (ver aba Placas, coluna Pedágio).']);
+    add('Lançamentos', _xSheet(L,_xW(7,22,14,42,10,10,15,16,14,12,16,16,52,80),
+      Object.assign(_xRange(6,7,CPK_XF.m),{9:'#,##0.00'})));
+  }
+
+  // ══ 8. KM MÊS A MÊS ═══════════════════════════════════════════════
+  {
+    const L=[['Placa','Filial','Competência','Base importada no mês?','KM importado','KM SZB × SZY','KM considerado','Fonte no mês','KM total da placa']];
+    const baseMes=new Set(CPK.kmImportMeses||[]);
+    const impMes=CPK.kmImportPorMes||{};
+    (CPK.aggPlaca||[]).forEach(p=>{
+      const fil=cpkFilialEscopo(p,escopo);
+      meses.forEach(m=>{
+        const temBase=baseMes.has(m);
+        const ki=+((impMes[m]||{})[p.placa])||0;
+        const ks=+((p.km_szb_mes||{})[m])||0;
+        const kc=temBase?ki:ks;
+        L.push([p.placa,fil,m,temBase?'SIM':'não',_xNum(ki),_xNum(ks),_xNum(kc),
+          temBase?(ki>0?'Base importada':'Sem KM na base'):(ks>0?'SZB × SZY':'Sem viagem no mês'),_xNum(p.km_total)]);
+      });
+    });
+    L.push([]);
+    L.push(['Regra: no mês COM base importada a base é a fonte autoritativa; no mês SEM base, o KM deriva de SZB × SZY. O KM do período é a soma das parcelas mensais.']);
+    add('KM', _xSheet(L,_xW(10,7,13,22,14,14,15,20,16), _xRange(4,6,CPK_XF.k)));
+  }
+
+  // ══ 9. DEPRECIAÇÃO ════════════════════════════════════════════════
+  {
+    const L=[['Placa','Frota','Tipo','Marca','Modelo','Ano fab.','Ano mod.','Valor de compra','Data da compra',
+      'Valor residual','Base depreciável','Método','% ao ano','Período (meses)','Depreciação mensal',
+      'Depreciação no período','Acumulada','Valor contábil','Unidade','Status','Entra no CPK?']];
+    let idx={list:[]}; try{ idx=cpkDepIndex(CPK.filtros.mes)||{list:[]}; }catch(_){}
+    const noEscopo=pl=>{
+      if((CPK.aggPlaca||[]).some(p=>p.placa===pl)) return 'SIM';
+      try{ const v=cpkVeic(pl); if(v&&cpkEhCarreta(v)&&(+depBy[pl]||0)>0) return 'SIM — diluída na filial'; }catch(_){}
+      return 'não';
+    };
+    (idx.list||[]).forEach(r=>{
+      const noPer=+depBy[r.placa]||0;
+      L.push([r.placa,r.frota||'',(typeof cpkDepTipoLabel==='function'?cpkDepTipoLabel(r.tipo):r.tipo)||'',r.marca||'',r.modelo||'',
+        r.anoFab||'',r.anoMod||'',_xNum(r.valorCompra),r.dataCompra||'',_xNum(r.valorResidual),_xNum(r.valorDepreciavel),
+        (typeof cpkDepMetodoLabel==='function'?cpkDepMetodoLabel(r.metodo):r.metodo)||'',_xNum(r.percentualAnual),r.periodoMeses||'',
+        _xNum(r.depMensalNoMes),_xNum(noPer),_xNum(r.acumulado),_xNum(r.valorContabil),r.unidade||'',r.status||'',
+        noPer>0?noEscopo(r.placa):'não']);
+    });
+    L.push([]);
+    L.push(['Depreciação de carreta (sem linha por placa nas demais abas) — diluída entre as placas da filial:']);
+    Object.keys(depCarr).forEach(f=>{ if(+depCarr[f]) L.push(['Filial '+f,'','','','','','','','','','','','','',_xNum(0),_xNum(depCarr[f])]); });
+    add('Depreciação', _xSheet(L,_xW(10,8,16,14,20,9,9,16,13,14,16,16,10,14,17,20,15,15,9,12,13),
+      Object.assign({7:CPK_XF.m},_xRange(9,10,CPK_XF.m),{12:CPK_XF.p},_xRange(14,17,CPK_XF.m))));
+  }
+
+  // ══ 10. IMPOSTOS ══════════════════════════════════════════════════
+  {
+    const L=[['Filial','Receita bruta','ICMS','PIS/COFINS','IR/CS','ISS','Total de impostos','Receita líquida',
+      'Alíquota efetiva','Origem da alíquota','Estimada?','Mês de referência']];
+    const FONTE={mes:'Do mês',anterior:'Estimada pelo mês anterior',misto:'Mista (período)'};
+    escopo.forEach(f=>{
+      const ip=cpkImpostoFil(f);
+      L.push([f,_xNum(ip.bruta),_xNum(ip.det.icms),_xNum(ip.det.pisCofins),_xNum(ip.det.irCs),_xNum(ip.det.iss),
+        _xNum(ip.imposto),_xNum(ip.liquida),_xNum(ip.aliq*100),FONTE[ip.fonte]||ip.fonte||'—',ip.estimada?'SIM':'não',ip.mesRef||'']);
+    });
+    L.push(['TOTAL',_xNum(T.recBr),null,null,null,null,_xNum(T.imp),_xNum(T.recLq),_xNum(T.aliqEf),'','','']);
+    L.push([]);
+    L.push(['O imposto é deduzido da RECEITA no nível do CT-e, com a alíquota da filial no mês do documento. Ele NÃO entra no custo nem no CPK.']);
+    add('Impostos', _xSheet(L,_xW(8,16,14,14,14,12,17,16,15,28,11,14),
+      Object.assign(_xRange(1,7,CPK_XF.m),{8:CPK_XF.p})));
+  }
+
+  // ══ 11. ROTAS ═════════════════════════════════════════════════════
+  {
+    const L=[['Filial','Rota','Origem','Destino','Viagens','KM total','KM médio','Receita líquida','Custo rateado','CPK','Receita/km','Margem/km','Margem %','Viagens sem KM']];
+    (CPK.aggRota||[]).slice().sort((a,b)=>(b.faturamento||0)-(a.faturamento||0)).forEach(r=>{
+      L.push([r.filial||'',r.rota_cod||'',r.origem||'',r.destino||'',r.viagens||0,_xNum(r.km_total),_xNum(r.km_medio),
+        _xNum(r.faturamento),_xNum(r.custo_total),_xNum(r.cpk),_xNum(r.receita_km),_xNum(r.margem_km),_xNum(r.margem_pct),r.sem_km||0]);
+    });
+    L.push([]);
+    L.push(['O custo por rota é rateio por km (taxa efetiva da placa que rodou), não apontamento direto — serve para comparar rotas entre si.']);
+    add('Rotas', _xSheet(L,_xW(7,10,26,26,9,13,11,16,15,10,12,12,11,14),
+      Object.assign({5:CPK_XF.k},{6:CPK_XF.k},_xRange(7,11,CPK_XF.m),{12:CPK_XF.p})));
+  }
+
+  // ══ 12. CLIENTES ══════════════════════════════════════════════════
+  {
+    const L=[['Cliente','Unidade','Viagens','KM total','Receita líquida','Custo rateado','CPK','Receita/km','Margem/km','Margem %','Viagens sem KM']];
+    (CPK.aggCliente||[]).forEach(c=>L.push([c.nome||'',c.unidade||'',c.viagens||0,_xNum(c.km_total),_xNum(c.faturamento),
+      _xNum(c.custo_total),_xNum(c.cpk),_xNum(c.receita_km),_xNum(c.margem_km),_xNum(c.margem_pct),c.sem_km||0]));
+    add('Clientes', _xSheet(L,_xW(38,9,9,13,16,15,10,12,12,11,14),
+      Object.assign({3:CPK_XF.k},_xRange(4,8,CPK_XF.m),{9:CPK_XF.p})));
+  }
+
+  // ══ 13. INCONSISTÊNCIAS ═══════════════════════════════════════════
+  {
+    const L=[['Tipo','Filial','Placa','Descrição','Valor envolvido']];
+    (CPK.custoIncons||[]).forEach(i=>L.push([i.tipo||'',i.fil||'',i.placa||'',i.descricao||'',_xNum(i.valor)]));
+    const d=CPK.diag||{};
+    (d.semCadastro||[]).forEach(p=>L.push(['Placa sem cadastro','',p,'Placa com movimento no SZB e sem registro no cadastro da frota.',null]));
+    (d.indefinidas||[]).forEach(p=>L.push(['Vínculo indefinido no SZB','',p,'Coluna Frota em branco no SZB — receita e custo ficam fora do CPK.',null]));
+    (d.semKm||[]).forEach(p=>L.push(['Placa sem KM','',p,'Placa no cálculo sem KM no período — não gera CPK próprio.',null]));
+    (d.kmParcial||[]).forEach(p=>L.push(['KM parcial no período','',p,'Placa com KM em apenas parte das competências do período.',null]));
+    (d.recDiverg||[]).forEach(r=>L.push([r.tipo==='vinculo'?'Divergência de vínculo (cadastro × SZB)':'Divergência de unidade (cadastro × SZB)',
+      r.filSZB||'',r.placa||'','CT-e '+(r.ctrc||'')+(r.serie?('/'+r.serie):'')+' de '+(r.dt||'')+' — SZB: '+(r.vincSZB||'')+'/'+(r.uniSZB||'')+' · cadastro: '+(r.vincCad||'—')+'/'+(r.uniCad||'—')+'. Não altera a receita.',_xNum(r.valor)]));
+    if(L.length===1) L.push(['—','','','Nenhuma inconsistência registrada no período e escopo atuais.',null]);
+    add('Inconsistências', _xSheet(L,_xW(38,8,10,90,16),{4:CPK_XF.m}));
+  }
+
+  // ══ 14. EXCLUÍDOS ═════════════════════════════════════════════════
+  {
+    const L=[['Fonte','Filial','Centro de custo','Descrição','Placa','Valor original','Motivo da exclusão','Regra']];
+    (CPK.custoExcluidos||[]).forEach(e=>L.push([e.fonte||'',e.fil||'',e.cod||'',e.nome||'',e.placa||'',_xNum(e.valorOrig),e.motivo||'',e.regra||'']));
+    if(L.length===1) L.push(['—','','','','',null,'Nenhum lançamento excluído no período.','']);
+    L.push([]);
+    L.push(['Total excluído (não entra no custo do CPK):', '', '', '', '',
+      _xNum((CPK.custoExcluidos||[]).reduce((s,e)=>s+(+e.valorOrig||0),0)), '', '']);
+    add('Excluídos', _xSheet(L,_xW(22,8,14,42,10,16,54,80),{5:CPK_XF.m}));
+  }
+
+  // ══ 15. REGRAS ════════════════════════════════════════════════════
+  {
+    const R=[
+      ['ESCOPO','Só frota própria. Agregado fica fora: fechamento de agregados, diesel de agregado (02.02/04.02) e empréstimos/custos diretos de placa agregada (10/11/12.01).'],
+      ['EXCEÇÃO','A Garantia Agregados entra como C.O e é rateada igualmente entre as placas próprias da filial.'],
+      ['GUARDA DE PLACA','Custo lançado em CC de frota mas com placa agregada ou de vínculo indefinido fica FORA do CPK e vira inconsistência.'],
+      ['GUARDA DE PLACA — exceções','Custo em placa de carreta da Comix nos CCs 03.01/06.01/07.01/08.01 é custo da frota e é diluído entre as placas da filial; despesa adm (09.01) em carro de apoio entra pelo percentual de rateio e é diluída na filial onde o carro está alocado no cadastro.'],
+      ['RATEIO DE COMPARTILHADOS','Custos administrativos (CC 09.01 / mão de obra adm) entram pelo percentual do rateio vigente (padrão 82%), proporção da demanda gerada pela frota própria. O C.P da premissa não recebe o fator.'],
+      ['CUSTO DE CAPITAL','Apenas a Depreciação por placa, quando cadastrada. O Custo de Equipamentos (C.E) da premissa NÃO entra no CPK — fica só como referência.'],
+      ['DEPRECIAÇÃO DE CARRETA','A carreta não roda km próprio: não vira linha por placa e a sua depreciação é rateada igualmente entre as placas da filial.'],
+      ['PEDÁGIO','Cada cavalo próprio carrega o próprio pedágio (Valor Cobrado + Vale Comix). O pedágio de carro de apoio entra na filial do carro e é rateado entre as placas dela. Pedágio de agregado, carreta, placa sem cadastro ou sem placa fica fora do CPK.'],
+      ['PESSOAL','O C.P do CPK vem do campo Custo Frota 35% da Premissa (CPK) do fechamento — não há lançamento individual.'],
+      ['KM','KM por placa vem da base importada (aba Dados), resolvido MÊS A MÊS: em competência sem base importada, o KM daquele mês deriva de SZB × SZY. Num período de vários meses, custo e KM cobrem sempre as mesmas competências.'],
+      ['RECEITA','Receita = CT-e de frota própria no SZB, mais as Cartas Frete Complementar (FSC0000) próprias, que são receita real sem placa e sem KM.'],
+      ['IMPOSTOS','A receita é deduzida de ICMS, PIS/COFINS, IR/CS e ISS no NÍVEL DO CT-E, pela alíquota efetiva da filial no mês do documento. O imposto não entra no custo nem no CPK — ele já saiu por cima, na receita.'],
+      ['ESCOPO POR FILIAL','A RECEITA segue a operação do CT-e (unidade histórica do SZB). O KM, o CUSTO e a DEPRECIAÇÃO seguem a filial física da placa. Por isso cada filial filtrada reproduz exatamente a linha dela no consolidado, e a soma das filiais fecha com o total.'],
+      ['RATEIO DO RESÍDUO','O custo sem placa de cada filial (C.P, Garantia Agregados, custos diluídos de carreta e carro de apoio) é dividido igualmente entre as placas daquela filial.'],
+      ['FÓRMULAS','CPK = Custo total ÷ KM total. VPK bruto = Receita bruta ÷ KM. VPK líquido = Receita líquida ÷ KM. Resultado líquido/km = VPK líquido − CPK. Resultado bruto/km = VPK bruto − CPK. Margem de contribuição/km = (Receita líquida − Diesel − C.O − Pedágio) ÷ KM.'],
+      ['PLACAS DE CONTROLE','AAA9999 é descartada de tudo (controle diretivo). FSC0000 gera apenas receita complementar, sem placa, KM, rota ou cliente.']
+    ];
+    const L=[['Tema','Regra aplicada no cálculo']].concat(R);
+    L.push([]);
+    L.push(['Fonte dos dados','SZB (Controle de Frete) · Mapinha (lançamentos, premissas, pedágios, impostos) · Ordens de Serviço · cadastro da frota · base de KM (aba Dados) · cadastro de depreciação.']);
+    L.push(['Período exportado',per+' · '+escTxt]);
+    add('Regras', _xSheet(L,_xW(28,150)));
+  }
+
+  const nome='CPK_memoria_'+(meses.length?meses[0]:'')+(meses.length>1?('_a_'+meses[meses.length-1]):'')+'_'+(unidade||'consolidado')+'.xlsx';
+  XLSX.writeFile(wb, nome);
+  cpkToast('Memória de cálculo exportada: '+ctes.length+' CT-e e '+ledger.length+' lançamentos.');
 }
 
 // ── AUDITORIA POR FILIAL (expandível) ─────────────────────────────────
