@@ -1978,64 +1978,17 @@ async function loadAllData() {
       console.warn("Frota: SZY sem dados na nuvem — distância da viagem ficará como '—'");
     }
 
-    // === COMPRESSORES: alocação_frota é a fonte oficial do vínculo ===
-    // Corrige localmente antes da primeira renderização e, para admin, saneia
-    // vínculos duplicados/campos antigos no Firestore em segundo plano.
+    // === RECONCILIAÇÃO · alocacao_frota é a fonte oficial do vínculo ===
+    // Roda ANTES do primeiro render: rodando depois, a tela nascia com o status
+    // velho e só se corrigia na próxima re-renderização. Vale para carretas e
+    // compressores — mesma regra, vocabulários diferentes.
+    reconciliarStatusEquipamentos(STATE.isAdmin);
     reconciliarCompressoresComAlocacao(STATE.isAdmin);
 
     _frotaLoaderHide();
 
     populateFilialFilters();
     refreshCurrentView();
-
-    // === Reconcilia status das carretas com a realidade da alocação ===
-    // Carreta vinculada = operando. Sem vínculo e sem status especial = disponivel.
-    // Indexa por id + placa + frota para resistir a mismatch de chave (ex: carreta1_id="SL184" vs id="MGF3787")
-    {
-      const carretasEmUso = new Set();
-      Object.values(STATE.alocacoes).forEach(a => {
-        [a.carreta1_id, a.carreta2_id].forEach(cid => {
-          if (!cid) return;
-          carretasEmUso.add(cid);
-          const cv = STATE.veiculos.find(x => x.id === cid || x.placa === cid || x.frota === cid);
-          if (cv) {
-            carretasEmUso.add(cv.id);
-            carretasEmUso.add(cv.placa);
-            if (cv.frota) carretasEmUso.add(cv.frota);
-          }
-        });
-      });
-      // Só estados operacionais: o ciclo de vida (status_ativo) já saiu do loop
-      // abaixo via foraDaFrota(), então não precisa entrar nesta lista.
-      const STATUS_ESPECIAL = ["indisponivel","em_reforma","a_reformar","manutencao"];
-      const toSync = [];
-      STATE.veiculos.forEach(v => {
-        if (v.categoria !== "carreta") return;
-        if (foraDaFrota(v)) return;   // fora de frota não é reconciliada
-        const emUso = carretasEmUso.has(v.id) || carretasEmUso.has(v.placa) || (v.frota && carretasEmUso.has(v.frota));
-        if (emUso) {
-          // Alocada → deve ser operando
-          if (v.disponibilidade !== "operando") {
-            v.disponibilidade = "operando";
-            toSync.push({ placa: v.placa, status: "OPERANDO" });
-          }
-        } else {
-          // Não alocada + sem status especial + marcada como operando → inconsistência → disponivel
-          if (v.disponibilidade === "operando" && !STATUS_ESPECIAL.includes(v.disponibilidade)) {
-            v.disponibilidade = "disponivel";
-            toSync.push({ placa: v.placa, status: "DISPONIVEL" });
-          }
-        }
-      });
-      if (STATE.isAdmin && toSync.length) {
-        console.log("[Frota] Reconciliando status de " + toSync.length + " carreta(s):", toSync.map(x=>x.placa+":"+x.status));
-        toSync.forEach(({ placa, status }) => {
-          window._FB.atualizarVeiculo(placa, { status }).catch(e =>
-            console.warn("[Frota] Falha ao reconciliar", placa, e.message)
-          );
-        });
-      }
-    }
 
     // === Auto-persistir tipo_vinculo dos cavalos classificados por prefixo (CP/CA) ===
     // Roda em background, não bloqueia a UI. Apenas admin pode gravar.
@@ -2403,7 +2356,112 @@ function gerarSzbMock() {
 
 /* ─── Helpers ─── */
 function findVeiculo(id) {
-  return STATE.veiculos.find(v => v.id === id || v.placa === id) || null;
+  if (!id) return null;
+  const chave = String(id).trim().toUpperCase();
+  // id e placa primeiro; código de frota (SL234, CP102...) como fallback.
+  // A alocação grava ora a placa, ora o código de frota — sem esse fallback o
+  // Kanban não achava a carreta, não pintava o slot e a busca vinha vazia,
+  // enquanto a reconciliação (que já resolvia por frota) a mantinha operando.
+  return STATE.veiculos.find(v => v.id === id || v.placa === id)
+      || STATE.veiculos.find(v => String(v.id||"").toUpperCase() === chave
+                               || String(v.placa||"").toUpperCase() === chave)
+      || STATE.veiculos.find(v => String(v.frota||"").toUpperCase() === chave)
+      || null;
+}
+
+/* ─── OCUPAÇÃO · fonte única de "está preso a um cavalo?" ────────────────────
+   Um doc de alocacao_frota só vale se o cavalo dono existir e ainda for frota.
+   Doc órfão — cavalo apagado, vendido, baixado ou inativo — não segura mais
+   nada: era exatamente ele que mantinha carreta/compressor eternamente
+   "operando" sem aparecer em coluna nenhuma do Kanban. */
+function alocacaoTemCavaloValido(cavaloId, aloc) {
+  const cav = cavaloDaAlocacao(cavaloId, aloc);
+  return !!(cav && !foraDaFrota(cav));
+}
+
+function mapaOcupacao() {
+  const carretas = new Set();
+  const compressores = new Set();
+  const orfas = [];
+  const addCarreta = (chave) => {
+    if (!chave) return;
+    carretas.add(chave);
+    carretas.add(String(chave).trim().toUpperCase());
+    const v = findVeiculo(chave);
+    if (!v) return;
+    if (v.id) carretas.add(v.id);
+    if (v.placa) carretas.add(v.placa);
+    if (v.frota) carretas.add(v.frota);
+  };
+  Object.entries(STATE.alocacoes || {}).forEach(([cavaloId, a]) => {
+    if (!a) return;
+    if (!alocacaoTemCavaloValido(cavaloId, a)) {
+      if (a.carreta1_id || a.carreta2_id || a.compressor_id) {
+        orfas.push({ cavalo: cavaloId, carreta1: a.carreta1_id || "—",
+                     carreta2: a.carreta2_id || "—", compressor: a.compressor_id || "—" });
+      }
+      return;   // vínculo fantasma: ignorado
+    }
+    addCarreta(a.carreta1_id);
+    addCarreta(a.carreta2_id);
+    if (a.compressor_id) compressores.add(a.compressor_id);
+  });
+  return { carretas, compressores, orfas };
+}
+
+function equipamentoAlocado(v, ocup) {
+  ocup = ocup || mapaOcupacao();
+  return ocup.carretas.has(v.id)
+      || ocup.carretas.has(v.placa)
+      || !!(v.frota && ocup.carretas.has(v.frota));
+}
+
+/* Estados que o equipamento tem por conta própria e que sempre ganham da regra
+   automática: manutenção (vem de OS aberta), reformas e indisponível. */
+const STATUS_PROPRIO_EQUIP = ["indisponivel", "em_reforma", "a_reformar", "manutencao"];
+
+/* ─── STATUS AUTOMÁTICO DO EQUIPAMENTO ───────────────────────────────────────
+   Preso a um cavalo válido = OPERANDO. Solto = DISPONÍVEL. Status próprio
+   (manutenção / reforma / indisponível) vence os dois lados: uma carreta em
+   reforma não vira "operando" só porque ainda tem um cavalo apontando pra ela,
+   e não vira "disponível" só porque saiu de um. */
+function reconciliarStatusEquipamentos(persistir) {
+  const ocup = mapaOcupacao();
+  const toSync = [];
+
+  STATE.veiculos.forEach(v => {
+    if (v.categoria !== "carreta") return;
+    if (foraDaFrota(v)) return;                          // fora de frota não reconcilia
+    if (STATUS_PROPRIO_EQUIP.includes(v.disponibilidade)) return;  // status próprio manda
+
+    if (equipamentoAlocado(v, ocup)) {
+      if (v.disponibilidade !== "operando") {
+        v.disponibilidade = "operando";
+        toSync.push({ placa: v.placa, status: "OPERANDO" });
+      }
+    } else if (v.disponibilidade !== "disponivel" && v.disponibilidade !== "reserva") {
+      // Sem cavalo e sem status próprio → disponível (inclui o caso "operando
+      // órfão", que era o furo: equipamento solto marcado como em uso).
+      v.disponibilidade = "disponivel";
+      toSync.push({ placa: v.placa, status: "DISPONIVEL" });
+    }
+  });
+
+  if (ocup.orfas.length) {
+    console.warn("[Frota] " + ocup.orfas.length + " alocação(ões) órfã(s) ignorada(s) — cavalo inexistente ou fora de frota:");
+    console.table(ocup.orfas);
+  }
+  if (toSync.length) {
+    console.log("[Frota] Status reconciliado em " + toSync.length + " equipamento(s):",
+      toSync.map(x => x.placa + " → " + x.status));
+  }
+  if (persistir && STATE.isAdmin && toSync.length) {
+    toSync.forEach(({ placa, status }) => {
+      window._FB.atualizarVeiculo(placa, { status }).catch(e =>
+        console.warn("[Frota] Falha ao reconciliar", placa, e.message));
+    });
+  }
+  return toSync;
 }
 function szbDe(id) { return STATE.szb[id] || null; }
 function classificarAlerta(dias) {
@@ -2967,7 +3025,7 @@ async function clearSlot(cavaloId, slot) {
     // Sincroniza status da carreta removida -> disponivel
     if (itemRemovidoId) {
       const carreta = findVeiculo(itemRemovidoId);
-      if (carreta && !["indisponivel","em_reforma","a_reformar","manutencao","vendida"].includes(carreta.disponibilidade)) {
+      if (carreta && !foraDaFrota(carreta) && !STATUS_PROPRIO_EQUIP.includes(carreta.disponibilidade)) {
         carreta.disponibilidade = "disponivel";
         try { await window._FB.atualizarVeiculo(carreta.placa, { status: "DISPONIVEL" }); } catch(_){}
       }
@@ -3014,9 +3072,12 @@ async function assignSlot(targetCavalo, slot, payload) {
     await window._FB.salvarAlocacao(targetCavalo, sanitizeAloc(tgt, targetCavalo));
     STATE.alocacoes[targetCavalo] = tgt;
 
-    // Sincroniza status da carreta -> operando (alocada = em uso = operando)
+    // Sincroniza status da carreta -> operando (alocada = em uso = operando).
+    // Manutenção / reforma / indisponível continuam mandando: o equipamento
+    // pode estar vinculado e mesmo assim parado.
     const carreta = findVeiculo(itemId);
-    if (carreta && carreta.disponibilidade !== "operando") {
+    if (carreta && carreta.disponibilidade !== "operando"
+        && !STATUS_PROPRIO_EQUIP.includes(carreta.disponibilidade)) {
       carreta.disponibilidade = "operando";
       try { await window._FB.atualizarVeiculo(carreta.placa, { status: "OPERANDO" }); } catch(_){}
     }
@@ -3096,21 +3157,18 @@ function openSlotPicker(cavaloId, slot, title) {
   const v = findVeiculo(cavaloId);
   if (!v) return;
 
-  // Listas de disponíveis (não alocados em nenhum cavalo)
-  const usadosCarreta = new Set();
-  const usadosCompressor = new Set();
-  Object.values(STATE.alocacoes).forEach(a => {
-    if (a.carreta1_id) usadosCarreta.add(a.carreta1_id);
-    if (a.carreta2_id) usadosCarreta.add(a.carreta2_id);
-    if (a.compressor_id) usadosCompressor.add(a.compressor_id);
-  });
+  // Listas de disponíveis (não alocados em nenhum cavalo válido).
+  // Usa o mapa de ocupação: resolve id/placa/frota e descarta vínculo órfão —
+  // antes, carreta gravada pelo código de frota aparecia como livre já estando
+  // em uso, e carreta presa a um cavalo baixado nunca voltava para a lista.
+  const ocup = mapaOcupacao();
 
   let opts = "";
   if (slot === "compressor") {
-    const livres = STATE.compressores.filter(c => !usadosCompressor.has(c.id));
+    const livres = STATE.compressores.filter(c => !ocup.compressores.has(c.id));
     opts = livres.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.identificacao || c.id)} ${c.serie ? '· '+escapeHtml(c.serie) : ''}</option>`).join("");
   } else {
-    const livres = STATE.veiculos.filter(x => x.categoria === "carreta" && !usadosCarreta.has(x.id) && !foraDaFrota(x));
+    const livres = STATE.veiculos.filter(x => x.categoria === "carreta" && !equipamentoAlocado(x, ocup) && !foraDaFrota(x));
     opts = livres.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.frota || '')} · ${escapeHtml(c.placa)} ${c.subtipo ? '('+escapeHtml(c.subtipo)+')' : ''}</option>`).join("");
   }
 
@@ -3489,14 +3547,21 @@ function _alocTimestampMs(a) {
 
 function cavaloDaAlocacao(cavaloId, aloc) {
   const placa = String((aloc && aloc.cavalo_placa) || "").trim().toUpperCase();
-  return STATE.veiculos.find(v => v.categoria === "cavalo" &&
-    (v.id === cavaloId || v.placa === cavaloId || (placa && v.placa === placa))) || null;
+  const chave = String(cavaloId || "").trim().toUpperCase();
+  const portador = v => v.categoria === "cavalo" || v.categoria === "apoio";
+  return STATE.veiculos.find(v => portador(v) &&
+      (v.id === cavaloId || v.placa === cavaloId || (placa && v.placa === placa)))
+    || STATE.veiculos.find(v => portador(v) && chave &&
+      (String(v.id||"").toUpperCase() === chave || String(v.frota||"").toUpperCase() === chave))
+    || null;
 }
 
 function obterAlocacaoDoCompressor(compressorId) {
   const encontrados = Object.entries(STATE.alocacoes)
     .filter(([,a]) => a && a.compressor_id === compressorId)
-    .map(([cavaloId,a]) => ({ cavaloId, aloc: a, cavalo: cavaloDaAlocacao(cavaloId, a) }));
+    .map(([cavaloId,a]) => ({ cavaloId, aloc: a, cavalo: cavaloDaAlocacao(cavaloId, a) }))
+    // Sem cavalo válido o vínculo é fantasma: compressor volta para estoque.
+    .filter(x => x.cavalo && !foraDaFrota(x.cavalo));
   if (!encontrados.length) return null;
   encontrados.sort((x,y) => _alocTimestampMs(y.aloc) - _alocTimestampMs(x.aloc));
   return encontrados[0];
