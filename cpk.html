@@ -463,6 +463,8 @@ table.dt tr:last-child td{border-bottom:none}table.dt tr:hover td{background:var
 .fil-stat .fs-l{font-size:9px;color:var(--mu);text-transform:uppercase;letter-spacing:.3px;font-weight:600}
 .fil-stat .fs-v{font-family:var(--m);font-size:13px;font-weight:500;color:var(--tx)}
 .fil-stat .fs-v.gn{color:var(--gn)}.fil-stat .fs-v.rd{color:var(--rd)}
+.fil-stat.fil-brt{grid-column:1/-1;border-top:1px dashed var(--bd);padding-top:6px}
+.fil-stat.fil-brt .fs-v{font-size:11.5px}
 .fil-hbar{height:6px;display:flex;background:var(--bd2)}
 .fil-hbar i{height:100%;display:block}
 .fil-hbar i.gn{background:var(--gn)}.fil-hbar i.am{background:var(--am)}.fil-hbar i.rd{background:var(--rd)}.fil-hbar i.mu{background:#cbd5e1}
@@ -791,6 +793,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
     <div class="cpk-pane" id="pane-rotas">
       <div class="cpk-info"><span>KM por rota via <strong>SZY</strong> (Km Ida + Km Volta) pelo código de rota. Receita e viagens via SZB (frota própria). Custo rateado por KM.</span></div>
       <div class="kpi-row" id="rotas-cards"></div>
+      <div id="rotas-recon"></div>
       <div class="insight-row" id="rotas-insights"></div>
       <div class="cpk-charts">
         <div class="chart-box"><div class="ct"><span>Top 8 rotas por receita</span></div><canvas id="ch-rotas-rec"></canvas></div>
@@ -825,6 +828,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
     <div class="cpk-pane" id="pane-placas">
       <div class="cpk-info"><span>CPK individual por placa (frota própria). Custo da placa = parcela do <strong>DRE do Mapinha sem custos de agregados</strong> (exceto a <strong>Garantia Agregados</strong>, que entra como C.O rateado): diesel e C.O com placa, e o <strong>pedágio por placa</strong> (Valor Cobrado + Vale Comix da aba Pedágios) permanecem na placa; o saldo sem placa (C.P Premissa CPK + Garantia Agregados + custos diluídos de carreta/carro de apoio, incluindo o pedágio de carro de apoio) é rateado igualmente entre as placas da filial. A <strong>depreciação mensal</strong> de cada placa (cavalo/carro de apoio), quando cadastrada, entra como custo direto da placa (sem rateio) — o C.E da premissa não entra no CPK. <strong>Carretas não aparecem como placa aqui</strong> (não rodam km próprio, logo não têm CPK): a sua depreciação é custo da frota, <strong>rateada igualmente entre as placas da filial</strong>, como os demais custos de carreta. KM por placa via aba <strong>Dados</strong> ou derivado de SZB×SZY. Receita via SZB.</span></div>
       <div class="kpi-row" id="placas-cards"></div>
+      <div id="placas-recon"></div>
       <div class="insight-row" id="placas-insights"></div>
 
       <div class="cpk-sec-hdr"><h2>Mapa de Saúde — frota própria</h2><div class="cpk-sec-line"></div><span class="meta">margem por km · 1 placa por bloco</span></div>
@@ -869,6 +873,7 @@ table.dt td.cc{font-family:var(--m);font-size:10px;color:var(--mu)}
     <div class="cpk-pane" id="pane-clientes">
       <div class="cpk-info"><span>CPK por cliente (frota própria). Receita e viagens via SZB; KM somado das viagens do cliente. Custo rateado por KM.</span></div>
       <div class="kpi-row" id="clientes-cards"></div>
+      <div id="clientes-recon"></div>
       <div class="insight-row" id="clientes-insights"></div>
       <div class="cpk-charts">
         <div class="chart-box"><div class="ct"><span>Top 8 clientes por receita</span></div><canvas id="ch-clientes-rec"></canvas></div>
@@ -3839,6 +3844,32 @@ function cpkFilialEscopo(p,scopeFils){
   const u=cpkFilialDe(p,fils);
   return (u&&fils.indexOf(u)>=0)?u:fils[0];
 }
+// ── FONTE ÚNICA DA RECEITA POR FILIAL (#CPK-REC-FIL-UNICA) ────────────
+// Três telas montavam a receita da filial por caminhos DIFERENTES a partir
+// dos mesmos quatro mapas do motor:
+//   · cpkAggFilial (cards da Visão Geral / Auditoria por Filial) somava
+//     recFilPropria + receitaComplementarFil, roteando o complementar órfão;
+//   · cpkVpkRecFilMap (aba VPK) repetia esse roteio à mão;
+//   · cpkRecFilBruta/Liquida (coluna Impostos) e cpkAudImpostosTabela liam
+//     os mapas DIRETO, sem roteio — e a tabela de impostos ainda ignorava
+//     a Carta Frete Complementar.
+// Resultado: a mesma filial podia aparecer com três "receitas" diferentes
+// em três lugares. Agora todos leem ESTE mapa. Bruta, líquida e imposto
+// saem sempre do mesmo lugar, com o mesmo roteio de órfão (1ª filial do
+// escopo — a mesma âncora usada para a placa sem filial).
+function cpkRecFilMap(){
+  const scopeFils=cpkScopeFiliais();
+  const out={}; FILIAIS_PADRAO.forEach(f=>out[f]={br:0,lq:0,imp:0});
+  const add=(f,k,v)=>{ const d=(f&&out[f])?f:scopeFils[0]; if(out[d]) out[d][k]+=(+v||0); };
+  const P=CPK.recFilPropria||{}, PB=CPK.recFilPropriaBruta||{};
+  const C=CPK.receitaComplementarFil||{}, CB=CPK.receitaComplementarFilBruta||{};
+  for(const f in P ) add(f,'lq',P[f]);
+  for(const f in C ) add(f,'lq',C[f]);
+  for(const f in PB) add(f,'br',PB[f]);
+  for(const f in CB) add(f,'br',CB[f]);
+  FILIAIS_PADRAO.forEach(f=>{ out[f].imp=out[f].br-out[f].lq; });
+  return out;
+}
 function cpkAggFilial(scopeOnly){
   const scopeFils=cpkScopeFiliais();
   const mk=()=>({km:0,rec:0,custo:0,placas:0,saud:0,aten:0,crit:0,semkm:0});
@@ -3875,14 +3906,12 @@ function cpkAggFilial(scopeOnly){
   // (Operacao do SZB), no nível do documento. Fonte: CPK.recFilPropria (motor).
   // Substitui o antigo rateio por placa, que colapsava placas com CT-es em mais
   // de uma operação numa única filial (reclassificação indevida PR↔SC).
-  const _recProp=CPK.recFilPropria||{};
-  Object.keys(_recProp).forEach(f=>{ if(map[f]) map[f].rec+=(+_recProp[f]||0); });
-  // RECEITA — soma a Carta Frete Complementar (FSC0000) na filial do CT-e (uniC),
-  // receita real sem placa/KM. Sem filial no CT-e, cai na 1ª do escopo (mesma
-  // regra da placa órfã). Sem isso, a receita/margem do card por filial ficava
-  // abaixo do headline pelo valor do complementar (custo já é o DRE cheio).
-  const _complFil=CPK.receitaComplementarFil||{};
-  Object.keys(_complFil).forEach(uc=>{ let f=uc; if(!f||!map[f])f=scopeFils[0]; if(map[f])map[f].rec+=(+_complFil[uc]||0); });
+  // e a Carta Frete Complementar (FSC0000) na filial do CT-e — tudo pela fonte
+  // única cpkRecFilMap (#CPK-REC-FIL-UNICA). O card passa a expor também a
+  // receita BRUTA e o imposto, para reconciliar na tela com a aba VPK.
+  const _recMap=cpkRecFilMap();
+  Object.keys(map).forEach(f=>{ const r=_recMap[f]||{br:0,lq:0,imp:0};
+    map[f].rec=+r.lq||0; map[f].recBruta=+r.br||0; map[f].impostos=+r.imp||0; });
   Object.values(map).forEach(m=>{ m.cpk=m.km>0?m.custo/m.km:null; m.margem=m.rec-m.custo;
     m.margem_km=m.km>0?m.margem/m.km:null; m.margem_pct=m.rec>0?m.margem/m.rec*100:null; });
   const fils=scopeOnly?scopeFils:['SC','PR','SP'];
@@ -3990,10 +4019,15 @@ function cpkRenderFiliais(){
       '<div class="fil-cpk"><b>'+(f.cpk!=null?cpkFmt(f.cpk):'—')+'</b><span>CPK /km</span></div>'+
       '</div>'+
       '<div class="fil-bd">'+
-        '<div class="fil-stat"><span class="fs-l">Receita</span><span class="fs-v">'+cpkFmt(f.rec)+'</span></div>'+
+        // #CPK-REC-LABEL — o card mostrava "Receita" com o valor LÍQUIDO, enquanto
+        // a aba VPK mostra "Receita bruta". Mesmo número, bases diferentes: a
+        // diferença é exatamente o imposto. Rótulo e tooltip agora dizem qual é qual.
+        '<div class="fil-stat"><span class="fs-l">Receita líq.</span><span class="fs-v" title="Bruta '+cpkFmt(f.recBruta||0)+' − Impostos '+cpkFmt(f.impostos||0)+' = líquida '+cpkFmt(f.rec)+' (a aba VPK mostra a bruta)">'+cpkFmt(f.rec)+'</span></div>'+
         '<div class="fil-stat"><span class="fs-l">Custo</span><span class="fs-v">'+cpkFmt(f.custo)+'</span></div>'+
         '<div class="fil-stat"><span class="fs-l">Margem</span><span class="fs-v '+margTone+'">'+cpkFmt(f.margem)+'</span></div>'+
         '<div class="fil-stat"><span class="fs-l">Margem %</span><span class="fs-v '+margTone+'">'+(f.margem_pct!=null?cpkFmtPct(f.margem_pct):'—')+'</span></div>'+
+        '<div class="fil-stat fil-brt" title="Este é o número que a aba VPK mostra como Receita bruta"><span class="fs-l">Receita bruta (VPK) · (–) Impostos</span>'+
+          '<span class="fs-v">'+cpkFmt(f.recBruta||0)+' <span style="color:var(--pu)">− '+cpkFmt(f.impostos||0)+'</span> <span style="color:var(--mu)">= '+cpkFmt(f.rec)+'</span></span></div>'+
       '</div>'+
       '<div class="fil-hbar">'+seg+'</div>'+
       '<div class="fil-foot">'+
@@ -4171,9 +4205,14 @@ function cpkCustoFilialMes(mes,b,pedDoc){
   const pedFil=cpkPedPropriaPorFil(pedDoc).porFil;
   // Custo de capital do histórico (regra 07/2026): SEMPRE a depreciação por
   // placa da filial no mês — o CE da premissa não entra em nenhum mês.
+  // #CPK-HIST-COERENTE — a depreciação histórica era roteada pelo campo
+  // `unidade` CRU do cadastro: placa sem unidade preenchida (ou com unidade
+  // fora de SC/PR/SP) era descartada em silêncio, e o CPK do gráfico ficava
+  // ACIMA do CPK do card do mesmo mês. Agora usa cpkFilialHome — exatamente
+  // a mesma âncora de filial que o motor usa para KM, custo e depreciação.
   const depFil={SC:0,PR:0,SP:0};
   const by=cpkDepIndex(mes).byPlaca;
-  for(const pl in by){ const v=cpkVeic(pl); const u=v&&v.unidade; if(depFil[u]!=null) depFil[u]+=(+by[pl]||0); }
+  for(const pl in by){ const u=cpkFilialHome({placa:pl}); if(depFil[u]!=null) depFil[u]+=(+by[pl]||0); }
   const res={};
   for(const fil of FILIAIS_PADRAO){
     const prem=cpkPremissaVigente(b.prem, fil, mes);
@@ -4182,13 +4221,51 @@ function cpkCustoFilialMes(mes,b,pedDoc){
   }
   return res;
 }
-function cpkKmFilialDeDoc(doc){
+// KM por filial de TODOS os meses do SZB, derivado de SZB×SZY — a mesma
+// regra que o motor aplica no mês sem base importada. Uma passada só,
+// cacheada por versão de dados (#CPK-HIST-COERENTE).
+function cpkKmFilialSZBPorMes(){
+  const sig=(CPK._dataVer||0)+'|'+((CPK.frota||[]).length)+'|'+((CPK.szb||[]).length);
+  if(CPK._kmSzbFilCache && CPK._kmSzbFilCache.sig===sig) return CPK._kmSzbFilCache.val;
+  const out={};
+  const G=(r,ns)=>{ for(const n of ns){ if(r[n]!=null&&r[n]!=='') return r[n]; } return ''; };
+  (CPK.szb||[]).forEach(r=>{
+    const cancel=cpkStr(G(r,['Dt Cancel','dt_cancel']));
+    if(cancel&&cancel!=='0'&&cancel!=='undefined')return;
+    const dt=cpkNormDate(G(r,['Dt. Emissao','dt_emissao','Data']));
+    const mes=dt?String(dt).slice(0,7):''; if(!mes)return;
+    const placa=cpkNormPlaca(G(r,['Placa Veicul','placa_veicul','Veiculo'])); if(!placa)return;
+    if(cpkPlacaIgnorada(placa)||cpkPlacaReceitaCompl(placa))return;
+    const frota=cpkStr(G(r,['Frota','frota'])).toUpperCase();
+    if(cpkVinculoReceitaSZB(frota,placa)!=='proprio')return;
+    let kmv=null; try{ kmv=cpkKmViagem(r); }catch(_){ return; }
+    if(!kmv||!(kmv.km>0))return;
+    const u=cpkFilialHome({placa});
+    if(!out[mes])out[mes]={SC:0,PR:0,SP:0};
+    if(out[mes][u]!=null) out[mes][u]+=kmv.km;
+  });
+  CPK._kmSzbFilCache={sig,val:out};
+  return out;
+}
+// #CPK-HIST-COERENTE — duas divergências corrigidas aqui:
+//   (a) o KM era roteado pelo campo `unidade` CRU do cadastro (placa sem
+//       cadastro ou sem unidade sumia do histórico, inflando o CPK do mês);
+//   (b) mês SEM base de KM importada virava KM=0 → ponto vazio no gráfico,
+//       enquanto o motor deriva o KM daquele mês de SZB×SZY. Agora o
+//       histórico aplica a MESMA regra por competência do cálculo oficial.
+function cpkKmFilialDeDoc(doc, mes){
   const km={SC:0,PR:0,SP:0};
   if(doc&&doc.data&&doc.data.placas){
     const placas=doc.data.placas;
-    Object.keys(placas).forEach(p=>{ const v=cpkVeic(p); if(!v||v.vinculo!=='proprio')return;
-      const u=v.unidade; if(km[u]==null)return; km[u]+=cpkNumKm(placas[p].km)||0; });
+    Object.keys(placas).forEach(p=>{ const pl=cpkNormPlaca(p); const v=cpkVeic(pl);
+      if(v && v.vinculo && v.vinculo!=='proprio')return;      // agregado fica fora
+      if(!v && !(CPK.frota||[]).length) return;               // sem cadastro carregado: não inventa
+      const u=cpkFilialHome({placa:pl}); if(km[u]==null)return;
+      km[u]+=cpkNumKm(placas[p].km)||0; });
+    return km;
   }
+  const alt=(cpkKmFilialSZBPorMes()[mes])||null;
+  if(alt){ km.SC=alt.SC||0; km.PR=alt.PR||0; km.SP=alt.SP||0; }
   return km;
 }
 async function cpkLoadHistorico(){
@@ -4221,7 +4298,7 @@ async function cpkLoadHistorico(){
     ]);
     const series={SC:[],PR:[],SP:[],CO:[]};
     meses.forEach((mes,i)=>{
-      const custo=cpkCustoFilialMes(mes,bundle,pedDocs[i]), kmFil=cpkKmFilialDeDoc(kmDocs[i]);
+      const custo=cpkCustoFilialMes(mes,bundle,pedDocs[i]), kmFil=cpkKmFilialDeDoc(kmDocs[i],mes);
       let cTot=0,kTot=0;
       ['SC','PR','SP'].forEach(f=>{ const c=(custo[f]&&custo[f].total)||0, k=kmFil[f]||0;
         series[f].push((k>0&&c>0)?+(c/k).toFixed(3):null); cTot+=c; kTot+=k; });
@@ -4240,8 +4317,26 @@ function cpkRenderEvolucao(){
   cpkLoadHistorico().then(h=>{
     if(!h||CPK_TAB!=='vg')return;
     const labels=h.meses.map(m=>{const pp=m.split('-');return pp[1]+'/'+pp[0].slice(2);});
-    const anyData=defs.some(d=>h.series[d[0]].some(v=>v!=null));
-    const datasets=defs.map(d=>({ label:d[1], data:h.series[d[0]], borderColor:d[2], backgroundColor:d[2],
+    // #CPK-HIST-COERENTE — o ponto do MÊS EM TELA passa a ser o número VIVO
+    // (o mesmo custo e KM dos cards e do headline), e não uma segunda
+    // reconstrução da série histórica. Sem isto, o gráfico terminava num CPK
+    // diferente do card da mesma filial, no mesmo mês. Só no escopo completo
+    // e mês único — com filtro/período, a série continua sendo a histórica.
+    const hs={meses:h.meses, series:{}};
+    defs.forEach(d=>{ hs.series[d[0]]=(h.series[d[0]]||[]).slice(); });
+    if(CPK.ready && !CPK.filtros.unidade && !cpkPeriodoMulti()){
+      const i=hs.meses.indexOf(CPK.filtros.mes);
+      if(i>=0){
+        try{
+          cpkAggFilial(false).forEach(f=>{
+            if(hs.series[f.sigla]) hs.series[f.sigla][i]=(f.cpk!=null&&isFinite(f.cpk))?+(+f.cpk).toFixed(3):null;
+          });
+          hs.series.CO[i]=(CPK.cpkRate!=null&&isFinite(CPK.cpkRate))?+(+CPK.cpkRate).toFixed(3):null;
+        }catch(_){}
+      }
+    }
+    const anyData=defs.some(d=>hs.series[d[0]].some(v=>v!=null));
+    const datasets=defs.map(d=>({ label:d[1], data:hs.series[d[0]], borderColor:d[2], backgroundColor:d[2],
       borderWidth:d[0]==='CO'?2.4:1.8, borderDash:d[0]==='CO'?[5,3]:[], tension:.3, spanGaps:true,
       pointRadius:2.4, pointHoverRadius:4, fill:false }));
     cpkChart('ch-vg-evol',{ type:'line', data:{labels,datasets},
@@ -4282,6 +4377,42 @@ function cpkRenderAlertas(){
 }
 
 
+// ── RECONCILIAÇÃO DAS ABAS ANALÍTICAS (#CPK-BASE-ABAS) ────────────────
+// Rotas, Clientes e Placas não são recortes do headline: são recortes do
+// CT-e. Três diferenças estruturais faziam o MESMO rótulo ("Receita",
+// "KM Total", "Custo", "Margem") mostrar números diferentes da Visão Geral,
+// sem nada na tela dizendo por quê:
+//   · a Carta Frete Complementar (FSC0000) é receita real sem placa/rota/cliente;
+//   · CT-e de placa cuja filial física é outra entra na receita da filial e
+//     fica fora da tabela por placa (Regra A × guarda de placa);
+//   · em Rotas/Clientes o KM é o KM DO CT-e (SZB×SZY) e o custo é
+//     km × taxa efetiva da placa — não o KM da frota nem o DRE cheio.
+// A caixa abaixo escreve a conta na tela, para o número não precisar ser
+// reexplicado a cada fechamento.
+function cpkReconAba(hostId, opt){
+  const host=document.getElementById(hostId); if(!host) return;
+  const compl=+CPK.receitaComplementar||0, fora=+CPK.receitaForaPlaca||0;
+  const recTopo=+CPK.receitaTotal||0, kmTopo=+CPK.totalKm||0, custoTopo=+CPK.pool||0;
+  const esperado = recTopo - compl - (opt.tiraFora?fora:0);
+  const m=[];
+  let l='Receita líquida do topo <b>'+cpkFmt(recTopo)+'</b>';
+  if(compl>0) l+=' − <b>'+cpkFmt(compl)+'</b> de Cartas Frete Complementar (receita real sem placa/rota/cliente)';
+  if(opt.tiraFora && fora>0.01) l+=' − <b>'+cpkFmt(fora)+'</b> de CT-e emitidos nesta operação por placas cuja filial física é outra';
+  l+=' = <b>'+cpkFmt(esperado)+'</b>, que é a receita desta aba.';
+  m.push(l);
+  const dif=(opt.rec!=null)?(opt.rec-esperado):0;
+  if(Math.abs(dif)>0.02) m.push('<b>Diferença residual de '+cpkFmt(dif)+'</b> entre a soma da tabela e o esperado — conferir na Auditoria.');
+  if(opt.kmCte){
+    const cob = kmTopo>0 ? (opt.km/kmTopo*100) : null;
+    m.push('O <b>KM desta aba é o KM dos CT-e</b> (SZB×SZY: '+cpkFmtKm(opt.km)+')'+
+      (cob!=null?', equivalente a <b>'+cpkFmtPct(cob,0)+'</b> do KM da frota ('+cpkFmtKm(kmTopo)+')':'')+
+      ' — não é o KM do headline. Por isso o <b>custo aqui é rateio</b> (km × CPK da placa: '+cpkFmt(opt.custo)+') e não o custo do DRE ('+cpkFmt(custoTopo)+'): estas colunas medem o CT-e, a Visão Geral mede a frota.');
+  } else {
+    m.push('KM ('+cpkFmtKm(opt.km)+') e custo ('+cpkFmt(opt.custo)+') desta aba somam <b>exatamente</b> o KM e o custo do headline — cada real do DRE está em alguma placa.');
+  }
+  host.innerHTML='<div class="cpk-info" style="margin-bottom:10px"><span>'+m.join(' ')+'</span></div>';
+}
+
 // ════════════════════════════════════════════════════════════════════
 //  ROTAS
 // ════════════════════════════════════════════════════════════════════
@@ -4293,10 +4424,11 @@ function cpkRenderRotas(){
   const totCusto=rotas.reduce((s,r)=>s+(r.custo_total||0),0);
   document.getElementById('rotas-cards').innerHTML =
     cpkKpi('map','cy','Rotas', CPK.aggRota.length, totViag+' viagens') +
-    cpkKpi('road','','KM Total', cpkFmtKm(totKm), '') +
-    cpkKpi('trend','','Receita', cpkFmt(totRec), '') +
-    cpkKpi('wallet','rd','Custo (rateio)', cpkFmt(totCusto), '') +
-    cpkKpi('check', (totRec-totCusto)>=0?'gn':'rd','Margem', cpkFmt(totRec-totCusto), '', (totRec-totCusto)>=0?'gn':'rd');
+    cpkKpi('road','','KM dos CT-e', cpkFmtKm(totKm), 'SZB×SZY · não é o KM da frota') +
+    cpkKpi('trend','','Receita líq. (CT-e c/ placa)', cpkFmt(totRec), 'sem Cartas Frete Complementar') +
+    cpkKpi('wallet','rd','Custo (rateio por km)', cpkFmt(totCusto), 'km × CPK da placa') +
+    cpkKpi('check', (totRec-totCusto)>=0?'gn':'rd','Margem (rateio)', cpkFmt(totRec-totCusto), 'base CT-e, não o DRE', (totRec-totCusto)>=0?'gn':'rd');
+  cpkReconAba('rotas-recon',{rec:totRec, km:totKm, custo:totCusto, kmCte:true, tiraFora:false});
 
   // insights de rotas
   (function(){
@@ -4367,8 +4499,9 @@ function cpkRenderPlacas(){
     cpkKpi('hash','pu','Placas (Frota)', CPK.aggPlaca.length, '') +
     cpkKpi('road','cy','KM Total', cpkFmtKm(totKm), '') +
     cpkKpi('dollar','pu','CPK Frota', CPK.cpkRate!=null?cpkFmt(CPK.cpkRate)+' <small>/km</small>':'—', '') +
-    cpkKpi('trend','','Receita (placas)', cpkFmt(totRec), compl>0?('+ '+cpkFmt(compl)+' compl. (fora)'):'') +
-    cpkKpi('scale', (CPK.margemMediaKm||0)>=0?'gn':'rd','Margem/km médio', CPK.margemMediaKm!=null?cpkFmt(CPK.margemMediaKm):'—', '', (CPK.margemMediaKm||0)>=0?'gn':'rd');
+    cpkKpi('trend','','Receita líq. (placas)', cpkFmt(totRec), (function(){const fora=+CPK.receitaForaPlaca||0;const q=[];if(compl>0)q.push(cpkFmt(compl)+' compl.');if(fora>0.01)q.push(cpkFmt(fora)+' de placa de outra filial');return q.length?('fora da tabela: '+q.join(' + ')):'';})()) +
+    cpkKpi('scale', (CPK.margemMediaKm||0)>=0?'gn':'rd','Margem/km médio', CPK.margemMediaKm!=null?cpkFmt(CPK.margemMediaKm):'—', 'média simples entre placas (não ponderada por km)', (CPK.margemMediaKm||0)>=0?'gn':'rd');
+  cpkReconAba('placas-recon',{rec:totRec, km:totKm, custo:CPK.aggPlaca.reduce((a,p)=>a+(+p.custo_total||0),0), kmCte:false, tiraFora:true});
 
   // insights por placa
   (function(){
@@ -4451,10 +4584,11 @@ function cpkRenderClientes(){
   const totViag=cli.reduce((s,c)=>s+(c.viagens||0),0);
   document.getElementById('clientes-cards').innerHTML =
     cpkKpi('users','cy','Clientes', CPK.aggCliente.length, totViag+' viagens') +
-    cpkKpi('road','','KM Total', cpkFmtKm(totKm), '') +
-    cpkKpi('trend','','Receita', cpkFmt(totRec), '') +
-    cpkKpi('wallet','rd','Custo (rateio)', cpkFmt(totCusto), '') +
-    cpkKpi('check', (totRec-totCusto)>=0?'gn':'rd','Margem', cpkFmt(totRec-totCusto), '', (totRec-totCusto)>=0?'gn':'rd');
+    cpkKpi('road','','KM dos CT-e', cpkFmtKm(totKm), 'SZB×SZY · não é o KM da frota') +
+    cpkKpi('trend','','Receita líq. (CT-e c/ placa)', cpkFmt(totRec), 'sem Cartas Frete Complementar') +
+    cpkKpi('wallet','rd','Custo (rateio por km)', cpkFmt(totCusto), 'km × CPK da placa') +
+    cpkKpi('check', (totRec-totCusto)>=0?'gn':'rd','Margem (rateio)', cpkFmt(totRec-totCusto), 'base CT-e, não o DRE', (totRec-totCusto)>=0?'gn':'rd');
+  cpkReconAba('clientes-recon',{rec:totRec, km:totKm, custo:totCusto, kmCte:true, tiraFora:false});
 
   // insights de clientes
   (function(){
@@ -6336,10 +6470,16 @@ function cpkAudInconsList(){
 // nunca precise ser reexplicado.
 function cpkAudImpostosTabela(){
   const fils=cpkScopeFiliais();
-  const recBr=CPK.recFilPropriaBruta||{}, recLq=CPK.recFilPropria||{};
+  // #CPK-REC-FIL-UNICA — esta tabela lia recFilPropria/Bruta DIRETO, isto é,
+  // SEM as Cartas Frete Complementar. A linha "Receita própria bruta (CPK)"
+  // saía menor que a "Receita bruta" da Auditoria por Filial (que usa
+  // cpkImpostoFil) e a soma da coluna de imposto não batia com o card
+  // "Impostos deduzidos". Agora as três leituras vêm do mesmo mapa.
+  const _rmap=cpkRecFilMap();
   const linhas=fils.map(f=>{
     const a=(CPK.impostosFil||{})[f]||{};
-    const br=+recBr[f]||0, lq=+recLq[f]||0;
+    const _r=_rmap[f]||{br:0,lq:0};
+    const br=+_r.br||0, lq=+_r.lq||0;
     const tagCls = a.fonte==='mes'?'inc' : (a.fonte==='anterior'||a.fonte==='misto')?'inc0' : 'exc';
     const tagTxt = a.fonte==='mes'?'do mês' : a.fonte==='anterior'?('est. '+a.mesRef) : a.fonte==='misto'?'mista (período)' : 'ausente';
     return '<tr><td><b>'+f+'</b></td>'+
@@ -6356,7 +6496,7 @@ function cpkAudImpostosTabela(){
       '<th class="r">Alíquota efetiva</th><th class="r">Receita própria bruta (CPK)</th>'+
       '<th class="r">Imposto deduzido (CPK)</th><th class="r">Receita própria líquida</th>'+
     '</tr></thead><tbody>'+(linhas||'<tr><td colspan="7">Sem filial no escopo.</td></tr>')+'</tbody></table>'+
-    '<div class="cpk-info"><span>A base do Mapinha é a <b>filial inteira</b> (frota própria + agregado); a do CPK é <b>só a receita própria</b>. O que os dois compartilham é a <b>alíquota</b>, não o valor. Alíquota mista é aceita porque quem emite o CT-e é sempre a Comix e o insumo do agregado é comprado pela Comix — débito e crédito são simétricos por real de receita. <b>IR/CS entra</b> (lucro presumido: base presumida sobre a receita, logo proporcional por construção).</span></div></div>';
+    '<div class="cpk-info"><span>A <b>Receita própria bruta (CPK)</b> aqui é a MESMA da Auditoria por Filial e da aba VPK: CT-e de frota própria <b>+ Cartas Frete Complementar próprias</b>; a soma da coluna <b>Imposto deduzido (CPK)</b> fecha com o card <b>Impostos deduzidos</b> ('+cpkFmt(+CPK.impostosCPK||0)+'). A base do Mapinha é a <b>filial inteira</b> (frota própria + agregado); a do CPK é <b>só a receita própria</b>. O que os dois compartilham é a <b>alíquota</b>, não o valor. Alíquota mista é aceita porque quem emite o CT-e é sempre a Comix e o insumo do agregado é comprado pela Comix — débito e crédito são simétricos por real de receita. <b>IR/CS entra</b> (lucro presumido: base presumida sobre a receita, logo proporcional por construção).</span></div></div>';
 }
 
 function cpkRenderAuditoria(){
@@ -6497,17 +6637,9 @@ function cpkAudMemoria(n,tipo){
 // Carta Frete Complementar pela filial do CT-e; complementar sem filial
 // legível cai na 1ª filial do escopo. Sem espelhar esse roteio, a soma
 // das linhas não fecharia com o headline.
-function cpkVpkRecFilMap(){
-  const scopeFils=cpkScopeFiliais();
-  const out={}; ['SC','PR','SP'].forEach(f=>out[f]={br:0,lq:0});
-  const rp=CPK.recFilPropria||{}, rpb=CPK.recFilPropriaBruta||{};
-  Object.keys(rp ).forEach(f=>{ if(out[f]) out[f].lq+=+rp[f] ||0; });
-  Object.keys(rpb).forEach(f=>{ if(out[f]) out[f].br+=+rpb[f]||0; });
-  const cf=CPK.receitaComplementarFil||{}, cfb=CPK.receitaComplementarFilBruta||{};
-  Object.keys(cf ).forEach(uc=>{ const f=(uc&&out[uc])?uc:scopeFils[0]; if(out[f]) out[f].lq+=+cf[uc] ||0; });
-  Object.keys(cfb).forEach(uc=>{ const f=(uc&&out[uc])?uc:scopeFils[0]; if(out[f]) out[f].br+=+cfb[uc]||0; });
-  return out;
-}
+// Alias da fonte única (#CPK-REC-FIL-UNICA): a VPK reimplementava este roteio
+// e podia divergir do card da Visão Geral na primeira mudança de regra.
+function cpkVpkRecFilMap(){ return cpkRecFilMap(); }
 
 // Linhas por filial. KM e CUSTO vêm de cpkAggFilial (mesma base dos cards
 // e da Auditoria) — receita bruta/líquida vem do mapa acima.
@@ -6834,14 +6966,15 @@ function cpkVpkExport(){
 //  Receita bruta = CT-es próprios + Cartas Frete Complementar (FSC0000).
 // ══════════════════════════════════════════════════════════════════
 const CPK_IMP_LABEL={icms:'ICMS', pisCofins:'PIS/COFINS', irCs:'IR/CS', iss:'ISS'};
-function cpkRecFilBruta(f){
-  return (+(CPK.recFilPropriaBruta||{})[f]||0) + (+(CPK.receitaComplementarFilBruta||{})[f]||0);
-}
-function cpkRecFilLiquida(f){
-  return (+(CPK.recFilPropria||{})[f]||0) + (+(CPK.receitaComplementarFil||{})[f]||0);
-}
+// Fonte única: cpkRecFilMap (#CPK-REC-FIL-UNICA). Antes estas duas funções
+// liam os mapas do motor DIRETO, sem o roteio de complementar órfão que
+// cpkAggFilial fazia — a mesma filial podia sair com receita diferente na
+// Visão Geral e na coluna de Impostos.
+function cpkRecFilBruta(f){   return +((cpkRecFilMap()[f]||{}).br)||0; }
+function cpkRecFilLiquida(f){ return +((cpkRecFilMap()[f]||{}).lq)||0; }
 function cpkImpostoFil(f){
-  const br=cpkRecFilBruta(f), lq=cpkRecFilLiquida(f);
+  const _r=cpkRecFilMap()[f]||{br:0,lq:0};
+  const br=+_r.br||0, lq=+_r.lq||0;
   const a=(CPK.impostosFil||{})[f]||{};
   const imp=br-lq;
   const det={}; const impMap=+a.imposto||0;
@@ -7165,6 +7298,14 @@ function cpkExportMemoria(){
         'O custo de cada filial fecha com o consolidado.','Filiais');
     chk('Soma da receita líquida dos cards = receita líquida', somaCards('rec'), T.recLq,
         'A receita do topo é a mesma que aparece filial a filial.','Filiais / Impostos');
+    // #CPK-REC-FIL-UNICA — travas contra a regressão corrigida em 08/2026:
+    // receita por filial era montada por três caminhos diferentes e a tabela
+    // de impostos ignorava as Cartas Frete Complementar.
+    chk('Soma da receita BRUTA dos cards = receita bruta', somaCards('recBruta'), T.recBr,
+        'Bruta e líquida da filial saem da MESMA fonte (cpkRecFilMap).','Filiais / Impostos');
+    chk('Soma dos impostos por filial = impostos do período',
+        escopo.reduce((s,f)=>s+((typeof cpkImpostoFil==='function'?cpkImpostoFil(f).imposto:0)||0),0), T.imp,
+        'A coluna de imposto da Auditoria por Filial fecha com o card do topo.','Impostos');
     chk('Soma do custo de TODAS as placas = custo total', placas.reduce((s,p)=>s+(+p.custo_total||0),0), T.custo,
         'Todo real do DRE foi entregue a alguma placa — sem sobra e sem vazamento.','Placas / Rateio');
     chk('Receita das placas + receita sem placa + complementares = receita líquida',
