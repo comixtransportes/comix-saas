@@ -3890,9 +3890,33 @@ const ATLAS_BRIDGE_STATIC_COLS = new Set([
   'parametros_sistema','cpk_parametros','cpk_metas','cpk_km_rotas',
   'cpk_categorias_regras','mapinha_premissas','ciot_parametros','ciot_cadastros_apoio'
 ]);
+/* [LEITURAS] Normaliza o parâmetro `where` da ponte.
+   Os módulos enviam nos DOIS formatos:
+     - simples:  where: ['placa','==','TPO0F08']
+     - múltiplo: where: [['filial','==','SC'],['mes','==','2026-08']]
+   O handler antigo só entendia o formato múltiplo: no formato simples o
+   forEach percorria as strings 'placa'/'=='/'TPO0F08', nenhuma delas era
+   Array, e o filtro era DESCARTADO EM SILÊNCIO — a ponte devolvia a coleção
+   inteira. Foi o que fez a inspeção da placa TPO0F08 ser barrada pelo
+   hodômetro do SXS2H56. Agora os dois formatos viram a mesma lista. */
+function atlasBridgeNormalizeWhere(where){
+  if (!Array.isArray(where) || !where.length) return [];
+  const lista = Array.isArray(where[0]) ? where : [where];
+  return lista.filter(w => Array.isArray(w) && w.length >= 3 && w[0] != null && w[2] !== undefined);
+}
 function atlasBridgeKey(msg){
-  let w=''; try{ w=msg.where?JSON.stringify(msg.where):''; }catch(_){}
+  let w=''; try{ w=JSON.stringify(atlasBridgeNormalizeWhere(msg.where)); }catch(_){}
   return [msg.collection, msg.orderBy||'', msg.orderDir||'', msg.limit||'', w].join('|');
+}
+/* Valor comparável para ordenação em memória (Timestamp, Date, número ou texto) */
+function atlasBridgeSortVal(v){
+  if (v == null) return '';
+  if (typeof v.toMillis === 'function') { try { return v.toMillis(); } catch(_) {} }
+  if (typeof v.toDate === 'function')   { try { return v.toDate().getTime(); } catch(_) {} }
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === 'number') return v;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : String(v);
 }
 function atlasBridgeTTL(col){
   return ATLAS_BRIDGE_STATIC_COLS.has(col) ? ATLAS_BRIDGE_TTL_STATIC : ATLAS_BRIDGE_TTL_DEFAULT;
@@ -3955,14 +3979,37 @@ window.addEventListener('message', async function(ev) {
         /* [LEITURAS] Suporte a filtros no servidor: os módulos podem enviar
            where:[[campo,op,valor],...] para trazer só o mês/filial necessários
            em vez da coleção inteira. As regras de segurança continuam valendo. */
-        if (Array.isArray(msg.where)) {
-          msg.where.forEach(w => {
-            if (Array.isArray(w) && w.length >= 3) ref = ref.where(String(w[0]), String(w[1] || '=='), w[2]);
-          });
+        const filtros = atlasBridgeNormalizeWhere(msg.where);
+        filtros.forEach(w => { ref = ref.where(String(w[0]), String(w[1] || '=='), w[2]); });
+        if (msg.where && !filtros.length) {
+          console.warn('[Ponte] Filtro `where` recebido em formato inválido e ignorado:', msg.collection, msg.where);
         }
         if (msg.orderBy) ref = ref.orderBy(msg.orderBy, msg.orderDir || 'asc');
         if (msg.limit) ref = ref.limit(Number(msg.limit));
-        const snap = await ref.get();
+
+        /* [LEITURAS] Com o `where` finalmente sendo aplicado, a combinação
+           where + orderBy em campo diferente passa a exigir índice composto no
+           Firestore. Se o índice ainda não existir, refazemos a consulta sem o
+           orderBy e ordenamos em memória — nenhum módulo quebra enquanto os
+           índices não são criados. */
+        let snap;
+        try {
+          snap = await ref.get();
+        } catch(errIdx) {
+          const precisaIndice = /index/i.test(errIdx && (errIdx.message || errIdx.code) || '');
+          if (!precisaIndice || !msg.orderBy || !filtros.length) throw errIdx;
+          console.warn('[Ponte] Índice composto ausente para', msg.collection, '— ordenando em memória.', errIdx.message);
+          let ref2 = db.collection(msg.collection);
+          filtros.forEach(w => { ref2 = ref2.where(String(w[0]), String(w[1] || '=='), w[2]); });
+          if (msg.limit) ref2 = ref2.limit(Number(msg.limit));
+          snap = await ref2.get();
+          snap = { docs: snap.docs.slice().sort((a,b) => {
+            const va = atlasBridgeSortVal(a.data()[msg.orderBy]);
+            const vb = atlasBridgeSortVal(b.data()[msg.orderBy]);
+            const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+            return (msg.orderDir === 'desc') ? -cmp : cmp;
+          }) };
+        }
         const docs = snap.docs.map(d => ({ id:d.id, data: atlasCleanForFrame(d.data()) }));
         /* [LEITURAS] Guarda de memória: payloads gigantes (ex.: coleções com
            PDFs em base64) não entram no cache do parent — evita reter dezenas
