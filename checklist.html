@@ -837,6 +837,9 @@ body.checklist-only #view-checklist-wizard .view-body{padding-top:14px;}
               </div>
             </div>
 
+            <!-- Conjunto vinculado (cavalo + carretas + compressor) -->
+            <div id="insp-conjunto-preview" style="display:none;background:var(--bg);border:1px solid var(--bd2);border-radius:var(--rs);padding:9px 10px;margin-bottom:10px"></div>
+
             <button class="btn btn-ac" style="width:100%" onclick="confirmarInicioInspecao()">✓ Confirmar e iniciar</button>
           </div>
 
@@ -2444,6 +2447,34 @@ let _motoristaDaFrota = '';
 /* ── Helper: normaliza texto ── */
 function mntUpper(v) { return String(v || '').trim().toLocaleUpperCase('pt-BR'); }
 
+/* ── Helper: chave canônica de placa ──
+   Remove hífen, espaço, ponto e qualquer caractere não alfanumérico.
+   "sxs-2h56", "SXS 2H56" e "SXS2H56" viram a MESMA chave.
+   Usado em TODA comparação de placa (hodômetro, alocação, permissões). */
+function normPlacaChave(v) {
+  return String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/* ── Helper: nome de pessoa sem acento, em caixa alta e com espaço simples ── */
+function normNomePessoa(v) {
+  return String(v || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase().replace(/[^A-Z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+
+/* ── Helper: resolve uma referência de veículo (doc id, placa ou frota) na PLACA real ── */
+function resolverPlacaVeiculo(ref) {
+  if (!ref) return '';
+  const alvo = normPlacaChave(ref);
+  if (!alvo) return '';
+  const lista = (MNT_CACHE && MNT_CACHE.veiculos) || [];
+  const v = lista.find(x => normPlacaChave(x.id) === alvo)
+         || lista.find(x => normPlacaChave(x.placa) === alvo)
+         || lista.find(x => normPlacaChave(x.frota) === alvo);
+  return v ? mntUpper(v.placa) : mntUpper(ref);
+}
+
 /* ── Helper: opção de select ── */
 function mntOpt(value, label) {
   const o = document.createElement('option');
@@ -2806,32 +2837,86 @@ function onMotoristaChange(motorista) {
 /* ══ ALOCAÇÃO DO USUÁRIO LOGADO ══
    Depois que o ATLAS_CURRENT_USER chega via postMessage (com email/uid),
    busca em alocacao_frota qual cavalo e carretas este motorista está alocado. */
-async function resolveAlocacaoUsuario() {
-  if (!ATLAS_CURRENT_USER.email && !ATLAS_CURRENT_USER.uid) return;
+/* Pontuação de compatibilidade entre o usuário logado e o motorista da alocação.
+   Substitui o antigo `emailUser.startsWith(primeiroNome)`, que casava motoristas
+   diferentes que compartilhavam o primeiro nome. */
+function pontuarMatchMotorista(aloc) {
+  const nomeAloc = normNomePessoa(aloc && aloc.motorista);
+  if (!nomeAloc) return 0;
 
-  // Identifica a placa do cavalo alocado a este motorista
-  let placaCavalo = '';
-  let carretas    = [];
+  const emailUser = String(ATLAS_CURRENT_USER.email || '').toLowerCase().trim();
+  const emailAloc = String((aloc.motorista_email || aloc.email || '')).toLowerCase().trim();
+  if (emailUser && emailAloc && emailUser === emailAloc) return 100;
+
+  const nomeUser = normNomePessoa(ATLAS_CURRENT_USER.nome);
+  if (nomeUser && nomeUser === nomeAloc) return 90;
+
+  const tokensAloc = nomeAloc.split(' ').filter(t => t.length > 2);
+
+  // Nome derivado do e-mail: "marcelo.nunes@..." → "MARCELO NUNES"
+  if (emailUser.includes('@')) {
+    const local = normNomePessoa(emailUser.split('@')[0].replace(/[._\-0-9]+/g, ' '));
+    if (local && local === nomeAloc) return 80;
+    const tokensMail = local.split(' ').filter(t => t.length > 2);
+    const comuns = tokensMail.filter(t => tokensAloc.includes(t));
+    if (comuns.length >= 2) return 70;                        // exige 2 nomes, não só o primeiro
+  }
+
+  // Nome do usuário contido no nome do motorista (ex.: sem o sobrenome do meio)
+  const tokensUser = nomeUser.split(' ').filter(t => t.length > 2);
+  if (tokensUser.length >= 2 && tokensUser.every(t => tokensAloc.includes(t))) return 60;
+
+  return 0;
+}
+
+/* Resolve, para o usuário logado, o CAVALO + CARRETAS + COMPRESSOR da alocação.
+   Sempre converte os ids da alocação nas PLACAS reais (o doc de alocação pode
+   guardar o id do documento do veículo, não a placa). */
+async function resolveAlocacaoUsuario() {
+  if (!ATLAS_CURRENT_USER.email && !ATLAS_CURRENT_USER.uid && !ATLAS_CURRENT_USER.nome) return;
+  if (!MNT_CACHE.alocacoes || !Object.keys(MNT_CACHE.alocacoes).length) return;
+
+  let melhor = null;
+  let melhorPonto = 0;
+  let empate = false;
 
   Object.values(MNT_CACHE.alocacoes).forEach(aloc => {
-    const nomeAloc = mntUpper(aloc.motorista || '');
-    const emailUser = mntUpper(ATLAS_CURRENT_USER.email);
-    const nomeUser  = mntUpper(ATLAS_CURRENT_USER.nome || '');
-
-    const match = nomeAloc && (nomeAloc === emailUser || nomeAloc === nomeUser ||
-      emailUser.startsWith(nomeAloc.split(' ')[0]));
-
-    if (match) {
-      placaCavalo = mntUpper(aloc.cavalo_id || '');
-      if (aloc.carreta1_id) carretas.push(mntUpper(aloc.carreta1_id));
-      if (aloc.carreta2_id) carretas.push(mntUpper(aloc.carreta2_id));
+    const p = pontuarMatchMotorista(aloc);
+    if (!p) return;
+    if (p > melhorPonto) { melhorPonto = p; melhor = aloc; empate = false; }
+    else if (p === melhorPonto && melhor) {
+      const mesmoCavalo = normPlacaChave(aloc.cavalo_id) === normPlacaChave(melhor.cavalo_id);
+      if (!mesmoCavalo) empate = true;   // dois cavalos empatados → não arrisca preencher errado
     }
   });
 
-  if (placaCavalo) {
-    ATLAS_CURRENT_USER.placa    = placaCavalo;
-    ATLAS_CURRENT_USER.carretas = carretas;
-    loadChecklists(); // recarrega com dados de alocação corretos
+  if (!melhor || empate) {
+    if (empate) console.warn('[Checklist] Alocação ambígua para o usuário — preenchimento automático da placa desativado.');
+    ATLAS_CURRENT_USER.alocacao = null;
+    return;
+  }
+
+  const placaCavalo = resolverPlacaVeiculo(melhor.cavalo_placa || melhor.cavalo_id);
+  const c1 = melhor.carreta1_id ? resolverPlacaVeiculo(melhor.carreta1_id) : '';
+  const c2 = melhor.carreta2_id ? resolverPlacaVeiculo(melhor.carreta2_id) : '';
+  const carretas = [c1, c2].filter(Boolean);
+
+  if (!placaCavalo) { ATLAS_CURRENT_USER.alocacao = null; return; }
+
+  ATLAS_CURRENT_USER.placa      = placaCavalo;
+  ATLAS_CURRENT_USER.carretas   = carretas;
+  ATLAS_CURRENT_USER.compressor = melhor.compressor_id || null;
+  ATLAS_CURRENT_USER.motoristaAlocacao = mntUpper(melhor.motorista || '');
+  ATLAS_CURRENT_USER.alocacao = { cavalo: placaCavalo, carreta1: c1 || null, carreta2: c2 || null, compressor: melhor.compressor_id || null };
+
+  console.log('[Checklist] Alocação do usuário:', placaCavalo, '| carretas:', carretas.join(', ') || '—', '| match:', melhorPonto);
+
+  loadChecklists(); // recarrega com dados de alocação corretos
+
+  // Se a tela de "Iniciar inspeção" já estiver aberta, repreenche agora
+  const formSel = document.getElementById('insp-form-selecao');
+  if (formSel && formSel.style.display !== 'none' && document.getElementById('view-checklist-wizard')?.classList.contains('on')) {
+    prepararFormularioInspecao();
   }
 }
 
@@ -3567,7 +3652,7 @@ async function loadChecklists() {
     if (emailAtual && !ATLAS_CURRENT_USER.email) ATLAS_CURRENT_USER.email = emailAtual;
 
     let rawDocs = [];
-    const placasPermitidas = [ATLAS_CURRENT_USER.placa, ...(ATLAS_CURRENT_USER.carretas || [])].filter(Boolean).map(mntUpper);
+    const placasPermitidas = [ATLAS_CURRENT_USER.placa, ...(ATLAS_CURRENT_USER.carretas || [])].filter(Boolean).map(normPlacaChave);
 
     if (isAdmin) {
       try {
@@ -3585,8 +3670,11 @@ async function loadChecklists() {
           console.warn('[Checklist] Consulta restrita falhou:', err.message);
         }
       }
-      if (placasPermitidas.length) {
-        for (const placa of placasPermitidas) await addDocs({ where:['placa','==',placa], limit:80 });
+      // Consulta pela placa exatamente como está gravada (com hífen, se houver);
+      // o filtro definitivo é sempre reaplicado no cliente logo abaixo.
+      const placasQuery = [ATLAS_CURRENT_USER.placa, ...(ATLAS_CURRENT_USER.carretas || [])].filter(Boolean).map(mntUpper);
+      if (placasQuery.length) {
+        for (const placa of placasQuery) await addDocs({ where:['placa','==',placa], limit:80 });
       }
       if (emailAtual) {
         await addDocs({ where:['motorista_email','==',emailAtual], limit:80 });
@@ -3609,7 +3697,7 @@ async function loadChecklists() {
 
     if (!isAdmin) {
       if (placasPermitidas.length > 0) {
-        docs = docs.filter(d => placasPermitidas.includes(mntUpper(d.placa || '')) || mntUpper(d.motorista_email || d.criadoPor || '') === mntUpper(emailAtual));
+        docs = docs.filter(d => placasPermitidas.includes(normPlacaChave(d.placa)) || mntUpper(d.motorista_email || d.criadoPor || '') === mntUpper(emailAtual));
       } else if (emailAtual) {
         docs = docs.filter(d => {
           const emailDoc = mntUpper(d.motorista_email || d.criadoPor || d.motorista || '');
@@ -3791,11 +3879,13 @@ function iniciarInspecao(placa, motoristaNomeParam) {
   }
 
   // Busca alocação real para obter compressor, carreta1, carreta2
+  const chavePlaca = normPlacaChave(placa);
   const alocKey = Object.keys(MNT_CACHE.alocacoes).find(function(k) {
-    const a = MNT_CACHE.alocacoes[k];
-    return mntUpper(k) === mntUpper(placa) ||
-           mntUpper(a.cavalo_placa || '') === mntUpper(placa) ||
-           mntUpper(a.cavalo_id || '') === mntUpper(placa);
+    const a = MNT_CACHE.alocacoes[k] || {};
+    return normPlacaChave(k) === chavePlaca ||
+           normPlacaChave(a.cavalo_placa) === chavePlaca ||
+           normPlacaChave(a.cavalo_id) === chavePlaca ||
+           normPlacaChave(resolverPlacaVeiculo(a.cavalo_id)) === chavePlaca;
   });
   const aloc = alocKey ? MNT_CACHE.alocacoes[alocKey] : null;
 
@@ -3820,8 +3910,9 @@ function iniciarInspecao(placa, motoristaNomeParam) {
 
   // Carreta 1
   const c1Id  = aloc && aloc.carreta1_id ? aloc.carreta1_id : null;
-  const c1V   = c1Id ? MNT_CACHE.veiculos.find(function(x) { return x.id === c1Id || x.placa === c1Id; }) : null;
+  const c1V   = c1Id ? MNT_CACHE.veiculos.find(function(x) { return normPlacaChave(x.id) === normPlacaChave(c1Id) || normPlacaChave(x.placa) === normPlacaChave(c1Id); }) : null;
   window._inspCarreta1 = c1Id;
+  window._inspCarreta1Placa = c1V ? mntUpper(c1V.placa) : (c1Id ? mntUpper(c1Id) : null);
   const tituloC1 = document.getElementById('insp-titulo-carreta1');
   if (tituloC1) {
     tituloC1.textContent = c1V
@@ -3831,8 +3922,9 @@ function iniciarInspecao(placa, motoristaNomeParam) {
 
   // Carreta 2
   const c2Id  = aloc && aloc.carreta2_id ? aloc.carreta2_id : null;
-  const c2V   = c2Id ? MNT_CACHE.veiculos.find(function(x) { return x.id === c2Id || x.placa === c2Id; }) : null;
+  const c2V   = c2Id ? MNT_CACHE.veiculos.find(function(x) { return normPlacaChave(x.id) === normPlacaChave(c2Id) || normPlacaChave(x.placa) === normPlacaChave(c2Id); }) : null;
   window._inspCarreta2 = c2Id;
+  window._inspCarreta2Placa = c2V ? mntUpper(c2V.placa) : (c2Id ? mntUpper(c2Id) : null);
   const tituloC2 = document.getElementById('insp-titulo-carreta2');
   if (tituloC2) {
     tituloC2.textContent = c2V
@@ -4057,23 +4149,76 @@ function checklistDateMillis(d) {
   const dt = new Date(d);
   return Number.isFinite(dt.getTime()) ? dt.getTime() : 0;
 }
+/* ══ ÚLTIMO HODÔMETRO DA PLACA ══
+   CORREÇÃO: a consulta com where(['placa','==',...]) nem sempre é aplicada —
+   quando o módulo roda dentro do portal, a ponte Firestore do index.html podia
+   ignorar o filtro e devolver os checklists de TODAS as placas. O código antigo
+   pegava o mais recente dessa lista, então a inspeção de uma placa era barrada
+   pelo hodômetro de OUTRO veículo (ex.: TPO0F08 travado pelos 195.491 do SXS2H56).
+
+   Agora o filtro por placa é SEMPRE reaplicado no cliente, com chave canônica
+   (sem hífen/espaço). Se o servidor devolveu documentos de outras placas, o
+   filtro foi ignorado — então varremos um lote maior e filtramos localmente.
+   Nenhum documento de outra placa consegue mais influenciar a validação. */
 async function buscarUltimoHodometroChecklist(placa) {
-  const placaNorm = mntUpper(placa || '');
-  if (!placaNorm || placaNorm === '—') return null;
-  let rawDocs = [];
+  const chaveAlvo = normPlacaChave(placa);
+  if (!chaveAlvo) return null;
+
+  const mapear   = arr => (arr || []).map(d => ({ id: d.id, ...(d.data || {}) }));
+  const daPlaca  = docs => docs.filter(d => normPlacaChave(d.placa) === chaveAlvo);
+  const placaSrv = mntUpper(placa || '');
+
+  let docs = null;
+  let erro = null;
+
+  // 1) Consulta filtrada no servidor (caminho rápido)
   try {
-    rawDocs = await atlasFsGetCollection('checklists_diarios', { where:['placa','==',placaNorm], orderBy:'dataAbertura', orderDir:'desc', limit:50 });
-  } catch(errOrder) {
-    rawDocs = await atlasFsGetCollection('checklists_diarios', { where:['placa','==',placaNorm], limit:50 });
+    docs = mapear(await atlasFsGetCollection('checklists_diarios', { where:['placa','==',placaSrv], orderBy:'dataAbertura', orderDir:'desc', limit:50 }));
+  } catch(e1) {
+    erro = e1;
+    try {
+      docs = mapear(await atlasFsGetCollection('checklists_diarios', { where:['placa','==',placaSrv], limit:50 }));
+      erro = null;
+    } catch(e2) { erro = e2; docs = null; }
   }
-  const leituras = rawDocs.map(d => ({ id:d.id, ...(d.data || {}) }))
+
+  // 2) Detecta filtro ignorado (veio doc de outra placa) ou resultado vazio → varredura ampla
+  const precisaVarrer = docs === null || docs.length === 0 || daPlaca(docs).length !== docs.length;
+  if (precisaVarrer) {
+    let amplo = null;
+    try {
+      amplo = mapear(await atlasFsGetCollection('checklists_diarios', { orderBy:'dataAbertura', orderDir:'desc', limit:1000 }));
+    } catch(e3) {
+      try { amplo = mapear(await atlasFsGetCollection('checklists_diarios', { limit:1000 })); }
+      catch(e4) { amplo = null; if (docs === null) erro = e4; }
+    }
+    if (amplo !== null) { docs = amplo; erro = null; }
+  }
+
+  // Nenhuma consulta funcionou → propaga o erro (a validação avisa "sem conexão")
+  if (docs === null) throw (erro || new Error('Não foi possível consultar os checklists.'));
+
+  const leituras = daPlaca(docs)
     .map(d => {
       const valor = parseHodometroValor(d.hodometro_numero ?? d.hodometroNumero ?? d.hodometro_atual ?? d.hodometroAtual ?? d.hodometro ?? d.km_atual ?? d.kmAtual ?? d.km);
-      return valor === null ? null : { valor, valorFormatado: formatarHodometroNumero(valor), dataMs: checklistDateMillis(d.dataAbertura || d.criadoEm), id:d.id };
+      if (valor === null) return null;
+      const dataMs = checklistDateMillis(d.dataAbertura || d.criadoEm);
+      return {
+        valor,
+        valorFormatado: formatarHodometroNumero(valor),
+        dataMs,
+        dataLabel: dataMs ? new Date(dataMs).toLocaleDateString('pt-BR') : (d.data || ''),
+        placa: mntUpper(d.placa || ''),
+        numero: d.checklist_numero || d.numeroChecklist || '',
+        id: d.id
+      };
     })
     .filter(Boolean)
-    .sort((a,b) => b.dataMs - a.dataMs);
-  return leituras[0] || null;
+    .sort((a,b) => (b.dataMs - a.dataMs) || (b.valor - a.valor));
+
+  const ultimo = leituras[0] || null;
+  console.log('[Checklist] Último hodômetro de', placaSrv, '→', ultimo ? ultimo.valorFormatado + ' (' + ultimo.dataLabel + ')' : 'sem histórico', '| leituras da placa:', leituras.length);
+  return ultimo;
 }
 async function validarHodometroInspecao(placa) {
   const atual = getHodometroAtual();
@@ -4109,17 +4254,45 @@ async function validarHodometroInspecao(placa) {
     wizStep(0);
     return { ok:false };
   }
+  const placaRef = mntUpper(placa || window._inspPlaca || '') || '—';
+
   if (ultimo && atual.valor <= ultimo.valor) {
-    if (atual.input) {
-      atual.input.style.borderColor = 'var(--rd)';
-      if (typeof atual.input.scrollIntoView === 'function') setTimeout(() => atual.input.scrollIntoView({ behavior:'smooth', block:'center' }), 50);
+    // Exceção legítima (troca/reset de painel ou apontamento anterior errado):
+    // não trava o motorista em campo — pede confirmação explícita e marca o registro.
+    const chaveOverride = normPlacaChave(placaRef) + '|' + atual.valor;
+    if (window._inspHodometroOverride !== chaveOverride) {
+      const confirmou = confirm(
+        'Atenção — hodômetro menor que o último registrado.\n\n' +
+        'Placa: ' + placaRef + '\n' +
+        'Informado agora: ' + atual.valorFormatado + '\n' +
+        'Último registrado: ' + ultimo.valorFormatado + (ultimo.dataLabel ? ' (' + ultimo.dataLabel + ')' : '') + '\n\n' +
+        'Confirme SOMENTE se o valor informado estiver correto (ex.: troca de painel ou erro no apontamento anterior).\n' +
+        'A inspeção será salva com alerta para o líder revisar.\n\n' +
+        'Confirmar mesmo assim?'
+      );
+      if (!confirmou) {
+        if (atual.input) {
+          atual.input.style.borderColor = 'var(--rd)';
+          if (typeof atual.input.scrollIntoView === 'function') setTimeout(() => atual.input.scrollIntoView({ behavior:'smooth', block:'center' }), 50);
+        }
+        setHodometroHint('Último apontado para a placa ' + placaRef + ': ' + ultimo.valorFormatado + (ultimo.dataLabel ? ' em ' + ultimo.dataLabel : '') + '. Informe um valor maior ou confirme a exceção.', 'rd');
+        toast('Hodômetro menor que o último da placa ' + placaRef + ' (' + ultimo.valorFormatado + ').', 'rd');
+        wizStep(0);
+        return { ok:false, valor:atual.valor, valorFormatado:atual.valorFormatado, ultimo };
+      }
+      window._inspHodometroOverride = chaveOverride;
     }
-    setHodometroHint('O hodômetro deve ser maior que o último apontado (' + ultimo.valorFormatado + ').', 'rd');
-    toast('O hodômetro deve ser maior que o último apontado: ' + ultimo.valorFormatado + '.', 'rd');
-    wizStep(0);
-    return { ok:false, valor:atual.valor, valorFormatado:atual.valorFormatado, ultimo };
+    if (atual.input) atual.input.style.borderColor = 'var(--am)';
+    setHodometroHint('Exceção confirmada — menor que o último apontado (' + ultimo.valorFormatado + '). Será sinalizado ao líder.', 'am');
+    return { ok:true, valor:atual.valor, valorFormatado:atual.valorFormatado, ultimo, regressivo:true };
   }
-  setHodometroHint(ultimo ? 'Último apontado: ' + ultimo.valorFormatado + '.' : 'Primeiro apontamento deste veículo: valor livre.', 'gn');
+
+  setHodometroHint(
+    ultimo
+      ? 'Último apontado para ' + placaRef + ': ' + ultimo.valorFormatado + (ultimo.dataLabel ? ' em ' + ultimo.dataLabel : '') + '.'
+      : 'Primeiro apontamento da placa ' + placaRef + ': valor livre.',
+    'gn'
+  );
   return { ok:true, valor:atual.valor, valorFormatado:atual.valorFormatado, ultimo };
 }
 function wizStep(n) {
@@ -4225,13 +4398,16 @@ async function salvarChecklistFirebase() {
       numeroChecklist:  numeroChecklist,
       numero_inspecao:  numeroChecklist,
       placa,
+      placa_chave:      normPlacaChave(placa),   // chave canônica p/ consultas por placa
       motorista,
       motorista_email:  ATLAS_CURRENT_USER.email || '—',
       dataAbertura:     new Date(window._inspTs || agora),
       horario:          agora.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}),
       data:             agora.toLocaleDateString('pt-BR'),
-      hodometro:        hodometroInfo.valorFormatado,
-      hodometro_numero: hodometroInfo.valor,
+      hodometro:          hodometroInfo.valorFormatado,
+      hodometro_numero:   hodometroInfo.valor,
+      hodometro_anterior: hodometroInfo.ultimo ? hodometroInfo.ultimo.valor : null,
+      hodometro_regressivo: !!hodometroInfo.regressivo,
       tipo:             v ? (v.tipo || 'Cavalo') : 'Cavalo',
       frota:            v ? (v.frota || '—') : '—',
       modelo:           v ? (v.modelo || '—') : '—',
@@ -4239,6 +4415,8 @@ async function salvarChecklistFirebase() {
       compressor_label: compLabel,
       carreta1_id:      window._inspCarreta1 || null,
       carreta2_id:      window._inspCarreta2 || null,
+      carreta1_placa:   window._inspCarreta1Placa || null,
+      carreta2_placa:   window._inspCarreta2Placa || null,
       status:           'realizado',
       aprovados,
       reprovados,
@@ -4663,6 +4841,9 @@ function resetarInspecaoEmBranco() {
   window._inspCompressor = null;
   window._inspCarreta1 = null;
   window._inspCarreta2 = null;
+  window._inspCarreta1Placa = null;
+  window._inspCarreta2Placa = null;
+  window._inspHodometroOverride = null;
   wizCurrent = 0;
   document.querySelectorAll('#insp-checklist-content .status-btn').forEach(btn => btn.classList.remove('on'));
   document.querySelectorAll('#insp-checklist-content .cl-item').forEach(row => row.classList.remove('reprovado','nok-row'));
@@ -4718,39 +4899,113 @@ function coletarItensChecklistInspecao() {
 /* Preenche o formulário de seleção ao entrar na tela de inspeção.
    - Motorista logado e placa alocada → preenche automaticamente e bloqueia campos.
    - Admin ou sem alocação → libera autocomplete em ambos os campos. */
-function prepararFormularioInspecao() {
-  resetarInspecaoEmBranco();
+/* Busca a alocação (cavalo + carretas + compressor) de uma placa de cavalo. */
+function alocacaoDaPlaca(placa) {
+  const chave = normPlacaChave(placa);
+  if (!chave || !MNT_CACHE.alocacoes) return null;
+  const key = Object.keys(MNT_CACHE.alocacoes).find(k => {
+    const a = MNT_CACHE.alocacoes[k] || {};
+    return normPlacaChave(k) === chave
+        || normPlacaChave(a.cavalo_placa) === chave
+        || normPlacaChave(a.cavalo_id) === chave
+        || normPlacaChave(resolverPlacaVeiculo(a.cavalo_id)) === chave;
+  });
+  if (!key) return null;
+  const a = MNT_CACHE.alocacoes[key] || {};
+  return {
+    key,
+    cavalo:    resolverPlacaVeiculo(a.cavalo_placa || a.cavalo_id || key),
+    carreta1:  a.carreta1_id ? resolverPlacaVeiculo(a.carreta1_id) : '',
+    carreta2:  a.carreta2_id ? resolverPlacaVeiculo(a.carreta2_id) : '',
+    compressor: a.compressor_id || null,
+    motorista: mntUpper(a.motorista || '')
+  };
+}
+
+/* Mostra, antes de iniciar, qual conjunto será inspecionado (cavalo + carretas). */
+function renderPreviewConjunto(placa) {
+  const box = document.getElementById('insp-conjunto-preview');
+  if (!box) return;
+  const chave = normPlacaChave(placa);
+  if (!chave) { box.style.display = 'none'; box.innerHTML = ''; return; }
+
+  const aloc = alocacaoDaPlaca(placa);
+  const v    = MNT_CACHE.veiculos.find(x => normPlacaChave(x.placa) === chave);
+  const compLabel = aloc && aloc.compressor && MNT_CACHE.compressores && MNT_CACHE.compressores[aloc.compressor]
+    ? MNT_CACHE.compressores[aloc.compressor].identificacao
+    : (aloc && aloc.compressor ? aloc.compressor : '');
+
+  const linha = (icone, rotulo, valor) =>
+    `<div style="display:flex;justify-content:space-between;gap:8px;padding:3px 0">
+       <span style="color:var(--mu)">${icone} ${rotulo}</span>
+       <span style="font-family:var(--m);font-weight:600;color:${valor ? 'var(--tx)' : 'var(--mu)'}">${valor || '—'}</span>
+     </div>`;
+
+  box.innerHTML =
+    `<div style="font-size:10.5px;font-weight:700;color:var(--mu);margin-bottom:4px">CONJUNTO VINCULADO AO MOTORISTA</div>
+     <div style="font-size:11px">
+       ${linha('🚛', 'Cavalo', mntUpper(placa) + (v && v.frota ? ' · ' + v.frota : ''))}
+       ${linha('📦', 'Carreta 1', aloc ? aloc.carreta1 : '')}
+       ${linha('📦', 'Carreta 2', aloc ? aloc.carreta2 : '')}
+       ${linha('💨', 'Compressor', compLabel)}
+     </div>
+     ${aloc ? '' : '<div style="font-size:10.5px;color:var(--am);margin-top:5px">Sem alocação cadastrada na Frota para esta placa — carretas e compressor não serão preenchidos.</div>'}`;
+  box.style.display = '';
+}
+
+/* Preenche o formulário de seleção ao entrar na tela de inspeção.
+   - Motorista logado → cavalo e carretas vêm da alocação cadastrada na Frota.
+   - Se os cadastros ainda estiverem carregando, espera antes de decidir. */
+let _inspFormTentativas = 0;
+function prepararFormularioInspecao(_retry) {
+  if (!_retry) { resetarInspecaoEmBranco(); _inspFormTentativas = 0; }
   const formSel = document.getElementById('insp-form-selecao');
   if (!formSel) return;
-
-  const isAdmin = ['admin','lr','lm'].includes(ATLAS_CURRENT_USER.perfil);
-  const motInput = document.getElementById('insp-motorista-input');
-  const placaInput = document.getElementById('insp-placa-input');
-
-  const motorista = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '';
-  const placaAloc = ATLAS_CURRENT_USER.placa || '';
-
-  if (!isAdmin && placaAloc && motorista) {
-    // Motorista alocado: preenche e bloqueia
-    if (motInput)  { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
-    if (placaInput){ placaInput.value = placaAloc; placaInput.readOnly = true; placaInput.style.background = 'var(--bg)'; }
-    // Auto-confirma e inicia diretamente sem precisar clicar no botão
-    setTimeout(() => confirmarInicioInspecao(), 100);
-  } else if (!isAdmin && motorista) {
-    // Motorista sem alocação definida: preenche nome mas libera placa
-    if (motInput)  { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
-    if (placaInput){ placaInput.readOnly = false; placaInput.value = ''; placaInput.style.background = ''; }
-  } else {
-    // Admin ou LM: campos livres com autocomplete
-    if (motInput)  { motInput.readOnly = false; motInput.value = motorista || ''; motInput.style.background = ''; }
-    if (placaInput){ placaInput.readOnly = false; placaInput.value = placaAloc || ''; placaInput.style.background = ''; }
-  }
 
   formSel.style.display = '';
   const heroContent = document.getElementById('insp-hero-content');
   const checkContent = document.getElementById('insp-checklist-content');
   if (heroContent)  heroContent.style.display = 'none';
   if (checkContent) checkContent.style.display = 'none';
+
+  const isAdmin    = ['admin','lr','lm'].includes(String(ATLAS_CURRENT_USER.perfil || '').toLowerCase());
+  const motInput   = document.getElementById('insp-motorista-input');
+  const placaInput = document.getElementById('insp-placa-input');
+  const motorista  = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || '';
+  const cadastrosProntos = !!(MNT_CACHE.veiculos && MNT_CACHE.veiculos.length);
+
+  // Cadastros/alocações ainda carregando: aguarda (até ~6s) para não liberar
+  // a placa em branco e o motorista acabar escolhendo o veículo errado.
+  if (!isAdmin && (!cadastrosProntos || !ATLAS_CURRENT_USER.placa) && _inspFormTentativas < 20) {
+    _inspFormTentativas++;
+    if (motInput)   { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
+    if (placaInput) { placaInput.value = ''; placaInput.readOnly = true; placaInput.placeholder = 'Buscando veículo alocado...'; placaInput.style.background = 'var(--bg)'; }
+    if (cadastrosProntos) { try { resolveAlocacaoUsuario(); } catch(_) {} }
+    setTimeout(() => prepararFormularioInspecao(true), 300);
+    return;
+  }
+
+  const placaAloc = ATLAS_CURRENT_USER.placa || '';
+
+  if (!isAdmin && placaAloc && motorista) {
+    // Motorista alocado: cavalo e carretas vêm da Frota — campos bloqueados
+    if (motInput)   { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
+    if (placaInput) { placaInput.value = placaAloc; placaInput.readOnly = true; placaInput.placeholder = 'Placa do veículo...'; placaInput.style.background = 'var(--bg)'; }
+    renderPreviewConjunto(placaAloc);
+    // Auto-confirma e inicia diretamente sem precisar clicar no botão
+    setTimeout(() => confirmarInicioInspecao(), 120);
+  } else if (!isAdmin && motorista) {
+    // Motorista sem alocação cadastrada: libera a placa e avisa
+    if (motInput)   { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
+    if (placaInput) { placaInput.readOnly = false; placaInput.value = ''; placaInput.placeholder = 'Placa do veículo...'; placaInput.style.background = ''; }
+    renderPreviewConjunto('');
+    toast('Nenhum veículo alocado a você na Frota — selecione a placa manualmente.', 'am');
+  } else {
+    // Admin ou LM: campos livres com autocomplete
+    if (motInput)   { motInput.readOnly = false; motInput.value = motorista || ''; motInput.style.background = ''; }
+    if (placaInput) { placaInput.readOnly = false; placaInput.value = placaAloc || ''; placaInput.placeholder = 'Placa do veículo...'; placaInput.style.background = ''; }
+    if (placaAloc) renderPreviewConjunto(placaAloc); else renderPreviewConjunto('');
+  }
 }
 
 // Autocomplete Motorista no formulário de inspeção
@@ -4772,11 +5027,17 @@ function selecionarInspMotorista(nome) {
   if (inp) inp.value = nome;
   const sugg = document.getElementById('insp-motorista-sugg');
   if (sugg) sugg.style.display = 'none';
-  // Tenta preencher a placa do motorista
-  const aloc = Object.values(MNT_CACHE.alocacoes).find(a => mntUpper(a.motorista || '') === mntUpper(nome));
-  if (aloc && aloc.cavalo_id) {
-    const placaInp = document.getElementById('insp-placa-input');
-    if (placaInp && !placaInp.readOnly) placaInp.value = mntUpper(aloc.cavalo_id);
+  // Preenche a PLACA REAL do cavalo alocado a este motorista (+ preview das carretas)
+  const alvo = normNomePessoa(nome);
+  const aloc = Object.values(MNT_CACHE.alocacoes).find(a => normNomePessoa(a.motorista) === alvo);
+  const placaInp = document.getElementById('insp-placa-input');
+  if (aloc && (aloc.cavalo_placa || aloc.cavalo_id)) {
+    const placaReal = resolverPlacaVeiculo(aloc.cavalo_placa || aloc.cavalo_id);
+    if (placaInp && !placaInp.readOnly) placaInp.value = placaReal;
+    renderPreviewConjunto(placaReal);
+  } else {
+    renderPreviewConjunto(placaInp ? placaInp.value : '');
+    if (placaInp && !placaInp.value) toast('Motorista sem cavalo alocado na Frota — informe a placa.', 'am');
   }
 }
 
@@ -4801,11 +5062,15 @@ function selecionarInspPlaca(placa) {
   const sugg = document.getElementById('insp-placa-sugg');
   if (sugg) sugg.style.display = 'none';
   // Tenta preencher motorista pela alocação
-  const v = MNT_CACHE.veiculos.find(x => x.placa === placa);
-  if (v && v.motorista) {
+  const chave = normPlacaChave(placa);
+  const v = MNT_CACHE.veiculos.find(x => normPlacaChave(x.placa) === chave);
+  const aloc = alocacaoDaPlaca(placa);
+  const motNome = (aloc && aloc.motorista) || (v && v.motorista) || '';
+  if (motNome) {
     const motInp = document.getElementById('insp-motorista-input');
-    if (motInp && !motInp.readOnly) motInp.value = v.motorista;
+    if (motInp && !motInp.readOnly) motInp.value = motNome;
   }
+  renderPreviewConjunto(placa);
 }
 
 // Teclado nos campos de autocomplete da inspeção
