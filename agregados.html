@@ -315,6 +315,9 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
   .rep{border:none;box-shadow:none;padding:0;font-size:10px;zoom:1 !important}
   .rep tr.lv-ok>td,.rep tr.lv-warn>td,.rep tr.lv-err>td,.rep tr.lv-info>td,.rep tr.row-hot>td,.rep tr.row-match>td{background:none !important;box-shadow:none !important;outline:none !important}
 }
+/* marcador de crédito realocado por placa (cadastro) */
+.rlc{display:inline-block;font-size:9px;line-height:1;padding:1px 3px;margin-left:3px;border-radius:3px;
+     background:rgba(56,189,124,.16);color:#1d8a55;border:1px solid rgba(56,189,124,.35);cursor:help;vertical-align:middle}
 </style>
 </head>
 <body>
@@ -553,7 +556,7 @@ function normalizeRows(raw, dateCols){
 function setBase(id, raw){
   if(!raw||!raw.length||!BASES[id]) return false;
   BASES[id].rows=normalizeRows(raw, BASES[id].dateCols); BASES[id].loaded=true;
-  if(id==='szb'){ montarMeses(); logSzbCols(); }
+  if(id==='szb'){ montarMeses(); logSzbCols(); _placaSzbCache={}; }
   _cache={}; refreshBaseInfo(); renderAll(); return true;
 }
 function ensureBases(){
@@ -582,7 +585,8 @@ window.addEventListener('message', function(ev){
 function refreshBaseInfo(){
   const el=document.getElementById('baseInfo'); if(!el) return;
   const falta=Object.keys(BASES).filter(id=>!BASES[id].loaded).map(s=>s.toUpperCase());
-  el.textContent = falta.length ? ('aguardando: '+falta.join(', ')) : ('SZB '+BASES.szb.rows.length+' · SZC '+BASES.szc.rows.length+' · SZI '+BASES.szi.rows.length+' linhas');
+  const cad = CADVEIC.loaded ? (' · cadastro '+CADVEIC.n+' placas') : (CADVEIC.erro ? ' · cadastro de veículos indisponível (crédito por operação)' : ' · cadastro…');
+  el.textContent = falta.length ? ('aguardando: '+falta.join(', ')) : ('SZB '+BASES.szb.rows.length+' · SZC '+BASES.szc.rows.length+' · SZI '+BASES.szi.rows.length+' linhas'+cad);
 }
 function montarMeses(){
   const sel=document.getElementById('selMes'); if(!sel||!BASES.szb.rows) return;
@@ -700,6 +704,87 @@ function logSzbCols(){
   }catch(_){}
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   UNIDADE DA PLACA (Cadastros › Veículos)
+   Regra de negócio: o CRÉDITO não pertence à operação em que foi
+   lançado no Protheus — ele pertence ao AGREGADO. Portanto o crédito é
+   alocado na unidade em que a PLACA está cadastrada no módulo
+   Cadastros (coleção `veiculos`, campo `filial` = sigla SC/PR/SP).
+   Cascata de resolução:
+     1) Cadastros › Veículos (fonte oficial);
+     2) unidade onde a placa mais faturou no mês (SZB) — placa sem cadastro;
+     3) operação do próprio lançamento (comportamento antigo) — último recurso.
+   ══════════════════════════════════════════════════════════════════ */
+const AG_CRED_POR_PLACA = true;     // false volta ao rateio por operação
+const CADVEIC = { loading:false, loaded:false, erro:false, ts:0, map:{}, n:0 };
+function placaKeyCad(p){ return upper(p).replace(/[^A-Z0-9]/g,''); }
+function _cadFilialDoc(d){
+  const o=(d&&d.data)||d||{};
+  const sg=normOpKey(o.filial||o.unidade||o.sigla||o.filial_sigla||'');
+  return OPCODE_SIGLA[sg] || (['SC','PR','SP'].includes(upper(sg))?upper(sg):'');
+}
+async function ensureCadVeiculos(force){
+  if(CADVEIC.loading) return;
+  if(CADVEIC.loaded && !force) return;
+  CADVEIC.loading=true; CADVEIC.erro=false;
+  try{
+    let docs=[];
+    /* 1º: cache do portal, se o pai já carregou os cadastros */
+    try{
+      const pc = window.parent && (window.parent.ATLAS_VEICULOS || (window.parent.operationalCache&&window.parent.operationalCache.veiculos));
+      if(pc && pc.length) docs=pc.map(function(v){ return {id:v.id||v.placa, data:v}; });
+    }catch(_){}
+    /* 2º: ponte Firestore (mesmo canal do Fechamento x Mapinha) */
+    if(!docs.length) docs = await xmGetCollection('veiculos');
+    const map={};
+    (docs||[]).forEach(function(d){
+      const o=(d&&d.data)||d||{};
+      const pk=placaKeyCad(o.placa||(d&&d.id)||'');
+      if(!pk) return;
+      const sg=_cadFilialDoc(d);
+      if(sg) map[pk]=sg;
+    });
+    CADVEIC.map=map; CADVEIC.n=Object.keys(map).length;
+    CADVEIC.loaded=CADVEIC.n>0; CADVEIC.erro=!CADVEIC.loaded; CADVEIC.ts=Date.now();
+    if(CADVEIC.loaded){ _cache={}; refreshBaseInfo(); renderAll(); }
+  }catch(e){ console.warn('[Atlas/Agregados] ensureCadVeiculos:', e.message); CADVEIC.erro=true; }
+  CADVEIC.loading=false;
+}
+function filialCadastroDaPlaca(placa){
+  const pk=placaKeyCad(placa); if(!pk) return '';
+  return CADVEIC.map[pk]||'';
+}
+/* fallback 2 — unidade predominante da placa no SZB do mês (independe do escopo) */
+let _placaSzbCache={};
+function filialSzbDaPlaca(placa, mes){
+  if(!BASES.szb.loaded) return '';
+  if(!_placaSzbCache[mes]){
+    const acc={};
+    BASES.szb.rows.forEach(function(r){
+      if(r['Dt Cancel']) return;
+      if(String(r['Dt. Emissao']).slice(0,7)!==mes) return;
+      const pk=placaKeyCad(r['Placa Veicul']); if(!pk) return;
+      const sg=siglaDeOp(r['Operacao']); if(!sg) return;
+      (acc[pk]=acc[pk]||{})[sg]=(acc[pk][sg]||0)+toNum(r['Valor Total']);
+    });
+    const out={};
+    Object.keys(acc).forEach(function(pk){
+      out[pk]=Object.keys(acc[pk]).sort(function(a,b){ return acc[pk][b]-acc[pk][a]; })[0];
+    });
+    _placaSzbCache[mes]=out;
+  }
+  return _placaSzbCache[mes][placaKeyCad(placa)]||'';
+}
+/* unidade de alocação do crédito: cadastro → SZB → operação do lançamento */
+function filialAlocCredito(placa, mes, sgOp){
+  if(!AG_CRED_POR_PLACA) return {sg:sgOp, origem:'op'};
+  const cad=filialCadastroDaPlaca(placa);
+  if(cad) return {sg:cad, origem:'cadastro'};
+  const szb=filialSzbDaPlaca(placa, mes);
+  if(szb) return {sg:szb, origem:'szb'};
+  return {sg:sgOp, origem:'op'};
+}
+
 /* ══ MOTOR: monta o fechamento de um mês (escopo atual) ══ */
 let _cache={};
 function buildMes(mes){
@@ -755,11 +840,17 @@ function buildMes(mes){
   });
   if(BASES.szi.loaded) BASES.szi.rows.forEach(function(r){
     if(isExcluidoAgreg(r['Agregado'])) return;
-    if(!fils.has(siglaDeOp(r['Operacao']))) return;
     if(String(r['Data']).slice(0,7)!==mes) return;
+    const cred=/cred/i.test(r['Deb / Cred']||'');
+    const sgOp=siglaDeOp(r['Operacao']);
+    /* CRÉDITO: ignora a operação do lançamento e usa a unidade da placa
+       (Cadastros › Veículos). DÉBITO: segue a operação, como no TrL010. */
+    const aloc = cred ? filialAlocCredito(r['Veiculo'], mes, sgOp) : {sg:sgOp, origem:'op'};
+    if(!fils.has(aloc.sg)) return;
+    const realoc = cred && aloc.origem!=='op' && aloc.sg!==sgOp;
     const o=ag(r['Agregado'], r['Nome']);
     const v=veic(o, r['Veiculo']);
-    const val=toNum(r['Valor']); const cred=/cred/i.test(r['Deb / Cred']||'');
+    const val=toNum(r['Valor']);
     const d=String(r['Descricao']||'').trim();
     const nf=String(pick(r,XM_NF_ALIASES)).trim();
     const prestCod=String(pick(r,XM_FORN_COD_ALIASES)).trim();
@@ -768,6 +859,7 @@ function buildMes(mes){
     const pm=d.match(PARC_RE);
     v.lanc.push({ filial:String(r['Filial']||'').trim(), data:String(r['Data']).slice(0,10), seq:String(r['N Lancamento']||'').trim(),
       op:opNum(r['Operacao']), deb:cred?0:val, cred:cred?val:0, fonte:'SZI', desc:d, nf:nf, prestador:prest, prestadorCod:prestCod,
+      opSigla:sgOp, filAloc:aloc.sg, alocOrigem:aloc.origem, realoc:realoc,
       parcKey: pm ? upper(d.replace(PARC_RE,'').replace(/\s+/g,' ')) : null,
       parcX: pm?+pm[1]:null, parcY: pm?+pm[2]:null,
       isViaFacil:/VIA\s*FACIL/i.test(d), isAguiasat:/AGUIASAT/i.test(d),
@@ -1037,7 +1129,8 @@ function relatorioTrl(o, mes, repId, prevAg){
         const lkey=p+'|'+tipo+'|'+_normDesc(l.desc);
         const vd=_lancVerdict(l, v, vPrev);
         h+='<tr data-row="lanc" data-placa="'+esc(p)+'" data-tipo="'+tipo+'" data-val="'+valL+'" data-op="'+esc(l.op)+'" data-fonte="'+esc(l.fonte)+'" data-data="'+esc(l.data)+'" data-diabr="'+esc(diaBR(l.data))+'" data-desc="'+esc(l.desc)+'" data-lkey="'+esc(lkey)+'" data-verdict="'+vd.sev+'" data-motivo="'+esc(vd.motivo)+'">'
-          +'<td style="width:34px">'+esc(l.filial)+'</td><td style="width:74px">'+diaBR(l.data)+'</td><td style="width:60px">'+esc(l.seq)+'</td><td style="width:30px">'+esc(l.op)+'</td>'
+          +'<td style="width:34px">'+esc(l.filial)+'</td><td style="width:74px">'+diaBR(l.data)+'</td><td style="width:60px">'+esc(l.seq)+'</td>'
+          +'<td style="width:44px">'+esc(l.op)+(l.realoc?'<span class="rlc" title="'+escAttr('Crédito lançado na operação '+l.op+' e alocado em '+l.filAloc+' — unidade da placa '+p+(l.alocOrigem==='cadastro'?' no Cadastros.':' pelo faturamento do mês (placa sem cadastro).'))+'">↺'+esc(l.filAloc)+'</span>':'')+'</td>'
           +'<td class="num" style="width:90px">'+(l.deb?num(l.deb):'')+'</td><td class="num" style="width:90px">'+(l.cred?num(l.cred):'')+'</td>'
           +'<td>'+esc(l.desc)+(l.fonte==='SZC'?'':'')+'</td></tr>';
       });
@@ -1123,9 +1216,9 @@ function _lancVerdict(l, vCur, vPrev){
     return {sev:'warn', motivo:'Salto de parcela (anterior '+pv.parcX+'/'+pv.parcY+', atual '+l.parcX+'/'+l.parcY+').'};
   }
   if(l.isAguiasat && l.deb>0) return {sev:'ok', motivo:'Rastreador Aguiasat cobrado (obrigatório).'};
-  if(l.isDeprec) return {sev:'ok', motivo: l.cred>0 ? 'Crédito de devolução de depreciação.' : 'Depreciação / custo administrativo cobrado.'};
+  if(l.isDeprec) return {sev:'ok', motivo: l.cred>0 ? ('Crédito de devolução de depreciação.'+(l.realoc?' Alocado em '+l.filAloc+' pela unidade da placa.':'')) : 'Depreciação / custo administrativo cobrado.'};
   if(l.isAjuste) return {sev:'info', motivo:'Ajuste de percentual lançado.'};
-  if(l.cred>0) return {sev:'ok', motivo:'Crédito (estorno / devolução).'};
+  if(l.cred>0) return {sev:'ok', motivo:'Crédito (estorno / devolução).'+(l.realoc?' Lançado na op '+l.op+' e alocado em '+l.filAloc+' — unidade da placa'+(l.alocOrigem==='cadastro'?' no Cadastros.':' pelo faturamento do mês.'):'')};
   return {sev:'ok', motivo:'Lançamento padrão.'};
 }
 
@@ -2513,6 +2606,10 @@ function renderAll(){
 }
 ensureBases();
 setInterval(ensureBases, 4000);
+/* cadastro de veículos: define a unidade de alocação dos créditos */
+ensureCadVeiculos();
+setTimeout(function(){ if(!CADVEIC.loaded) ensureCadVeiculos(true); }, 4000);
+setTimeout(function(){ if(!CADVEIC.loaded) ensureCadVeiculos(true); }, 12000);
 initFechInterativo();
 
 </script>
