@@ -1496,7 +1496,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
     },
     listarCadastros: async function(collectionName) {
       if (!currentUser) throw new Error("Usuário não autenticado");
-      const allowed = ["veiculos", "motoristas", "filiais"];
+      const allowed = ["veiculos", "motoristas", "filiais", "alocacao_frota"];
       if (!allowed.includes(collectionName)) throw new Error("Coleção operacional não permitida");
       const snap = await db.collection(collectionName).get();
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -1680,7 +1680,7 @@ window._appReady = async function(user, perfil) {
   }
   populatePlacas();
   // Restaurar placas salvas para este usuário
-  _loadPlacaPrefs(user.email);
+  await window.atlasPrePreencherFicha(true);
   showScreen("scr_home");
 };
 
@@ -1756,7 +1756,7 @@ document.getElementById("li_senha").addEventListener("keydown",e=>{if(e.key==="E
 document.getElementById("li_email").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("li_senha").focus();});
 
 /* ═══ CADASTROS OPERACIONAIS DINÂMICOS ═══ */
-const operationalCache = { veiculos: [], motoristas: [], filiais: [] };
+const operationalCache = { veiculos: [], motoristas: [], filiais: [], alocacoes: {} };
 
 
 /* ═══ BASE SZB COMPARTILHADA — origem/destino/destinatário para campos digitáveis com seleção ═══ */
@@ -1946,6 +1946,7 @@ async function loadOperationalCadastros() {
     operationalCache.motoristas = (motoristas || []).map(normalizeOperationalDriver).sort((a,b)=>sortByField(a,b,"nome"));
     operationalCache.filiais = (filiais || []).map(normalizeOperationalUnidade).sort((a,b)=>sortByField(a,b,"nome"));
     rebuildVehicleMaps();
+    await carregarAlocacoesFrota();
   } catch (err) {
     operationalCache.veiculos = [];
     operationalCache.motoristas = [];
@@ -4032,6 +4033,235 @@ function _savePlacaPrefs() {
   });
 })();
 
+/* ════════════════════════════════════════════════════════════════════════
+   CONJUNTO DO MOTORISTA — pré-preenchimento automático da Ficha
+   Mesma regra já usada no checklist.html: identifica o usuário logado,
+   acha a alocação dele em alocacao_frota e traz motorista + cavalo +
+   carreta 1 + carreta 2 + unidade já preenchidos. Vale na entrada da
+   tela E a cada "Novo relatório" (resetAll), para o motorista nunca
+   precisar reselecionar o próprio conjunto.
+   Fallback: se não houver alocação, usa o placa_pref salvo do usuário.
+════════════════════════════════════════════════════════════════════════ */
+const atlasConjunto = { perfil: null, resolvido: null, avisado: false };
+
+function fcUpper(v){ return String(v||"").trim().toLocaleUpperCase("pt-BR"); }
+function fcNormPlaca(v){ return String(v||"").toUpperCase().replace(/[^A-Z0-9]/g,""); }
+function fcNormNome(v){
+  return String(v||"")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .toUpperCase().replace(/[^A-Z0-9 ]/g," ")
+    .replace(/\s+/g," ").trim();
+}
+
+/* Converte referência de veículo (id do doc, placa ou nº de frota) na PLACA real */
+function fcResolverPlaca(ref){
+  if (!ref) return "";
+  const alvo = fcNormPlaca(ref);
+  if (!alvo) return "";
+  const lista = operationalCache.veiculos || [];
+  const v = lista.find(x => fcNormPlaca(x.id)    === alvo)
+         || lista.find(x => fcNormPlaca(x.placa) === alvo)
+         || lista.find(x => fcNormPlaca(x.frota) === alvo);
+  return v ? fcUpper(v.placa) : fcUpper(ref);
+}
+
+/* Lê alocacao_frota (tolerante a falha de permissão — nunca quebra a ficha) */
+async function carregarAlocacoesFrota(){
+  operationalCache.alocacoes = {};
+  try {
+    if (!window._FB || typeof window._FB.listarCadastros !== "function") return;
+    const docs = await window._FB.listarCadastros("alocacao_frota");
+    (docs||[]).forEach(d => { operationalCache.alocacoes[d.id] = Object.assign({}, d, { cavalo_id: d.cavalo_id || d.id }); });
+  } catch (err) {
+    console.warn("Ficha: alocação de frota indisponível — pré-preenchimento usará a última seleção salva.", err);
+  }
+}
+
+/* Perfil do usuário logado (nome, e-mail, placa_pref) — usuarios/{uid} */
+async function carregarPerfilUsuarioFicha(){
+  const user = window._FB && window._FB.getCurrentUser ? window._FB.getCurrentUser() : null;
+  if (!user) return null;
+  if (atlasConjunto.perfil && atlasConjunto.perfil.uid === user.uid) return atlasConjunto.perfil;
+  let dados = {};
+  try {
+    const snap = await window._FB._db().collection("usuarios").doc(user.uid).get();
+    if (snap.exists) dados = snap.data() || {};
+  } catch (_) {}
+  atlasConjunto.perfil = {
+    uid:   user.uid,
+    email: String(user.email||"").toLowerCase().trim(),
+    nome:  fcUpper(dados.nome || dados.nome_completo || user.displayName || ""),
+    cpf:   String(dados.cpf||"").replace(/\D/g,""),
+    placa_pref: dados.placa_pref || null
+  };
+  return atlasConjunto.perfil;
+}
+
+/* Pontuação de compatibilidade usuário logado × motorista da alocação.
+   Idêntica à do checklist: exige mais que o primeiro nome para casar. */
+function fcPontuarMatch(aloc){
+  const p = atlasConjunto.perfil || {};
+  const nomeAloc = fcNormNome(aloc && aloc.motorista);
+  if (!nomeAloc) return 0;
+
+  const emailUser = String(p.email||"").toLowerCase().trim();
+  const emailAloc = String((aloc.motorista_email || aloc.email || "")).toLowerCase().trim();
+  if (emailUser && emailAloc && emailUser === emailAloc) return 100;
+
+  const cpfAloc = String(aloc.motorista_cpf || aloc.cpf || "").replace(/\D/g,"");
+  if (p.cpf && cpfAloc && p.cpf === cpfAloc) return 95;
+
+  const nomeUser = fcNormNome(p.nome);
+  if (nomeUser && nomeUser === nomeAloc) return 90;
+
+  const tokensAloc = nomeAloc.split(" ").filter(t => t.length > 2);
+
+  if (emailUser.includes("@")) {
+    const local = fcNormNome(emailUser.split("@")[0].replace(/[._\-0-9]+/g," "));
+    if (local && local === nomeAloc) return 80;
+    const tokensMail = local.split(" ").filter(t => t.length > 2);
+    const comuns = tokensMail.filter(t => tokensAloc.includes(t));
+    if (comuns.length >= 2) return 70;
+  }
+
+  const tokensUser = nomeUser.split(" ").filter(t => t.length > 2);
+  if (tokensUser.length >= 2 && tokensUser.every(t => tokensAloc.includes(t))) return 60;
+
+  return 0;
+}
+
+/* Resolve cavalo + carretas + motorista + unidade do usuário logado */
+function fcResolverConjuntoUsuario(){
+  const alocs = operationalCache.alocacoes || {};
+  if (!Object.keys(alocs).length) return null;
+
+  let melhor = null, melhorPonto = 0, empate = false;
+  Object.values(alocs).forEach(a => {
+    const pt = fcPontuarMatch(a);
+    if (!pt) return;
+    if (pt > melhorPonto) { melhorPonto = pt; melhor = a; empate = false; }
+    else if (pt === melhorPonto && melhor) {
+      if (fcNormPlaca(a.cavalo_id) !== fcNormPlaca(melhor.cavalo_id)) empate = true;
+    }
+  });
+
+  if (!melhor || empate) {
+    if (empate) console.warn("Ficha: alocação ambígua para este usuário — pré-preenchimento desativado.");
+    return null;
+  }
+
+  const cavalo = fcResolverPlaca(melhor.cavalo_placa || melhor.cavalo_id);
+  if (!cavalo) return null;
+
+  const veic = (operationalCache.veiculos||[]).find(v => fcNormPlaca(v.placa) === fcNormPlaca(cavalo)) || {};
+  return {
+    cavalo:    cavalo,
+    ct1:       melhor.carreta1_id ? fcResolverPlaca(melhor.carreta1_id) : "",
+    ct2:       melhor.carreta2_id ? fcResolverPlaca(melhor.carreta2_id) : "",
+    motorista: fcUpper(melhor.motorista || ""),
+    filial:    fcUpper(melhor.filial || melhor.unidade || veic.filial || ""),
+    ponto:     melhorPonto
+  };
+}
+
+/* Sigla da unidade a partir de qualquer grafia */
+function fcSiglaUnidade(v){
+  const t = fcUpper(v);
+  if (!t) return "";
+  if (["SC","SP","PR"].includes(t)) return t;
+  if (t.indexOf("SANTA CATARINA") >= 0) return "SC";
+  if (t.indexOf("SAO PAULO") >= 0 || t.indexOf("SÃO PAULO") >= 0) return "SP";
+  if (t.indexOf("PARANA") >= 0 || t.indexOf("PARANÁ") >= 0) return "PR";
+  return t;
+}
+
+/* Grava valor no select e espelha no combobox de placa (input _inp) */
+function fcSetSelect(selId, val){
+  const sel = document.getElementById(selId);
+  if (!sel || !val) return false;
+  const opt = [...sel.options].find(o => o.value === val)
+           || [...sel.options].find(o => fcNormPlaca(o.value) === fcNormPlaca(val));
+  if (!opt) return false;
+  sel.value = opt.value;
+  const inp = document.getElementById(selId + "_inp");
+  if (inp) { inp.value = opt.text; inp.classList.remove("err"); inp.classList.add("ok"); }
+  sel.classList.remove("err"); sel.classList.add("ok");
+  return true;
+}
+
+/* Aplica o conjunto resolvido no formulário */
+function fcAplicarConjunto(conj){
+  if (!conj) return false;
+  let algo = false;
+
+  if (conj.motorista) {
+    const sel = document.getElementById("f_motorista");
+    if (sel) {
+      const alvo = fcNormNome(conj.motorista);
+      const opt = [...sel.options].find(o => fcNormNome(o.value) === alvo);
+      if (opt) { sel.value = opt.value; sel.classList.add("ok"); algo = true; }
+      else if (alvo) { sel.appendChild(new Option(conj.motorista, conj.motorista)); sel.value = conj.motorista; algo = true; }
+      if (typeof renderEntregasSZBRelation === "function") { try { renderEntregasSZBRelation(); } catch(_){} }
+    }
+  }
+
+  if (fcSetSelect("f_placa_cv", conj.cavalo)) { algo = true; if (typeof autoFrota === "function") autoFrota(); }
+  if (conj.ct1) { if (fcSetSelect("f_ct1", conj.ct1)) algo = true; }
+  if (conj.ct2) { if (fcSetSelect("f_ct2", conj.ct2)) algo = true; }
+  if (typeof validateCarretas === "function") { try { validateCarretas(); } catch(_){} }
+
+  const sigla = fcSiglaUnidade(conj.filial);
+  if (sigla) {
+    const selF = document.getElementById("f_filial");
+    if (selF) {
+      const opt = [...selF.options].find(o => fcUpper(o.value) === sigla)
+               || [...selF.options].find(o => fcUpper(o.text).indexOf(sigla + " —") === 0);
+      if (opt) { selF.value = opt.value; selF.classList.add("ok"); algo = true; }
+    }
+  }
+  return algo;
+}
+
+/* Ponto de entrada — chamado no login e a cada Novo relatório.
+   force = true recarrega alocação/perfil do Firestore. */
+window.atlasPrePreencherFicha = async function(force){
+  try {
+    await carregarPerfilUsuarioFicha();
+    if (force && !Object.keys(operationalCache.alocacoes || {}).length) await carregarAlocacoesFrota();
+
+    let conj = fcResolverConjuntoUsuario();
+    if (conj) {
+      atlasConjunto.resolvido = conj;
+      const ok = fcAplicarConjunto(conj);
+      console.log("[Ficha] Conjunto do motorista:", conj.motorista || "—", "|", conj.cavalo,
+                  "| carretas:", [conj.ct1, conj.ct2].filter(Boolean).join(", ") || "—", "| match:", conj.ponto);
+      if (ok) return true;
+    }
+
+    /* Sem alocação: reaproveita a última seleção salva do próprio usuário */
+    const prefs = (atlasConjunto.perfil && atlasConjunto.perfil.placa_pref) || null;
+    if (prefs) {
+      if (typeof _applyPlacaPrefs === "function") _applyPlacaPrefs(prefs);
+      return true;
+    }
+    if (!atlasConjunto.avisado && force) {
+      atlasConjunto.avisado = true;
+      console.info("Ficha: nenhum veículo alocado a este usuário na Frota — seleção manual.");
+    }
+  } catch (err) {
+    console.warn("Ficha: falha no pré-preenchimento do conjunto.", err);
+  }
+  return false;
+};
+
+/* Reaplica quando o conjunto é resolvido depois da tela já montada
+   (ex.: combobox de placa criado ~600ms após o load) */
+window.addEventListener("load", function(){
+  setTimeout(function(){
+    if (atlasConjunto.resolvido) fcAplicarConjunto(atlasConjunto.resolvido);
+  }, 900);
+});
+
 window.resetAll = function() {
   selectedMods=[];activeMod=0;svcCount=0;entCount=0;veiculoParado=false;canvases={};
   Object.keys(entregaFotos||{}).forEach(k=>delete entregaFotos[k]);
@@ -4056,6 +4286,8 @@ window.resetAll = function() {
     if(el){el.value="";el.classList.remove("err","ok");}
   });
   showScreen("scr_form");
+  /* Novo relatório NÃO começa do zero: recarrega motorista + cavalo + carretas */
+  if (typeof window.atlasPrePreencherFicha === "function") window.atlasPrePreencherFicha(false);
 };
 </script>
 
@@ -4087,7 +4319,7 @@ window._appReady = async function(user, perfil) {
   await loadOperationalCadastros();
   requestAtlasSZBData();
   populatePlacas();
-  _loadPlacaPrefs(user.email);
+  await window.atlasPrePreencherFicha(true);
   showScreen("scr_form");
 };
 
