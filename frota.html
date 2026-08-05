@@ -535,6 +535,18 @@ table.data-table{
 
 /* ═══ DASHBOARD ═══ */
 .dashboard{flex:1;overflow-y:auto;padding:18px 24px;background:var(--bg)}
+.dash-alert-pares{border:1px solid #e6b800;border-left:4px solid #e6b800;background:#fffbe9;
+  border-radius:6px;padding:10px 14px;margin-bottom:14px}
+.dash-alert-tit{font-size:12px;font-weight:700;color:#8a6d00;letter-spacing:.02em}
+.dash-alert-sub{font-size:11px;color:#6b5a1f;margin-top:3px;line-height:1.45}
+.dash-alert-lista{margin:6px 0 0;padding-left:18px;font-size:11.5px;color:#4a3f14;line-height:1.6}
+.dash-alert-conflito{border-color:#d97706;border-left-color:#d97706;background:#fff4e6}
+.dash-alert-conflito .dash-alert-tit{color:#9a4a00}
+.dash-alert-conflito .dash-alert-sub{color:#7a4a12}
+.dash-alert-conflito .dash-alert-lista{color:#4a2f14}
+.dash-alert-btn{margin-left:8px;padding:1px 8px;font-size:10.5px;font-weight:600;cursor:pointer;
+  border:1px solid #d97706;border-radius:4px;background:#fff;color:#9a4a00}
+.dash-alert-btn:hover{background:#d97706;color:#fff}
 .kpi-grid{
   display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
   gap:12px;margin-bottom:18px;
@@ -1257,8 +1269,48 @@ table.data-table{
     if(v.categoria==="carreta")return"CARRETA";
     return v.vinculo==="AGREGADO"?"AGREGADO":"FROTA";
   }
-  function statusGeral(v){ return frotaAgg(v)+" "+(DISP_SUFFIX[v.disponibilidade]||"OPERANDO"); }
-  function pesoGeral(v){ if(v.categoria==="carreta"){const k=classifySub(v.subtipo); if(k==="rodotrem"||k==="bitrem")return 0.5;} return 1; }
+  /* ── ALINHAMENTO COM O DASHBOARD ────────────────────────────────────────────
+     A pivot soma rótulo de status + coluna de peso. Para a planilha bater com o
+     Dashboard, o rótulo e o peso precisam sair daqui JÁ com as regras do Atlas
+     aplicadas — a pivot não tem como saber de alocação nem de par de placas. */
+  function estaAlocada(v, ocup){
+    try { return equipamentoAlocado(v, ocup); } catch(e){ return false; }
+  }
+  /* Carreta em RESERVA e solta entra como DISPONÍVEL: é a definição oficial
+     (disponível + reserva, sem cavalo). O estado real continua visível na aba
+     Carreta, coluna Status, que segue gravando RESERVA. */
+  function dispEfetiva(v, ocup){
+    if(v.categoria==="carreta" && v.disponibilidade==="reserva")
+      return estaAlocada(v, ocup) ? "operando" : "disponivel";
+    return v.disponibilidade;
+  }
+  function statusGeral(v, ocup){ return frotaAgg(v)+" "+(DISP_SUFFIX[dispEfetiva(v,ocup)]||"OPERANDO"); }
+
+  /* Peso das placas de rodotrem/bitrem: 2 placas = 1 equipamento. Dentro de cada
+     unidade+subtipo+status, os pares completos valem 0,5 cada placa e a placa
+     ÓRFÃ vale 0 — replicando o Math.floor(placas/2) do Dashboard em vez de somar
+     meio equipamento fantasma no relatório. */
+  function mapaPesos(veiculos, ocup){
+    const grupos={}, pesos={};
+    veiculos.forEach(function(v){
+      if(v.categoria!=="carreta") return;
+      const k=classifySub(v.subtipo);
+      if(k!=="rodotrem" && k!=="bitrem") return;
+      const key=(v.unidade_slug||"?")+"|"+k+"|"+dispEfetiva(v,ocup);
+      (grupos[key]=grupos[key]||[]).push(v);
+    });
+    Object.keys(grupos).forEach(function(key){
+      const arr=grupos[key];
+      arr.sort(function(a,b){ return String(a.placa||a.id||"").localeCompare(String(b.placa||b.id||"")); });
+      const limite=Math.floor(arr.length/2)*2;
+      arr.forEach(function(v,i){ pesos[v.id||v.placa]= i<limite ? 0.5 : 0; });
+    });
+    return pesos;
+  }
+  function pesoGeral(v, pesos){
+    const p = pesos && pesos[v.id||v.placa];
+    return (p===0 || p===0.5) ? p : 1;
+  }
 
   function cell(col,row,style,val){
     const r=col+row, s=style?` s="${style}"`:"";
@@ -1294,10 +1346,11 @@ table.data-table{
   }
 
   // ---- recToVals por aba ----
-  function geralVals(v){ return {
+  function makeGeralVals(ocup, pesos){ return function(v){ return {
     A:v.frota||"", B:v.placa||"", C:v.ano||"", D:v.motorista||"", E:v.modelo||"",
     F:v.renavam||"", G:v.chassi||"", H:frotaAgg(v), I:"-", J:tipoGeral(v),
-    K:unidadeFull(v), L:statusGeral(v), M:v.observacao||"", N:pesoGeral(v), O:"" }; }
+    K:unidadeFull(v), L:statusGeral(v, ocup), M:v.observacao||"", N:pesoGeral(v, pesos),
+    O:(pesos && pesos[v.id||v.placa]===0) ? "PAR INCOMPLETO" : "" }; }; }
 
   function makeCompVals(ctx){ return function(c){
     const aloc=ctx.alocByComp[c.id];
@@ -1344,8 +1397,13 @@ table.data-table{
     const alocByComp={}; Object.values(alocByCav).forEach(a=>{ if(a.compressor_id)alocByComp[a.compressor_id]=a; });
     const ctx={ veiculos:STATE.veiculos, vehById, vehByPlaca, vehByFrota, compById, alocByCav, alocByComp };
 
+    // Mesma fonte de verdade do Dashboard: mapaOcupacao ignora vínculo fantasma
+    let ocup=null; try { ocup=mapaOcupacao(); } catch(e){ console.warn("[Frota/Export] mapaOcupacao indisponível:",e.message); }
+    const ativos=STATE.veiculos.filter(v=>!foraDaFrota(v));
+    const pesos=mapaPesos(ativos, ocup);
+
     let g=dec(files["xl/worksheets/sheet1.xml"]);
-    g=setSheetData(g,1,"ABCDEFGHIJKLMNO".split(""),STATE.veiculos.filter(v=>!foraDaFrota(v)),geralVals,2);
+    g=setSheetData(g,1,"ABCDEFGHIJKLMNO".split(""),ativos,makeGeralVals(ocup,pesos),2);
     files["xl/worksheets/sheet1.xml"]=enc(g);
 
     let cp=dec(files["xl/worksheets/sheet2.xml"]);
@@ -1368,6 +1426,21 @@ table.data-table{
       let t=dec(files[p]);
       if(t.indexOf("refreshOnLoad=")<0) t=t.replace("<pivotCacheDefinition ", '<pivotCacheDefinition refreshOnLoad="1" ');
       files[p]=enc(t);
+    });
+
+    /* Filtro manual da pivot não traz item novo: se o sistema passar a emitir um
+       rótulo inédito (ex.: CARRETA INDISPONÍVEL), a linha some e o Total Geral
+       encolhe sem aviso. includeNewItemsInFilter conserta isso sem tocar no que
+       já está oculto de propósito. Falha aqui não pode derrubar a exportação. */
+    Object.keys(files).forEach(function(p){
+      if(!/^xl\/pivotTables\/pivotTable\d+\.xml$/.test(p)) return;
+      try{
+        let t=dec(files[p]);
+        if(t.indexOf("includeNewItemsInFilter")<0){
+          t=t.replace(/<pivotField /g, '<pivotField includeNewItemsInFilter="1" ');
+          files[p]=enc(t);
+        }
+      }catch(e){ console.warn("[Frota/Export] pivotTable não ajustada:",p,e.message); }
     });
 
     return F.zipSync(files,{level:6});
@@ -2415,6 +2488,64 @@ function equipamentoAlocado(v, ocup) {
       || ocup.carretas.has(v.placa)
       || !!(v.frota && ocup.carretas.has(v.frota));
 }
+
+/* ─── CONFLITO: EQUIPAMENTO PARADO x CAVALO OPERANDO ─────────────────────────
+   reconciliarStatusEquipamentos() dá razão ao status próprio (manutenção vinda
+   de OS, reforma, indisponível) e NÃO desengata a carreta — de propósito, pra
+   não apagar o vínculo sozinho. O efeito colateral é o que aparece no cadastro:
+   carreta em Manutenção continuar pendurada num cavalo que está operando. O
+   status fica certo dos dois lados (Dashboard e planilha), mas a alocação vira
+   mentira: o cavalo aparece equipado e na prática está sem aquele equipamento.
+   Aqui a inconsistência é detectada e listada para desengate manual. */
+function conflitosEquipParado() {
+  const out = [];
+  Object.entries(STATE.alocacoes || {}).forEach(([cavaloId, a]) => {
+    if (!a) return;
+    if (!alocacaoTemCavaloValido(cavaloId, a)) return;   // órfã tem alerta próprio
+    const cav = cavaloDaAlocacao(cavaloId, a);
+    if (!cav) return;
+    const cavParado = STATUS_PROPRIO_EQUIP.includes(cav.disponibilidade);
+    ["carreta1", "carreta2"].forEach(slot => {
+      const id = a[slot + "_id"];
+      if (!id) return;
+      const c = findVeiculo(id);
+      if (!c || foraDaFrota(c)) return;
+      if (!STATUS_PROPRIO_EQUIP.includes(c.disponibilidade)) return;
+      out.push({
+        cavaloId, slot,
+        cavalo: cav.frota || cav.placa || cavaloId,
+        cavaloStatus: cav.disponibilidade || "operando",
+        cavaloParado: cavParado,
+        equip: c.frota || c.placa || id,
+        placa: c.placa || "",
+        status: c.disponibilidade,
+        unidade: c.unidade_slug || cav.unidade_slug || "",
+      });
+    });
+    if (a.compressor_id) {
+      const comp = (STATE.compressores || []).find(x => x.id === a.compressor_id);
+      let st = null;
+      try { st = comp ? visaoCompressor(comp).status : null; } catch(e) {}
+      if (st === "manutencao") out.push({
+        cavaloId, slot: "compressor",
+        cavalo: cav.frota || cav.placa || cavaloId,
+        cavaloStatus: cav.disponibilidade || "operando",
+        cavaloParado: cavParado,
+        equip: comp.numero || comp.serie || comp.id,
+        placa: "", status: "manutencao",
+        unidade: cav.unidade_slug || "",
+      });
+    }
+  });
+  if (out.length) {
+    console.warn("[Frota] " + out.length + " equipamento(s) parado(s) ainda alocado(s) em cavalo:");
+    console.table(out);
+  }
+  return out;
+}
+window.frotaDesengatar = async function(cavaloId, slot) {
+  try { await clearSlot(cavaloId, slot); } catch(e) { showToast("Erro: " + e.message, "error"); }
+};
 
 /* Estados que o equipamento tem por conta própria e que sempre ganham da regra
    automática: manutenção (vem de OS aberta), reformas e indisponível. */
@@ -3931,7 +4062,7 @@ function calcResumo() {
       cavalos_op: 0, frota_op: 0, agregado_op: 0,
       // EQUIPAMENTOS - TOTAL (operando + disponível + manutenção + reserva) por vínculo
       equip_frota_total: 0, equip_agregado_total: 0,
-      cavalos_disp: 0, cavalos_indisp: 0, cavalos_manut: 0,
+      cavalos_disp: 0, cavalos_indisp: 0, cavalos_manut: 0, cavalos_reserva: 0,
       cavalos_em_reforma: 0, cavalos_a_reformar: 0, cavalos_indisponivel: 0,
       // Manutenção de cavalos (por vínculo) — apenas status=manutencao
       cavalos_manut_frota: 0, cavalos_manut_agregado: 0,
@@ -3955,12 +4086,25 @@ function calcResumo() {
     };
   }
 
-  // Conjunto de carretas em uso (alocadas em algum cavalo)
-  const carretasUsadas = new Set();
-  Object.values(STATE.alocacoes).forEach(a => {
-    if (a.carreta1_id) carretasUsadas.add(a.carreta1_id);
-    if (a.carreta2_id) carretasUsadas.add(a.carreta2_id);
-  });
+  /* FONTE ÚNICA DE "ESTÁ ALOCADA?" — antes este bloco varria STATE.alocacoes cru
+     (só carreta1_id/carreta2_id, sem validar o cavalo e sem alias). Isso divergia
+     de reconciliarStatusEquipamentos(), que usa mapaOcupacao() e IGNORA vínculo
+     fantasma (cavalo inexistente ou fora de frota). Resultado: carreta engatada
+     num cavalo vendido era marcada DISPONÍVEL pela reconciliação (e exportada
+     assim) mas excluída das disponíveis aqui. Agora os dois lados usam o mesmo
+     mapa. */
+  const ocupacao = mapaOcupacao();
+  const carretaAlocada = (v) => equipamentoAlocado(v, ocupacao);
+
+  /* Rastreio de pares rodotrem/bitrem por unidade+subtipo+status. Como o total é
+     Math.floor(placas/2), todo balde com contagem ÍMPAR perde uma placa na conta:
+     é par incompleto no cadastro e vira alerta no Dashboard. */
+  const parPlacas = {};
+  const regPar = (unit, sub, bkt, v) => {
+    const k = unit + "|" + sub + "|" + bkt;
+    (parPlacas[k] = parPlacas[k] || []).push(v.placa || v.frota || v.id);
+  };
+  const statusDesconhecidos = new Set();
 
   function classifySubtipo(subtipo) {
     const s = String(subtipo || "").toUpperCase();
@@ -4007,7 +4151,14 @@ function calcResumo() {
         else u.MANUT.cavalos_manut_frota++;
       } else if (d === "disponivel") {
         if (unit && u[unit]) u[unit].cavalos_disp++;
+      } else if (d === "reserva") {
+        // RESERVA é estado próprio: não é operando (regra da frota) e não é
+        // manutenção. Continua dentro de EQUIPAMENTOS - TOTAL, fora de OPERANDO.
+        if (unit && u[unit]) u[unit].cavalos_reserva++;
       } else if (unit && u[unit]) {
+        // Rede de segurança: qualquer status fora do vocabulário conhecido cai
+        // aqui e vira "operando". Antes isso inflava o indicador em silêncio.
+        if (d && d !== "operando") statusDesconhecidos.add(d);
         u[unit].cavalos_op++;
         if (v.vinculo === "AGREGADO") u[unit].agregado_op++; else u[unit].frota_op++;
       }
@@ -4024,15 +4175,17 @@ function calcResumo() {
       if (isPar) {
         // Acumula em _raw — pós-loop divide por 2 e soma nos contadores principais
         u[unit][rPfx + "_total"]++;
-        if      (d === "em_reforma")    u[unit][rPfx + "_em_reforma"]++;
-        else if (d === "a_reformar")    u[unit][rPfx + "_a_reformar"]++;
-        else if (d === "indisponivel")  u[unit][rPfx + "_indisp"]++;
-        else if (d === "manutencao")    u[unit][rPfx + "_manut"]++;
-        else if (d === "reserva")       u[unit][rPfx + "_reserva"]++;
-        else if (d === "disponivel")    u[unit][rPfx + "_disp"]++;
-        else                            u[unit][rPfx + "_op"]++;
+        const bkt = d === "em_reforma"   ? "_em_reforma"
+                  : d === "a_reformar"   ? "_a_reformar"
+                  : d === "indisponivel" ? "_indisp"
+                  : d === "manutencao"   ? "_manut"
+                  : d === "reserva"      ? "_reserva"
+                  : d === "disponivel"   ? "_disp"
+                  : "_op";
+        u[unit][rPfx + bkt]++;
+        regPar(unit, sub, bkt, v);
         // tabela disponíveis: livre = sem cavalo alocado
-        if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id))
+        if ((d === "disponivel" || d === "reserva") && !carretaAlocada(v))
           u[unit][rPfx + "_disp_livre"]++;
         // subtipo manutenção
         if (d === "em_reforma" || d === "a_reformar" || d === "manutencao")
@@ -4049,7 +4202,7 @@ function calcResumo() {
         else                            u[unit].carretas_op++;
         if (sub) {
           u[unit]["sub_" + sub]++;
-          if ((d === "disponivel" || d === "reserva") && !carretasUsadas.has(v.id))
+          if ((d === "disponivel" || d === "reserva") && !carretaAlocada(v))
             u[unit]["disp_" + sub]++;
           if (d === "em_reforma" || d === "a_reformar" || d === "manutencao")
             u[unit]["manut_" + sub]++;
@@ -4063,7 +4216,12 @@ function calcResumo() {
     const o = u[uk];
     [["_rr","rodotrem"],["_rb","bitrem"]].forEach(([p, sub]) => {
       const h = (k) => Math.floor((o[p + k] || 0) / 2);
-      o.carretas         += h("_total");
+      /* Total = soma dos pares completos DENTRO de cada status, não floor do total
+         bruto. Em cadastro limpo dá exatamente o mesmo número; em cadastro com
+         placa órfã os dois lados (Dashboard e pivot do Excel) passam a fechar. */
+      const paresPorStatus = h("_op") + h("_disp") + h("_reserva") + h("_manut")
+                           + h("_em_reforma") + h("_a_reformar") + h("_indisp");
+      o.carretas         += paresPorStatus;
       o.carretas_op      += h("_op");
       o.carretas_disp    += h("_disp");
       o.carretas_reserva += h("_reserva");
@@ -4071,7 +4229,7 @@ function calcResumo() {
       o.carretas_em_reforma += h("_em_reforma");
       o.carretas_a_reformar += h("_a_reformar");
       o.carretas_indisp  += h("_indisp");
-      o["sub_"  + sub]   += h("_total");
+      o["sub_"  + sub]   += paresPorStatus;
       o["disp_" + sub]   += h("_disp_livre");
       o["manut_"+ sub]   += h("_manut_sub");
     });
@@ -4090,6 +4248,31 @@ function calcResumo() {
   });
   const total = {};
   Object.keys(u.SC).forEach(k => { total[k] = (u.SC[k]||0) + (u.SP[k]||0) + (u.PR[k]||0); });
+  /* PARES INCOMPLETOS — balde com número ímpar de placas. A placa sem par não
+     entra em nenhuma contagem (Math.floor) nem pesa no Excel: em vez de sumir
+     em silêncio, ela é listada para correção no cadastro. */
+  const BKT_LABEL = { _op:"Operando", _disp:"Disponível", _reserva:"Reserva", _manut:"Manutenção",
+                      _em_reforma:"Em reforma", _a_reformar:"A reformar", _indisp:"Indisponível" };
+  const SUB_NOME  = { rodotrem:"RODOTREM", bitrem:"BITREM" };
+  const paresIncompletos = [];
+  Object.keys(parPlacas).forEach(k => {
+    const placas = parPlacas[k];
+    if (placas.length % 2 === 0) return;
+    const [unidade, sub, bkt] = k.split("|");
+    paresIncompletos.push({
+      unidade, subtipo: SUB_NOME[sub] || sub, status: BKT_LABEL[bkt] || bkt,
+      placas: placas.slice().sort(), qtd: placas.length,
+    });
+  });
+  if (paresIncompletos.length) {
+    console.warn("[Frota] " + paresIncompletos.length + " grupo(s) de par incompleto (placa órfã não contabilizada):");
+    console.table(paresIncompletos);
+  }
+  if (statusDesconhecidos.size) {
+    console.warn("[Frota] Status de cavalo fora do vocabulário conhecido, contados como OPERANDO:",
+      Array.from(statusDesconhecidos));
+  }
+
   const alertas = { green: 0, yellow: 0, orange: 0, red: 0, gray: 0 };
   STATE.veiculos.filter(v => v.categoria === "cavalo" && !foraDaFrota(v)).forEach(v => {
     const szb = szbDe(v.id);
@@ -4097,7 +4280,8 @@ function calcResumo() {
     const isIndisp = ["indisponivel","em_reforma","a_reformar","manutencao"].includes(v.disponibilidade);
     alertas[isIndisp ? "gray" : classificarAlerta(dias)]++;
   });
-  return { byUnit: u, total, alertas };
+  return { byUnit: u, total, alertas, paresIncompletos,
+           statusDesconhecidos: Array.from(statusDesconhecidos) };
 }
 
 /* ─── EXPORTAR EXCEL · máscara do template FROTA_COMIX_2026.xlsm ───
@@ -4157,6 +4341,34 @@ function renderDashboard() {
   }
   const r = calcResumo();
   const totalCavalosOp = r.total.cavalos_op;
+
+  // Alerta de par incompleto — placa de rodotrem/bitrem sem cônjuge no cadastro
+  const UNI_NOME = { SC: "Santa Catarina", PR: "Paraná", SP: "São Paulo" };
+  const alertaPares = (r.paresIncompletos || []).length ? `
+    <div class="dash-alert-pares">
+      <div class="dash-alert-tit">⚠ Par incompleto no cadastro — ${r.paresIncompletos.length} grupo(s)</div>
+      <div class="dash-alert-sub">Rodotrem e bitrem contam 2 placas = 1 equipamento. Nos grupos abaixo sobra uma placa sem par, que fica fora das contagens do Dashboard e da planilha até o cadastro ser acertado.</div>
+      <ul class="dash-alert-lista">
+        ${r.paresIncompletos.map(p => `<li><b>${UNI_NOME[p.unidade]||p.unidade}</b> · ${p.subtipo} · ${p.status} — ${p.qtd} placas: ${p.placas.map(escapeHtml).join(", ")}</li>`).join("")}
+      </ul>
+    </div>` : "";
+
+  // Alerta de equipamento parado ainda engatado em cavalo
+  const ST_NOME = { manutencao:"Manutenção", em_reforma:"Em reforma", a_reformar:"A reformar", indisponivel:"Indisponível" };
+  const SLOT_NOME = { carreta1:"Carreta 1", carreta2:"Carreta 2", compressor:"Compressor" };
+  const conflitos = conflitosEquipParado();
+  const alertaConflitos = conflitos.length ? `
+    <div class="dash-alert-pares dash-alert-conflito">
+      <div class="dash-alert-tit">⚠ Equipamento parado ainda alocado — ${conflitos.length} caso(s)</div>
+      <div class="dash-alert-sub">O status do equipamento manda sobre a alocação, então ele não conta como operando — mas o vínculo continua no Kanban e o cavalo aparece equipado com algo que está na oficina. Desengate para o cavalo receber outro equipamento.</div>
+      <ul class="dash-alert-lista">
+        ${conflitos.map(c => `<li>
+          <b>${escapeHtml(c.equip)}</b>${c.placa ? " ("+escapeHtml(c.placa)+")" : ""} · ${ST_NOME[c.status]||c.status}
+          — engatado em <b>${escapeHtml(c.cavalo)}</b> (${c.cavaloParado ? (ST_NOME[c.cavaloStatus]||c.cavaloStatus) : "operando"}) no slot ${SLOT_NOME[c.slot]||c.slot}
+          ${STATE.isAdmin ? `<button class="dash-alert-btn" onclick="frotaDesengatar('${escapeHtml(c.cavaloId)}','${c.slot}')">Desengatar</button>` : ""}
+        </li>`).join("")}
+      </ul>
+    </div>` : "";
 
   // Tabela Carretas — subtipos já com ÷2 aplicado para rodotrem/bitrem (par = 1 equipamento)
   const carrRows = [
@@ -4256,6 +4468,8 @@ function renderDashboard() {
   const totalCompGeral = compRows.reduce((s,r)=>s+r[4],0);
 
   el.innerHTML = `
+    ${alertaPares}
+    ${alertaConflitos}
     <!-- PAINEL PRINCIPAL (estilo resumo_frota) -->
     <div class="dash-xl-grid">
       ${xlTbl("EQUIPAMENTOS - TOTAL, E POR TIPO", "Total de cavalos mecânicos (operando, disponível, manutenção e reserva) por vínculo e unidade", equipTotalRows,
@@ -4283,7 +4497,7 @@ function renderDashboard() {
       <div class="kpi accent-blue">
         <div class="kpi-label">Cavalos Operando</div>
         <div class="kpi-value">${totalCavalosOp}</div>
-        <div class="kpi-sub">${r.total.frota_op} Frota · ${r.total.agregado_op} Agregado</div>
+        <div class="kpi-sub">${r.total.frota_op} Frota · ${r.total.agregado_op} Agregado${r.total.cavalos_reserva ? ` · ${r.total.cavalos_reserva} em reserva (fora de operando)` : ""}</div>
       </div>
       <div class="kpi accent-green">
         <div class="kpi-label">Carretas</div>
@@ -4565,12 +4779,10 @@ async function imprimirRelatorio() {
     resumo.push(["FROTA OPERANDO", r.byUnit.SC.frota_op, r.byUnit.PR.frota_op, r.byUnit.SP.frota_op, r.total.frota_op]);
     resumo.push(["AGREGADO OPERANDO", r.byUnit.SC.agregado_op, r.byUnit.PR.agregado_op, r.byUnit.SP.agregado_op, r.total.agregado_op]);
     resumo.push(["FROTA DISPONÍVEL", r.byUnit.SC.cavalos_disp, r.byUnit.PR.cavalos_disp, r.byUnit.SP.cavalos_disp, r.total.cavalos_disp]);
+    resumo.push(["FROTA RESERVA", r.byUnit.SC.cavalos_reserva, r.byUnit.PR.cavalos_reserva, r.byUnit.SP.cavalos_reserva, r.total.cavalos_reserva]);
     resumo.push(["INDISPONÍVEL", r.byUnit.SC.cavalos_indisp, r.byUnit.PR.cavalos_indisp, r.byUnit.SP.cavalos_indisp, r.total.cavalos_indisp]);
-    resumo.push(["Total Geral",
-      r.byUnit.SC.frota_op + r.byUnit.SC.agregado_op + r.byUnit.SC.cavalos_disp + r.byUnit.SC.cavalos_indisp,
-      r.byUnit.PR.frota_op + r.byUnit.PR.agregado_op + r.byUnit.PR.cavalos_disp + r.byUnit.PR.cavalos_indisp,
-      r.byUnit.SP.frota_op + r.byUnit.SP.agregado_op + r.byUnit.SP.cavalos_disp + r.byUnit.SP.cavalos_indisp,
-      r.total.frota_op + r.total.agregado_op + r.total.cavalos_disp + r.total.cavalos_indisp]);
+    const totCav = (o) => o.frota_op + o.agregado_op + o.cavalos_disp + o.cavalos_reserva + o.cavalos_indisp;
+    resumo.push(["Total Geral", totCav(r.byUnit.SC), totCav(r.byUnit.PR), totCav(r.byUnit.SP), totCav(r.total)]);
     resumo.push([]);
     resumo.push(["CARRETAS", "SANTA CATARINA", "PARANÁ", "SÃO PAULO", "Total Geral"]);
     resumo.push(["OPERANDO", r.byUnit.SC.carretas_op, r.byUnit.PR.carretas_op, r.byUnit.SP.carretas_op, r.total.carretas_op]);
