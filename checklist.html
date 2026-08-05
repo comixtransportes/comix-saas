@@ -4962,6 +4962,14 @@ function prepararFormularioInspecao(_retry) {
   const formSel = document.getElementById('insp-form-selecao');
   if (!formSel) return;
 
+  /* Guarda de reentrada: o retry roda a cada 300ms e o resolveAlocacaoUsuario
+     também repreenche o formulário quando encontra a alocação. Sem isso, os
+     dois caminhos podiam chamar confirmarInicioInspecao() e iniciar a mesma
+     inspeção duas vezes (gerando dois números e piscando a tela). Se o wizard
+     já está aberto, não há mais o que preparar. */
+  const heroAberto = document.getElementById('insp-hero-content');
+  if (_retry && heroAberto && heroAberto.style.display !== 'none') return;
+
   formSel.style.display = '';
   const heroContent = document.getElementById('insp-hero-content');
   const checkContent = document.getElementById('insp-checklist-content');
@@ -4993,7 +5001,15 @@ function prepararFormularioInspecao(_retry) {
     if (placaInput) { placaInput.value = placaAloc; placaInput.readOnly = true; placaInput.placeholder = 'Placa do veículo...'; placaInput.style.background = 'var(--bg)'; }
     renderPreviewConjunto(placaAloc);
     // Auto-confirma e inicia diretamente sem precisar clicar no botão
-    setTimeout(() => confirmarInicioInspecao(), 120);
+    if (!window._inspAutoIniciando) {
+      window._inspAutoIniciando = true;
+      setTimeout(() => {
+        window._inspAutoIniciando = false;
+        const hero = document.getElementById('insp-hero-content');
+        if (hero && hero.style.display !== 'none') return;  // já iniciada
+        confirmarInicioInspecao();
+      }, 120);
+    }
   } else if (!isAdmin && motorista) {
     // Motorista sem alocação cadastrada: libera a placa e avisa
     if (motInput)   { motInput.value = motorista; motInput.readOnly = true; motInput.style.background = 'var(--bg)'; }
