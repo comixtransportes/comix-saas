@@ -877,7 +877,7 @@ function normalizeAtlasSZBRows(rows){
 }
 /* setter único: normaliza uma vez e dispara o preenchimento */
 function szbFingerprint(rows){ try{ return ((rows&&rows.length)||0)+'|'+JSON.stringify((rows&&rows[0])||{}).length; }catch(_){ return String((rows&&rows.length)||0); } }
-function setSZBRows(raw){ if(!raw||!raw.length) return false; SZB.rows=normalizeAtlasSZBRows(raw); SZB.loaded=true; SZB._fp=szbFingerprint(raw); onSZBLoaded(); renderDre(); renderLancCards(); return true; }
+function setSZBRows(raw){ if(!raw||!raw.length) return false; SZB.rows=normalizeAtlasSZBRows(raw); SZB.loaded=true; SZB._fp=szbFingerprint(raw); _placaSzbCache={}; onSZBLoaded(); renderDre(); renderLancCards(); return true; }
 /* checa se o portal já tem um SZB diferente do carregado (ex.: reimportado no Download Base) e re-sincroniza */
 function checkSZBFresh(){
   try{ const pd=window.parent && window.parent.ATLAS_DATA && window.parent.ATLAS_DATA.szb;
@@ -911,6 +911,7 @@ function setBaseRows(id, raw){
   renderDre(); renderLancCards(); return true;
 }
 function ensureAgregadoBases(){
+  ensureCadVeiculos();                 // unidade da placa (Cadastros › Veículos) p/ a linha (–) Agregados
   ['szc','szi'].forEach(function(id){
     if(AUX[id].loaded) return;
     try{ const pd=window.parent.ATLAS_DATA && window.parent.ATLAS_DATA[id];
@@ -925,6 +926,92 @@ function ensureAgregadoBases(){
     }
   });
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   UNIDADE DA PLACA (Cadastros › Veículos) — espelha agregados.html
+   Regra de negócio: o fechamento pertence ao AGREGADO, não à operação.
+   CTRCs, abastecimentos, débitos e créditos podem ser lançados em
+   qualquer operação (17/18/03) — o TrL010 traz todos juntos na folha do
+   agregado. Portanto TODO lançamento da placa é alocado na unidade em
+   que ela está cadastrada no módulo Cadastros (coleção `veiculos`,
+   campo `filial` = sigla SC/PR/SP), ignorando a operação da linha.
+   Cascata de resolução (idêntica ao módulo Agregados):
+     1) Cadastros › Veículos (fonte oficial);
+     2) unidade onde a placa mais faturou no mês (SZB) — placa sem cadastro;
+     3) operação da própria linha (comportamento antigo) — último recurso.
+   ATENÇÃO: vale SÓ para a linha (–) Agregados. Receita, Diesel, Pedágio,
+   C.O/C.P/C.E seguem inalterados (receita é da operação, não da placa).
+   ══════════════════════════════════════════════════════════════════ */
+const AG_ALOC_POR_PLACA = true;     // false volta ao rateio por operação
+const CADVEIC = { loading:false, loaded:false, erro:false, ts:0, map:{}, n:0 };
+function placaKeyCad(p){ return upper(p).replace(/[^A-Z0-9]/g,''); }
+/* mesma cascata de campos do agregados.html (+ 'operacao', usado no cadastro antigo) */
+function _cadFilialDoc(d){
+  const o=(d&&d.data)||d||{};
+  const sg=normOpKey(o.filial||o.unidade||o.sigla||o.filial_sigla||o.operacao||'');
+  return OPCODE_SIGLA[sg] || (['SC','PR','SP'].includes(upper(sg))?upper(sg):'');
+}
+async function ensureCadVeiculos(force){
+  if(CADVEIC.loading) return;
+  if(CADVEIC.loaded && !force) return;
+  CADVEIC.loading=true; CADVEIC.erro=false;
+  try{
+    let docs=[];
+    /* 1º: cache do portal, se o pai já carregou os cadastros */
+    try{
+      const pc = window.parent && (window.parent.ATLAS_VEICULOS || (window.parent.operationalCache&&window.parent.operationalCache.veiculos));
+      if(pc && pc.length) docs=pc.map(function(v){ return {id:v.id||v.placa, data:v}; });
+    }catch(_){}
+    /* 2º: ponte Firestore autenticada do portal (mesma do resto do Mapinha) */
+    if(!docs.length) docs = await fsGetCollection('veiculos');
+    const map={};
+    (docs||[]).forEach(function(d){
+      const o=(d&&d.data)||d||{};
+      const pk=placaKeyCad(o.placa||o.Placa||(d&&d.id)||'');
+      if(!pk) return;
+      const sg=_cadFilialDoc(d);
+      if(sg) map[pk]=sg;
+    });
+    CADVEIC.map=map; CADVEIC.n=Object.keys(map).length;
+    CADVEIC.loaded=CADVEIC.n>0; CADVEIC.erro=!CADVEIC.loaded; CADVEIC.ts=Date.now();
+    if(CADVEIC.loaded){ _placaSzbCache={}; renderDre(); }
+  }catch(e){ console.warn('[Mapinha/Agregados] ensureCadVeiculos:', e.message); CADVEIC.erro=true; }
+  CADVEIC.loading=false;
+}
+function filialCadastroDaPlaca(placa){
+  const pk=placaKeyCad(placa); if(!pk) return '';
+  return CADVEIC.map[pk]||'';
+}
+/* fallback 2 — unidade predominante da placa no SZB do mês (independe do escopo) */
+let _placaSzbCache={};
+function filialSzbDaPlaca(placa, mes){
+  if(!SZB.rows) return '';
+  if(!_placaSzbCache[mes]){
+    const acc={};
+    SZB.rows.forEach(function(r){
+      if(r['Dt Cancel']) return;
+      if(String(r['Dt. Emissao']).slice(0,7)!==mes) return;
+      const pk=placaKeyCad(r['Placa Veicul']); if(!pk) return;
+      const sg=siglaDeOp(r['Operacao']); if(!sg) return;
+      (acc[pk]=acc[pk]||{})[sg]=(acc[pk][sg]||0)+toNum(r['Valor Total']);
+    });
+    const out={};
+    Object.keys(acc).forEach(function(pk){
+      out[pk]=Object.keys(acc[pk]).sort(function(a,b){ return acc[pk][b]-acc[pk][a]; })[0];
+    });
+    _placaSzbCache[mes]=out;
+  }
+  return _placaSzbCache[mes][placaKeyCad(placa)]||'';
+}
+/* unidade de alocação da linha: cadastro → SZB → operação da linha.
+   usarSzb=false nas linhas do próprio SZB (o fallback seria circular). */
+function filialAlocPlaca(placa, mes, sgOp, usarSzb){
+  if(!AG_ALOC_POR_PLACA) return {sg:sgOp, origem:'op'};
+  const cad=filialCadastroDaPlaca(placa);
+  if(cad) return {sg:cad, origem:'cadastro'};
+  if(usarSzb!==false){ const szb=filialSzbDaPlaca(placa, mes); if(szb) return {sg:szb, origem:'szb'}; }
+  return {sg:sgOp, origem:'op'};
+}
 /* Fechamento de Agregados (regra COMIX):
    = Σ SZB 'Comissao Mot'  (realizado líquido do agregado por viagem)
    − Σ SZC abastecimentos de agregados (diesel + arla; exclui proprietários)
@@ -934,32 +1021,50 @@ function ensureAgregadoBases(){
    Débitos/créditos entram CHEIOS, sem recorte de categoria (todos por placa).
    Lançamentos manuais NÃO entram nesta conta. */
 function calcFechamentoAgregados(){
-  const o={ comissao:0, szcDiesel:0, szcArla:0, debSZI:0, credSZI:0, total:0, falta:[] };
+  const o={ comissao:0, szcDiesel:0, szcArla:0, debSZI:0, credSZI:0, total:0, falta:[],
+            inN:0, inVal:0, outN:0, outVal:0 };
+  const mes=ST.mesRef, fil=ST.filial;
+  /* decide se a linha entra nesta filial e contabiliza a realocação.
+     contrib = efeito da linha no fechamento (comissão/crédito +, abast/débito −) */
+  function pega(placa, sgOp, contrib, usarSzb){
+    const a=filialAlocPlaca(placa, mes, sgOp, usarSzb);
+    if(a.sg!==fil){                                   // saiu desta filial
+      if(sgOp===fil){ o.outN++; o.outVal+=contrib; }
+      return false;
+    }
+    if(sgOp!==fil){ o.inN++; o.inVal+=contrib; }      // veio de outra operação
+    return true;
+  }
   if(SZB.rows){
     SZB.rows.forEach(function(r){
       if(r['Dt Cancel']) return;
       if(isExcluidoAgreg(r['Cod Propriet'])) return;
-      if(siglaDeOp(r['Operacao'])!==ST.filial) return;
-      if(String(r['Dt. Emissao']).slice(0,7)!==ST.mesRef) return;
-      o.comissao += toNum(r['Comissao Mot']);
+      if(String(r['Dt. Emissao']).slice(0,7)!==mes) return;
+      const com=toNum(r['Comissao Mot']);
+      /* usarSzb=false: nas próprias linhas do SZB o fallback seria circular */
+      if(!pega(r['Placa Veicul'], siglaDeOp(r['Operacao']), com, false)) return;
+      o.comissao += com;
     });
   } else o.falta.push('SZB');
   if(AUX.szc.loaded){
     AUX.szc.rows.forEach(function(r){
       if(isExcluidoAgreg(r['Proprietario'])) return;
-      if(siglaDeOp(r['Operacao'])!==ST.filial) return;
-      if(String(r['Data Emissao']).slice(0,7)!==ST.mesRef) return;
-      const v=toNum(r['Valor']); const cb=String(r['Combustivel']||'').toLowerCase();
+      if(String(r['Data Emissao']).slice(0,7)!==mes) return;
+      const v=toNum(r['Valor']);
+      /* abastecimento lançado em outra operação (ex.: interno CUSTO SP para
+         placa de PR) continua sendo custo do agregado → segue a placa. */
+      if(!pega(r['Veiculo'], siglaDeOp(r['Operacao']), -v, true)) return;
+      const cb=String(r['Combustivel']||'').toLowerCase();
       if(cb.indexOf('arla')>=0) o.szcArla += v; else o.szcDiesel += v;
     });
   } else o.falta.push('SZC');
   if(AUX.szi.loaded){
     AUX.szi.rows.forEach(function(r){
       if(isExcluidoAgreg(r['Agregado'])) return;
-      if(siglaDeOp(r['Operacao'])!==ST.filial) return;
-      if(String(r['Data']).slice(0,7)!==ST.mesRef) return;
-      const v=toNum(r['Valor']);
-      if(/cred/i.test(r['Deb / Cred']||'')) o.credSZI += v; else o.debSZI += v;
+      if(String(r['Data']).slice(0,7)!==mes) return;
+      const v=toNum(r['Valor']); const cred=/cred/i.test(r['Deb / Cred']||'');
+      if(!pega(r['Veiculo'], siglaDeOp(r['Operacao']), cred?v:-v, true)) return;
+      if(cred) o.credSZI += v; else o.debSZI += v;
     });
   } else o.falta.push('SZI');
   o.abastSZC = o.szcDiesel + o.szcArla;
@@ -1897,7 +2002,7 @@ function calcBreakdownConsolidado(){
   const CE={cavalos:0,carretas:0,va:0,outros:0,realTotal:0,metaTotal:0};
   const CO={melhorias:0,agregEmp:0};
   const DD={internoFrota:0,internoAgreg:0,externoFrota:0,externoAgreg:0,arlaFrota:0,arlaAgreg:0,reembolso:0,total:0};
-  const AG={comissao:0,szcDiesel:0,szcArla:0,abastSZC:0,debSZI:0,credSZI:0,total:0,falta:[]};
+  const AG={comissao:0,szcDiesel:0,szcArla:0,abastSZC:0,debSZI:0,credSZI:0,total:0,falta:[],inN:0,inVal:0,outN:0,outVal:0};
   const M ={fatBruto:0,producaoT:0,diesel:0,agreg:0,co:0,cp:0,ce:0,resultadoFinanceiro:0};
   const CPKP={baseDiretaSemAE:0,participacaoDiretoPct:0,aeAlocado:0,baseFinalAposAE:0,custoFrota35:0,custoAgregado65:0};
   // snapshot do ST para restaurar depois
@@ -1915,6 +2020,7 @@ function calcBreakdownConsolidado(){
     const dd=d.dieselDet||{}; for(const k in DD) DD[k]+=+dd[k]||0;
     AG.comissao+=+ag.comissao||0; AG.szcDiesel+=+ag.szcDiesel||0; AG.szcArla+=+ag.szcArla||0;
     AG.abastSZC+=+ag.abastSZC||0; AG.debSZI+=+ag.debSZI||0; AG.credSZI+=+ag.credSZI||0; AG.total+=+ag.total||0;
+    AG.inN+=+ag.inN||0; AG.inVal+=+ag.inVal||0; AG.outN+=+ag.outN||0; AG.outVal+=+ag.outVal||0;
     (ag.falta||[]).forEach(x=>{ if(!AG.falta.includes(x)) AG.falta.push(x); });
     for(const k in M) M[k]+=+m[k]||0;
   });
@@ -1989,6 +2095,9 @@ function renderDre(){
       + `<span style="opacity:.8">(diesel ${moeda(ag.szcDiesel||0)} + arla ${moeda(ag.szcArla||0)})</span> `
       + `− Débitos SZI <b>${moeda(ag.debSZI||0)}</b> + Créditos SZI <b>${moeda(ag.credSZI||0)}</b> = <b>${moeda(ag.total||0)}</b>`
       + (falta?`<br>⏳ Aguardando carregar: ${ag.falta.join(', ')} — valor parcial até todas as bases chegarem.`:'')
+      + `<br><span style="opacity:.8">Alocação por <b>placa</b> (Cadastros › Veículos)${CADVEIC.loaded?` — ${CADVEIC.n} placas cadastradas`:''}: CTRC, abastecimento, débito e crédito seguem a unidade da placa, não a operação da linha — igual ao módulo Agregados. Receita, Diesel, Pedágio e demais grupos continuam por operação.</span>`
+      + ((ag.inN||ag.outN)?`<br><span style="opacity:.8">Realocação no mês: <b>${ag.inN||0}</b> lançamento(s) de outra operação entraram (${moeda(ag.inVal||0)}) · <b>${ag.outN||0}</b> saíram para outra unidade (${moeda(ag.outVal||0)}).</span>`:'')
+      + (CADVEIC.erro?`<br>⚠️ <b>Cadastro de veículos indisponível</b> — alocação caiu para a operação da linha (regra antiga). O valor pode divergir do Fechamento de Agregados até o cadastro carregar.`:'')
       + `</div>`;
     note.innerHTML += `<div class="lock-note" style="color:var(--mu);background:#fafbfc;border-color:var(--bd2)">`
       + `<b>Composição Diesel</b> = Interno (frota <b>${moeda(dd.internoFrota||0)}</b> + agreg <b>${moeda(dd.internoAgreg||0)}</b>) + Externo (frota <b>${moeda(dd.externoFrota||0)}</b> + agreg <b>${moeda(dd.externoAgreg||0)}</b>) + Arla (frota <b>${moeda(dd.arlaFrota||0)}</b> + agreg <b>${moeda(dd.arlaAgreg||0)}</b>)`
@@ -2735,6 +2844,11 @@ function normPlaca(p){ return String(p||'').toUpperCase().replace(/[^A-Z0-9]/g,'
 /* cadastro de veículos → mapa placa→sigla (mesma base/ponte do sistema) */
 async function ensurePlacaFilial(){
   if(ST._placaFilialCache) return ST._placaFilialCache;
+  /* fonte única: mesmo mapa placa→filial usado na linha (–) Agregados do DRE.
+     Sem isso, uma placa cadastrada só em 'sigla' cairia em unidades diferentes
+     no Pedágio e no fechamento de Agregados. */
+  try{ await ensureCadVeiculos();
+       if(CADVEIC.loaded){ ST._placaFilialCache=Object.assign({},CADVEIC.map); return ST._placaFilialCache; } }catch(_){}
   const map={}; const sigSet=new Set((ST.filiais||[]).map(f=>f.sigla));
   try{
     const vs = await fsGetCollection('veiculos');
@@ -3069,6 +3183,10 @@ document.addEventListener('keydown', ev=>{ if(ev.key==='Escape') fecharEditarLan
 
 /* ══ START ══ */
 window.addEventListener('DOMContentLoaded', ()=>{ try{ window.parent.postMessage({type:'ATLAS_REQUEST_USER'},'*'); }catch(_){} boot(); });
+/* cadastro de veículos (unidade da placa p/ a linha (–) Agregados): novas tentativas
+   se a ponte do portal ainda não estava pronta na primeira carga */
+setTimeout(function(){ if(!CADVEIC.loaded) ensureCadVeiculos(true); }, 5000);
+setTimeout(function(){ if(!CADVEIC.loaded) ensureCadVeiculos(true); }, 15000);
 window.addEventListener('focus', ()=>{ const lanc=document.getElementById('v-lanc'); if(lanc&&lanc.classList.contains('on')) checkSZBFresh(); });
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) checkSZBFresh(); });
 </script>
