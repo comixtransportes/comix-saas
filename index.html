@@ -4001,14 +4001,24 @@ window.addEventListener('message', async function(ev) {
           console.warn('[Ponte] Índice composto ausente para', msg.collection, '— ordenando em memória.', errIdx.message);
           let ref2 = db.collection(msg.collection);
           filtros.forEach(w => { ref2 = ref2.where(String(w[0]), String(w[1] || '=='), w[2]); });
-          if (msg.limit) ref2 = ref2.limit(Number(msg.limit));
+          /* IMPORTANTE: o `limit` NÃO pode ser aplicado aqui. Sem orderBy, o
+             Firestore ordena por __name__ (id do documento), então limitar
+             antes traria N documentos arbitrários — e o "mais recente" sairia
+             errado. Buscamos o conjunto filtrado (teto de segurança de 3.000),
+             ordenamos em memória e só então cortamos no limite pedido. */
+          ref2 = ref2.limit(3000);
           snap = await ref2.get();
-          snap = { docs: snap.docs.slice().sort((a,b) => {
+          let ordenados = snap.docs.slice().sort((a,b) => {
             const va = atlasBridgeSortVal(a.data()[msg.orderBy]);
             const vb = atlasBridgeSortVal(b.data()[msg.orderBy]);
             const cmp = va < vb ? -1 : va > vb ? 1 : 0;
             return (msg.orderDir === 'desc') ? -cmp : cmp;
-          }) };
+          });
+          if (snap.docs.length >= 3000) {
+            console.warn('[Ponte] Teto de 3.000 documentos atingido em', msg.collection, '— crie o índice composto para', JSON.stringify(filtros.map(f=>f[0])), '+', msg.orderBy);
+          }
+          if (msg.limit) ordenados = ordenados.slice(0, Number(msg.limit));
+          snap = { docs: ordenados };
         }
         const docs = snap.docs.map(d => ({ id:d.id, data: atlasCleanForFrame(d.data()) }));
         /* [LEITURAS] Guarda de memória: payloads gigantes (ex.: coleções com
