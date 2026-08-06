@@ -1328,24 +1328,34 @@ table.data-table{
      regravada diretamente no resumo com a mesma regra do Dashboard: operando,
      disponível, manutenção e reserva; indisponível/reforma ficam fora. */
   function ensureResumoFrotaStyles(xml){
-    // Estilos próprios para a tabela estática B8:F11 (mantém o visual azul do resumo).
-    const fm=/<fills count="(\d+)">/.exec(xml), xm=/<cellXfs count="(\d+)">/.exec(xml);
-    if(!fm || !xm) return {xml:xml, ids:{headLeft:55,headCenter:0,bodyLeft:55,bodyCenter:0}};
+    /* A primeira tabela deixa de ser pivot para não ser sobrescrita no refresh.
+       Por isso o visual do PivotStyleLight16 precisa ser materializado nas células.
+       A cor abaixo (#C0E6F5), fontes, alinhamentos e ausência de bordas replicam
+       exatamente o padrão visual das demais tabelas do Resumo_Frota. */
+    const fm=/<fills\b[^>]*count="(\d+)"[^>]*>/.exec(xml), xm=/<cellXfs\b[^>]*count="(\d+)"[^>]*>/.exec(xml);
+    if(!fm || !xm) return {xml:xml, ids:{headerLeft:55,headerCenter:0,bodyLeft:55,bodyRight:0,totalLeft:55,totalRight:0}};
     const fillId=parseInt(fm[1],10), xfBase=parseInt(xm[1],10);
-    const fill='<fill><patternFill patternType="solid"><fgColor rgb="FFBF DDF5"/><bgColor indexed="64"/></patternFill></fill>'.replace('FFBF DDF5','FFBFDDF5');
-    xml=xml.replace('</fills>',fill+'</fills>').replace('<fills count="'+fm[1]+'">','<fills count="'+(fillId+1)+'">');
+    const fill='<fill><patternFill patternType="solid"><fgColor rgb="FFC0E6F5"/><bgColor indexed="64"/></patternFill></fill>';
+    xml=xml.replace('</fills>',fill+'</fills>')
+           .replace(new RegExp('<fills\\b([^>]*)count=\"'+fm[1]+'\"([^>]*)>'), '<fills$1count="'+(fillId+1)+'"$2>');
     const xfs=[
-      '<xf numFmtId="0" fontId="3" fillId="'+fillId+'" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>',
-      '<xf numFmtId="0" fontId="3" fillId="'+fillId+'" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>',
-      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>',
-      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+      // Cabeçalho: negrito 10, azul claro, título à esquerda e colunas centralizadas.
+      '<xf numFmtId="0" fontId="3" fillId="'+fillId+'" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>',
+      '<xf numFmtId="0" fontId="3" fillId="'+fillId+'" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>',
+      // Corpo: regular 10, sem preenchimento/bordas; textos à esquerda, números à direita.
+      '<xf numFmtId="0" fontId="7" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>',
+      '<xf numFmtId="0" fontId="7" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>',
+      // Total: mesma faixa azul do cabeçalho, negrito 10 e valores à direita.
+      '<xf numFmtId="0" fontId="3" fillId="'+fillId+'" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>',
+      '<xf numFmtId="0" fontId="3" fillId="'+fillId+'" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>'
     ].join('');
-    xml=xml.replace('</cellXfs>',xfs+'</cellXfs>').replace('<cellXfs count="'+xm[1]+'">','<cellXfs count="'+(xfBase+4)+'">');
-    return {xml:xml,ids:{headLeft:xfBase,headCenter:xfBase+1,bodyLeft:xfBase+2,bodyCenter:xfBase+3}};
+    xml=xml.replace('</cellXfs>',xfs+'</cellXfs>')
+           .replace(new RegExp('<cellXfs\\b([^>]*)count=\"'+xm[1]+'\"([^>]*)>'), '<cellXfs$1count="'+(xfBase+6)+'"$2>');
+    return {xml:xml,ids:{headerLeft:xfBase,headerCenter:xfBase+1,bodyLeft:xfBase+2,bodyRight:xfBase+3,totalLeft:xfBase+4,totalRight:xfBase+5}};
   }
 
   function patchResumoFrotaEquipamentos(xml, veiculos, ids){
-    ids=ids||{headLeft:55,headCenter:0,bodyLeft:55,bodyCenter:0};
+    ids=ids||{headerLeft:55,headerCenter:0,bodyLeft:55,bodyRight:0,totalLeft:55,totalRight:0};
     const totais={ FROTA:{SC:0,PR:0,SP:0}, AGREGADO:{SC:0,PR:0,SP:0} };
     veiculos.forEach(function(v){
       if(v.categoria!=="cavalo") return;
@@ -1369,8 +1379,11 @@ table.data-table{
       Object.keys(vals).forEach(function(col){
         const reCell=new RegExp('<c r="'+col+rn+'"[^>]*(?:\\/>|>[\\s\\S]*?<\\/c>)');
         const oldCell=(reCell.exec(rowXml)||[])[0]||"";
-        const isHead=(rn===8 || rn===11), isFirst=(col==="B");
-        const style=isHead ? (isFirst?ids.headLeft:ids.headCenter) : (isFirst?ids.bodyLeft:ids.bodyCenter);
+        const isFirst=(col==="B");
+        let style;
+        if(rn===8) style=isFirst ? ids.headerLeft : ids.headerCenter;
+        else if(rn===11) style=isFirst ? ids.totalLeft : ids.totalRight;
+        else style=isFirst ? ids.bodyLeft : ids.bodyRight;
         const novo=cell(col,rn,String(style),vals[col]);
         if(oldCell) rowXml=rowXml.replace(reCell,novo);
         else rowXml=rowXml.replace('</row>',novo+'</row>');
@@ -1391,7 +1404,7 @@ table.data-table{
     const map={}; if(m){ const re=/<c r="([A-Z]+)\d+"(?:\s+s="(\d+)")?/g; let cm;
       while((cm=re.exec(m[1]))) map[cm[1]]=cm[2]||"0"; } return map;
   }
-  function setSheetData(xml, headerEndRow, colLetters, records, recToVals, dataStartRow){
+  function setSheetData(xml, headerEndRow, colLetters, records, recToVals, dataStartRow, styleForCell){
     const colStyles = captureColStyles(xml, dataStartRow);
     const sdM = /<sheetData>([\s\S]*?)<\/sheetData>/.exec(xml);
     const inner = sdM ? sdM[1] : "";
@@ -1402,7 +1415,11 @@ table.data-table{
     let dataRows=""; let rn=dataStartRow;
     for(const rec of records){
       const vals=recToVals(rec); let cells="";
-      for(const col of colLetters) cells+=cell(col, rn, colStyles[col]||"0", vals[col]);
+      for(const col of colLetters){
+        const baseStyle=colStyles[col]||"0";
+        const style=styleForCell ? (styleForCell(rec,col,vals,baseStyle,rn)||baseStyle) : baseStyle;
+        cells+=cell(col, rn, style, vals[col]);
+      }
       dataRows+=`<row r="${rn}" spans="${first}:${last}">${cells}</row>`; rn++;
     }
     const lastRow=Math.max(rn-1, headerEndRow);
@@ -1471,11 +1488,26 @@ table.data-table{
     const pesos=mapaPesos(ativos, ocup);
 
     let g=dec(files["xl/worksheets/sheet1.xml"]);
-    g=setSheetData(g,1,"ABCDEFGHIJKLMNO".split(""),ativos,makeGeralVals(ocup,pesos),2);
+    /* No template, B2 (Placa) é verde e setSheetData copiava esse estilo para
+       todas as linhas. Agora a placa só fica verde quando o status efetivo da
+       própria linha é OPERANDO — exatamente o que aparece nas abas de alocação. */
+    g=setSheetData(g,1,"ABCDEFGHIJKLMNO".split(""),ativos,makeGeralVals(ocup,pesos),2,
+      function(v,col,vals,baseStyle){
+        if(col!=="B") return baseStyle;
+        return /OPERANDO$/i.test(String(vals.L||"")) ? "66" : "7";
+      });
     files["xl/worksheets/sheet1.xml"]=enc(g);
 
     let cp=dec(files["xl/worksheets/sheet2.xml"]);
-    cp=setSheetData(cp,1,"ABCDEFGH".split(""),STATE.compressores,makeCompVals(ctx),2);
+    /* A base de Compressores também nasce toda verde no template (estilos 67/68/69).
+       Mantém o verde apenas para OPERANDO; estoque/manutenção recebem os estilos
+       equivalentes sem preenchimento, preservando fonte, borda, número e alinhamento. */
+    const compNeutralStyle={"67":"3","68":"2","69":"108"};
+    cp=setSheetData(cp,1,"ABCDEFGH".split(""),STATE.compressores,makeCompVals(ctx),2,
+      function(c,col,vals,baseStyle){
+        if(String(vals.H||"").toUpperCase()==="OPERANDO") return baseStyle;
+        return compNeutralStyle[String(baseStyle)] || baseStyle;
+      });
     files["xl/worksheets/sheet2.xml"]=enc(cp);
 
     const carretas=STATE.veiculos.filter(v=>v.categoria==="carreta" && !foraDaFrota(v));
@@ -2687,15 +2719,28 @@ function equipamentoAlocado(v, ocup) {
 }
 
 /* Indica o que está efetivamente alocado nas três colunas operacionais (SC/SP/PR).
-   - cavalo: aparece numa dessas colunas quando está operacional e com filial definida;
-   - carreta: precisa estar engatada num cavalo válido (mapaOcupacao ignora vínculos órfãos). */
+   O destaque verde é apenas visual: não altera nenhuma regra de status/alocação. */
+function cavaloEmColunaOperacional(cav) {
+  if (!cav || foraDaFrota(cav)) return false;
+  const bloqueados = ["em_reforma","a_reformar","indisponivel","reserva","disponivel","manutencao"];
+  return ["SC","SP","PR"].includes(cav.unidade_slug) && !bloqueados.includes(cav.disponibilidade);
+}
 function veiculoEstaAlocado(v, ocup) {
   if (!v || foraDaFrota(v)) return false;
-  if (v.categoria === "cavalo") {
-    const bloqueados = ["em_reforma","a_reformar","indisponivel","reserva","disponivel","manutencao"];
-    return ["SC","SP","PR"].includes(v.unidade_slug) && !bloqueados.includes(v.disponibilidade);
+  if (v.categoria === "cavalo") return cavaloEmColunaOperacional(v);
+  if (v.categoria === "carreta") {
+    // Carreta parada/disponível pode manter vínculo legado para alerta, mas não deve ficar verde.
+    if (v.disponibilidade !== "operando") return false;
+    return Object.entries(STATE.alocacoes || {}).some(([cavaloId,a]) => {
+      if (!a) return false;
+      const cav = cavaloDaAlocacao(cavaloId, a);
+      if (!cavaloEmColunaOperacional(cav)) return false;
+      return [a.carreta1_id,a.carreta2_id].some(id => {
+        const carr=findVeiculo(id);
+        return carr && carr.id===v.id;
+      });
+    });
   }
-  if (v.categoria === "carreta") return equipamentoAlocado(v, ocup || mapaOcupacao());
   return false;
 }
 
@@ -4115,7 +4160,9 @@ function renderCompressores() {
           const vincLabel = view.info ? (cvVinc === "AGREGADO" ? "Agregado" : "Frota") : "—";
           const vincCls = cvVinc === "AGREGADO" ? "agregado" : "frota";
           const statusAtual = view.status;
-          const alocado = !!view.info;
+          // Verde somente quando o compressor está de fato OPERANDO em cavalo de SC/SP/PR.
+          // Vínculo legado durante manutenção não recebe destaque.
+          const alocado = statusAtual === "operando" && !!view.info && cavaloEmColunaOperacional(view.info.cavalo);
           const placaVisual = placaAtual ? renderPlaca(placaAtual, "sm", alocado) : '';
           return `
           <tr>
