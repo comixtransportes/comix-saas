@@ -1785,6 +1785,7 @@ const STATE = {
   alocacoes: {},      // de db.alocacao_frota (mapa cavalo_id → composição)
   szb: {},            // de SZB (mock por enquanto)
   szy: { map: {}, loaded: false }, // cadastro de rotas (bases_cloud/szy) → distância por rota
+  osAbertaDesde: {},  // placa → timestamp (ms) da OS aberta mais antiga · base do cálculo de dias parado
 };
 
 /* ─── Normalização ─── */
@@ -1864,6 +1865,10 @@ function normalizeVeiculo(v) {
     status_ativo: statusAtivo,              // ativo | vendido | baixado | inativo
     status_ativo_raw: v.status_ativo || null,
     status_ativo_origem: v.status_ativo_origem || null,
+    /* Carimbo de quando o status operacional foi trocado à mão. Gravado pela
+       edição de status na aba Geral. Serve de plano B para medir dias parado
+       quando o equipamento está em manutenção sem OS aberta. */
+    status_desde: v.status_desde || null,
     observacao: v.observacao || v.observacoes || null,
     chassi: v.chassi || null,
     renavam: v.renavam || null,
@@ -1898,6 +1903,76 @@ function foraDaFrota(v) {
 }
 window.normalizeStatusAtivo = normalizeStatusAtivo;
 window.foraDaFrota = foraDaFrota;
+
+/* ─── STATUS MANUAL FORTE · quem ganha de quem ───────────────────────────────
+   Manutenção é status AUTOMÁTICO: nasce sozinho de OS aberta e é reescrito a
+   cada carregamento. Indisponível / em reforma / a reformar são status que
+   alguém digitou de propósito — e por isso não podem ser atropelados pelo
+   cruzamento de OS nem por um valor velho parado na alocação. Era exatamente
+   esse atropelo que devolvia a placa para "Manutenção" no dia seguinte. */
+const STATUS_MANUAL_FORTE = ["indisponivel", "em_reforma", "a_reformar"];
+
+/* Status interno → texto gravado em `veiculos.status`. Todo rótulo aqui tem que
+   voltar ao mesmo status interno quando o normalizeVeiculo relê o cadastro. */
+const STATUS_LABEL_FIRESTORE = {
+  operando: "OPERANDO", disponivel: "DISPONIVEL", manutencao: "MANUTENCAO",
+  reserva: "RESERVA", em_reforma: "EM REFORMA", a_reformar: "A REFORMAR",
+  indisponivel: "INDISPONIVEL",
+};
+
+/* ─── PARADA CURTA · manutenção de menos de 5 dias ainda é operando ──────────
+   Regra de operação: equipamento parado há menos de DIAS_MIN_PARADO dias é
+   parada de rotina — segue contando como OPERANDO e não entra no alerta de
+   desengate. Do 5º dia parado em diante vira manutenção de verdade em todas as
+   contagens. A data vem, nesta ordem: OS aberta mais antiga da placa →
+   `status_desde` (carimbo da troca manual de status). Sem nenhuma das duas não
+   dá para medir e o equipamento continua em manutenção, como antes. */
+const DIAS_MIN_PARADO = 5;
+
+/* Datas do Protheus/Firestore chegam em formato variado: Timestamp, Date, ISO,
+   dd/mm/aaaa e aaaammdd. Um parser só para todos. */
+function parseDataQualquer(raw) {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "object") {
+    if (typeof raw.toDate === "function") { try { return raw.toDate().getTime(); } catch(e) { return null; } }
+    if (raw instanceof Date) return isNaN(raw.getTime()) ? null : raw.getTime();
+    if (raw.seconds != null) return Number(raw.seconds) * 1000;
+    return null;
+  }
+  if (typeof raw === "number") return raw < 1e12 ? raw * 1000 : raw;
+  const s = String(raw).trim();
+  if (!s) return null;
+  let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);       // dd/mm/aaaa
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1]).getTime();
+  m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/);           // aaaa-mm-dd
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]).getTime();
+  if (/^\d{8}$/.test(s))                                             // aaaammdd (Protheus)
+    return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8)).getTime();
+  const t = Date.parse(s);
+  return isNaN(t) ? null : t;
+}
+
+/* A OS não tem um nome de campo único de abertura entre os registros antigos e
+   os novos — varre a lista de candidatos e fica com a primeira data válida. */
+const OS_CAMPOS_DATA = ["data_abertura", "dataAbertura", "abertura", "dt_abertura",
+  "data_os", "dataOS", "data", "data_emissao", "emissao", "data_entrada",
+  "criado_em", "createdAt", "created_at", "timestamp"];
+function dataAberturaOS(os) {
+  for (let i = 0; i < OS_CAMPOS_DATA.length; i++) {
+    const t = parseDataQualquer(os[OS_CAMPOS_DATA[i]]);
+    if (t) return t;
+  }
+  return null;
+}
+
+/* Dias corridos desde que o veículo parou. null = não dá para medir. */
+function diasParadoDe(v) {
+  if (!v) return null;
+  const placa = String(v.placa || v.id || "").toUpperCase().trim();
+  const ms = (placa && STATE.osAbertaDesde[placa]) || parseDataQualquer(v.status_desde);
+  if (!ms) return null;
+  return Math.max(0, Math.floor((Date.now() - ms) / 86400000));
+}
 
 /* ─── Carregamento de dados ─── */
 function setFrotaTimestamp() {
@@ -1954,7 +2029,14 @@ async function loadAllData() {
         if (a.unidade) { v.unidade = a.unidade; }
         // Alocação só governa o estado operacional. Um veículo fora de frota
         // (status_ativo ≠ ativo) não é "ressuscitado" por alocação antiga.
-        if (a.disponibilidade && !foraDaFrota(v)) { v.disponibilidade = a.disponibilidade; }
+        // E status manual forte gravado no Cadastros (indisponível / em reforma /
+        // a reformar) não é derrubado por um valor velho preso na alocação —
+        // esse era um dos caminhos que revertia a troca de status no dia seguinte.
+        if (a.disponibilidade && !foraDaFrota(v)) {
+          const cadastroForte = STATUS_MANUAL_FORTE.includes(v.disponibilidade);
+          const alocForte     = STATUS_MANUAL_FORTE.includes(a.disponibilidade);
+          if (!cadastroForte || alocForte) v.disponibilidade = a.disponibilidade;
+        }
       }
     });
 
@@ -1965,6 +2047,7 @@ async function loadAllData() {
       const osSnap = await _db.collection("ordens_servico").get();
       const placasEmManutencao = new Set();
       const placasSemOSAberta  = new Set();
+      STATE.osAbertaDesde = {};
 
       osSnap.docs.forEach(doc => {
         const os = doc.data();
@@ -1973,6 +2056,11 @@ async function loadAllData() {
         const concluida = /conclu|cancel|reprov/i.test(String(os.status || ""));
         if (!concluida) {
           placasEmManutencao.add(placa);
+          // Guarda a abertura MAIS ANTIGA em aberto: é ela que mede há quanto
+          // tempo o equipamento está de fato parado.
+          const dt = dataAberturaOS(os);
+          if (dt && (!STATE.osAbertaDesde[placa] || dt < STATE.osAbertaDesde[placa]))
+            STATE.osAbertaDesde[placa] = dt;
         } else {
           // só adiciona em "sem OS aberta" se não estiver também em aberta
           if (!placasEmManutencao.has(placa)) placasSemOSAberta.add(placa);
@@ -1987,8 +2075,10 @@ async function loadAllData() {
         if (foraDaFrota(v)) return;
         const placaUp = String(v.placa || v.id || "").toUpperCase().trim();
         if (placasEmManutencao.has(placaUp)) {
-          // Força manutenção independente do que está salvo na alocação
-          v.disponibilidade = "manutencao";
+          // OS aberta manda sobre operando/disponível/reserva — mas NÃO sobre
+          // status manual forte. Quem marcou "em reforma" no cadastro quis dizer
+          // em reforma, mesmo com OS ainda aberta na oficina.
+          if (!STATUS_MANUAL_FORTE.includes(v.disponibilidade)) v.disponibilidade = "manutencao";
         } else if (placasSemOSAberta.has(placaUp) && v.disponibilidade === "manutencao") {
           // OS finalizadas e a alocação ainda diz "manutencao" — restaura para operando
           v.disponibilidade = "operando";
@@ -1996,6 +2086,29 @@ async function loadAllData() {
       });
 
       console.log("[Frota] OS cruzadas: " + placasEmManutencao.size + " placas em manutenção");
+
+      // ── PARADA CURTA: manutenção de menos de 5 dias segue contando como operando ──
+      // Reclassificação feita num lugar só, logo depois do cruzamento de OS, para
+      // que Dashboard, Kanban, alertas e Excel enxerguem exatamente o mesmo status.
+      const _paradaCurta = [];
+      STATE.veiculos.forEach(v => {
+        v._diasParado = null;
+        v._manutCurta = false;
+        if (foraDaFrota(v)) return;
+        if (v.categoria !== "carreta") return;          // regra vale para equipamento
+        if (v.disponibilidade !== "manutencao") return;
+        const dias = diasParadoDe(v);
+        v._diasParado = dias;
+        if (dias == null || dias >= DIAS_MIN_PARADO) return;
+        v._manutCurta = true;
+        v.disponibilidade = "operando";
+        _paradaCurta.push({ frota: v.frota, placa: v.placa, dias: dias });
+      });
+      if (_paradaCurta.length) {
+        console.log("[Frota] " + _paradaCurta.length + " equipamento(s) em parada curta (< " +
+          DIAS_MIN_PARADO + " dias) contando como OPERANDO:");
+        console.table(_paradaCurta);
+      }
 
       // Diagnóstico da regra "fora de frota" — confere no console quais veículos
       // saíram das contagens e por qual campo foram identificados.
@@ -2510,6 +2623,9 @@ function conflitosEquipParado() {
       if (!id) return;
       const c = findVeiculo(id);
       if (!c || foraDaFrota(c)) return;
+      // Parada curta (< 5 dias) já virou "operando" na carga: não é conflito,
+      // não some do Kanban e não precisa desengatar.
+      if (c._manutCurta) return;
       if (!STATUS_PROPRIO_EQUIP.includes(c.disponibilidade)) return;
       out.push({
         cavaloId, slot,
@@ -2519,6 +2635,7 @@ function conflitosEquipParado() {
         equip: c.frota || c.placa || id,
         placa: c.placa || "",
         status: c.disponibilidade,
+        dias: (c._diasParado != null ? c._diasParado : diasParadoDe(c)),
         unidade: c.unidade_slug || cav.unidade_slug || "",
       });
     });
@@ -2532,7 +2649,7 @@ function conflitosEquipParado() {
         cavaloStatus: cav.disponibilidade || "operando",
         cavaloParado: cavParado,
         equip: comp.numero || comp.serie || comp.id,
-        placa: "", status: "manutencao",
+        placa: "", status: "manutencao", dias: null,
         unidade: cav.unidade_slug || "",
       });
     }
@@ -2563,6 +2680,7 @@ function reconciliarStatusEquipamentos(persistir) {
   STATE.veiculos.forEach(v => {
     if (v.categoria !== "carreta") return;
     if (foraDaFrota(v)) return;                          // fora de frota não reconcilia
+    if (v._manutCurta) return;                           // parada curta: status real é manutenção, só não conta ainda
     if (STATUS_PROPRIO_EQUIP.includes(v.disponibilidade)) return;  // status próprio manda
 
     if (equipamentoAlocado(v, ocup)) {
@@ -3550,6 +3668,8 @@ function renderGeral() {
     return;
   }
 
+  /* Rótulo gravado na coleção `veiculos` — tem que ser um texto que o
+     normalizeVeiculo saiba reler de volta para o mesmo status interno. */
   const STATUS_OPTS = [
     {v:"operando",l:"Operando"},
     {v:"disponivel",l:"Disponível"},
@@ -3636,9 +3756,16 @@ window.editGeralField = async function(id, field, value) {
   if (!v) return;
   const aloc = STATE.alocacoes[id] || {};
   const patch = { ...aloc };
+  let patchVeiculo = null;
   if (field === "status") {
     patch.disponibilidade = value;
     v.disponibilidade = value;
+    v._manutCurta = false;
+    // Espelha no cadastro do veículo. Sem isso a alocação e a coleção `veiculos`
+    // ficavam com verdades diferentes e a mais velha voltava no dia seguinte.
+    // `status_desde` carimba a data da troca — é o plano B para medir dias parado.
+    patchVeiculo = { status: STATUS_LABEL_FIRESTORE[value] || String(value).toUpperCase() };
+    try { patchVeiculo.status_desde = firebase.firestore.Timestamp.now(); } catch(e) {}
   } else if (field === "unit") {
     if (!value) return;
     const map = { SC: "SANTA CATARINA", SP: "SÃO PAULO", PR: "PARANÁ" };
@@ -3651,6 +3778,13 @@ window.editGeralField = async function(id, field, value) {
   try {
     await window._FB.salvarAlocacao(id, sanitizeAloc(patch, id));
     STATE.alocacoes[id] = { ...aloc, ...patch };
+    if (patchVeiculo && v.placa) {
+      try {
+        await window._FB.atualizarVeiculo(v.placa, patchVeiculo);
+        v.status_raw = patchVeiculo.status;
+        v.status_desde = new Date();
+      } catch(e) { console.warn("[Frota] Status salvo na alocação, mas não no cadastro:", e.message); }
+    }
     // Re-renderiza aba atual + dashboard (sincronia entre abas)
     refreshCurrentView();
     showToast("Atualizado", "success");
@@ -4360,10 +4494,10 @@ function renderDashboard() {
   const alertaConflitos = conflitos.length ? `
     <div class="dash-alert-pares dash-alert-conflito">
       <div class="dash-alert-tit">⚠ Equipamento parado ainda alocado — ${conflitos.length} caso(s)</div>
-      <div class="dash-alert-sub">O status do equipamento manda sobre a alocação, então ele não conta como operando — mas o vínculo continua no Kanban e o cavalo aparece equipado com algo que está na oficina. Desengate para o cavalo receber outro equipamento.</div>
+      <div class="dash-alert-sub">O status do equipamento manda sobre a alocação, então ele não conta como operando — mas o vínculo continua no Kanban e o cavalo aparece equipado com algo que está na oficina. Desengate para o cavalo receber outro equipamento. Paradas de menos de ${DIAS_MIN_PARADO} dias não entram aqui: continuam contando como operando.</div>
       <ul class="dash-alert-lista">
         ${conflitos.map(c => `<li>
-          <b>${escapeHtml(c.equip)}</b>${c.placa ? " ("+escapeHtml(c.placa)+")" : ""} · ${ST_NOME[c.status]||c.status}
+          <b>${escapeHtml(c.equip)}</b>${c.placa ? " ("+escapeHtml(c.placa)+")" : ""} · ${ST_NOME[c.status]||c.status}${c.dias != null ? " há "+c.dias+" dia"+(c.dias===1?"":"s") : ""}
           — engatado em <b>${escapeHtml(c.cavalo)}</b> (${c.cavaloParado ? (ST_NOME[c.cavaloStatus]||c.cavaloStatus) : "operando"}) no slot ${SLOT_NOME[c.slot]||c.slot}
           ${STATE.isAdmin ? `<button class="dash-alert-btn" onclick="frotaDesengatar('${escapeHtml(c.cavaloId)}','${c.slot}')">Desengatar</button>` : ""}
         </li>`).join("")}
