@@ -454,6 +454,17 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 .plate-mercosul.sm .pm-top .br-flag{width:9px;height:6px;left:4px}
 .plate-mercosul.sm .pm-top .br-flag::before{width:5px;height:3px}
 .plate-mercosul.sm .pm-top .br-flag::after{width:1.5px;height:1.5px}
+/* Alocado nas colunas operacionais SC/SP/PR: destaque visual também na listagem */
+.plate-mercosul.allocated{
+  border-color:var(--green);background:var(--green-l);
+  box-shadow:0 0 0 2px rgba(15,110,86,.12);
+}
+.plate-mercosul.allocated .pm-top{background:var(--green)}
+.plate-mercosul.allocated .pm-num{color:var(--green);background:var(--green-l)}
+.allocated-equipment{
+  display:inline-block;color:var(--green);background:var(--green-l);
+  border:1px solid var(--green-b);border-radius:4px;padding:2px 6px;
+}
 
 /* Card alongado (modo filtrado por filial) */
 .board.filtered{grid-template-columns:1fr 1fr;gap:10px}
@@ -1312,6 +1323,63 @@ table.data-table{
     return (p===0 || p===0.5) ? p : 1;
   }
 
+  /* A primeira pivot do Resumo_Frota filtrava apenas FROTA/AGREGADO OPERANDO.
+     Com isso manutenção, reserva e indisponíveis sumiam do total. A tabela é
+     regravada diretamente no resumo com a mesma regra do Dashboard: operando,
+     disponível, manutenção e reserva; indisponível/reforma ficam fora. */
+  function ensureResumoFrotaStyles(xml){
+    // Estilos próprios para a tabela estática B8:F11 (mantém o visual azul do resumo).
+    const fm=/<fills count="(\d+)">/.exec(xml), xm=/<cellXfs count="(\d+)">/.exec(xml);
+    if(!fm || !xm) return {xml:xml, ids:{headLeft:55,headCenter:0,bodyLeft:55,bodyCenter:0}};
+    const fillId=parseInt(fm[1],10), xfBase=parseInt(xm[1],10);
+    const fill='<fill><patternFill patternType="solid"><fgColor rgb="FFBF DDF5"/><bgColor indexed="64"/></patternFill></fill>'.replace('FFBF DDF5','FFBFDDF5');
+    xml=xml.replace('</fills>',fill+'</fills>').replace('<fills count="'+fm[1]+'">','<fills count="'+(fillId+1)+'">');
+    const xfs=[
+      '<xf numFmtId="0" fontId="3" fillId="'+fillId+'" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>',
+      '<xf numFmtId="0" fontId="3" fillId="'+fillId+'" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>',
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>',
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>'
+    ].join('');
+    xml=xml.replace('</cellXfs>',xfs+'</cellXfs>').replace('<cellXfs count="'+xm[1]+'">','<cellXfs count="'+(xfBase+4)+'">');
+    return {xml:xml,ids:{headLeft:xfBase,headCenter:xfBase+1,bodyLeft:xfBase+2,bodyCenter:xfBase+3}};
+  }
+
+  function patchResumoFrotaEquipamentos(xml, veiculos, ids){
+    ids=ids||{headLeft:55,headCenter:0,bodyLeft:55,bodyCenter:0};
+    const totais={ FROTA:{SC:0,PR:0,SP:0}, AGREGADO:{SC:0,PR:0,SP:0} };
+    veiculos.forEach(function(v){
+      if(v.categoria!=="cavalo") return;
+      if(["indisponivel","em_reforma","a_reformar"].includes(v.disponibilidade)) return;
+      const u=v.unidade_slug; if(!["SC","PR","SP"].includes(u)) return;
+      const vinc=v.vinculo==="AGREGADO"?"AGREGADO":"FROTA";
+      totais[vinc][u]++;
+    });
+    const soma=function(o){ return (o.SC||0)+(o.PR||0)+(o.SP||0); };
+    const rows={
+      8:{B:"EQUIPAMENTOS - TOTAL, E POR TIPO",C:"SANTA CATARINA",D:"PARANÁ",E:"SÃO PAULO",F:"Total Geral"},
+      9:{B:"FROTA",C:totais.FROTA.SC,D:totais.FROTA.PR,E:totais.FROTA.SP,F:soma(totais.FROTA)},
+      10:{B:"AGREGADO",C:totais.AGREGADO.SC,D:totais.AGREGADO.PR,E:totais.AGREGADO.SP,F:soma(totais.AGREGADO)},
+      11:{B:"Total Geral",C:totais.FROTA.SC+totais.AGREGADO.SC,D:totais.FROTA.PR+totais.AGREGADO.PR,E:totais.FROTA.SP+totais.AGREGADO.SP,F:soma(totais.FROTA)+soma(totais.AGREGADO)}
+    };
+    Object.keys(rows).forEach(function(rStr){
+      const rn=parseInt(rStr,10), vals=rows[rn];
+      const reRow=new RegExp('<row r="'+rn+'"[^>]*>[\\s\\S]*?<\\/row>');
+      const m=reRow.exec(xml); if(!m) return;
+      let rowXml=m[0];
+      Object.keys(vals).forEach(function(col){
+        const reCell=new RegExp('<c r="'+col+rn+'"[^>]*(?:\\/>|>[\\s\\S]*?<\\/c>)');
+        const oldCell=(reCell.exec(rowXml)||[])[0]||"";
+        const isHead=(rn===8 || rn===11), isFirst=(col==="B");
+        const style=isHead ? (isFirst?ids.headLeft:ids.headCenter) : (isFirst?ids.bodyLeft:ids.bodyCenter);
+        const novo=cell(col,rn,String(style),vals[col]);
+        if(oldCell) rowXml=rowXml.replace(reCell,novo);
+        else rowXml=rowXml.replace('</row>',novo+'</row>');
+      });
+      xml=xml.replace(m[0],rowXml);
+    });
+    return xml;
+  }
+
   function cell(col,row,style,val){
     const r=col+row, s=style?` s="${style}"`:"";
     if(val===null||val===undefined||val==="") return `<c r="${r}"${s}/>`;
@@ -1421,6 +1489,22 @@ table.data-table{
       s=setSheetData(s,4,alocCols,alocRowsForUnit(p[0],ctx),function(r){return r;},5);
       files[p[1]]=enc(s);
     });
+
+    // Resumo_Frota: primeira tabela = regra completa do Dashboard por vínculo, não só operando.
+    const styPath="xl/styles.xml";
+    const resumoSty=ensureResumoFrotaStyles(dec(files[styPath]));
+    files[styPath]=enc(resumoSty.xml);
+    let rf=dec(files["xl/worksheets/sheet4.xml"]);
+    rf=patchResumoFrotaEquipamentos(rf,ativos,resumoSty.ids);
+    files["xl/worksheets/sheet4.xml"]=enc(rf);
+    // Desconecta apenas a pivot antiga (Tabela dinâmica1 / pivotTable4) para ela não
+    // sobrescrever B8:F11 ao atualizar o cache. As demais pivots continuam normais.
+    const rfRelPath="xl/worksheets/_rels/sheet4.xml.rels";
+    if(files[rfRelPath]){
+      let rel=dec(files[rfRelPath]);
+      rel=rel.replace(/<Relationship Id="rId4"[^>]*Target="\.\.\/pivotTables\/pivotTable4\.xml"\s*\/?>/,'');
+      files[rfRelPath]=enc(rel);
+    }
 
     ["xl/pivotCache/pivotCacheDefinition1.xml","xl/pivotCache/pivotCacheDefinition2.xml"].forEach(function(p){
       let t=dec(files[p]);
@@ -2602,6 +2686,19 @@ function equipamentoAlocado(v, ocup) {
       || !!(v.frota && ocup.carretas.has(v.frota));
 }
 
+/* Indica o que está efetivamente alocado nas três colunas operacionais (SC/SP/PR).
+   - cavalo: aparece numa dessas colunas quando está operacional e com filial definida;
+   - carreta: precisa estar engatada num cavalo válido (mapaOcupacao ignora vínculos órfãos). */
+function veiculoEstaAlocado(v, ocup) {
+  if (!v || foraDaFrota(v)) return false;
+  if (v.categoria === "cavalo") {
+    const bloqueados = ["em_reforma","a_reformar","indisponivel","reserva","disponivel","manutencao"];
+    return ["SC","SP","PR"].includes(v.unidade_slug) && !bloqueados.includes(v.disponibilidade);
+  }
+  if (v.categoria === "carreta") return equipamentoAlocado(v, ocup || mapaOcupacao());
+  return false;
+}
+
 /* ─── CONFLITO: EQUIPAMENTO PARADO x CAVALO OPERANDO ─────────────────────────
    reconciliarStatusEquipamentos() dá razão ao status próprio (manutenção vinda
    de OS, reforma, indisponível) e NÃO desengata a carreta — de propósito, pra
@@ -2851,10 +2948,11 @@ function getCavalosPorColuna(colId) {
   });
 }
 
-function renderPlaca(placa, size) {
+function renderPlaca(placa, size, alocado) {
   size = size || "";
   const num = escapeHtml(placa || "—");
-  return `<div class="plate-mercosul ${size}">
+  const clsAlocado = alocado ? " allocated" : "";
+  return `<div class="plate-mercosul ${size}${clsAlocado}">
     <div class="pm-top"><span class="br-flag"></span>BRASIL</div>
     <div class="pm-num">${num}</div>
   </div>`;
@@ -3689,6 +3787,7 @@ function renderGeral() {
 
   const sortArrow = (f) => sortField === f ? (sortDir === "asc" ? " ↑" : " ↓") : "";
   const th = (f, label) => `<th onclick="sortGeral('${f}')" style="cursor:pointer;user-select:none" title="Clique para ordenar">${label}${sortArrow(f)}</th>`;
+  const ocupGeral = mapaOcupacao();
 
   wrap.innerHTML = `
     <table class="data-table">
@@ -3712,7 +3811,7 @@ function renderGeral() {
           <tr>
             <td><span class="tcat ${v.categoria}">${ico(catIco[v.categoria],12)} ${catLabel[v.categoria]}</span></td>
             <td class="mono"><strong onclick="openDetail('${escapeHtml(v.id)}')" style="cursor:pointer">${escapeHtml(v.frota || '—')}</strong></td>
-            <td>${renderPlaca(v.placa, 'sm')}</td>
+            <td>${renderPlaca(v.placa, 'sm', veiculoEstaAlocado(v, ocupGeral))}</td>
             <td><span class="badge-vinculo ${v.vinculo==='AGREGADO'?'agregado':'frota'}">${v.vinculo==='AGREGADO'?'Agregado':'Próprio/Frota'}</span></td>
             <td>${escapeHtml(v.modelo || '—')}</td>
             <td class="muted">${escapeHtml(v.subtipo || '—')}</td>
@@ -4016,11 +4115,12 @@ function renderCompressores() {
           const vincLabel = view.info ? (cvVinc === "AGREGADO" ? "Agregado" : "Frota") : "—";
           const vincCls = cvVinc === "AGREGADO" ? "agregado" : "frota";
           const statusAtual = view.status;
-          const placaVisual = placaAtual ? renderPlaca(placaAtual, "sm") : '';
+          const alocado = !!view.info;
+          const placaVisual = placaAtual ? renderPlaca(placaAtual, "sm", alocado) : '';
           return `
           <tr>
-            <td style="color:var(--gray)">${ico('ico-compressor', 16)}</td>
-            <td><strong ${STATE.isAdmin ? 'onclick="editCompressor(\''+escapeHtml(c.id)+'\');event.stopPropagation()" style="cursor:pointer"' : ''}>${escapeHtml(c.identificacao || c.id)}</strong></td>
+            <td style="color:${alocado ? 'var(--green)' : 'var(--gray)'}">${ico('ico-compressor', 16)}</td>
+            <td><strong class="${alocado ? 'allocated-equipment' : ''}" ${STATE.isAdmin ? 'onclick="editCompressor(\''+escapeHtml(c.id)+'\');event.stopPropagation()" style="cursor:pointer"' : ''}>${escapeHtml(c.identificacao || c.id)}</strong></td>
             <td class="mono muted">${escapeHtml(c.serie || '—')}</td>
             <td><span class="badge-vinculo ${vincCls}">${vincLabel}</span></td>
             <td>${STATE.isAdmin
@@ -4033,7 +4133,7 @@ function renderCompressores() {
                          placeholder="Buscar placa..."
                          onchange="vincularCompressorAPlaca('${escapeHtml(c.id)}',this.value.trim().toUpperCase())">
                 </div>`
-              : (placaAtual ? renderPlaca(placaAtual, "sm") : '<span class="muted">—</span>')}</td>
+              : (placaAtual ? renderPlaca(placaAtual, "sm", alocado) : '<span class="muted">—</span>')}</td>
             <td>${escapeHtml(view.unidade || '—')}</td>
             <td><span class="status-tag ${stClass[statusAtual]||'reserva'}">${stLabel[statusAtual]||statusAtual||'—'}</span></td>
             ${STATE.isAdmin ? '<td><button class="btn-icon" onclick="editCompressor(\''+escapeHtml(c.id)+'\');event.stopPropagation()" title="Editar">✏</button></td>' : ''}
