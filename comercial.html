@@ -980,6 +980,8 @@ details.cfg-det>.card{margin-top:10px}
       O grupo é identificado pelo <b>código seguido do nome da rodovia</b> quando ele existir (<span class="mono">BR-101 · Governador Mário Covas</span>);
       o mesmo código atravessa trechos com nomes diferentes, e nesse caso aparecem os dois mais frequentes.
       Só entram aqui os abastecimentos de <b>diesel S-10</b>.
+      Posto <b>sem nenhum abastecimento S-10</b> não é listado: sem amostra não há preço médio, e a linha só ocuparia espaço —
+      ele continua gravado na base e reaparece no primeiro abastecimento.
       A coordenada de cada posto é geocodificada uma única vez e fica gravada aqui; é ela que permite dizer,
       no Simulador, qual posto está dentro do trecho calculado pela HERE.
     </div>
@@ -4952,7 +4954,7 @@ function renderVeiculos(){
       <td class="num">${d.pneusLisos>0?d.pneusLisos:`<span class="muted">${veicPneusLisos(d)}</span>`}</td>
       <td class="num">${num(d.tara,1)}</td><td class="num">${num(d.capacidade,1)}</td>
       <td class="mono">${num(d.comp,1)}×${num(d.larg,1)}×${num(d.alt,1)}</td><td>${esc(d.categoriaAntt||'granel_solido')}</td>
-      <td>${podeEditarPremissas()?`<button class="icon-btn" title="Editar" onclick="veicEditar('${v.id}')">✎</button>`:''}</td></tr>`;
+      <td>${podeEditarPremissas()?`<button class="icon-btn" title="Editar" onclick="veicEditar('${v.id}')">✎</button> <button class="icon-btn danger" title="Excluir conjunto" onclick="veicExcluir('${v.id}')">🗑</button>`:''}</td></tr>`;
   }).join('') || '<tr><td colspan="9" class="empty">Sem perfis.</td></tr>';
 }
 /* Tipo de carreta do perfil. Enquanto o campo não estiver preenchido no
@@ -5022,6 +5024,33 @@ async function veicSalvar(id){
   if(!data.nome){ toast('Nome obrigatório.','am'); return; }
   if(id) await fsSetDoc(COL.veiculos,id,data,true); else await fsAddDoc(COL.veiculos,{...data,criado_em:agoraISO()});
   cacheBust('veic'); await carregarVeiculos(); renderVeiculos(); montarSelects(); mdFechar(); toast('Perfil salvo.','gn');
+}
+/* Exclusão do conjunto cadastrado errado. A confirmação nomeia o perfil e diz
+   o que muda: o conjunto some das opções do Simulador (é dele que saem eixos,
+   tipo de carreta e pneus lisos), mas simulações e propostas já emitidas não
+   se mexem — cada uma guarda o próprio snapshot do veículo. */
+function veicExcluir(id){
+  if(!podeEditarPremissas()){ toast('Sem permissão para excluir perfis.','am'); return; }
+  const v=ST.veiculos.find(x=>x.id===id);
+  if(!v){ toast('Perfil não encontrado.','am'); return; }
+  const d=v.data||{};
+  mdAbrir('Excluir perfil de veículo',
+    `<p>Excluir <b>${esc(d.nome||'(sem nome)')}</b> — ${esc(String(d.eixos||'—'))} eixos, ${esc(veicTipoCarreta(d))}?</p>
+     <p class="muted" style="margin-top:6px">O conjunto sai da aba e das opções de veículo e de eixos do Simulador.
+     Simulações e propostas já geradas não mudam: cada uma guarda o snapshot do veículo usado no cálculo. Não há desfazer.</p>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn danger" onclick="veicExcluirOk('${id}')">Excluir</button>`);
+}
+async function veicExcluirOk(id){
+  if(!podeEditarPremissas()){ toast('Sem permissão para excluir perfis.','am'); return; }
+  try{
+    await fsDeleteDoc(COL.veiculos,id);
+    cacheBust('veic'); await carregarVeiculos(); renderVeiculos(); montarSelects();
+    mdFechar(); toast('Perfil excluído.','gn');
+  }catch(e){
+    console.warn('[Comercial] veicExcluir:', e && e.message);
+    toast('Não foi possível excluir: '+((e&&e.message)||'erro desconhecido'),'rd');
+  }
 }
 
 /* — Tabela ANTT — */
@@ -10326,19 +10355,35 @@ function sbRenderRodovias(){
       _nk(p.cidade).includes(q)||_nk(p.endereco).includes(q)||_nk(p.uf).includes(q)) : SB.postos;
   if(!filtrados.length){ alvo.innerHTML='<div class="muted">Nada encontrado para essa busca.</div>'; return; }
 
+  const est=new Map(); filtrados.forEach(p=>est.set(p.chave, sbEstatPosto(p.chave)));
+
+  /* Posto sem nenhum abastecimento S-10 sai da lista: a linha não tem último
+     preço nem média, então não informa nada — só empurra para baixo os postos
+     que de fato têm amostra. Ele permanece na base (e no casamento com a rota)
+     e reaparece sozinho assim que abastecer. */
+  const semAbast = filtrados.filter(p=>!(est.get(p.chave)?.qtd>0)).length;
+  const comAbast = filtrados.filter(p=>est.get(p.chave)?.qtd>0);
+  if(!comAbast.length){
+    alvo.innerHTML=`<div class="muted">Nenhum dos ${num(filtrados.length,0)} posto(s) desta seleção tem abastecimento de diesel S-10 — sem amostra não há preço médio a mostrar.</div>`;
+    return;
+  }
+
   const grupos=new Map();
-  filtrados.forEach(p=>{
+  comAbast.forEach(p=>{
     const k=p.rodovia||'— sem rodovia no endereço (via urbana)';
     if(!grupos.has(k)) grupos.set(k,[]);
     grupos.get(k).push(p);
   });
-  const est=new Map(); filtrados.forEach(p=>est.set(p.chave, sbEstatPosto(p.chave)));
 
   const ordenados=[...grupos.entries()].sort((a,b)=>{
     const qa=a[1].reduce((s,p)=>s+(est.get(p.chave)?.qtd||0),0);
     const qb=b[1].reduce((s,p)=>s+(est.get(p.chave)?.qtd||0),0);
     return qb-qa || a[0].localeCompare(b[0]);
   });
+
+  const nota = semAbast
+    ? `<div class="muted" style="margin-top:8px">${num(semAbast,0)} posto(s) fora da lista por não ter abastecimento de diesel S-10 — sem amostra não há preço médio.</div>`
+    : '';
 
   alvo.innerHTML=ordenados.map(([rodovia,postos],i)=>{
     const total=postos.reduce((s,p)=>s+(est.get(p.chave)?.qtd||0),0);
@@ -10376,7 +10421,7 @@ function sbRenderRodovias(){
         <th>Último</th><th class="num">R$/L último</th><th class="num">R$/L médio</th><th>Coord.</th></tr></thead>
         <tbody>${linhas}</tbody>
       </table></details>`;
-  }).join('');
+  }).join('')+nota;
 }
 
 async function sbExportar(){
