@@ -493,6 +493,40 @@ path.sim-rota-alt{cursor:pointer}
 .sim-prem-linha .rest{border:0;background:none;color:var(--mu);cursor:pointer;font-size:11px;padding:0 2px}
 .sim-prem-linha .rest:hover{color:var(--ac)}
 .sim-prem-nota{font-size:10.5px;color:var(--mu);margin-top:9px;padding-top:9px;border-top:1px solid var(--bd2);line-height:1.4}
+
+/* ══ E16 — Diesel (R$/L): a cor do campo diz de onde veio o número ══
+   verde  = último abastecimento de um posto identificado no trecho da rota
+   azul   = média ponderada da unidade que está cotando (fallback)
+   cinza  = digitado por cima; o campo continua editável em todos os casos. */
+.sim-prem-linha input.auto-rota{background:#e9f9f0;border-color:#a6dfc0;color:#0d7a45;font-weight:600}
+.sim-prem-linha input.manual-user{background:var(--sf);border-color:var(--bd2);color:var(--tx);font-weight:600}
+.sb-chip{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:999px;
+  font-size:9.5px;font-weight:700;letter-spacing:.01em;border:1px solid transparent;vertical-align:middle;
+  margin-left:4px;cursor:help;white-space:nowrap}
+.sb-chip.rota{background:#e9f9f0;color:#0d7a45;border-color:#a6dfc0}
+.sb-chip.media{background:#eef4ff;color:var(--ac);border-color:#c2d4ff}
+.sb-chip.manual{background:var(--sf);color:var(--mu);border-color:var(--bd2)}
+.sb-chip.vazio{display:none}
+
+/* ══ Upload contínuo da ShellBox (aba Combustível) ══ */
+.sb-drop{border:1.5px dashed var(--bd2);border-radius:9px;padding:16px;text-align:center;
+  background:var(--sf);cursor:pointer;transition:border-color .15s,background .15s}
+.sb-drop:hover,.sb-drop.on{border-color:var(--ac);background:var(--ac-bg)}
+.sb-drop b{display:block;font-size:12.5px;color:var(--hd);margin-bottom:3px}
+.sb-drop span{font-size:11px;color:var(--mu)}
+.sb-prog{height:5px;border-radius:999px;background:var(--bd2);overflow:hidden;margin-top:10px;display:none}
+.sb-prog>i{display:block;height:100%;width:0;background:var(--ac);transition:width .2s}
+.sb-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px}
+.sb-res{margin-top:10px;font-size:11px;line-height:1.5;color:var(--tx)}
+.sb-res b{color:var(--hd)}
+.sb-rod{margin-top:6px}
+.sb-rod details{border:1px solid var(--bd2);border-radius:8px;margin-bottom:5px;background:var(--sf)}
+.sb-rod summary{cursor:pointer;padding:7px 10px;font-size:11.5px;font-weight:700;color:var(--hd);
+  display:flex;align-items:center;gap:8px;list-style:none}
+.sb-rod summary::-webkit-details-marker{display:none}
+.sb-rod summary em{font-style:normal;font-weight:500;color:var(--mu);font-size:10.5px;margin-left:auto}
+.sb-rod .tb{margin:0 0 8px}
+.sb-rod .tb th,.sb-rod .tb td{font-size:11px;padding:4px 8px}
 .sim-res-bloco{margin-bottom:15px}
 .sim-res-bloco>h4{font-size:11.5px;font-weight:700;color:var(--hd);margin:0 0 6px;letter-spacing:.02em}
 #simFinanceiro .tb td{padding:4.5px 8px;font-size:11.5px}
@@ -888,6 +922,53 @@ details.cfg-det>.card{margin-top:10px}
       <thead><tr><th>Filial</th><th class="num">R$/L</th><th>Fonte</th><th>Vigência</th></tr></thead>
       <tbody></tbody>
     </table>
+  </div>
+
+  <!-- ── Upload contínuo da planilha ShellBox ── -->
+  <div class="card">
+    <h3>Abastecimentos ShellBox
+      <span class="tabs-r">
+        <button class="btn sm" id="sbBtnRecarregar" title="Rebaixa a base da nuvem, ignorando o cache local">↻ Recarregar base</button>
+        <button class="btn sm" id="sbBtnGeo" title="Geocodifica os postos que ainda estão sem coordenada">📍 Geocodificar postos</button>
+        <button class="btn sm" id="sbBtnExport" title="Exporta a base consolidada em .xlsx">⬇ Excel</button>
+        <button class="btn sm pri" id="sbBtnUpload">Enviar planilha</button>
+      </span>
+    </h3>
+    <div class="muted" style="margin-bottom:8px">
+      Carga <b>contínua</b>, no mesmo padrão da base SZB: a planilha exportada do ShellBox é lida,
+      a faixa de datas do arquivo define o intervalo de trabalho e, dentro dela,
+      <b>linha nova entra</b>, <b>linha existente alterada é atualizada</b> e
+      <b>linha que sumiu do arquivo é excluída</b>. Fora da faixa nada é tocado — o histórico anterior fica preservado.
+      A chave é o <span class="mono">ID da transação</span>.
+      Como o ShellBox exporta <b>por conta/unidade</b> e os arquivos de SC, PR e SP cobrem o mesmo período,
+      a exclusão só alcança registros do <b>mesmo recorte do arquivo</b> (perfil e placa presentes nele) —
+      enviar o arquivo de uma unidade nunca apaga o histórico das outras.
+    </div>
+
+    <div class="sb-drop" id="sbDrop">
+      <b>Solte aqui a planilha do ShellBox</b>
+      <span>ou clique para escolher — .xls, .xlsx ou .csv · vários arquivos de uma vez são processados em sequência</span>
+      <input type="file" id="sbFile" accept=".xls,.xlsx,.csv" multiple style="display:none">
+    </div>
+    <div class="sb-prog" id="sbProg"><i></i></div>
+    <div class="sb-meta" id="sbMeta"><span class="pill mu">Base não carregada.</span></div>
+    <div class="sb-res" id="sbRes"></div>
+  </div>
+
+  <!-- ── Base por rodovia ── -->
+  <div class="card">
+    <h3>Postos por rodovia
+      <span class="tabs-r">
+        <input type="text" id="sbBusca" placeholder="rodovia, posto, cidade…" style="height:30px;min-width:220px">
+      </span>
+    </h3>
+    <div class="muted" style="margin-bottom:8px">
+      A referência da base é a <b>rodovia</b>: o código (BR-101, SC-416, SP-330…) e o <b>km</b> saem do endereço do posto —
+      quando o endereço traz só o nome da via (Anhanguera, Castelo Branco, Régis Bittencourt…), o código correspondente é resolvido por tabela.
+      A coordenada de cada posto é geocodificada uma única vez e fica gravada aqui; é ela que permite dizer,
+      no Simulador, qual posto está dentro do trecho calculado pela HERE.
+    </div>
+    <div class="sb-rod" id="sbRodovias"><div class="muted">Base não carregada.</div></div>
   </div>
 </div>
 
@@ -2027,7 +2108,11 @@ function _hereParseRota(rt, veic, eixosBase){
      pedágio do trecho = Σ(tarifa por eixo) × eixos daquele trecho. */
   const pedagioEixo = pracas.reduce((a,pz)=>a+(Number(pz.tarifaEixo)||0),0);
   const eixoAprox   = pracas.some(pz=>pz.eixoAprox && pz.valor!=null);
-  return { distKm:distM/1000, durMin:durS/60, polylines:polys, pracas,
+  /* rotaDetalhada (pontos + spans de cada seção) sai junto: é a mesma geometria
+     que o matcher de praças consome e agora também o matcher de postos ShellBox,
+     que precisa das rodovias percorridas (spans routeNumbers/names) para dizer
+     qual posto está no trecho calculado. */
+  return { distKm:distM/1000, durMin:durS/60, polylines:polys, pracas, rotaDetalhada,
            pedagioIda:pedagioTotal, pedagioEixo, eixosConsulta:eixosBase, eixoAprox, pedagioFonte };
 }
 
@@ -9259,6 +9344,924 @@ else cbxLigarSimulador();
 
 try{ window.ligarCombo=ligarCombo; window.cbxLigarSimulador=cbxLigarSimulador; window.cbxAvisar=cbxAvisar; }catch(_){}
 })();
+</script>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   SHELLBOX — ABASTECIMENTOS POR RODOVIA (aba Combustível) + DIESEL DA ROTA (E16)
+   ──────────────────────────────────────────────────────────────────────────
+   O que este bloco resolve, na ordem em que o problema aparece:
+
+   1) CARGA CONTÍNUA, no mesmo padrão da SZB
+      A planilha do ShellBox é exportada por período e reexportada quando um
+      lançamento é corrigido, cancelado ou entra atrasado. Recarregar tudo do
+      zero apagaria o histórico anterior; só empilhar duplicaria transação.
+      A regra passa a ser a mesma da SZB:
+        · a FAIXA DE DATAS do arquivo (menor e maior data de transação) define
+          o intervalo de trabalho;
+        · dentro do intervalo — ID novo ENTRA, ID que já existe com qualquer
+          campo diferente ATUALIZA, ID que estava na base e não veio no arquivo
+          é EXCLUÍDO (foi cancelado ou estornado na origem);
+        · fora do intervalo nada é tocado.
+      A chave é o "ID da transação". A base mora em bases_cloud/shellbox,
+      particionada em chunks e lida pelo mesmo loadBaseCloud() das demais —
+      portanto herda de graça o cache por carimbo no IndexedDB.
+
+   2) BASE COM REFERÊNCIA NA RODOVIA
+      A pergunta operacional não é "onde fica o posto", é "que postos existem
+      nesta estrada". Cada posto vira um registro cuja referência é o código da
+      rodovia (BR-101, SC-416, SP-330…) extraído do endereço, com o km ou o
+      número quando o endereço traz. Endereço que só nomeia a via (Anhanguera,
+      Castelo Branco, Régis Bittencourt…) é resolvido por tabela de apelidos.
+      Cada posto é geocodificado UMA vez e a coordenada fica gravada — é ela
+      que permite dizer se o posto está dentro do trecho calculado.
+
+   3) QUAL POSTO ESTÁ NO TRECHO
+      Mesmo matcher geométrico já usado nas praças de pedágio: a rota devolvida
+      pela HERE vem com pontos e spans (names/routeNumbers); cada posto é
+      projetado no segmento mais próximo e só é aceito se estiver dentro do raio
+      E se o código da rodovia do posto for compatível com as vias daquele
+      segmento. Posto urbano (sem código) entra com raio menor, decidido só pela
+      geometria.
+
+   4) E16 — Diesel (R$/L)
+      Havendo posto identificado no trecho, o campo recebe o ÚLTIMO abastecimento
+      registrado nesses postos (o preço mais atual efetivamente praticado na
+      estrada) e fica VERDE, com a etiqueta "posto na rota". Não havendo, cai na
+      MÉDIA PONDERADA POR LITROS da unidade que está cotando — mesma regra de
+      apuração já usada no módulo (janela de litragem e corte de preço fora da
+      curva) — e fica AZUL, com a etiqueta "média da unidade". Digitando por
+      cima, o campo fica CINZA com a etiqueta "digitado"; o ↺ ao lado do rótulo
+      devolve o número automático. O campo continua editável nos três casos.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Configuração ─────────────────────────────────────────────────────────── */
+const SB_BASE_ID    = 'shellbox';          /* bases_cloud/shellbox              */
+const SB_DOC_POSTOS = 'shellbox_postos';   /* comercial_config/shellbox_postos  */
+const SB_CHUNK      = 500;                 /* linhas por chunk no Firestore     */
+const SB_RAIO_M     = 1500;                /* posto fica à beira da pista e o
+                                              geocode de endereço não é cirúrgico */
+const SB_RAIO_SEM_VIA_M = 600;             /* segmento sem via nomeada: aperta  */
+const SB_GEO_TETO   = 90;                  /* teto de geocodificações por rodada */
+const SB_LITROS_MIN = 50, SB_LITROS_MAX = 1200;   /* janela do diesel           */
+const SB_FORA_CURVA = 0.5;                 /* corte em 50% da média dos demais  */
+const SB_MESES_MEDIA = 3;                  /* janela da média ponderada         */
+
+const SB = {
+  rows:[], meta:null, postos:[], carregado:false, carregando:null,
+  ocupado:false, ultimoResumo:null, busca:'', memoChave:new Map()
+};
+
+/* ── Cabeçalhos aceitos (normalizados por _nk: sem acento, sem pontuação) ──── */
+const SB_ALIAS = {
+  id:         ['IDDATRANSACAO','IDTRANSACAO','TRANSACAO','ID'],
+  status:     ['STATUS','SITUACAO'],
+  data:       ['DATAHORATRANSACAOFIMDOABASTECIMENTO','DATAHORATRANSACAO','DATAHORA','DATADATRANSACAO','DATA'],
+  condutor:   ['NOMEDOCONDUTOR','CONDUTOR','MOTORISTA'],
+  posto:      ['NOMEDOPOSTO','POSTO','ESTABELECIMENTO'],
+  endereco:   ['ENDERECODOPOSTO','ENDERECO','LOGRADOURO'],
+  cidade:     ['CIDADEDOPOSTO','CIDADE','MUNICIPIO'],
+  uf:         ['ESTADODOPOSTO','UF','ESTADO'],
+  cnpj:       ['CNPJDOPOSTO','CNPJ'],
+  placa:      ['PLACA'],
+  hodometro:  ['HODOMETRO','ODOMETRO'],
+  combustivel:['COMBUSTIVEL','PRODUTO'],
+  litros:     ['LITROS','QTDLITROS','QUANTIDADE'],
+  valor:      ['TOTALDOABASTECIMENTO','VALORTOTAL','TOTAL','VALOR'],
+  preco:      ['RLITRO','PRECOLITRO','PRECOPORLITRO','VALORLITRO'],
+  unitario:   ['VALORUNITARIO','VALORBOMBA'],
+  perfil:     ['PERFIL','OPERACAO','CENTRODECUSTO'],
+  ident:      ['IDENTIFICADORDOVEICULO','IDENTIFICADOR']
+};
+function sbMapa(row){
+  const idx={}; Object.keys(row||{}).forEach(k=>{ const n=_nk(k); if(!(n in idx)) idx[n]=k; });
+  const m={};
+  for(const campo in SB_ALIAS){
+    for(const a of SB_ALIAS[campo]){ if(idx[a]!==undefined){ m[campo]=idx[a]; break; } }
+  }
+  return m;
+}
+
+/* ── Data/hora: o ShellBox exporta texto "dd/mm/aaaa hh:mm:ss" ────────────── */
+function sbDataISO(v){
+  if(v==null||v==='') return '';
+  if(v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0,19);
+  if(typeof v==='number' && isFinite(v)){
+    return new Date(Date.UTC(1899,11,30)+Math.round(v*86400000)).toISOString().slice(0,19);
+  }
+  const s=String(v).trim();
+  let m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}T`+
+              (m[4]?`${m[4].padStart(2,'0')}:${m[5]}:${m[6]||'00'}`:'00:00:00');
+  m=s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if(m) return `${m[1]}-${m[2]}-${m[3]}T`+(m[4]?`${m[4].padStart(2,'0')}:${m[5]}:${m[6]||'00'}`:'00:00:00');
+  return '';
+}
+function sbDataBR(iso){
+  if(!iso) return '—';
+  const d=String(iso).slice(0,10), h=String(iso).slice(11,16);
+  return dtSimplesBR(d)+(h?' '+h:'');
+}
+function sbMesMenos(mes, n){
+  const [a,m]=String(mes||'').split('-').map(Number);
+  if(!a||!m) return mes;
+  const t=(a*12+(m-1))-Math.max(0,n);
+  return String(Math.floor(t/12)).padStart(4,'0')+'-'+String((t%12)+1).padStart(2,'0');
+}
+
+/* ══ Rodovia e km a partir do endereço ═════════════════════════════════════
+   Cobre as três grafias que o ShellBox devolve para a mesma via: "BR-101",
+   "BR 101" e "Br101" — foi justamente o "Rod Br101 Km 121" que quebrou o
+   extrator de rodovia das praças, que exige o hífen. O código sai canônico
+   (UF-NNN, com hífen), que é o formato que a HERE devolve nos spans. */
+const SB_UFS_ROD='BR|SP|PR|SC|RS|MG|RJ|ES|GO|DF|BA|PE|CE|MT|MS|PA|AM|RO|AC|AP|RR|TO|MA|PI|RN|PB|AL|SE';
+/* o "C" opcional cobre a grafia PRC-163 / SPC-… usada por alguns cadastros
+   para as rodovias estaduais coincidentes com trecho federal */
+const _SB_RE_ROD=new RegExp('(?:^|[^A-Z0-9])('+SB_UFS_ROD+')C?[ -]?(\\d{2,3})(?![0-9])','g');
+function sbCodigosRodovia(v){
+  const s=_prNorm(v); if(!s) return [];
+  const out=[]; let m; _SB_RE_ROD.lastIndex=0;
+  while((m=_SB_RE_ROD.exec(s))){ const c=m[1]+'-'+m[2]; if(!out.includes(c)) out.push(c); }
+  return out;
+}
+/* Vias que o cadastro do posto nomeia sem citar o código. */
+const SB_VIAS_NOMEADAS=[
+  [/\bANHANGUERA\b/,'SP-330'], [/\bBANDEIRANTES\b/,'SP-348'],
+  [/\bCASTEL+O? ?BRANCO\b|\bCASTELO\b/,'SP-280'], [/\bRAPOSO TAVARES\b/,'SP-270'],
+  [/\bREGIS BITTENCOURT\b/,'BR-116'], [/\bPRES(IDENTE)? DUTRA\b|\bVIA DUTRA\b/,'BR-116'],
+  [/\bFERNAO DIAS\b/,'BR-381'], [/\bD(OM|ONA)? ?PEDRO\b/,'SP-065'],
+  [/\bWASHINGTON LUI?[SZ]\b/,'SP-310'], [/\bAYRTON SENNA\b/,'SP-070'],
+  [/\bTAMOIOS\b/,'SP-099'], [/\bANCHIETA\b/,'SP-150'], [/\bIMIGRANTES\b/,'SP-160'],
+  [/\bMARECHAL RONDON\b/,'SP-300'], [/\bSANTOS DUMONT\b/,'SP-075'],
+  [/\bGOVERNADOR MARIO COVAS\b|\bMARIO COVAS\b/,'BR-101'],
+  [/\bANTONIO HEIL\b/,'SC-486'], [/\bJOSE CARLOS DAUX\b/,'SC-401'],
+  [/\bINGO HERING\b/,'BR-470'], [/\bJORGE LACERDA\b/,'SC-390'],
+  [/\bLUIZ ROSSO\b/,'SC-445'], [/\bDEPUTADO OLICIO CALDAS\b/,'SC-108']
+];
+function sbRodovia(endereco){
+  const cod=sbCodigosRodovia(endereco);
+  if(cod.length) return cod[0];
+  const n=_prNorm(endereco);
+  for(const [re,c] of SB_VIAS_NOMEADAS) if(re.test(n)) return c;
+  return '';
+}
+/* km explícito ("KM 275", "KM 512 2" → 512,2) ou, na falta, o número do endereço. */
+function sbKm(endereco){
+  const s=_prNorm(endereco); if(!s) return null;
+  let m=s.match(/\bKM\s*(\d{1,4})(?:\s+(\d)\b)?/);
+  if(m) return Number(m[1])+(m[2]?Number('0.'+m[2]):0);
+  const semRod=s.replace(new RegExp('\\b('+SB_UFS_ROD+')\\s?\\d{2,3}\\b','g'),' ')
+                .replace(/\bS ?N\b/g,' ');
+  m=semRod.match(/\b(\d{1,5})\b/);
+  return m?Number(m[1]):null;
+}
+
+/* ── Identidade do posto: CNPJ manda; sem CNPJ, nome + cidade + UF ─────────── */
+function sbChavePosto(r){
+  const d=_digitos(r&&r.cnpj);
+  if(d.length>=8) return 'c:'+d;
+  const k='n:'+_nk(r&&r.posto)+'|'+_nk(r&&r.cidade)+'|'+String((r&&r.uf)||'').toUpperCase();
+  return k;
+}
+function sbUnidade(r){
+  return rtSigla(r&&r.perfil) || rtSigla(r&&r.ident) || '';
+}
+function sbEhDiesel(r){
+  const c=String((r&&r.combustivel)||'');
+  return /diesel/i.test(c) && !/arla/i.test(c);
+}
+function sbLancamentoValido(r){
+  return !/CANCEL|REPROV|ESTORN|NEGAD|RECUSAD/i.test(String((r&&r.status)||''));
+}
+
+/* ══ Leitura e normalização da planilha ════════════════════════════════════ */
+function sbLerArquivo(file, XL){
+  return new Promise((res,rej)=>{
+    const rd=new FileReader();
+    rd.onerror=()=>rej(new Error('não foi possível ler o arquivo'));
+    rd.onload=()=>{
+      try{
+        const wb=XL.read(new Uint8Array(rd.result),{type:'array'});
+        const nome=wb.SheetNames[0];
+        if(!nome) throw new Error('a planilha não tem abas');
+        res(XL.utils.sheet_to_json(wb.Sheets[nome],{defval:'',raw:true}));
+      }catch(e){ rej(e); }
+    };
+    rd.readAsArrayBuffer(file);
+  });
+}
+function sbNormalizar(brutas){
+  if(!brutas || !brutas.length) throw new Error('planilha vazia');
+  const m=sbMapa(brutas[0]);
+  if(!m.id || !m.data)
+    throw new Error('não encontrei as colunas "ID da transação" e "Data/Hora transação" — confira se é a exportação do ShellBox');
+  const g=(r,c)=>m[c]?r[m[c]]:'';
+  const out=[]; let semId=0, semData=0;
+  for(const r of brutas){
+    const id=rtTxt(g(r,'id')).replace(/\.0+$/,'');
+    if(!id){ semId++; continue; }
+    const data=sbDataISO(g(r,'data'));
+    if(!data){ semData++; continue; }
+    const litros=rtNum(g(r,'litros')), valor=rtNum(g(r,'valor'));
+    let preco=rtNum(g(r,'preco'));
+    if(!(preco>0) && litros>0 && valor>0) preco=valor/litros;
+    if(!(preco>0)) preco=rtNum(g(r,'unitario'));
+    out.push({
+      id, data,
+      status:rtTxt(g(r,'status')),
+      posto:rtTxt(g(r,'posto')),
+      endereco:rtTxt(g(r,'endereco')),
+      cidade:rtTxt(g(r,'cidade')),
+      uf:rtTxt(g(r,'uf')).toUpperCase().slice(0,2),
+      cnpj:_digitos(g(r,'cnpj')),
+      placa:rtTxt(g(r,'placa')).toUpperCase().replace(/[^A-Z0-9]/g,''),
+      combustivel:rtTxt(g(r,'combustivel')),
+      litros:+Number(litros||0).toFixed(3),
+      valor:+Number(valor||0).toFixed(2),
+      preco:+Number(preco||0).toFixed(4),
+      perfil:rtTxt(g(r,'perfil')),
+      condutor:rtTxt(g(r,'condutor')),
+      ident:rtTxt(g(r,'ident'))
+    });
+  }
+  if(!out.length) throw new Error('nenhuma linha com ID e data válidos');
+  /* o mesmo ID pode vir repetido dentro do arquivo (reexportação): vence o último */
+  const dedup=new Map(); out.forEach(r=>dedup.set(r.id,r));
+  return {linhas:[...dedup.values()], semId, semData, duplicadas:out.length-dedup.size};
+}
+
+/* Assinatura da linha — é ela que diz se um registro que já existe MUDOU. */
+function sbHash(r){
+  return [r.data,r.status,r.posto,r.endereco,r.cidade,r.uf,r.cnpj,r.placa,
+          r.combustivel,r.litros,r.valor,r.preco,r.perfil,r.condutor,r.ident].join('');
+}
+
+/* ══ Mescla contínua — o coração do "mesmo padrão da SZB" ══════════════════
+   Uma armadilha real desta base obrigou a refinar a regra de exclusão. O
+   ShellBox exporta POR CONTA/UNIDADE: os arquivos de SC, PR e SP cobrem
+   exatamente o mesmo período e não têm nenhum ID em comum. Excluir "tudo que
+   está na faixa de datas e não veio no arquivo" apagaria SC inteiro assim que
+   o arquivo de PR fosse enviado.
+
+   O intervalo, portanto, tem duas dimensões: TEMPO e ESCOPO. Só é candidato à
+   exclusão o registro que, além de estar na faixa de datas, pertence ao mesmo
+   recorte do arquivo — perfil E placa presentes nele. A dupla condição resolve
+   o perfil "LIDERES", que existe nas três contas com veículos diferentes: o
+   arquivo de PR não carrega as placas de SC, então os LIDERES de SC ficam
+   intactos. É deliberadamente conservador: na dúvida, preserva. */
+function sbEscopo(novas){
+  const perfis=new Set(), placas=new Set();
+  novas.forEach(r=>{ if(r.perfil) perfis.add(_nk(r.perfil)); if(r.placa) placas.add(r.placa); });
+  return {perfis, placas};
+}
+function sbMesclar(base, novas){
+  const map=new Map(base.map(r=>[String(r.id),r]));
+  let ini='', fim='';
+  novas.forEach(r=>{ const d=String(r.data||'').slice(0,10); if(!d) return;
+    if(!ini||d<ini) ini=d; if(!fim||d>fim) fim=d; });
+
+  let add=0, upd=0, igual=0;
+  const vistos=new Set();
+  for(const r of novas){
+    const k=String(r.id); vistos.add(k);
+    const atual=map.get(k);
+    if(!atual){ map.set(k,r); add++; }
+    else if(sbHash(atual)!==sbHash(r)){ map.set(k,r); upd++; }
+    else igual++;
+  }
+
+  const escopo=sbEscopo(novas);
+  const excluidas=[]; let del=0;
+  if(ini && fim && escopo.perfis.size && escopo.placas.size){
+    for(const [k,r] of map){
+      if(vistos.has(k)) continue;
+      const d=String(r.data||'').slice(0,10);
+      if(!d || d<ini || d>fim) continue;
+      if(!escopo.perfis.has(_nk(r.perfil))) continue;
+      if(!r.placa || !escopo.placas.has(r.placa)) continue;
+      map.delete(k); del++; if(excluidas.length<40) excluidas.push(r);
+    }
+  }
+  const rows=[...map.values()].sort((a,b)=>String(b.data||'').localeCompare(String(a.data||'')));
+  return {rows, add, upd, del, igual, ini, fim, excluidas,
+          perfis:escopo.perfis.size, placas:escopo.placas.size};
+}
+
+/* ══ Persistência — bases_cloud/shellbox, chunked igual às demais bases ═════ */
+function sbFirestore(){
+  const fb=comGetFirebase();
+  if(!fb) throw new Error('Firestore indisponível nesta sessão — abra o módulo pelo Atlas.');
+  return fb.firestore();
+}
+async function sbGravarBase(rows, arquivo, onProg){
+  const db=sbFirestore();
+  const ref=db.collection('bases_cloud').doc(SB_BASE_ID);
+  let nAntes=0;
+  try{ const s=await ref.get(); if(s.exists) nAntes=Number(s.data().numChunks||0); }catch(_){}
+
+  const n=Math.ceil(rows.length/SB_CHUNK);
+  for(let i=0;i<n;i++){
+    await ref.collection('chunks').doc(String(i)).set({rows:rows.slice(i*SB_CHUNK,(i+1)*SB_CHUNK)});
+    if(typeof onProg==='function') onProg(i+1,n);
+  }
+  /* carga menor que a anterior deixaria chunks órfãos, que voltariam como
+     linhas fantasmas na próxima leitura */
+  for(let i=n;i<nAntes;i++){ try{ await ref.collection('chunks').doc(String(i)).delete(); }catch(_){} }
+
+  const meta={ numChunks:n, count:rows.length, file:arquivo||'', tipo:'shellbox',
+               ts:agoraISO(), user:(ATLAS_CURRENT_USER.email||'—') };
+  await ref.set(meta,{merge:false});          /* meta por último: é ele que vira o carimbo */
+  try{ await bcGravar('base:'+SB_BASE_ID,{carimbo:bcCarimbo(meta), rows, gravado_em:Date.now()}); }catch(_){}
+  SB.meta={ts:meta.ts,file:meta.file,user:meta.user,count:meta.count};
+  return meta;
+}
+async function sbGravarPostos(){
+  await fsSetDoc(COL.config, SB_DOC_POSTOS, {
+    itens:SB.postos, atualizado_em:agoraISO(), atualizado_por:(ATLAS_CURRENT_USER.email||'—')
+  }, true);
+}
+
+/* ══ Base de postos por rodovia ════════════════════════════════════════════ */
+function sbRecalcularPostos(){
+  const antes=new Map(SB.postos.map(p=>[p.chave,p]));
+  const map=new Map();
+  for(const r of SB.rows){
+    const k=sbChavePosto(r); if(!k) continue;
+    let p=map.get(k);
+    if(!p){ p={chave:k, cnpj:r.cnpj||'', nome:r.posto||'', endereco:r.endereco||'',
+               cidade:r.cidade||'', uf:r.uf||'', qtd:0, ultimo:'', _nomes:{}, _ends:{}}; map.set(k,p); }
+    p.qtd++;
+    if(String(r.data)>String(p.ultimo)) p.ultimo=r.data;
+    if(r.posto)    p._nomes[r.posto]=(p._nomes[r.posto]||0)+1;
+    if(r.endereco) p._ends[r.endereco]=(p._ends[r.endereco]||0)+1;
+    if(!p.cidade && r.cidade) p.cidade=r.cidade;
+    if(!p.uf && r.uf) p.uf=r.uf;
+    if(!p.cnpj && r.cnpj) p.cnpj=r.cnpj;
+  }
+  const saida=[];
+  for(const p of map.values()){
+    /* o mesmo CNPJ aparece com grafias e endereços diferentes: vence o nome
+       mais frequente e o endereço que efetivamente identifica a rodovia */
+    p.nome = Object.keys(p._nomes).sort((a,b)=>p._nomes[b]-p._nomes[a]||b.length-a.length)[0]||p.nome;
+    const ends=Object.keys(p._ends);
+    p.endereco = ends.sort((a,b)=>{
+      const ra=sbRodovia(a)?1:0, rb=sbRodovia(b)?1:0;
+      if(ra!==rb) return rb-ra;
+      const ka=sbKm(a)!=null?1:0, kb=sbKm(b)!=null?1:0;
+      if(ka!==kb) return kb-ka;
+      return p._ends[b]-p._ends[a] || b.length-a.length;
+    })[0]||p.endereco;
+    delete p._nomes; delete p._ends;
+
+    const ant=antes.get(p.chave)||{};
+    p.rodovia = ant.rodoviaManual || sbRodovia(p.endereco) || '';
+    if(ant.rodoviaManual) p.rodoviaManual=ant.rodoviaManual;
+    p.km = sbKm(p.endereco);
+    /* coordenada é cara: preserva a que já foi geocodificada, a menos que o
+       endereço de referência tenha mudado */
+    if(ant.lat && ant.lng && ant.enderecoGeo===p.endereco){
+      p.lat=ant.lat; p.lng=ant.lng; p.geo=ant.geo||'here'; p.geoLabel=ant.geoLabel||''; p.enderecoGeo=ant.enderecoGeo;
+    } else if(ant.lat && ant.lng && !ant.enderecoGeo){
+      p.lat=ant.lat; p.lng=ant.lng; p.geo=ant.geo||'here'; p.geoLabel=ant.geoLabel||''; p.enderecoGeo=p.endereco;
+    }
+    saida.push(p);
+  }
+  saida.sort((a,b)=> (a.rodovia||'~~').localeCompare(b.rodovia||'~~') || (a.km||0)-(b.km||0) || a.nome.localeCompare(b.nome));
+  SB.postos=saida;
+  return saida;
+}
+
+async function sbGeocodificarPendentes(teto, onProg){
+  if(!ST.hereKey) return {ok:0, falhou:0, pulados:0, semChave:true};
+  const pend=SB.postos.filter(p=>!(Number(p.lat)&&Number(p.lng)) && p.geo!=='falhou');
+  const lote=pend.slice(0, Math.max(0, teto==null?SB_GEO_TETO:teto));
+  let ok=0, falhou=0;
+  for(let i=0;i<lote.length;i++){
+    const p=lote[i];
+    const tentativas=[
+      [p.endereco, p.cidade, p.uf].filter(Boolean).join(', '),
+      [p.nome, p.cidade, p.uf].filter(Boolean).join(', '),
+      [p.cidade, p.uf].filter(Boolean).join(', ')
+    ].filter(Boolean);
+    let achou=null;
+    for(const q of tentativas){
+      try{ achou=await hereGeocode(q); break; }catch(_){ /* tenta a próxima grafia */ }
+    }
+    if(achou){ p.lat=+Number(achou.lat).toFixed(6); p.lng=+Number(achou.lng).toFixed(6);
+               p.geo='here'; p.geoLabel=achou.label||''; p.enderecoGeo=p.endereco; ok++; }
+    else { p.geo='falhou'; falhou++; }
+    if(typeof onProg==='function') onProg(i+1, lote.length);
+    await new Promise(r=>setTimeout(r,110));   /* respiro para não estourar o rate da HERE */
+  }
+  return {ok, falhou, pulados:Math.max(0,pend.length-lote.length)};
+}
+
+/* ══ Matcher: postos dentro do trecho calculado ════════════════════════════ */
+function sbMatchPostos(secoes, raioM){
+  const segs=_prMontarSegmentos(secoes);
+  const postos=SB.postos.filter(p=>Number(p.lat)&&Number(p.lng));
+  if(!segs.length || !postos.length) return [];
+  let mnLa=1e9,mxLa=-1e9,mnLn=1e9,mxLn=-1e9;
+  segs.forEach(s=>[s.a,s.b].forEach(pt=>{ const la=pt[0],ln=pt[1];
+    if(la<mnLa)mnLa=la; if(la>mxLa)mxLa=la; if(ln<mnLn)mnLn=ln; if(ln>mxLn)mxLn=ln; }));
+  const mg=(raioM||SB_RAIO_M)/111000+0.002;
+  const out=[];
+  for(const p of postos){
+    const la=Number(p.lat), ln=Number(p.lng);
+    if(la<mnLa-mg||la>mxLa+mg||ln<mnLn-mg||ln>mxLn+mg) continue;
+    let best=null;
+    for(const seg of segs){
+      const r=_prPontoSeg([la,ln],seg.a,seg.b);
+      if(!best||r.dist<best.dist) best={dist:r.dist,t:r.t,seg};
+    }
+    if(!best) continue;
+    /* o raio largo só vale quando os dois lados podem se confirmar: o posto tem
+       código de rodovia E o segmento tem via nomeada. Faltando qualquer um dos
+       dois, sobra apenas a geometria para decidir — e aí ela precisa ser
+       apertada, senão um posto de rua urbana entra por estar perto da pista. */
+    const temVia=best.seg.vias.length>0, temCod=!!p.rodovia;
+    const limite=(temVia&&temCod)?(raioM||SB_RAIO_M):Math.min(raioM||SB_RAIO_M, SB_RAIO_SEM_VIA_M);
+    if(best.dist>limite) continue;
+    if(temCod && !_prRodoviaCompativel(p.rodovia, best.seg.vias)) continue;
+    out.push(Object.assign({},p,{_dist:Math.round(best.dist),
+                                 _along:best.seg.along+best.t*best.seg.len,
+                                 _vias:best.seg.vias}));
+  }
+  return out.sort((a,b)=>a._along-b._along);
+}
+
+/* ══ Preço do diesel — as duas origens do E16 ══════════════════════════════ */
+function sbChaveMemo(r){
+  const k=sbChavePosto(r);
+  return k;
+}
+function sbDieselDaRota(){
+  const r=(typeof SIMR!=='undefined')?SIMR.atual:null;
+  if(!r || !Array.isArray(r.rotaDetalhada) || !r.rotaDetalhada.length) return null;
+  if(!SB.rows.length || !SB.postos.length) return null;
+
+  const naRota=sbMatchPostos(r.rotaDetalhada, SB_RAIO_M);
+  if(!naRota.length) return null;
+  const idx=new Map(naRota.map(p=>[p.chave,p]));
+
+  let melhor=null;
+  for(const x of SB.rows){
+    if(!sbEhDiesel(x) || !(x.preco>0) || !sbLancamentoValido(x)) continue;
+    const p=idx.get(sbChaveMemo(x)); if(!p) continue;
+    if(!melhor || String(x.data)>String(melhor.linha.data)) melhor={linha:x, posto:p};
+  }
+  if(!melhor) return null;
+  return { valor:+Number(melhor.linha.preco).toFixed(3), fonte:'posto_rota',
+           linha:melhor.linha, posto:melhor.posto, postos:naRota };
+}
+function sbMediaUnidade(filial){
+  const alvo=String(filial||'').toUpperCase();
+  const cand=[];
+  for(const x of SB.rows){
+    if(!sbEhDiesel(x) || !(x.preco>0) || !(x.litros>0) || !sbLancamentoValido(x)) continue;
+    if(alvo && sbUnidade(x)!==alvo) continue;
+    cand.push(x);
+  }
+  if(!cand.length) return null;
+
+  let max=''; cand.forEach(x=>{ if(x.data>max) max=x.data; });
+  const de=sbMesMenos(max.slice(0,7), SB_MESES_MEDIA-1);
+  const naJanelaMes=cand.filter(x=>x.data.slice(0,7)>=de);
+  const periodo=naJanelaMes.length?naJanelaMes:cand;
+
+  const naJanelaL=periodo.filter(x=>x.litros>=SB_LITROS_MIN && x.litros<=SB_LITROS_MAX);
+  const usar=naJanelaL.length?naJanelaL:periodo;
+
+  /* corte de preço fora da curva medido contra a média ponderada dos demais —
+     mesma regra do módulo, só que em O(n) usando os totais */
+  const totL=usar.reduce((a,x)=>a+x.litros,0);
+  const totV=usar.reduce((a,x)=>a+x.preco*x.litros,0);
+  const limpa=usar.filter(x=>{
+    const oL=totL-x.litros, oV=totV-x.preco*x.litros;
+    const media=oL>0?oV/oL:0;
+    return media<=0 || x.preco>=media*SB_FORA_CURVA;
+  });
+  const L=limpa.reduce((a,x)=>a+x.litros,0);
+  const V=limpa.reduce((a,x)=>a+x.preco*x.litros,0);
+  if(!(L>0)) return null;
+  return { valor:+(V/L).toFixed(3), fonte:'media_unidade', unidade:alvo||'consolidado',
+           qtd:limpa.length, qtdBruta:periodo.length, litros:L,
+           de, ate:max.slice(0,7), descartados:periodo.length-limpa.length };
+}
+
+/* ══ Etiqueta e cor do E16 ═════════════════════════════════════════════════ */
+function sbMontarChip(){
+  const el=$('simP_diesel_rs'); if(!el) return null;
+  const linha=el.closest('.sim-prem-linha'); if(!linha) return null;
+  let chip=linha.querySelector('#sbChipDiesel');
+  if(!chip){
+    chip=document.createElement('span');
+    chip.id='sbChipDiesel'; chip.className='sb-chip vazio';
+    const rot=linha.querySelector('span'); if(rot) rot.appendChild(chip); else return null;
+  }
+  return chip;
+}
+function sbRenderChip(tipo, texto, titulo){
+  const chip=sbMontarChip(); if(!chip) return;
+  if(!tipo){ chip.className='sb-chip vazio'; chip.textContent=''; chip.title=''; return; }
+  chip.className='sb-chip '+tipo;
+  chip.textContent=texto||'';
+  chip.title=titulo||'';
+}
+function sbPintarCampo(classe){
+  const el=$('simP_diesel_rs'); if(!el) return;
+  el.classList.remove('auto','auto-rota','manual-user');
+  if(classe) el.classList.add(classe);
+}
+
+/* Devolve true quando conseguiu alimentar o campo por conta própria. */
+function sbAplicarDieselE16(forcar){
+  const el=$('simP_diesel_rs'); if(!el) return false;
+  if(el.dataset.manual==='1' && !forcar){
+    sbPintarCampo('manual-user');
+    sbRenderChip('manual','digitado','Valor informado manualmente. O ↺ ao lado do rótulo devolve o número automático.');
+    return true;
+  }
+
+  const rota=sbDieselDaRota();
+  if(rota){
+    el.dataset.manual=''; el.value=rota.valor;
+    sbPintarCampo('auto-rota');
+    const p=rota.posto;
+    const ondeNaRodovia=(p.rodovia?p.rodovia:'via urbana')+(p.km!=null?' · km '+num(p.km,p.km%1?1:0):'');
+    sbRenderChip('rota','posto na rota',
+      `Último abastecimento na rota: ${p.nome} — ${ondeNaRodovia}, ${p.cidade}/${p.uf}, `+
+      `em ${sbDataBR(rota.linha.data)}. ${rota.postos.length} posto(s) da base identificado(s) no trecho.`);
+    _simDieselFonte='shellbox_posto_rota';
+    _simDieselNota=`Diesel R$ ${num(rota.valor,3)}/l — <b>último abastecimento na rota</b>: `+
+      `${esc(p.nome)} (${esc(ondeNaRodovia)}, ${esc(p.cidade)}/${esc(p.uf)}) em ${esc(sbDataBR(rota.linha.data))}`+
+      `${rota.linha.placa?' · placa '+esc(rota.linha.placa):''} · ${rota.postos.length} posto(s) da base ShellBox no trecho calculado.`;
+    try{ simPremRenderNota(); }catch(_){}
+    return true;
+  }
+
+  const filial=$('simFilial')?($('simFilial').value||''):'';
+  const med=sbMediaUnidade(filial) || sbMediaUnidade('');
+  if(med){
+    el.dataset.manual=''; el.value=med.valor;
+    sbPintarCampo('auto');
+    const rot=med.unidade==='consolidado'?'consolidado':('unidade '+med.unidade);
+    sbRenderChip('media','média da unidade',
+      `Nenhum posto da base ShellBox foi identificado no trecho calculado. `+
+      `Valor = média ponderada por litros de ${med.qtd} abastecimento(s) do ${rot}, `+
+      `período ${med.de} a ${med.ate}.`);
+    _simDieselFonte='shellbox_media_unidade';
+    _simDieselNota=`Diesel R$ ${num(med.valor,3)}/l — <b>média ponderada da ${esc(rot)}</b> `+
+      `(${med.qtd} de ${med.qtdBruta} abastecimentos, ${num(med.litros,0)} l, ${esc(med.de)} a ${esc(med.ate)})`+
+      `${med.descartados?` · ${med.descartados} descartado(s) por litragem ou preço fora da curva`:''}`+
+      ` — <b>sem posto da base ShellBox no trecho calculado</b>.`;
+    try{ simPremRenderNota(); }catch(_){}
+    return true;
+  }
+  return false;
+}
+
+/* ══ Carregamento da base ══════════════════════════════════════════════════ */
+async function sbGarantirBase(force){
+  if(SB.carregado && !force) return SB;
+  if(SB.carregando) return SB.carregando;
+  SB.carregando=(async()=>{
+    if(force){ try{ await bcGravar('base:'+SB_BASE_ID,{carimbo:'', rows:[], gravado_em:0}); }catch(_){} }
+    try{
+      const b=await loadBaseCloud(SB_BASE_ID);
+      SB.rows=(b&&Array.isArray(b.rows))?b.rows:[];
+      SB.meta=b?{ts:b.ts,file:b.file,user:b.user,count:b.count}:null;
+    }catch(e){ console.warn('[ShellBox] base:',e&&e.message); SB.rows=[]; SB.meta=null; }
+    try{
+      const d=await fsGetDoc(COL.config, SB_DOC_POSTOS);
+      SB.postos=(d && Array.isArray(d.data.itens))?d.data.itens:[];
+    }catch(_){ SB.postos=[]; }
+    SB.carregado=true; SB.carregando=null;
+    try{ sbRenderTudo(); }catch(_){}
+    return SB;
+  })();
+  return SB.carregando;
+}
+
+/* ══ Upload ════════════════════════════════════════════════════════════════ */
+function sbPodeEditar(){ return typeof isGestorOuAdmin==='function' ? isGestorOuAdmin() : true; }
+function sbProg(p){
+  const b=$('sbProg'); if(!b) return;
+  if(p==null){ b.style.display='none'; b.firstElementChild.style.width='0'; return; }
+  b.style.display='block'; b.firstElementChild.style.width=Math.max(0,Math.min(100,p))+'%';
+}
+function sbRes(html){ const el=$('sbRes'); if(el) el.innerHTML=html||''; }
+
+async function sbProcessarArquivos(files){
+  if(!files || !files.length) return;
+  if(!sbPodeEditar()){ toast('Apenas gestor ou admin pode atualizar a base ShellBox.','am'); return; }
+  if(SB.ocupado){ toast('Já existe uma carga em andamento.','am'); return; }
+  SB.ocupado=true; sbProg(2); sbRes('<span class="muted">Lendo a planilha…</span>');
+  const acc={add:0, upd:0, del:0, igual:0, arquivos:[], excluidas:[]};
+  try{
+    const XL=await rtCarregarXLSX();
+    sbProg(8);
+    await sbGarantirBase();
+    sbProg(14);
+
+    let rows=SB.rows.slice();
+    const lista=[...files];
+    for(let i=0;i<lista.length;i++){
+      const f=lista[i];
+      sbRes(`<span class="muted">Lendo <b>${esc(f.name)}</b> (${i+1} de ${lista.length})…</span>`);
+      const brutas=await sbLerArquivo(f, XL);
+      const norm=sbNormalizar(brutas);
+      const r=sbMesclar(rows, norm.linhas);
+      rows=r.rows;
+      acc.add+=r.add; acc.upd+=r.upd; acc.del+=r.del; acc.igual+=r.igual;
+      acc.excluidas=acc.excluidas.concat(r.excluidas);
+      acc.arquivos.push({nome:f.name, linhas:norm.linhas.length, ini:r.ini, fim:r.fim,
+                         add:r.add, upd:r.upd, del:r.del, igual:r.igual,
+                         perfis:r.perfis, placas:r.placas,
+                         duplicadas:norm.duplicadas, semData:norm.semData});
+      sbProg(14+30*(i+1)/lista.length);
+    }
+
+    SB.rows=rows;
+    sbRes('<span class="muted">Gravando a base na nuvem…</span>');
+    const nomeArq=acc.arquivos.map(a=>a.nome).join(' · ').slice(0,180);
+    await sbGravarBase(rows, nomeArq, (i,n)=>sbProg(44+26*i/Math.max(1,n)));
+
+    sbRes('<span class="muted">Atualizando a base de postos por rodovia…</span>');
+    sbProg(72);
+    sbRecalcularPostos();
+    const geo=await sbGeocodificarPendentes(SB_GEO_TETO,(i,n)=>sbProg(74+20*i/Math.max(1,n)));
+    await sbGravarPostos();
+    sbProg(98);
+
+    SB.ultimoResumo=Object.assign({}, acc, {geo, total:rows.length, em:agoraISO()});
+    sbRenderTudo();
+    sbRenderResumo();
+    toast(`ShellBox: ${acc.add} nova(s) · ${acc.upd} atualizada(s) · ${acc.del} excluída(s).`,'gn');
+
+    /* o E16 do Simulador passa a valer com a base nova, sem recarregar a tela */
+    try{ if(sbAplicarDieselE16(false)) simRecalcular(); }catch(_){}
+  }catch(e){
+    console.error('[ShellBox]',e);
+    sbRes(`<span class="pill rd">Falhou</span> ${esc(e.message||String(e))}`);
+    toast('Carga do ShellBox: '+(e.message||'falhou'),'rd');
+  }finally{
+    SB.ocupado=false; setTimeout(()=>sbProg(null),700);
+  }
+}
+
+/* ══ Render ════════════════════════════════════════════════════════════════ */
+function sbRenderTudo(){ sbRenderMeta(); sbRenderRodovias(); }
+
+function sbRenderMeta(){
+  const el=$('sbMeta'); if(!el) return;
+  const p=[];
+  if(!SB.carregado){ el.innerHTML='<span class="pill mu">Base não carregada.</span>'; return; }
+  if(!SB.rows.length){ el.innerHTML='<span class="pill am">Nenhum abastecimento na base — envie a primeira planilha do ShellBox.</span>'; return; }
+
+  let ini='', fim='';
+  for(const r of SB.rows){ const d=String(r.data||'').slice(0,10); if(!d) continue;
+    if(!ini||d<ini) ini=d; if(!fim||d>fim) fim=d; }
+  p.push(`<span class="pill ac">${num(SB.rows.length,0)} abastecimentos</span>`);
+  p.push(`<span class="pill mu">${esc(dtSimplesBR(ini))} a ${esc(dtSimplesBR(fim))}</span>`);
+  const comCoord=SB.postos.filter(x=>Number(x.lat)&&Number(x.lng)).length;
+  p.push(`<span class="pill mu">${num(SB.postos.length,0)} postos · ${num(comCoord,0)} com coordenada</span>`);
+  const semCoord=SB.postos.length-comCoord;
+  if(semCoord) p.push(`<span class="pill am" title="Postos sem coordenada não entram no casamento com o trecho da rota">${num(semCoord,0)} sem coordenada</span>`);
+  const rod=new Set(SB.postos.filter(x=>x.rodovia).map(x=>x.rodovia));
+  p.push(`<span class="pill mu">${num(rod.size,0)} rodovias</span>`);
+  if(SB.meta&&SB.meta.ts) p.push(`<span class="pill mu" title="${esc(SB.meta.file||'')}">carga ${esc(dtBR(SB.meta.ts))}${SB.meta.user?' · '+esc(SB.meta.user):''}</span>`);
+  el.innerHTML=p.join('');
+}
+
+function sbRenderResumo(){
+  const r=SB.ultimoResumo; if(!r){ sbRes(''); return; }
+  const linhas=r.arquivos.map(a=>
+    `<div>· <b>${esc(a.nome)}</b> — ${num(a.linhas,0)} linha(s), intervalo ${esc(dtSimplesBR(a.ini))} a ${esc(dtSimplesBR(a.fim))}: `+
+    `<span class="pill gn">${a.add} nova(s)</span> <span class="pill ac">${a.upd} atualizada(s)</span> `+
+    `<span class="pill ${a.del?'rd':'mu'}">${a.del} excluída(s)</span> <span class="pill mu">${a.igual} sem mudança</span>`+
+    `<div class="muted" style="margin-left:10px">escopo da exclusão: ${a.perfis} perfil(is) e ${a.placas} placa(s) deste arquivo`+
+    `${a.duplicadas?` · ${a.duplicadas} ID(s) repetido(s) no próprio arquivo (venceu o último)`:''}`+
+    `${a.semData?` · ${a.semData} linha(s) sem data descartada(s)`:''}</div></div>`).join('');
+  const g=r.geo||{};
+  const geoTxt = g.semChave ? '<div class="muted">Postos novos ficaram sem coordenada: a chave da HERE não está configurada (aba Pedágio &amp; Rota). Sem coordenada o posto não é casado com o trecho da rota.</div>'
+    : (g.ok||g.falhou||g.pulados)
+      ? `<div class="muted">Geocodificação: ${g.ok||0} posto(s) resolvido(s)${g.falhou?`, ${g.falhou} sem endereço reconhecido`:''}${g.pulados?`, ${g.pulados} adiado(s) para a próxima rodada`:''}.</div>`
+      : '';
+  const excl = r.excluidas.length
+    ? `<details style="margin-top:6px"><summary class="muted" style="cursor:pointer">Ver ${r.excluidas.length>=40?'as primeiras 40 ':''}transações excluídas</summary>`+
+      `<div class="muted" style="margin-top:4px">${r.excluidas.map(x=>`${esc(x.id)} · ${esc(sbDataBR(x.data))} · ${esc(x.posto)} · ${esc(x.placa)}`).join('<br>')}</div></details>`
+    : '';
+  sbRes(`<div><b>Base consolidada: ${num(r.total,0)} abastecimentos.</b></div>${linhas}${geoTxt}${excl}`);
+}
+
+function sbEstatPosto(chave){
+  let qtd=0, ultimo=null, litros=0, valor=0;
+  for(const x of SB.rows){
+    if(sbChaveMemo(x)!==chave) continue;
+    qtd++;
+    if(sbEhDiesel(x) && x.preco>0 && x.litros>0 && sbLancamentoValido(x)){ litros+=x.litros; valor+=x.preco*x.litros; }
+    if(!ultimo || String(x.data)>String(ultimo.data)) ultimo=x;
+  }
+  return {qtd, ultimo, media: litros>0?valor/litros:null};
+}
+
+function sbRenderRodovias(){
+  const alvo=$('sbRodovias'); if(!alvo) return;
+  if(!SB.carregado){ alvo.innerHTML='<div class="muted">Base não carregada.</div>'; return; }
+  if(!SB.postos.length){ alvo.innerHTML='<div class="muted">Nenhum posto na base ainda.</div>'; return; }
+
+  const q=_nk(SB.busca||'');
+  const filtrados = q ? SB.postos.filter(p=>
+      _nk(p.rodovia).includes(q)||_nk(p.nome).includes(q)||_nk(p.cidade).includes(q)||
+      _nk(p.endereco).includes(q)||_nk(p.uf).includes(q)) : SB.postos;
+  if(!filtrados.length){ alvo.innerHTML='<div class="muted">Nada encontrado para essa busca.</div>'; return; }
+
+  const grupos=new Map();
+  filtrados.forEach(p=>{
+    const k=p.rodovia||'— sem rodovia no endereço (via urbana)';
+    if(!grupos.has(k)) grupos.set(k,[]);
+    grupos.get(k).push(p);
+  });
+  const est=new Map(); filtrados.forEach(p=>est.set(p.chave, sbEstatPosto(p.chave)));
+
+  const ordenados=[...grupos.entries()].sort((a,b)=>{
+    const qa=a[1].reduce((s,p)=>s+(est.get(p.chave)?.qtd||0),0);
+    const qb=b[1].reduce((s,p)=>s+(est.get(p.chave)?.qtd||0),0);
+    return qb-qa || a[0].localeCompare(b[0]);
+  });
+
+  alvo.innerHTML=ordenados.map(([rodovia,postos],i)=>{
+    const total=postos.reduce((s,p)=>s+(est.get(p.chave)?.qtd||0),0);
+    const linhas=postos.sort((a,b)=>(a.km??1e9)-(b.km??1e9)||a.nome.localeCompare(b.nome)).map(p=>{
+      const e=est.get(p.chave)||{};
+      const coord=(Number(p.lat)&&Number(p.lng))
+        ? `<span class="pill gn" title="${esc(p.geoLabel||'')}">ok</span>`
+        : (p.geo==='falhou'?'<span class="pill rd" title="A HERE não reconheceu o endereço">falhou</span>'
+                           :'<span class="pill am">pendente</span>');
+      return `<tr>
+        <td>${esc(p.nome)}<div class="muted" style="font-size:10px">${esc(p.endereco||'—')}</div></td>
+        <td class="num mono">${p.km!=null?num(p.km,p.km%1?1:0):'—'}</td>
+        <td>${esc(p.cidade||'—')}/${esc(p.uf||'—')}</td>
+        <td class="num">${num(e.qtd||0,0)}</td>
+        <td>${e.ultimo?esc(sbDataBR(e.ultimo.data)):'—'}</td>
+        <td class="num">${e.ultimo&&e.ultimo.preco>0?num(e.ultimo.preco,3):'—'}</td>
+        <td class="num">${e.media!=null?num(e.media,3):'—'}</td>
+        <td>${coord}</td></tr>`;
+    }).join('');
+    return `<details${i<2?' open':''}>
+      <summary>${esc(rodovia)} <span class="pill mu">${postos.length} posto(s)</span><em>${num(total,0)} abastecimento(s)</em></summary>
+      <table class="tb">
+        <thead><tr><th>Posto</th><th class="num">Km</th><th>Cidade/UF</th><th class="num">Abast.</th>
+        <th>Último</th><th class="num">R$/L último</th><th class="num">R$/L médio</th><th>Coord.</th></tr></thead>
+        <tbody>${linhas}</tbody>
+      </table></details>`;
+  }).join('');
+}
+
+async function sbExportar(){
+  try{
+    const XL=await rtCarregarXLSX();
+    await sbGarantirBase();
+    const wb=XL.utils.book_new();
+    const add=(nome,dados)=>{ const ws=XL.utils.json_to_sheet(dados.length?dados:[{'—':'sem registros'}]);
+      XL.utils.book_append_sheet(wb,ws,nome.slice(0,31)); };
+    add('Abastecimentos', SB.rows.map(r=>({
+      'ID':r.id,'Data':sbDataBR(r.data),'Status':r.status,'Posto':r.posto,'Endereço':r.endereco,
+      'Rodovia':sbRodovia(r.endereco),'Km':sbKm(r.endereco),'Cidade':r.cidade,'UF':r.uf,'CNPJ':r.cnpj,
+      'Placa':r.placa,'Combustível':r.combustivel,'Litros':r.litros,'Valor':r.valor,'R$/L':r.preco,
+      'Perfil':r.perfil,'Unidade':sbUnidade(r),'Condutor':r.condutor
+    })));
+    add('Postos por rodovia', SB.postos.map(p=>{ const e=sbEstatPosto(p.chave); return {
+      'Rodovia':p.rodovia||'—','Km':p.km,'Posto':p.nome,'Endereço':p.endereco,'Cidade':p.cidade,'UF':p.uf,
+      'CNPJ':p.cnpj,'Abastecimentos':e.qtd,'Último':e.ultimo?sbDataBR(e.ultimo.data):'—',
+      'R$/L médio':e.media!=null?+e.media.toFixed(3):null,'Lat':p.lat,'Lng':p.lng,'Geocodificação':p.geo||'pendente'
+    };}));
+    XL.writeFile(wb,'ShellBox_postos_por_rodovia.xlsx');
+  }catch(e){ toast('Exportação falhou: '+(e.message||e),'rd'); }
+}
+
+/* ══ Ligações de tela ══════════════════════════════════════════════════════ */
+function sbBind(){
+  const drop=$('sbDrop'), file=$('sbFile');
+  if(!drop||!file) return;
+
+  const abrir=()=>{ if(!sbPodeEditar()){ toast('Apenas gestor ou admin pode atualizar a base ShellBox.','am'); return; } file.click(); };
+  drop.addEventListener('click',abrir);
+  const btnUp=$('sbBtnUpload'); if(btnUp) btnUp.onclick=abrir;
+
+  file.addEventListener('change',e=>{ const fs=[...(e.target.files||[])]; e.target.value=''; sbProcessarArquivos(fs); });
+  ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.add('on'); }));
+  ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{ e.preventDefault(); drop.classList.remove('on'); }));
+  drop.addEventListener('drop',e=>{
+    const fs=[...((e.dataTransfer&&e.dataTransfer.files)||[])];
+    if(fs.length) sbProcessarArquivos(fs);
+  });
+
+  const btnRe=$('sbBtnRecarregar');
+  if(btnRe) btnRe.onclick=async()=>{
+    btnRe.disabled=true; const t=btnRe.textContent; btnRe.textContent='Carregando…';
+    try{ SB.carregado=false; await sbGarantirBase(true); toast('Base ShellBox recarregada da nuvem.','gn'); }
+    finally{ btnRe.disabled=false; btnRe.textContent=t; }
+  };
+
+  const btnGeo=$('sbBtnGeo');
+  if(btnGeo) btnGeo.onclick=async()=>{
+    if(!sbPodeEditar()){ toast('Apenas gestor ou admin pode geocodificar a base.','am'); return; }
+    await sbGarantirBase();
+    if(!SB.postos.length){ toast('Não há postos na base ainda.','am'); return; }
+    btnGeo.disabled=true; const t=btnGeo.textContent; btnGeo.textContent='Geocodificando…';
+    try{
+      /* uma nova rodada reabre os que falharam: endereço ruim de um dia pode
+         ser resolvido depois que a HERE atualiza a base dela */
+      SB.postos.forEach(p=>{ if(p.geo==='falhou') delete p.geo; });
+      sbProg(5);
+      const g=await sbGeocodificarPendentes(SB_GEO_TETO,(i,n)=>sbProg(5+90*i/Math.max(1,n)));
+      await sbGravarPostos(); sbRenderTudo();
+      toast(g.semChave?'Configure a chave HERE na aba Pedágio & Rota.'
+                      :`Geocodificação: ${g.ok} ok · ${g.falhou} sem resultado${g.pulados?` · ${g.pulados} adiado(s)`:''}.`,
+            g.semChave?'am':'gn');
+    }catch(e){ toast('Geocodificação falhou: '+(e.message||e),'rd'); }
+    finally{ btnGeo.disabled=false; btnGeo.textContent=t; setTimeout(()=>sbProg(null),600); }
+  };
+
+  const btnEx=$('sbBtnExport'); if(btnEx) btnEx.onclick=sbExportar;
+
+  const busca=$('sbBusca');
+  if(busca){ let t=null; busca.addEventListener('input',()=>{ clearTimeout(t);
+    t=setTimeout(()=>{ SB.busca=busca.value; sbRenderRodovias(); },200); }); }
+
+  /* a aba Combustível carrega a base ao ser aberta pela primeira vez */
+  document.querySelectorAll('#tabsBar .tab[data-v="comb"]').forEach(b=>{
+    b.addEventListener('click',()=>{ sbGarantirBase(); });
+  });
+}
+
+/* ══ Enxertos nas funções do Simulador ═════════════════════════════════════
+   Nada do fluxo existente é reescrito: as funções originais continuam valendo
+   e só ganham o passo do ShellBox na frente (E16) ou atrás (chip e rota). */
+if(typeof simPremRender==='function'){
+  const _sbPremRender=simPremRender;
+  simPremRender=function(){
+    const r=_sbPremRender.apply(this,arguments);
+    try{
+      sbMontarChip();
+      const el=$('simP_diesel_rs');
+      if(el && el.dataset.sbLigado!=='1'){
+        el.dataset.sbLigado='1';
+        el.addEventListener('input',()=>{
+          sbPintarCampo('manual-user');
+          sbRenderChip('manual','digitado','Valor informado manualmente. O ↺ ao lado do rótulo devolve o número automático.');
+        });
+      }
+    }catch(e){ console.warn('[ShellBox] chip do E16:',e&&e.message); }
+    return r;
+  };
+}
+
+if(typeof simAtualizarDieselMedio==='function'){
+  const _sbDieselOrig=simAtualizarDieselMedio;
+  simAtualizarDieselMedio=async function(forcar){
+    const el=$('simP_diesel_rs');
+    if(el && el.dataset.manual==='1' && !forcar){
+      sbPintarCampo('manual-user');
+      sbRenderChip('manual','digitado','Valor informado manualmente. O ↺ ao lado do rótulo devolve o número automático.');
+      return;
+    }
+    try{ await sbGarantirBase(); }catch(_){}
+    try{ if(sbAplicarDieselE16(forcar)) return; }catch(e){ console.warn('[ShellBox] E16:',e&&e.message); }
+    /* base vazia ou sem preço apurável: segue a cascata antiga (SZC → preço
+       vigente da aba Combustível → premissa cadastrada) */
+    await _sbDieselOrig.call(this, forcar);
+    try{
+      const rot = _simDieselFonte==='media_realizada' ? ['media','média SZC']
+                : _simDieselFonte==='combustivel_vigente' ? ['media','preço vigente']
+                : ['media','premissa'];
+      sbPintarCampo('auto');
+      sbRenderChip(rot[0], rot[1], 'Sem base ShellBox aplicável — origem: '+rot[1]+'.');
+    }catch(_){}
+  };
+}
+
+if(typeof simAplicarRota==='function'){
+  const _sbAplicarRota=simAplicarRota;
+  simAplicarRota=function(){
+    const r=_sbAplicarRota.apply(this,arguments);
+    /* rota nova = trecho novo = possivelmente outro posto mandando no E16 */
+    sbGarantirBase().then(()=>{
+      try{ if(sbAplicarDieselE16(false)) simRecalcular(); }catch(e){ console.warn('[ShellBox] E16 pós-rota:',e&&e.message); }
+    }).catch(()=>{});
+    return r;
+  };
+}
+
+try{ sbBind(); }catch(e){ console.warn('[ShellBox] bind:',e&&e.message); }
+/* a base entra em segundo plano, fora do caminho crítico do boot */
+setTimeout(()=>{ try{ sbGarantirBase(); }catch(_){} }, 2600);
+
+try{ window.SB=SB; window.sbMatchPostos=sbMatchPostos; window.sbDieselDaRota=sbDieselDaRota;
+     window.sbMediaUnidade=sbMediaUnidade; window.sbRodovia=sbRodovia; window.sbKm=sbKm;
+     window.sbAplicarDieselE16=sbAplicarDieselE16; }catch(_){}
 </script>
 
 </body>
