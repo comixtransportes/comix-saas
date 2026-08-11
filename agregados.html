@@ -96,7 +96,12 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
 /* ── layout 2 colunas do Fechamento ── */
 .fech-grid{display:grid;grid-template-columns:300px 1fr;gap:14px;align-items:start}
 @media(max-width:980px){.fech-grid{grid-template-columns:1fr}}
-.ag-list{max-height:calc(100vh - 200px);overflow:auto}
+.ag-list{max-height:calc(100vh - 246px);overflow:auto}
+/* ── rodapé do painel Agregados: exportação de divergências ── */
+.ag-foot{display:flex;flex-direction:column;gap:5px;padding:9px 12px;border-top:1px solid var(--bd);background:#fafbfc;border-radius:0 0 var(--r) var(--r)}
+.ag-foot .btn{width:100%;text-align:center}
+.ag-foot-note{font-size:10.5px;color:var(--mu);line-height:1.35}
+.ag-foot-note b{color:var(--tx)}
 .ag-li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--bd2);cursor:pointer}
 .ag-li:hover{background:var(--ht)}
 .ag-li.on{background:var(--ac-bg);border-left:3px solid var(--ac);padding-left:9px}
@@ -359,6 +364,11 @@ tr.res td{background:var(--hd);color:#fff;font-weight:700}
         <input type="text" id="agBusca" class="sel" placeholder="buscar nome / placa / código" style="width:100%;max-width:170px" oninput="renderLista()">
       </div>
       <div class="ag-list" id="agLista"><div class="empty">Carregando bases…</div></div>
+      <div class="ag-foot no-print">
+        <button class="btn pri sm" id="agBtnExport" onclick="agExportarDivergencias()"
+                title="Gera uma planilha Excel com a relação de erros e divergências por agregado e placa. Com filial 'Todas', separa os agregados em uma aba por unidade.">⇩ Exportar divergências (Excel)</button>
+        <span class="ag-foot-note" id="agExportNote">aguardando bases…</span>
+      </div>
     </div>
     <div id="agDetalhe">
       <div class="panel"><div class="empty">Selecione um agregado na lista para abrir o fechamento.</div></div>
@@ -1007,19 +1017,312 @@ function renderLista(){
   if(busca) lista=lista.filter(o=> upper(o.nome).includes(busca)
       || Array.from(o.codes).some(c=>c.includes(busca.replace(/\D/g,'')||'§'))
       || Object.keys(o.veiculos).some(p=>p.includes(busca)));
-  if(!lista.length){ el.innerHTML='<div class="empty">Nenhum agregado no escopo.</div>'; return; }
+  if(!lista.length){ el.innerHTML='<div class="empty">Nenhum agregado no escopo.</div>'; agSetExportNote(0,0,0,0); return; }
   if(ST.sel && !cur.map[ST.sel]) ST.sel=null;
   if(!ST.sel) ST.sel=lista[0].cod;
+  let _nAg=0,_nErr=0,_nWarn=0;
   el.innerHTML = lista.map(function(o){
     const auds=auditar(o, prev.map[o.cod]); const c=contarSev(auds);
+    if(c.err||c.warn){ _nAg++; _nErr+=c.err; _nWarn+=c.warn; }
     const badge = c.err? '<span class="badge err">'+c.err+'</span>' : c.warn? '<span class="badge warn">'+c.warn+'</span>' : '<span class="badge ok">✓</span>';
     return '<div class="ag-li'+(ST.sel===o.cod?' on':'')+'" onclick="selecionar(\''+o.cod+'\')">'
       +'<div><div class="nm">'+esc(o.nome||'—')+'</div><div class="cd">'+Array.from(o.codes).sort().join(' +')+' · '+Object.keys(o.veiculos).length+' placa(s)</div></div>'
       +'<div style="text-align:right"><div class="sd'+(o.saldo<0?' deb':'')+'">'+moeda(o.saldo)+'</div>'+badge+'</div></div>';
   }).join('');
+  agSetExportNote(_nAg,_nErr,_nWarn,lista.length);
   renderDetalhe();
 }
 function selecionar(cod){ ST.sel=cod; renderLista(); }
+
+/* ══════════════════════════════════════════════════════════════════
+   EXPORTAÇÃO — relação de erros e divergências por agregado / placa
+   Fonte única de verdade: auditar() (as mesmas 7 validações da tela).
+   Entram apenas itens 'err' (erro) e 'warn' (alerta/divergência).
+   Filial = Todas → uma aba por unidade (SC/PR/SP) + aba Resumo.
+   ══════════════════════════════════════════════════════════════════ */
+const AG_SEV_LABEL={err:'ERRO', warn:'DIVERGÊNCIA'};
+/* as mensagens da auditoria começam com a placa: "ANZ-6F91: ..." */
+function agPlacaDaMsg(msg){
+  const m=String(msg||'').match(/^([A-Z0-9][A-Z0-9–\-]{2,9}):\s/);
+  return m?m[1]:'';
+}
+/* mensagem da auditoria vem com HTML (<b>) → texto puro para a planilha */
+function agTxtPuro(msg){
+  return String(msg==null?'':msg)
+    .replace(/<[^>]+>/g,'')
+    .replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&')
+    .replace(/\s+/g,' ').trim();
+}
+/* unidade do fechamento da placa — mesma alocação usada no buildMes */
+function agUnidadeVeic(v, mes){
+  const src=(v.ctrcs&&v.ctrcs[0])||(v.lanc&&v.lanc[0])||null;
+  if(src&&src.filAloc) return src.filAloc;
+  try{ const a=filialAlocPlaca(v.placa, mes, '', true); if(a&&a.sg) return a.sg; }catch(_){}
+  return '—';
+}
+/* unidade predominante do agregado (usada nas ocorrências de nível agregado) */
+function agUnidadeAgreg(o, mes){
+  const acc={};
+  Object.values(o.veiculos).forEach(function(v){
+    const u=agUnidadeVeic(v,mes); acc[u]=(acc[u]||0)+Math.abs(v.com)+Math.abs(v.fat)+1;
+  });
+  const ks=Object.keys(acc); if(!ks.length) return '—';
+  return ks.sort(function(a,b){ return acc[b]-acc[a]; })[0];
+}
+/* monta a relação de ocorrências do mês/escopo atual */
+function agBuildDivergencias(){
+  const mes=ST.mesRef;
+  const cur=buildMes(mes), prev=buildMes(mesAnterior(mes));
+  const out=[];
+  cur.lista.forEach(function(o){
+    const auds=auditar(o, prev.map[o.cod]).filter(function(a){ return a.sev==='err'||a.sev==='warn'; });
+    if(!auds.length) return;
+    const uniAg=agUnidadeAgreg(o, mes);
+    const codes=Array.from(o.codes).sort().join(' + ');
+    /* placas com CTRC fora da regra de percentual — a validação 7 é de nível
+       agregado, mas a relação precisa apontar a placa envolvida. */
+    const placasPct=Object.values(o.veiculos)
+      .filter(function(v){ return v.ctrcs.some(function(c){ return c.divg; }); })
+      .map(function(v){ return v.placa; }).sort();
+    auds.forEach(function(a){
+      const p=agPlacaDaMsg(a.msg);
+      const v=(p && o.veiculos[p]) ? o.veiculos[p] : null;
+      const placaGeral = (a.grupo==='Percentual' && placasPct.length) ? placasPct.join(', ') : '(todas as placas)';
+      out.push({
+        unidade : v ? agUnidadeVeic(v, mes) : uniAg,
+        agKey   : o.cod,
+        cod     : codes,
+        nome    : o.nome||'—',
+        placa   : v ? v.placa : placaGeral,
+        nivel   : v ? 'placa' : 'agregado',
+        sev     : a.sev,
+        grupo   : a.grupo,
+        msg     : agTxtPuro(a.msg),
+        com     : v ? v.com : o.com,
+        deb     : v ? (v.abast+v.deb) : (o.abast+o.deb),
+        cred    : v ? v.cred : o.cred,
+        saldo   : v ? v.saldo : o.saldo,
+        saldoAg : o.saldo,
+        nPlacas : Object.keys(o.veiculos).length
+      });
+    });
+  });
+  const ordSev={err:0, warn:1};
+  out.sort(function(a,b){
+    return String(a.unidade).localeCompare(String(b.unidade))
+      || a.nome.localeCompare(b.nome, 'pt-BR')
+      || a.cod.localeCompare(b.cod)
+      || (a.nivel==='agregado'?0:1)-(b.nivel==='agregado'?0:1)
+      || a.placa.localeCompare(b.placa)
+      || ordSev[a.sev]-ordSev[b.sev]
+      || a.grupo.localeCompare(b.grupo, 'pt-BR');
+  });
+  return out;
+}
+/* nota do rodapé do painel (atualizada a cada render da lista) */
+function agSetExportNote(nAg, nErr, nWarn, nTotal){
+  const el=document.getElementById('agExportNote'); if(!el) return;
+  const bt=document.getElementById('agBtnExport');
+  if(!nAg){
+    el.innerHTML='Nenhum erro ou divergência no escopo — <b>'+nTotal+'</b> agregado(s) conferido(s).';
+    if(bt) bt.disabled=false;
+    return;
+  }
+  el.innerHTML='<b>'+nAg+'</b> de '+nTotal+' agregado(s) com pendência · <b>'+nErr+'</b> erro(s) · <b>'+nWarn+'</b> divergência(s)'
+    + (ST.filial==='all' ? ' · a planilha sai separada por unidade.' : '');
+  if(bt) bt.disabled=false;
+}
+
+/* ── XML helpers da planilha de divergências ── */
+function agXmlEsc(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\r?\n/g,' '); }
+function agCelTxt(v, st){ const s=String(v==null?'':v); return '<Cell ss:StyleID="'+st+'">'+(s===''?'':'<Data ss:Type="String">'+agXmlEsc(s)+'</Data>')+'</Cell>'; }
+function agCelNum(v, st){
+  if(v===''||v===null||v===undefined||!isFinite(Number(v))) return '<Cell ss:StyleID="'+st+'"/>';
+  return '<Cell ss:StyleID="'+st+'"><Data ss:Type="Number">'+Number(v).toFixed(2)+'</Data></Cell>';
+}
+function agCelInt(v, st){
+  if(v===''||v===null||v===undefined||!isFinite(Number(v))) return '<Cell ss:StyleID="'+st+'"/>';
+  return '<Cell ss:StyleID="'+st+'"><Data ss:Type="Number">'+Math.round(Number(v))+'</Data></Cell>';
+}
+function agEstilos(){
+  const bd='<Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E3E6EA"/><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EFF1F3"/></Borders>';
+  function st(id, fill, font, bold, tipo, align){
+    return '<Style ss:ID="'+id+'">'
+      +'<Font ss:FontName="Segoe UI" ss:Size="10"'+(bold?' ss:Bold="1"':'')+(font?' ss:Color="'+font+'"':'')+'/>'
+      +(fill?'<Interior ss:Color="'+fill+'" ss:Pattern="Solid"/>':'')
+      +bd
+      +'<Alignment ss:Horizontal="'+(align||'Left')+'" ss:Vertical="Center" ss:WrapText="1"/>'
+      +(tipo==='num'?'<NumberFormat ss:Format="#,##0.00"/>':'')
+      +(tipo==='int'?'<NumberFormat ss:Format="0"/>':'')
+      +'</Style>';
+  }
+  const TONE={ Err:{fill:'#FDECEA', font:'#B3322E'}, Warn:{fill:'#FEF6E7', font:'#96660B'} };
+  let s='';
+  Object.keys(TONE).forEach(function(t){
+    s+=st('dSev'+t, TONE[t].fill, TONE[t].font, true,  '',    'Center');
+    s+=st('dTxt'+t, TONE[t].fill, '',           false, '',    'Left');
+    s+=st('dNum'+t, TONE[t].fill, '',           false, 'num', 'Right');
+  });
+  s+=st('dTxt','', '', false, '',    'Left');
+  s+=st('dNum','', '', false, 'num', 'Right');
+  s+=st('dInt','', '', false, 'int', 'Center');
+  s+=st('dTxtB','#F4F6FA','',true,'', 'Left');
+  s+=st('dNumB','#F4F6FA','',true,'num','Right');
+  s+=st('dIntB','#F4F6FA','',true,'int','Center');
+  s+='<Style ss:ID="dTitulo"><Font ss:FontName="Segoe UI" ss:Size="12" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F2A38" ss:Pattern="Solid"/><Alignment ss:Horizontal="Left" ss:Vertical="Center" ss:WrapText="1"/></Style>'
+    +'<Style ss:ID="dSub"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Color="#5D6D7E"/><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>'
+    +'<Style ss:ID="dHeader"><Font ss:FontName="Segoe UI" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#34495E" ss:Pattern="Solid"/><Borders><Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#4A6076"/></Borders><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/></Style>'
+    +'<Style ss:ID="dGrp"><Font ss:FontName="Segoe UI" ss:Size="10.5" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#2C3E50" ss:Pattern="Solid"/><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>'
+    +'<Style ss:ID="dUni"><Font ss:FontName="Segoe UI" ss:Size="10.5" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#148F77" ss:Pattern="Solid"/><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>';
+  return s;
+}
+/* uma aba de ocorrências (uma unidade, ou o escopo inteiro) */
+function agAbaDivergencias(nome, linhas, mesLbl, escopoLbl){
+  const H=['Unidade','Código','Agregado','Placa','Severidade','Validação','Ocorrência','Comissão (R$)','Débitos (R$)','Créditos (R$)','Saldo (R$)'];
+  const W=[58,86,210,96,96,104,430,92,92,92,92];
+  const N=H.length;
+  const nErr=linhas.filter(function(l){ return l.sev==='err'; }).length;
+  const nWar=linhas.length-nErr;
+  const nAg=new Set(linhas.map(function(l){ return l.agKey; })).size;
+
+  let x='<Worksheet ss:Name="'+agXmlEsc(nome)+'"><Table ss:DefaultRowHeight="16">';
+  W.forEach(function(w){ x+='<Column ss:AutoFitWidth="0" ss:Width="'+w+'"/>'; });
+  x+='<Row ss:Height="26"><Cell ss:StyleID="dTitulo" ss:MergeAcross="'+(N-1)+'"><Data ss:Type="String">'
+    +agXmlEsc('DIVERGÊNCIAS DO FECHAMENTO DE AGREGADOS · '+mesLbl+' · '+escopoLbl
+      +'   |   '+nAg+' agregado(s) · '+nErr+' erro(s) · '+nWar+' divergência(s)')+'</Data></Cell></Row>';
+  x+='<Row ss:Height="16"><Cell ss:StyleID="dSub" ss:MergeAcross="'+(N-1)+'"><Data ss:Type="String">'
+    +agXmlEsc('Auditoria automática mês atual × mês anterior · unidade definida pela filial de cadastro da placa · valores da placa quando a ocorrência é da placa, do agregado quando é geral.')+'</Data></Cell></Row>';
+  x+='<Row ss:Height="28">'+H.map(function(h){ return agCelTxt(h,'dHeader'); }).join('')+'</Row>';
+
+  if(!linhas.length){
+    x+='<Row><Cell ss:StyleID="dTxt" ss:MergeAcross="'+(N-1)+'"><Data ss:Type="String">Nenhum erro ou divergência nesta unidade.</Data></Cell></Row>';
+  }
+  let atual=null;
+  linhas.forEach(function(l){
+    if(l.agKey!==atual){
+      atual=l.agKey;
+      const dl=linhas.filter(function(z){ return z.agKey===atual; });
+      const e=dl.filter(function(z){ return z.sev==='err'; }).length;
+      x+='<Row ss:Height="19"><Cell ss:StyleID="dGrp" ss:MergeAcross="'+(N-1)+'"><Data ss:Type="String">'
+        +agXmlEsc('▸ '+l.cod+' — '+l.nome+'   ·   '+l.nPlacas+' placa(s)   ·   saldo do agregado '+moeda(l.saldoAg)
+          +'   ·   '+e+' erro(s), '+(dl.length-e)+' divergência(s)')+'</Data></Cell></Row>';
+    }
+    const t=l.sev==='err'?'Err':'Warn';
+    x+='<Row>'
+      +agCelTxt(l.unidade,'dTxt'+t)
+      +agCelTxt(l.cod,'dTxt'+t)
+      +agCelTxt(l.nome,'dTxt'+t)
+      +agCelTxt(l.placa,'dTxt'+t)
+      +agCelTxt(AG_SEV_LABEL[l.sev],'dSev'+t)
+      +agCelTxt(l.grupo,'dTxt'+t)
+      +agCelTxt(l.msg,'dTxt'+t)
+      +agCelNum(l.com,'dNum'+t)
+      +agCelNum(l.deb,'dNum'+t)
+      +agCelNum(l.cred,'dNum'+t)
+      +agCelNum(l.saldo,'dNum'+t)
+      +'</Row>';
+  });
+  x+='</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DoNotDisplayGridlines/><FreezePanes/><FrozenNoSplit/><SplitHorizontal>3</SplitHorizontal><TopRowBottomPane>3</TopRowBottomPane><ActivePane>2</ActivePane></WorksheetOptions></Worksheet>';
+  return x;
+}
+/* aba Resumo: contagem por unidade e por agregado */
+function agAbaResumo(linhas, unidades, mesLbl, escopoLbl, totalAgreg){
+  const H=['Unidade','Código','Agregado','Placas','Erros','Divergências','Validações com pendência','Saldo do agregado (R$)'];
+  const W=[58,86,230,54,54,86,300,120];
+  const N=H.length;
+  let x='<Worksheet ss:Name="Resumo"><Table ss:DefaultRowHeight="16">';
+  W.forEach(function(w){ x+='<Column ss:AutoFitWidth="0" ss:Width="'+w+'"/>'; });
+  x+='<Row ss:Height="26"><Cell ss:StyleID="dTitulo" ss:MergeAcross="'+(N-1)+'"><Data ss:Type="String">'
+    +agXmlEsc('RESUMO DAS DIVERGÊNCIAS · '+mesLbl+' · '+escopoLbl)+'</Data></Cell></Row>';
+  x+='<Row ss:Height="16"><Cell ss:StyleID="dSub" ss:MergeAcross="'+(N-1)+'"><Data ss:Type="String">'
+    +agXmlEsc(totalAgreg+' agregado(s) no escopo · '+new Set(linhas.map(function(l){return l.agKey;})).size+' com pendência.')+'</Data></Cell></Row>';
+  x+='<Row ss:Height="28">'+H.map(function(h){ return agCelTxt(h,'dHeader'); }).join('')+'</Row>';
+
+  unidades.forEach(function(u){
+    const ls=linhas.filter(function(l){ return l.unidade===u; });
+    const ags=[];
+    ls.forEach(function(l){ if(!ags.some(function(a){ return a.agKey===l.agKey; })) ags.push({agKey:l.agKey, cod:l.cod, nome:l.nome, nPlacas:l.nPlacas, saldoAg:l.saldoAg}); });
+    ags.sort(function(a,b){
+      const ea=ls.filter(function(z){ return z.agKey===a.agKey&&z.sev==='err'; }).length;
+      const eb=ls.filter(function(z){ return z.agKey===b.agKey&&z.sev==='err'; }).length;
+      return eb-ea || a.nome.localeCompare(b.nome,'pt-BR');
+    });
+    const e=ls.filter(function(z){ return z.sev==='err'; }).length;
+    x+='<Row ss:Height="19"><Cell ss:StyleID="dUni" ss:MergeAcross="'+(N-1)+'"><Data ss:Type="String">'
+      +agXmlEsc('UNIDADE '+u+'   ·   '+ags.length+' agregado(s) com pendência   ·   '+e+' erro(s), '+(ls.length-e)+' divergência(s)')+'</Data></Cell></Row>';
+    ags.forEach(function(a){
+      const la=ls.filter(function(z){ return z.agKey===a.agKey; });
+      const ea=la.filter(function(z){ return z.sev==='err'; }).length;
+      const grupos=[]; la.forEach(function(z){ if(grupos.indexOf(z.grupo)<0) grupos.push(z.grupo); });
+      x+='<Row>'
+        +agCelTxt(u,'dTxt')
+        +agCelTxt(a.cod,'dTxt')
+        +agCelTxt(a.nome,'dTxt')
+        +agCelInt(a.nPlacas,'dInt')
+        +agCelInt(ea,'dInt')
+        +agCelInt(la.length-ea,'dInt')
+        +agCelTxt(grupos.join(' · '),'dTxt')
+        +agCelNum(a.saldoAg,'dNum')
+        +'</Row>';
+    });
+    x+='<Row>'
+      +agCelTxt('','dTxtB')+agCelTxt('','dTxtB')+agCelTxt('Total '+u,'dTxtB')
+      +agCelInt(ags.reduce(function(s,a){ return s+a.nPlacas; },0),'dIntB')
+      +agCelInt(e,'dIntB')+agCelInt(ls.length-e,'dIntB')
+      +agCelTxt('','dTxtB')
+      +agCelNum(ags.reduce(function(s,a){ return s+a.saldoAg; },0),'dNumB')
+      +'</Row>';
+  });
+  x+='</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><DoNotDisplayGridlines/><FreezePanes/><FrozenNoSplit/><SplitHorizontal>3</SplitHorizontal><TopRowBottomPane>3</TopRowBottomPane><ActivePane>2</ActivePane></WorksheetOptions></Worksheet>';
+  return x;
+}
+function agExportarDivergencias(){
+  if(!BASES.szb.loaded){ toast('Aguardando a base SZB para exportar.','am'); return; }
+  if(!(BASES.szc.loaded&&BASES.szi.loaded)) toast('Atenção: SZC/SZI ainda não carregados — a relação pode sair incompleta.','am');
+  if(!ST.mesRef){ toast('Selecione o mês de referência.','am'); return; }
+
+  const linhas=agBuildDivergencias();
+  const totalAgreg=buildMes(ST.mesRef).lista.length;
+  const mesLbl=mesLabel(ST.mesRef);
+  const todas=ST.filial==='all';
+  const escopoLbl= todas ? 'TODAS AS UNIDADES' : 'Unidade '+ST.filial;
+
+  if(!linhas.length){ toast('Nenhum erro ou divergência no escopo — nada a exportar.','gn'); return; }
+
+  /* unidades presentes: com "Todas", uma aba por unidade (SC/PR/SP + eventuais outras) */
+  const ordem=['SC','PR','SP'];
+  let unidades=Array.from(new Set(linhas.map(function(l){ return l.unidade; })));
+  unidades.sort(function(a,b){
+    const ia=ordem.indexOf(a), ib=ordem.indexOf(b);
+    return (ia<0?99:ia)-(ib<0?99:ib) || String(a).localeCompare(String(b));
+  });
+
+  let xml='<?xml version="1.0" encoding="UTF-8"?>\n<?mso-application progid="Excel.Sheet"?>\n'
+    +'<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet" xmlns:html="http://www.w3.org/TR/REC-html40">'
+    +'<DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"><Author>COMIX Atlas</Author><Title>Fechamento Agregados — Erros e divergências</Title></DocumentProperties>'
+    +'<Styles>'+agEstilos()+'</Styles>';
+
+  if(todas){
+    xml+=agAbaResumo(linhas, unidades, mesLbl, escopoLbl, totalAgreg);
+    unidades.forEach(function(u){
+      xml+=agAbaDivergencias(u, linhas.filter(function(l){ return l.unidade===u; }), mesLbl, 'Unidade '+u);
+    });
+  } else {
+    xml+=agAbaDivergencias(ST.filial, linhas, mesLbl, escopoLbl);
+    xml+=agAbaResumo(linhas, unidades, mesLbl, escopoLbl, totalAgreg);
+  }
+  xml+='</Workbook>';
+
+  const blob=new Blob(['﻿'+xml],{type:'application/vnd.ms-excel;charset=utf-8;'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='agregados_divergencias_'+(todas?'TODAS':ST.filial)+'_'+ST.mesRef+'.xls';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(a.href); },800);
+
+  const nErr=linhas.filter(function(l){ return l.sev==='err'; }).length;
+  toast('Excel exportado: '+nErr+' erro(s) e '+(linhas.length-nErr)+' divergência(s)'+(todas?' em '+unidades.length+' unidade(s).':'.'),'gn');
+}
 
 /* ══ RENDER — detalhe: auditoria + comparação + relatório TrL010 ══ */
 function renderDetalhe(){
