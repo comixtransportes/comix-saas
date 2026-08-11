@@ -1109,7 +1109,8 @@ details.cfg-det>.card{margin-top:10px}
       <span style="display:flex;gap:8px;align-items:center">
         <button class="btn sm" id="btnPropAddRota" title="Inclui na tabela a rota calculada agora no simulador">+ rota atual</button>
         <button class="btn sm" id="btnPropAddHist" title="Traz uma rota já simulada antes (salva ou liberada) para esta mesma proposta">+ rota simulada antes</button>
-        <button class="btn sm pri" id="btnPropPdf">⬇ Baixar PDF</button>
+        <button class="btn sm" id="btnPropImprimir" title="Manda direto para a impressora">🖨 Imprimir</button>
+        <button class="btn sm pri" id="btnPropPdf" title="Baixa o arquivo já nomeado, sem caixa de diálogo">⬇ Baixar PDF</button>
         <button class="icon-btn" onclick="propFechar()">✕</button>
       </span>
     </div>
@@ -1210,8 +1211,9 @@ details.cfg-det>.card{margin-top:10px}
       </div>
     </div>
     <div class="modal-f">
-      <span class="muted" style="margin-right:auto;font-size:11px">O PDF é gerado pela caixa de impressão do navegador — escolha <b>Salvar como PDF</b>. Papel A4, margens padrão.</span>
+      <span class="muted" style="margin-right:auto;font-size:11px">O arquivo baixa direto, em A4, já nomeado no padrão <b>Proposta 000.00 CLIENTE dd.mm.aa</b> — sem passar pela caixa de impressão.</span>
       <button class="btn" onclick="propFechar()">Fechar</button>
+      <button class="btn" id="btnPropImprimir2">🖨 Imprimir</button>
       <button class="btn pri" id="btnPropPdf2">⬇ Baixar PDF</button>
     </div>
   </div>
@@ -4085,6 +4087,257 @@ function propNomeArquivo(d){
   partes.push(propDataArquivo(d.dataISO));
   return partes.join(' ');
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   PDF DE VERDADE, COM DOWNLOAD E NOME CERTO
+   ──────────────────────────────────────────────────────────────────
+   Por que mudou: a geração anterior mandava a folha para a caixa de
+   impressão do navegador e apostava no título do documento virar o nome
+   sugerido do arquivo. Isso só vale para a opção "Salvar como PDF" do
+   próprio Chrome — quando a impressora escolhida é a "Microsoft Print to
+   PDF" do Windows, quem abre é o diálogo do driver ("Salvar Saída de
+   Impressão como"), que ignora o título e vem com o campo Nome VAZIO.
+   Como o módulo roda dentro de um iframe do Atlas, o Chrome ainda por
+   cima considera o título do documento de topo, não o do quadro impresso.
+
+   Agora o arquivo é montado aqui, em texto vetorial (nada de rasterizar a
+   folha), e baixado direto pelo navegador com o nome exato:
+
+       Proposta 089.26 MANUCHAR 21.07.26.pdf
+
+   Sem caixa de diálogo, sem depender de impressora. O botão de imprimir
+   continua existindo para quem quer mandar direto ao papel.
+   ══════════════════════════════════════════════════════════════════ */
+const PROP_PDF_CDN=[
+  'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.2/jspdf.umd.min.js',
+  'https://unpkg.com/jspdf@2.5.2/dist/jspdf.umd.min.js',
+  'https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js'
+];
+let _jspdfP=null;
+function propCarregarJsPDF(){
+  const pronto=()=> (window.jspdf && window.jspdf.jsPDF) || window.jsPDF || null;
+  if(pronto()) return Promise.resolve(pronto());
+  if(_jspdfP) return _jspdfP;
+  /* três CDNs em cascata: a rede corporativa costuma liberar um e barrar
+     outro, e ficar sem PDF por causa disso não é aceitável */
+  _jspdfP=new Promise((res,rej)=>{
+    let i=0;
+    const tentar=()=>{
+      if(i>=PROP_PDF_CDN.length){ _jspdfP=null; rej(new Error('não foi possível carregar a biblioteca de PDF')); return; }
+      const s=document.createElement('script');
+      s.src=PROP_PDF_CDN[i++];
+      s.onload=()=>{ const j=pronto(); j? res(j) : tentar(); };
+      s.onerror=tentar;
+      document.head.appendChild(s);
+    };
+    tentar();
+  });
+  return _jspdfP;
+}
+
+/* O logotipo é um SVG embutido; o jsPDF só aceita bitmap, então ele é
+   rasterizado uma vez em alta resolução (3x a largura útil) e reaproveitado.
+   Como a origem é data: URL, o canvas não fica "tainted". */
+let _logoPNG=null;
+function propLogoPNG(){
+  if(_logoPNG) return Promise.resolve(_logoPNG);
+  return new Promise(res=>{
+    if(!PROP_LOGO){ res(null); return; }
+    const img=new Image();
+    img.onload=()=>{
+      try{
+        const c=document.createElement('canvas');
+        c.width=1200; c.height=Math.round(1200*(img.naturalHeight||712)/(img.naturalWidth||3634));
+        const g=c.getContext('2d');
+        g.fillStyle='#fff'; g.fillRect(0,0,c.width,c.height);
+        g.drawImage(img,0,0,c.width,c.height);
+        _logoPNG={url:c.toDataURL('image/png'), prop:c.height/c.width};
+        res(_logoPNG);
+      }catch(e){ console.warn('[Comercial] logo no PDF:', e&&e.message); res(null); }
+    };
+    img.onerror=()=>res(null);
+    img.src=PROP_LOGO;
+  });
+}
+
+/* ── medidas da folha, em milímetros ── */
+const PF={ L:15, R:15, T:16, B:16, larg:210, alt:297 };
+PF.util = PF.larg-PF.L-PF.R;
+
+async function propGerarPDF(d){
+  const jsPDFctor = await propCarregarJsPDF();
+  const logo = await propLogoPNG();
+  const doc = new jsPDFctor({unit:'mm', format:'a4', compress:true});
+  let y = PF.T;
+
+  const nova = (precisa)=>{ if(y+precisa > PF.alt-PF.B){ doc.addPage(); y=PF.T; return true; } return false; };
+  const txt = (t,x,opts)=>{ doc.text(String(t==null?'':t), x, y, opts||{}); };
+
+  /* ── cabeçalho: marca à esquerda, número à direita ── */
+  const logoH = 9.2;
+  if(logo){
+    const logoW = logoH/logo.prop;
+    doc.addImage(logo.url,'PNG', PF.L, y-1, logoW, logoH);
+  }else{
+    doc.setFont('helvetica','bold'); doc.setFontSize(24); doc.setTextColor(0);
+    doc.text('COMIX', PF.L, y+7);
+  }
+  if(d.num){
+    doc.setFont('courier','normal'); doc.setFontSize(10.5); doc.setTextColor(68);
+    doc.text('PC '+d.num, PF.larg-PF.R, y+4, {align:'right'});
+  }
+  y += logoH + 7;
+
+  /* ── cidade e data, à direita ── */
+  doc.setFont('times','normal'); doc.setFontSize(11.5); doc.setTextColor(17);
+  const local = (d.cidade||'')+((d.cidade&&d.data)?', ':'')+(d.data||'')+'.';
+  if(local.trim()!=='.'){ doc.text(local, PF.larg-PF.R, y, {align:'right'}); y+=8; }
+
+  /* ── destinatário ── */
+  doc.setFontSize(11.5); doc.text('À', PF.L, y); y+=5.4;
+  doc.setFont('times','bold'); doc.setFontSize(12.5);
+  doc.text(String(d.cliente||'—'), PF.L, y); y+=5.4;
+  doc.setFontSize(11.5);
+  if(d.ac){  doc.text('A/C: '+d.ac,  PF.L, y); y+=5.2; }
+  if(d.ref){
+    const linhas=doc.splitTextToSize('Ref.: '+d.ref, PF.util);
+    doc.text(linhas, PF.L, y); y += 5.2*linhas.length;
+  }
+  y+=4;
+
+  /* ── abertura ── */
+  doc.setFont('times','normal'); doc.setFontSize(11.5);
+  doc.text('Prezado(a) Senhor(a),', PF.L, y); y+=7;
+  if(d.abertura){
+    const linhas=doc.splitTextToSize(d.abertura, PF.util);
+    nova(linhas.length*5.2);
+    doc.text(linhas, PF.L, y, {align:'justify', maxWidth:PF.util}); y += linhas.length*5.2 + 1;
+  }
+
+  /* ── tabela de itens ──
+     Desenhada à mão para ficar idêntica à pré-visualização (cabeçalho
+     #1e3a6e, zebrado #f4f6fa, bordas #b9c2d4) sem puxar um segundo plugin. */
+  const cols=[
+    {t:'IT',                      w:7,  a:'center'},
+    {t:'ORIGEM',                  w:29, a:'left'},
+    {t:'DESTINO',                 w:29, a:'left'},
+    {t:'Tipo',                    w:13, a:'center'},
+    {t:'KM total',                w:15, a:'right'},
+    {t:'Frete Líquido / t',       w:21, a:'right'},
+    {t:'Pedágio / t',             w:18, a:'right'},
+    {t:'Imposto / t',             w:18, a:'right'},
+    {t:'Valor total do Frete / t',w:26, a:'right'}
+  ];
+  const somaW = cols.reduce((a,c)=>a+c.w,0);
+  cols.forEach(c=>c.w = c.w*PF.util/somaW);          /* normaliza para a largura útil */
+
+  const cel=(c,i)=>{ let x=PF.L; for(let k=0;k<i;k++) x+=cols[k].w; return x; };
+  const desenharCabecalho=()=>{
+    const h=9;
+    doc.setFillColor(30,58,110); doc.setDrawColor(30,58,110);
+    doc.rect(PF.L, y, PF.util, h, 'FD');
+    doc.setFont('helvetica','bold'); doc.setFontSize(6.6); doc.setTextColor(255);
+    cols.forEach((c,i)=>{
+      const linhas=doc.splitTextToSize(c.t, c.w-2.4);
+      const yy = y + h/2 - (linhas.length-1)*1.3 + 1.1;
+      doc.text(linhas, cel(c,i)+c.w/2, yy, {align:'center'});
+    });
+    y+=h;
+  };
+  const alturaLinha=(it)=>{
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.4);
+    const o=doc.splitTextToSize(String(it.o||''), cols[1].w-2.4).length;
+    const s=doc.splitTextToSize(String(it.d||''), cols[2].w-2.4).length;
+    return Math.max(6.4, 3.3*Math.max(o,s)+3.2);
+  };
+
+  /* cidade obrigatória: se a HERE devolveu rótulo de rua, cai no digitado */
+  const linhasTab = (d.itens||[]).map((it,i)=>({
+    it:String(i+1).padStart(2,'0'),
+    o: propLocal(it.origem,(it.param||{}).origemBruta)||'—',
+    d: propLocal(it.destino,(it.param||{}).destinoBruta)||'—',
+    tp: it.tipo||'—',
+    km: num(it.km,0)+(it.retornoVazio?' *':''),
+    fr: brl(it.frete), pe: brl(it.pedagio), im: brl(it.imposto), to: brl(it.total)
+  }));
+
+  y+=3; nova(24); desenharCabecalho();
+  if(!linhasTab.length){
+    doc.setFont('times','italic'); doc.setFontSize(9); doc.setTextColor(136);
+    doc.setDrawColor(185,194,212); doc.rect(PF.L, y, PF.util, 9);
+    doc.text('Nenhuma rota incluída na proposta.', PF.L+PF.util/2, y+6, {align:'center'});
+    y+=9;
+  }
+  linhasTab.forEach((L,idx)=>{
+    const h=alturaLinha(L);
+    if(y+h > PF.alt-PF.B){ doc.addPage(); y=PF.T; desenharCabecalho(); }
+    if(idx%2===1){ doc.setFillColor(244,246,250); doc.rect(PF.L, y, PF.util, h, 'F'); }
+    doc.setDrawColor(185,194,212); doc.setLineWidth(0.15);
+    cols.forEach((c,i)=>doc.rect(cel(c,i), y, c.w, h));
+    doc.setTextColor(17);
+    const vals=[L.it,L.o,L.d,L.tp,L.km,L.fr,L.pe,L.im,L.to];
+    vals.forEach((v,i)=>{
+      const c=cols[i];
+      doc.setFont(i>=4?'courier':'helvetica', i===8?'bold':'normal');
+      doc.setFontSize(i>=4?7.2:7.4);
+      const linhas=doc.splitTextToSize(String(v), c.w-2.4);
+      const yy = y + h/2 - (linhas.length-1)*1.65 + 1.2;
+      const x = c.a==='left' ? cel(c,i)+1.2 : c.a==='right' ? cel(c,i)+c.w-1.2 : cel(c,i)+c.w/2;
+      doc.text(linhas, x, yy, {align:c.a==='left'?'left':(c.a==='right'?'right':'center')});
+    });
+    y+=h;
+  });
+  y+=3;
+
+  if((d.itens||[]).some(it=>it.retornoVazio)){
+    doc.setFont('times','normal'); doc.setFontSize(9); doc.setTextColor(68);
+    doc.text('* KM total do percurso, incluindo o retorno vazio.', PF.L, y); y+=6;
+  }
+
+  /* ── condições ── */
+  const cond=(d.cond||[]).filter(c=>c.on!==false && String(c.txt||'').trim());
+  if(cond.length){
+    nova(14);
+    doc.setFont('times','bold'); doc.setFontSize(11.5); doc.setTextColor(17);
+    y+=3; doc.text('Condições:', PF.L, y); y+=6;
+    doc.setFont('times','normal');
+    cond.forEach(c=>{
+      const linhas=doc.splitTextToSize(String(c.txt).trim(), PF.util-6);
+      if(y+linhas.length*5 > PF.alt-PF.B){ doc.addPage(); y=PF.T; }
+      doc.text('•', PF.L+1.5, y);
+      doc.text(linhas, PF.L+6, y, {align:'justify', maxWidth:PF.util-6});
+      y += linhas.length*5 + 1.6;
+    });
+    y+=3;
+  }
+
+  /* ── despedida e assinatura ── */
+  if(d.despedida){ nova(10); doc.setFont('times','normal'); doc.setFontSize(11.5); doc.setTextColor(17);
+    doc.text(String(d.despedida), PF.L, y); y+=9; }
+
+  const a=d.ass||{};
+  const blocoAss = 8 + (logo?7:0) + ['nome','cargo','fone','cel','email'].filter(k=>a[k]).length*5;
+  nova(blocoAss);
+  y+=4;
+  if(logo){ doc.addImage(logo.url,'PNG', PF.L, y-3.5, 5.5/logo.prop, 5.5); y+=7.5; }
+  if(a.nome){  doc.setFont('times','bold');   doc.setFontSize(11.5); doc.setTextColor(17); doc.text(a.nome, PF.L, y); y+=5; }
+  doc.setFont('times','normal'); doc.setFontSize(10.5); doc.setTextColor(51);
+  if(a.cargo){ doc.text(a.cargo, PF.L, y); y+=4.8; }
+  if(a.fone){  doc.text('Fone: '+a.fone, PF.L, y); y+=4.8; }
+  if(a.cel){   doc.text('Cel: '+a.cel, PF.L, y); y+=4.8; }
+  if(a.email){ doc.text(a.email, PF.L, y); y+=4.8; }
+
+  /* rodapé com paginação, quando passa de uma folha */
+  const n=doc.getNumberOfPages();
+  if(n>1){
+    for(let i=1;i<=n;i++){
+      doc.setPage(i); doc.setFont('times','normal'); doc.setFontSize(8.5); doc.setTextColor(120);
+      doc.text(i+'/'+n, PF.larg-PF.R, PF.alt-8, {align:'right'});
+    }
+  }
+  return doc;
+}
+
 /* ══ Geração do PDF ══
    O documento é montado num iframe isolado e mandado para a caixa de
    impressão do navegador — sem dependência externa e com texto vetorial
@@ -4117,23 +4370,54 @@ function propImprimirDoc(d){
   return nome;
 }
 
-function propBaixarPDF(){
-  const d=propColeta();
-  if(!d.cliente){ toast('Informe o cliente antes de gerar a proposta.','am'); $('propCliente').focus(); return; }
-  if(!d.itens.length){ toast('A proposta está sem nenhuma rota.','am'); return; }
-  const nome=propImprimirDoc(d);
-  toast('Salve como PDF com o nome «'+nome+'».','gn');
-  /* O número é consumido só aqui: a proposta saiu, a sequência avança e a
-     próxima abertura do modal já sugere o seguinte. */
+function propValidar(d){
+  if(!d.cliente){ toast('Informe o cliente antes de gerar a proposta.','am'); const c=$('propCliente'); if(c) c.focus(); return false; }
+  if(!d.itens.length){ toast('A proposta está sem nenhuma rota.','am'); return false; }
+  return true;
+}
+/* Fecha o ciclo depois que o documento saiu: consome o número da sequência
+   e arquiva a proposta inteira na aba Propostas. */
+function propAposEmitir(d){
   propConsumirNumero(d.num).then(()=>{
     const dica=$('propNumDica');
     if(dica) dica.textContent='emitida · último emitido: '+propFmtNum(PROP_CFG.seq,PROP_CFG.ano);
     const inp=$('propNum'); if(inp) inp.dataset.manual='0';
   });
-  /* …e a proposta inteira vai para o arquivo da aba Propostas, com os
-     parâmetros e as premissas de cada rota. */
   try{ if(typeof pvArquivar==='function') pvArquivar(d); }
   catch(e){ console.warn('[Comercial] arquivamento da proposta:', e&&e.message); }
+}
+
+/* ⬇ Baixar PDF — download direto, sem caixa de diálogo, com o nome pronto. */
+async function propBaixarPDF(botao){
+  const d=propColeta();
+  if(!propValidar(d)) return;
+  const nome=propNomeArquivo(d);
+  const bts=[$('btnPropPdf'),$('btnPropPdf2')].filter(Boolean);
+  const antes=bts.map(b=>b.textContent);
+  bts.forEach(b=>{ b.disabled=true; b.textContent='Gerando…'; });
+  try{
+    const doc=await propGerarPDF(d);
+    doc.save(nome+'.pdf');                    /* baixa com o nome exato */
+    toast('Baixado: '+nome+'.pdf','gn');
+    propAposEmitir(d);
+  }catch(e){
+    console.error('[Comercial] PDF:', e);
+    /* Rede bloqueou os três CDNs: cai na impressão do navegador em vez de
+       deixar o usuário sem proposta — e avisa o nome que ele deve digitar. */
+    toast('Sem a biblioteca de PDF — abrindo a impressão. Salve como «'+nome+'».','am');
+    propImprimirDoc(d);
+    propAposEmitir(d);
+  }finally{
+    bts.forEach((b,i)=>{ b.disabled=false; b.textContent=antes[i]; });
+  }
+}
+
+/* 🖨 Imprimir — manda direto para a impressora/caixa de impressão. */
+function propImprimirProposta(){
+  const d=propColeta();
+  if(!propValidar(d)) return;
+  propImprimirDoc(d);
+  propAposEmitir(d);
 }
 
 
@@ -4281,7 +4565,8 @@ function pvRender(){
       <td>${esc(p.emitida_por_nome||p.emitida_por||'—')}</td>
       <td><div class="pv-acoes">
         <button class="btn sm" title="Ver os parâmetros e as premissas de cada rota" onclick="pvDetalhe('${p.id}')">👁</button>
-        <button class="btn sm" title="Imprimir novamente, exatamente como foi emitida" onclick="pvImprimir('${p.id}')">🖨</button>
+        <button class="btn sm" title="Baixar o PDF de novo, com o nome original" onclick="pvBaixar('${p.id}')">⬇</button>
+        <button class="btn sm" title="Imprimir, exatamente como foi emitida" onclick="pvImprimir('${p.id}')">🖨</button>
         <button class="btn sm pri" title="Abrir uma cópia para editar — ao gerar, sai com número novo" onclick="pvEditar('${p.id}')">✎</button>
         ${isAdmin()?`<button class="btn sm danger" title="Excluir do arquivo" onclick="pvExcluir('${p.id}')">×</button>`:''}
       </div></td></tr>`;
@@ -4296,16 +4581,26 @@ function pvRender(){
 function pvAchar(id){ return PV.lista.find(p=>p.id===id)||null; }
 
 /* Reimpressão fiel: usa o documento gravado, sem recalcular nada. */
-function pvImprimir(id){
-  const p=pvAchar(id); if(!p) return;
-  propImprimirDoc({
+function pvDoc(p){
+  return {
     num:p.num, cliente:p.cliente, ac:p.ac, ref:p.ref, cidade:p.cidade,
     data:p.data||propDataExtenso(p.dataISO), dataISO:p.dataISO,
     abertura:p.abertura, despedida:p.despedida, ass:p.ass||{},
     itens:p.itens||[], cond:(p.cond||[]).filter(c=>c.on&&String(c.txt||'').trim())
-  });
+  };
 }
-
+/* Reimpressão fiel: usa o documento gravado, sem recalcular nada. O nome do
+   arquivo é reconstruído a partir da data de EMISSÃO original. */
+async function pvBaixar(id){
+  const p=pvAchar(id); if(!p) return;
+  const d=pvDoc(p), nome=propNomeArquivo(d);
+  try{ const doc=await propGerarPDF(d); doc.save(nome+'.pdf'); toast('Baixado: '+nome+'.pdf','gn'); }
+  catch(e){ console.error(e); toast('Sem a biblioteca de PDF — abrindo a impressão.','am'); propImprimirDoc(d); }
+}
+function pvImprimir(id){
+  const p=pvAchar(id); if(!p) return;
+  propImprimirDoc(pvDoc(p));
+}
 /* Edição = nova proposta. Carrega tudo no editor, zera o número para o
    próximo da sequência e guarda o vínculo com a origem. */
 function pvEditar(id){
@@ -4404,6 +4699,7 @@ function pvDetalhe(id){
     ${(p.cond||[]).filter(c=>c.on).length?`<div class="sim-res-tt">Condições</div><ul style="margin:0 0 0 16px;font-size:11.5px;line-height:1.55">${p.cond.filter(c=>c.on).map(c=>`<li>${esc(c.txt)}</li>`).join('')}</ul>`:''}`;
   mdAbrir('Proposta '+(p.num||'')+' — parâmetros e premissas', corpo,
     `<button class="btn" onclick="mdFechar()">Fechar</button>
+     <button class="btn" onclick="pvBaixar('${p.id}')">⬇ Baixar PDF</button>
      <button class="btn" onclick="pvImprimir('${p.id}')">🖨 Imprimir</button>
      <button class="btn pri" onclick="mdFechar();pvEditar('${p.id}')">✎ Editar como nova</button>`);
 }
@@ -4437,6 +4733,8 @@ function propBind(){
   if(nu) nu.addEventListener('input',()=>{ nu.dataset.manual='1'; });
   b('btnPropPdf',propBaixarPDF);
   b('btnPropPdf2',propBaixarPDF);
+  b('btnPropImprimir',propImprimirProposta);
+  b('btnPropImprimir2',propImprimirProposta);
   ['propNum','propCliente','propAC','propRef','propCidade','propData','propAbertura','propDespedida',
    'propAssNome','propAssCargo','propAssFone','propAssCel','propAssEmail'].forEach(id=>{
     const el=$(id); if(!el) return;
