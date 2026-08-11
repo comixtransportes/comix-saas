@@ -910,12 +910,21 @@ details.cfg-det>.card{margin-top:10px}
 <div class="view" id="v-comb">
   <div class="card">
     <h3>Diesel vigente por filial
-      <span style="margin-left:auto"><button class="btn sm pri" id="btnNovoDiesel">Atualizar preço</button></span>
+      <span class="tabs-r">
+        <button class="btn sm" id="btnDieselRecalc" title="Rebaixa a SZC e reapura o custo médio de cada filial">↻ Reapurar</button>
+        <button class="btn sm pri" id="btnNovoDiesel">Lançar preço manual</button>
+      </span>
     </h3>
-    <div class="muted" style="margin-bottom:8px">Alimentado semanalmente (ANP ou ShellBox/Gobrax — mesmo dado do CPK). O Simulador consome automaticamente o preço vigente da filial; sem digitação manual na simulação.</div>
+    <div class="muted" style="margin-bottom:8px">
+      Apurado da <b>SZC</b> pela <b>mesma regra do custo médio de diesel do P&amp;D</b> — não é digitação:
+      último mês com abastecimento da filial · combustível diesel (Arla fora) · preço unitário = Valor ÷ Qtd Litros ·
+      janela de litragem de <b>50 a 1.200 l</b> · descarte do preço abaixo de <b>50%</b> da média ponderada dos demais ·
+      <b>média ponderada por litros</b>. O Simulador consome esse mesmo número.
+      O lançamento manual continua existindo e assume quando a filial não tem abastecimento apurado no período.
+    </div>
     <table class="tb" id="tbDiesel">
-      <thead><tr><th>Filial</th><th class="num">R$/L vigente</th><th>Fonte</th><th>Vigência desde</th><th>Atualizado por</th></tr></thead>
-      <tbody><tr><td colspan="5" class="empty">Sem preços cadastrados.</td></tr></tbody>
+      <thead><tr><th>Filial</th><th class="num">R$/L vigente</th><th>Fonte</th><th class="num">Amostra</th><th>Vigência</th><th>Atualizado por</th></tr></thead>
+      <tbody><tr><td colspan="6" class="empty">Aguardando a SZC…</td></tr></tbody>
     </table>
     <h3 style="margin-top:16px;margin-bottom:6px">Histórico</h3>
     <table class="tb" id="tbDieselHist">
@@ -943,6 +952,9 @@ details.cfg-det>.card{margin-top:10px}
       Como o ShellBox exporta <b>por conta/unidade</b> e os arquivos de SC, PR e SP cobrem o mesmo período,
       a exclusão só alcança registros do <b>mesmo recorte do arquivo</b> (perfil e placa presentes nele) —
       enviar o arquivo de uma unidade nunca apaga o histórico das outras.
+      <div style="margin-top:6px">A base guarda o arquivo <b>inteiro</b>, mas toda a apuração desta aba considera
+      <b>apenas abastecimentos de diesel S-10</b> — S-500, gasolina, etanol e Arla ficam gravados e fora das contas,
+      das médias e do preço que o Simulador consome.</div>
     </div>
 
     <div class="sb-drop" id="sbDrop">
@@ -965,6 +977,9 @@ details.cfg-det>.card{margin-top:10px}
     <div class="muted" style="margin-bottom:8px">
       A referência da base é a <b>rodovia</b>: o código (BR-101, SC-416, SP-330…) e o <b>km</b> saem do endereço do posto —
       quando o endereço traz só o nome da via (Anhanguera, Castelo Branco, Régis Bittencourt…), o código correspondente é resolvido por tabela.
+      O grupo é identificado pelo <b>código seguido do nome da rodovia</b> quando ele existir (<span class="mono">BR-101 · Governador Mário Covas</span>);
+      o mesmo código atravessa trechos com nomes diferentes, e nesse caso aparecem os dois mais frequentes.
+      Só entram aqui os abastecimentos de <b>diesel S-10</b>.
       A coordenada de cada posto é geocodificada uma única vez e fica gravada aqui; é ela que permite dizer,
       no Simulador, qual posto está dentro do trecho calculado pela HERE.
     </div>
@@ -1460,9 +1475,14 @@ async function boot(){
   await Promise.all([carregarClientesRotas(), carregarPremissas(), carregarDiesel()]);
   montarSelectsAgora();   /* no boot a montagem precisa ser síncrona: o painel de
                              premissas lê $('simVeiculo').value logo em seguida */
-  renderAntt(); renderVeiculos(); renderClientes(); renderRotas(); renderDiesel(); renderPremissas();
+  renderAntt(); renderVeiculos(); renderClientes(); renderRotas();
+  try{ renderDiesel(); }catch(e){ console.warn('[Comercial] diesel vigente:',e&&e.message); }
+  renderPremissas();
   carregarAuditoria();
   carregarSA1EmSegundoPlano();   /* SA1 entra assim que chegar, sem travar o boot */
+  /* o Diesel vigente por filial é apurado da SZC: entra em segundo plano,
+     como a SA1, para não segurar o boot com uma base grande */
+  setTimeout(()=>{ try{ dieselGarantirSZC(); }catch(_){} }, 1500);
   /* Rotas da SZY para o seletor do Simulador — mesma fonte da aba Rotas. */
   try{ if(typeof simCarregarRotasSZY==='function') simCarregarRotasSZY(false); }catch(_){}
   initMapa();
@@ -2825,9 +2845,14 @@ function premissasEfetivas(rotaId, filial, veiculoId){
   cand.sort((a,b)=>byScore(b)-byScore(a)||String(b.data.vigencia_inicio||'').localeCompare(String(a.data.vigencia_inicio||'')));
   return cand[0]?{id:cand[0].id, ...cand[0].data}:null;
 }
+/* Preço vigente da filial — mesma fonte e mesmas regras da tabela "Diesel
+   vigente por filial" (apuração da SZC no padrão do P&D, com o lançamento
+   manual como exceção documentada em renderDiesel). Manter esta função como
+   um atalho para o número da tabela é o que garante que Simulador e aba
+   Combustível nunca mostrem valores diferentes. */
 function dieselVigente(filial){
-  const h=[...ST.diesel].filter(d=>d.filial===filial).sort((a,b)=>String(b.vigencia||'').localeCompare(String(a.vigencia||'')));
-  return h[0]?Number(h[0].preco):null;
+  const v=dieselVigenteDet(filial);
+  return v && v.preco>0 ? v.preco : null;
 }
 
 /* ══ Simulador financeiro — RÉPLICA EXATA do Simulador_de_rotas_COMIX.xlsm ══
@@ -5834,23 +5859,138 @@ $('btnPracaCsvOut').onclick = ()=>{
   a.href=u; a.download='pracas_pedagio_comix.csv'; a.click(); URL.revokeObjectURL(u);
 };
 
-/* — Combustível — */
+/* ══ Combustível — Diesel vigente por filial ═══════════════════════════════
+   Esta tabela vivia de digitação semanal e por isso divergia do P&D: dois
+   números diferentes para o mesmo mês, na mesma empresa, garantem discussão
+   na reunião de resultado — e a discussão passa a ser sobre qual planilha
+   está certa, não sobre o custo.
+
+   Passa a ser APURADA, com os mesmos dados e as mesmas regras do
+   calcDieselKPI() do pd.html, que aqui já estão implementadas no
+   rtPrecoMedio() usado pelo módulo de Rotas:
+     1. base SZC (abastecimentos), do último mês em que a FILIAL abasteceu;
+     2. Combustivel contendo "diesel" e nunca "arla";
+     3. preço unitário = Valor ÷ Qtd Litros, caindo em Unit Venda sem litro;
+     4. descarta linha sem litragem, sem valor ou com preço não positivo;
+     5. janela de litragem de 50 a 1.200 l — corta arremate e transferência
+        de tanque, que não são preço de bomba;
+     6. descarta o preço abaixo de 50% da média ponderada dos DEMAIS
+        (lançamento errado, bonificação, estorno);
+     7. média PONDERADA POR LITROS: Σ(preço × litros) ÷ Σ litros.
+
+   O manual não morre — e não é decoração: quando a filial não tem
+   abastecimento apurado no período, ele é a única fonte; e quando alguém
+   lança um preço com vigência POSTERIOR ao mês apurado (a ANP subiu esta
+   semana e a SZC ainda fecha o mês anterior), esse lançamento prevalece.
+   Fora esses dois casos, quem manda é o realizado.
+
+   ── Por que aqui NÃO se filtra S-10 ─────────────────────────────────────
+   A base ShellBox, logo abaixo nesta mesma aba, considera apenas S-10: ali
+   o objetivo é o preço de bomba que a frota efetivamente paga na estrada.
+   Aqui o objetivo é OUTRO — reproduzir o custo médio de diesel do P&D — e o
+   P&D apura sobre todo o diesel da SZC, sem separar S-10 de S-500. Estreitar
+   o recorte só nesta tabela produziria de novo o problema que ela veio
+   resolver: dois números para a mesma coisa. Se um dia o P&D passar a
+   separar, basta virar a chave abaixo — rtPrecoMedio já aceita o recorte. */
+const DIESEL_FILIAIS=['SC','PR','SP'];
+const DIESEL_SO_S10=false;
+
+/* Apuração de uma filial. Devolve null quando não há SZC utilizável.
+   O try/catch não é decorativo: esta tabela é desenhada no boot, junto com as
+   demais, e a SZC vive em outro bloco de script — sem a rede, um tropeço aqui
+   derrubaria o render das premissas, que vem logo depois na mesma linha. */
+function dieselApurado(filial){
+  try{
+    if(!RT.szc || !RT.szc.length) return null;
+    const mes=simUltimoMesSZC(filial);
+    if(!mes) return null;
+    const m=rtPrecoMedio('diesel',mes,filial,DIESEL_SO_S10);
+    if(!m || !(m.preco>0)) return null;
+    return {preco:+m.preco.toFixed(3), mes, det:m};
+  }catch(e){ console.warn('[Diesel] apuração:',e&&e.message); return null; }
+}
+/* Lançamento manual mais recente da filial. */
+function dieselManual(filial){
+  const h=[...ST.diesel].filter(d=>d.filial===filial)
+    .sort((a,b)=>String(b.vigencia||'').localeCompare(String(a.vigencia||'')));
+  return h[0]||null;
+}
+/* Preço vigente consolidado — é este que o Simulador consome. */
+function dieselVigenteDet(filial){
+  const ap=dieselApurado(filial), mn=dieselManual(filial);
+  if(ap && mn && String(mn.vigencia||'') > ap.mes+'-31')
+    return {preco:Number(mn.preco), origem:'manual', manual:mn, apurado:ap};
+  if(ap) return {preco:ap.preco, origem:'apurado', apurado:ap, manual:mn};
+  if(mn && Number(mn.preco)>0) return {preco:Number(mn.preco), origem:'manual', manual:mn};
+  return null;
+}
+
+/* A SZC é grande e só é baixada uma vez por sessão: a tabela nasce vazia e
+   se completa quando a base chega. */
+var _dieselSZCPend=null;
+function dieselGarantirSZC(forcar){
+  if(_dieselSZCPend && !forcar) return _dieselSZCPend;
+  _dieselSZCPend=(async()=>{
+    try{ await rtCarregarSZC(!!forcar); }catch(e){ console.warn('[Diesel] SZC:',e&&e.message); }
+    try{ renderDiesel(); }catch(_){}
+  })();
+  return _dieselSZCPend;
+}
+
 function renderDiesel(){
-  const filiais=['SC','PR','SP'];
   const tb=$('tbDiesel').querySelector('tbody');
-  const vigentes=filiais.map(f=>{
-    const h=[...ST.diesel].filter(d=>d.filial===f).sort((a,b)=>String(b.vigencia||'').localeCompare(String(a.vigencia||'')));
-    return h[0]?{...h[0]}:null;
-  }).filter(Boolean);
-  tb.innerHTML = vigentes.length? vigentes.map(d=>
-    `<tr><td>${esc(d.filial)}</td><td class="num">${num(Number(d.preco),3)}</td><td>${esc(d.fonte||'—')}</td><td>${esc(d.vigencia||'—')}</td><td>${esc(d.por||'—')}</td></tr>`
-  ).join('') : '<tr><td colspan="5" class="empty">Sem preços cadastrados.</td></tr>';
+  let semSZC=true; try{ semSZC=!RT.szcCarregado; }catch(_){}
+  const linhas=[];
+  for(const f of DIESEL_FILIAIS){
+    const v=dieselVigenteDet(f);
+    if(!v) continue;
+    const ap=v.apurado, d=ap&&ap.det;
+    const fonte = v.origem==='apurado'
+      ? `<span class="pill gn" title="Apurado da SZC pela mesma regra do custo médio de diesel do P&amp;D">SZC · média ponderada</span>`
+      : `<span class="pill ac" title="Lançamento manual${ap?' com vigência posterior ao mês apurado ('+esc(ap.mes)+'): prevalece sobre o realizado':''}">${esc((v.manual&&v.manual.fonte)||'manual')}</span>`;
+    /* quando o manual prevalece, a amostra continua à vista, mas dizendo a
+       que ela se refere — é a do realizado, não a do número da linha */
+    const amostra = d
+      ? `<span title="${esc(`${v.origem==='manual'?'Amostra do realizado (não do preço exibido) — ':''}`+
+          `${d.qtd} abastecimento(s) no mês · ${d.foraDaJanela} fora da janela ${d.janela} · `+
+          `${d.foraDaCurva} com preço abaixo de 50% da média dos demais · ${num(d.litros,0)} l no total`)}">`+
+        `${v.origem==='manual'?'<span class="muted">':''}${num(d.qtdMedia,0)} abast.${v.origem==='manual'?'</span>':''}</span>`
+      : '—';
+    const vig = v.origem==='apurado'
+      ? esc(mesRotulo(ap.mes))
+      : esc(dtSimplesBR((v.manual&&v.manual.vigencia)||'')||'—');
+    const por = v.origem==='apurado' ? '<span class="muted">apuração automática</span>'
+                                     : esc((v.manual&&v.manual.por)||'—');
+    /* quando o manual vence, o realizado do mês continua à vista: é ele que
+       explica a diferença que alguém vai questionar */
+    const nota = (v.origem==='manual'&&ap)
+      ? `<div class="muted" style="font-size:10px">realizado de ${esc(mesRotulo(ap.mes))}: R$ ${num(ap.preco,3)}/l</div>` : '';
+    linhas.push(`<tr><td>${esc(f)}${nota}</td><td class="num">${num(v.preco,3)}</td><td>${fonte}</td>`+
+                `<td class="num">${amostra}</td><td>${vig}</td><td>${por}</td></tr>`);
+  }
+  const semDados = semSZC
+    ? '<tr><td colspan="6" class="empty">Carregando a SZC para apurar o custo médio…</td></tr>'
+    : '<tr><td colspan="6" class="empty">Nenhuma filial com abastecimento apurado na SZC nem preço lançado.</td></tr>';
+  tb.innerHTML = linhas.length ? linhas.join('') : semDados;
+
   const th=$('tbDieselHist').querySelector('tbody');
   th.innerHTML=[...ST.diesel].sort((a,b)=>String(b.vigencia||'').localeCompare(String(a.vigencia||''))).slice(0,30)
-    .map(d=>`<tr><td>${esc(d.filial)}</td><td class="num">${num(Number(d.preco),3)}</td><td>${esc(d.fonte||'—')}</td><td>${esc(d.vigencia||'—')}</td></tr>`).join('');
+    .map(d=>`<tr><td>${esc(d.filial)}</td><td class="num">${num(Number(d.preco),3)}</td><td>${esc(d.fonte||'—')}</td><td>${esc(d.vigencia||'—')}</td></tr>`).join('')
+    || '<tr><td colspan="4" class="empty">Nenhum lançamento manual.</td></tr>';
 }
+/* 'AAAA-MM' → 'mm/aaaa' */
+function mesRotulo(mes){
+  const [a,m]=String(mes||'').split('-');
+  return (a&&m)?`${m}/${a}`:(mes||'—');
+}
+if($('btnDieselRecalc')) $('btnDieselRecalc').onclick=async()=>{
+  const b=$('btnDieselRecalc'); b.disabled=true; const t=b.textContent; b.textContent='Reapurando…';
+  try{ await dieselGarantirSZC(true); toast('Custo médio de diesel reapurado da SZC.','gn'); }
+  catch(e){ toast('Reapuração falhou: '+(e.message||e),'rd'); }
+  finally{ b.disabled=false; b.textContent=t; }
+};
 $('btnNovoDiesel').onclick=()=>{
-  mdAbrir('Atualizar preço do diesel',
+  mdAbrir('Lançar preço manual do diesel',
     `<div class="fields">
       <label class="fld">Filial<select id="dFil"><option>SC</option><option>PR</option><option>SP</option></select></label>
       <label class="fld">R$/L<input type="number" id="dPreco" step="0.001"></label>
@@ -5865,7 +6005,8 @@ async function dieselSalvar(){
   if(isNaN(preco)||preco<=0){ toast('Preço inválido.','am'); return; }
   ST.diesel.push({filial:$('dFil').value,preco,fonte:$('dFonte').value,vigencia:$('dVig').value||hoje(),por:ATLAS_CURRENT_USER.email});
   await fsSetDoc(COL.config,'diesel',{historico:ST.diesel},true);
-  renderDiesel(); mdFechar(); toast('Diesel atualizado — o Simulador passa a usar este valor.','gn');
+  renderDiesel(); mdFechar();
+  toast('Preço lançado. Ele só prevalece sobre o realizado da SZC se a vigência for posterior ao mês apurado.','gn');
 }
 
 /* — Clientes (SA1 + cadastros do Atlas) — */
@@ -8155,8 +8296,12 @@ function rtSzcOp(row){
 }
 
 /* tipo: 'diesel' | 'arla' · mes: 'AAAA-MM' · op: 'SC'|'PR'|'SP'|'' (todas) */
-function rtPrecoMedio(tipo, mes, op){
-  const ck=tipo+'|'+mes+'|'+(op||'');
+/* soS10 (opcional): estreita a apuração ao diesel S-10. Fica DESLIGADO por
+   padrão de propósito — é assim que o número bate, dígito a dígito, com o
+   custo médio de diesel publicado pelo P&D, que não separa S-10 de S-500.
+   Ver DIESEL_SO_S10, em renderDiesel, para a decisão e como invertê-la. */
+function rtPrecoMedio(tipo, mes, op, soS10){
+  const ck=tipo+'|'+mes+'|'+(op||'')+(soS10?'|s10':'');
   if(RT.precoCache.has(ck)) return RT.precoCache.get(ck);
 
   const ehArla = tipo==='arla';
@@ -8171,7 +8316,8 @@ function rtPrecoMedio(tipo, mes, op){
     if(op && rtSzcOp(row)!==op) continue;
     const comb=String(row['Combustivel']||row['Combustível']||'').trim();
     if(ehArla){ if(!/arla/i.test(comb)) continue; }
-    else { if(!/diesel/i.test(comb) || /arla/i.test(comb)) continue; }
+    else { if(!/diesel/i.test(comb) || /arla/i.test(comb)) continue;
+           if(soS10 && !_SB_RE_S10.test(comb)) continue; }
     const litros=rtNum(row['Qtd Litros']), valor=rtNum(row['Valor']);
     const unit=rtNum(row['Unit Venda']);
     const precoUnit = litros>0 ? valor/litros : unit;
@@ -8205,7 +8351,7 @@ function rtPrecoMedio(tipo, mes, op){
     foraDaJanela: base.length-naJanela.length,
     foraDaCurva:  naJanela.length-limpa.length,
     descartados:  qtdBruta-limpa.length,
-    mes, op:op||'todas', tipo,
+    mes, op:op||'todas', tipo, soS10:!!soS10,
     janela: (lMin>0||lMax>0) ? `${lMin||0}–${lMax||'∞'} l` : 'sem janela'
   };
   RT.precoCache.set(ck,out);
@@ -9484,19 +9630,30 @@ function sbCodigosRodovia(v){
   while((m=_SB_RE_ROD.exec(s))){ const c=m[1]+'-'+m[2]; if(!out.includes(c)) out.push(c); }
   return out;
 }
-/* Vias que o cadastro do posto nomeia sem citar o código. */
+/* Vias que o cadastro do posto nomeia sem citar o código.
+   Terceiro elemento: o nome de exibição, já acentuado e capitalizado — é o
+   que aparece ao lado do código em "Postos por rodovia". */
 const SB_VIAS_NOMEADAS=[
-  [/\bANHANGUERA\b/,'SP-330'], [/\bBANDEIRANTES\b/,'SP-348'],
-  [/\bCASTEL+O? ?BRANCO\b|\bCASTELO\b/,'SP-280'], [/\bRAPOSO TAVARES\b/,'SP-270'],
-  [/\bREGIS BITTENCOURT\b/,'BR-116'], [/\bPRES(IDENTE)? DUTRA\b|\bVIA DUTRA\b/,'BR-116'],
-  [/\bFERNAO DIAS\b/,'BR-381'], [/\bD(OM|ONA)? ?PEDRO\b/,'SP-065'],
-  [/\bWASHINGTON LUI?[SZ]\b/,'SP-310'], [/\bAYRTON SENNA\b/,'SP-070'],
-  [/\bTAMOIOS\b/,'SP-099'], [/\bANCHIETA\b/,'SP-150'], [/\bIMIGRANTES\b/,'SP-160'],
-  [/\bMARECHAL RONDON\b/,'SP-300'], [/\bSANTOS DUMONT\b/,'SP-075'],
-  [/\bGOVERNADOR MARIO COVAS\b|\bMARIO COVAS\b/,'BR-101'],
-  [/\bANTONIO HEIL\b/,'SC-486'], [/\bJOSE CARLOS DAUX\b/,'SC-401'],
-  [/\bINGO HERING\b/,'BR-470'], [/\bJORGE LACERDA\b/,'SC-390'],
-  [/\bLUIZ ROSSO\b/,'SC-445'], [/\bDEPUTADO OLICIO CALDAS\b/,'SC-108']
+  [/\bANHANGUERA\b/,'SP-330','Anhanguera'], [/\bBANDEIRANTES\b/,'SP-348','dos Bandeirantes'],
+  [/\bCASTEL+O? ?BRANCO\b|\bCASTELO\b/,'SP-280','Castello Branco'], [/\bRAPOSO TAVARES\b/,'SP-270','Raposo Tavares'],
+  [/\bREGIS BITTENCOURT\b/,'BR-116','Régis Bittencourt'], [/\bPRES(IDENTE)? DUTRA\b|\bVIA DUTRA\b/,'BR-116','Presidente Dutra'],
+  [/\bFERNAO DIAS\b/,'BR-381','Fernão Dias'], [/\bD(OM|ONA)? ?PEDRO\b/,'SP-065','Dom Pedro I'],
+  [/\bWASHINGTON LUI?[SZ]\b/,'SP-310','Washington Luís'], [/\bAYRTON SENNA\b/,'SP-070','Ayrton Senna'],
+  [/\bTAMOIOS\b/,'SP-099','dos Tamoios'], [/\bANCHIETA\b/,'SP-150','Anchieta'], [/\bIMIGRANTES\b/,'SP-160','dos Imigrantes'],
+  [/\bMARECHAL RONDON\b/,'SP-300','Marechal Rondon'], [/\bSANTOS DUMONT\b/,'SP-075','Santos Dumont'],
+  [/\bGOVERNADOR MARIO COVAS\b|\bMARIO COVAS\b/,'BR-101','Governador Mário Covas'],
+  [/\bANTONIO HEIL\b/,'SC-486','Antônio Heil'], [/\bJOSE CARLOS DAUX\b/,'SC-401','José Carlos Daux'],
+  [/\bINGO HERING\b/,'BR-470','Ingo Hering'], [/\bJORGE LACERDA\b/,'SC-390','Jorge Lacerda'],
+  [/\bLUIZ ROSSO\b/,'SC-445','Luiz Rosso'], [/\bDEPUTADO OLICIO CALDAS\b/,'SC-108','Deputado Olício Caldas'],
+  /* nomes que aparecem no endereço JUNTO do código: não mudam o código
+     resolvido, mas dão o rótulo do trecho */
+  [/\bRODOVIA DO ARROZ\b/,'SC-416','do Arroz'], [/\bDO SOL\b/,'ES-060','do Sol'],
+  [/\bDEPUTADO ANTONIO HEIL\b/,'SC-486','Deputado Antônio Heil'],
+  [/\bOSVALDO REIS\b/,'SC-414','Osvaldo Reis'], [/\bVIRGILIO VARZEA\b/,'SC-401','Virgílio Várzea'],
+  [/\bADOLFO KONDER\b/,'BR-282','Adolfo Konder'],
+  [/\bTRANSBRASILIANA\b/,'BR-153','Transbrasiliana'],
+  [/\bRODOANEL\b/,'SP-021','Rodoanel Mário Covas'],
+  [/\bDOS MINERIOS\b/,'PR-090','dos Minérios'], [/\bDO CAFE\b/,'PR-323','do Café']
 ];
 function sbRodovia(endereco){
   const cod=sbCodigosRodovia(endereco);
@@ -9504,6 +9661,69 @@ function sbRodovia(endereco){
   const n=_prNorm(endereco);
   for(const [re,c] of SB_VIAS_NOMEADAS) if(re.test(n)) return c;
   return '';
+}
+
+/* ══ Nome da rodovia ═══════════════════════════════════════════════════════
+   O código sozinho ("BR-101") não diz nada a quem opera a estrada; o nome
+   sozinho ("Régis Bittencourt") não casa com os spans que a HERE devolve.
+   A base passa a carregar os dois: o CÓDIGO continua sendo a chave —
+   agrupamento, matcher geométrico e compatibilidade de via seguem decididos
+   por ele — e o NOME entra como rótulo, quando houver.
+
+   Duas origens, nesta ordem:
+     1) a tabela de apelidos acima — nome canônico, sempre preferido, e já
+        amarrado ao código, o que evita rotular a BR-116 como Dutra em SP;
+     2) o próprio endereço, quando ele nomeia a via ("Rod. Gov. Mário Covas,
+        km 121"): pega o trecho depois de Rod/Rodovia/Via/Av e descarta o que
+        for código, km, número ou genérico. Exige duas palavras — é isso que
+        impede "Rod Br101" de virar um nome.
+
+   O nome é gravado POR POSTO, não por código, porque o mesmo código muda de
+   nome ao longo do traçado (a BR-116 é Régis Bittencourt em SP e Presidente
+   Dutra a partir do Rio). O cabeçalho do grupo mostra os nomes que de fato
+   aparecem naquela rodovia, na ordem de quantos postos os usam. */
+/* só Rod/Rodovia/Via: avenida e rua têm nome próprio, mas não são rodovia —
+   deixar "Avenida Ivo Silveira" virar nome de rodovia sujaria a exportação */
+const _SB_RE_VIA_NOME=/\b(?:ROD(?:OVIA)?|RODV|VIA)\.?\s+([^,;|]{4,60})/i;
+const _SB_RE_LIXO_VIA=/\b(?:S\/?N|SN|ROD|RODOVIA|RODV|VIA|AV|AVE|AVENIDA|ACESSO|TRECHO|SENTIDO|MARGINAL|PISTA|SADO|KM|QUILOMETRO|LADO|PROX|PROXIMO|ANEL|CONTORNO|SN°)\b/ig;
+function _sbLimparNomeVia(s){
+  let t=String(s||'').replace(/\s+/g,' ').trim();
+  t=t.replace(/\bKM\b[\s\S]*$/i,' ');                                   /* do "km" em diante é endereço, não nome */
+  t=t.replace(new RegExp('\\b('+SB_UFS_ROD+')\\s?C?\\s?-?\\s?\\d{2,3}\\b','ig'),' ');
+  t=t.replace(/\d+/g,' ');
+  t=t.replace(_SB_RE_LIXO_VIA,' ');
+  return t.replace(/[^\wÀ-ÿ\s]/g,' ').replace(/\s+/g,' ').trim();
+}
+const _SB_MINUSC=['DA','DE','DO','DAS','DOS','E'];
+function _sbTitulo(s){
+  return String(s||'').toLowerCase().split(/\s+/).filter(Boolean).map((w,i)=>{
+    if(i>0 && _SB_MINUSC.includes(w.toUpperCase())) return w;
+    return w.charAt(0).toUpperCase()+w.slice(1);
+  }).join(' ');
+}
+function sbNomeRodovia(endereco, cod){
+  const n=_prNorm(endereco);
+  if(n){
+    /* 1) tabela de apelidos — só vale o apelido cujo código bate com o do
+          posto, senão um "Castelo" de nome de posto renomearia a rodovia */
+    for(const v of SB_VIAS_NOMEADAS){
+      if(!v[2] || !v[0].test(n)) continue;
+      if(cod && v[1]!==cod) continue;
+      return v[2];
+    }
+  }
+  /* 2) o endereço nomeia a via */
+  const m=_SB_RE_VIA_NOME.exec(String(endereco||''));
+  if(m){
+    const t=_sbLimparNomeVia(m[1]);
+    if(t.length>=6 && t.split(' ').length>=2) return _sbTitulo(t);
+  }
+  return '';
+}
+/* Rótulo canônico: código primeiro, nome depois quando houver. */
+function sbRodoviaLabel(cod, nome){
+  if(!cod) return nome?String(nome):'';
+  return cod+(nome?' · '+nome:'');
 }
 /* km explícito ("KM 275", "KM 512 2" → 512,2) ou, na falta, o número do endereço. */
 function sbKm(endereco){
@@ -9526,10 +9746,24 @@ function sbChavePosto(r){
 function sbUnidade(r){
   return rtSigla(r&&r.perfil) || rtSigla(r&&r.ident) || '';
 }
-function sbEhDiesel(r){
+/* ══ Recorte da aba: SOMENTE diesel S-10 ═══════════════════════════════════
+   A planilha do ShellBox traz na mesma exportação S-10, S-500, gasolina,
+   etanol e Arla. Misturar tudo distorce exatamente o número que a aba
+   existe para produzir: o S-500 custa menos e puxa a média para baixo, e o
+   E16 passa a cotar uma rota com um preço que a frota não paga.
+   A CARGA continua gravando o arquivo inteiro — não se mutila a origem, e o
+   histórico serve para conferência. O RECORTE é de LEITURA: tudo que a aba
+   conta, agrupa, promedia e exporta olha apenas o S-10.
+   Grafias cobertas: "S10", "S-10", "S 10", "DIESEL S10 ADITIVADO", "OD S-10".
+   O \b antes do 10 é o que impede "S500" e "S-500" de entrarem por engano. */
+const _SB_RE_S10  = /\bS\s*-?\s*10\b/i;
+const _SB_RE_NDSL = /ARLA|GASOLINA|ETANOL|ALCOOL|ÁLCOOL|GNV|GAS\s*NATURAL/i;
+function sbEhS10(r){
   const c=String((r&&r.combustivel)||'');
-  return /diesel/i.test(c) && !/arla/i.test(c);
+  return !_SB_RE_NDSL.test(c) && _SB_RE_S10.test(c);
 }
+/* Mantido o nome antigo: é ele que as demais rotinas da aba chamam. */
+function sbEhDiesel(r){ return sbEhS10(r); }
 function sbLancamentoValido(r){
   return !/CANCEL|REPROV|ESTORN|NEGAD|RECUSAD/i.test(String((r&&r.status)||''));
 }
@@ -9686,6 +9920,7 @@ function sbRecalcularPostos(){
   const antes=new Map(SB.postos.map(p=>[p.chave,p]));
   const map=new Map();
   for(const r of SB.rows){
+    if(!sbEhS10(r)) continue;                 /* recorte S-10 da aba */
     const k=sbChavePosto(r); if(!k) continue;
     let p=map.get(k);
     if(!p){ p={chave:k, cnpj:r.cnpj||'', nome:r.posto||'', endereco:r.endereco||'',
@@ -9716,6 +9951,10 @@ function sbRecalcularPostos(){
     const ant=antes.get(p.chave)||{};
     p.rodovia = ant.rodoviaManual || sbRodovia(p.endereco) || '';
     if(ant.rodoviaManual) p.rodoviaManual=ant.rodoviaManual;
+    /* nome do trecho: rótulo, nunca chave — o agrupamento e o matcher
+       continuam decididos pelo código */
+    p.rodoviaNome = ant.rodoviaNomeManual || sbNomeRodovia(p.endereco, p.rodovia) || '';
+    if(ant.rodoviaNomeManual) p.rodoviaNomeManual=ant.rodoviaNomeManual;
     p.km = sbKm(p.endereco);
     /* coordenada é cara: preserva a que já foi geocodificada, a menos que o
        endereço de referência tenha mudado */
@@ -9888,7 +10127,7 @@ function sbAplicarDieselE16(forcar){
     el.dataset.manual=''; el.value=rota.valor;
     sbPintarCampo('auto-rota');
     const p=rota.posto;
-    const ondeNaRodovia=(p.rodovia?p.rodovia:'via urbana')+(p.km!=null?' · km '+num(p.km,p.km%1?1:0):'');
+    const ondeNaRodovia=(p.rodovia?sbRodoviaLabel(p.rodovia,p.rodoviaNome):'via urbana')+(p.km!=null?' · km '+num(p.km,p.km%1?1:0):'');
     sbRenderChip('rota','posto na rota',
       `Último abastecimento na rota: ${p.nome} — ${ondeNaRodovia}, ${p.cidade}/${p.uf}, `+
       `em ${sbDataBR(rota.linha.data)}. ${rota.postos.length} posto(s) da base identificado(s) no trecho.`);
@@ -10019,10 +10258,16 @@ function sbRenderMeta(){
   if(!SB.carregado){ el.innerHTML='<span class="pill mu">Base não carregada.</span>'; return; }
   if(!SB.rows.length){ el.innerHTML='<span class="pill am">Nenhum abastecimento na base — envie a primeira planilha do ShellBox.</span>'; return; }
 
+  /* o intervalo mostrado é o do RECORTE (S-10), não o do arquivo: é ele que
+     delimita o que a aba efetivamente calcula */
+  const s10=SB.rows.filter(sbEhS10);
   let ini='', fim='';
-  for(const r of SB.rows){ const d=String(r.data||'').slice(0,10); if(!d) continue;
+  for(const r of s10){ const d=String(r.data||'').slice(0,10); if(!d) continue;
     if(!ini||d<ini) ini=d; if(!fim||d>fim) fim=d; }
-  p.push(`<span class="pill ac">${num(SB.rows.length,0)} abastecimentos</span>`);
+  p.push(`<span class="pill ac" title="A aba considera apenas abastecimentos de diesel S-10">${num(s10.length,0)} abastecimentos S-10</span>`);
+  const fora=SB.rows.length-s10.length;
+  if(fora) p.push(`<span class="pill mu" title="S-500, gasolina, etanol, Arla e demais produtos: ficam gravados na base, mas fora de toda apuração desta aba">${num(fora,0)} fora do recorte S-10</span>`);
+  if(!s10.length){ el.innerHTML=p.join('')+'<span class="pill am">Nenhum abastecimento S-10 na base — nada a apurar nesta aba.</span>'; return; }
   p.push(`<span class="pill mu">${esc(dtSimplesBR(ini))} a ${esc(dtSimplesBR(fim))}</span>`);
   const comCoord=SB.postos.filter(x=>Number(x.lat)&&Number(x.lng)).length;
   p.push(`<span class="pill mu">${num(SB.postos.length,0)} postos · ${num(comCoord,0)} com coordenada</span>`);
@@ -10055,12 +10300,16 @@ function sbRenderResumo(){
   sbRes(`<div><b>Base consolidada: ${num(r.total,0)} abastecimentos.</b></div>${linhas}${geoTxt}${excl}`);
 }
 
+/* Estatística do posto — contagem, último abastecimento e média ponderada,
+   todos já dentro do recorte S-10: o "Abast." da tabela precisa bater com a
+   amostra que gerou a média, senão a coluna vira armadilha de leitura. */
 function sbEstatPosto(chave){
   let qtd=0, ultimo=null, litros=0, valor=0;
   for(const x of SB.rows){
+    if(!sbEhS10(x)) continue;
     if(sbChaveMemo(x)!==chave) continue;
     qtd++;
-    if(sbEhDiesel(x) && x.preco>0 && x.litros>0 && sbLancamentoValido(x)){ litros+=x.litros; valor+=x.preco*x.litros; }
+    if(x.preco>0 && x.litros>0 && sbLancamentoValido(x)){ litros+=x.litros; valor+=x.preco*x.litros; }
     if(!ultimo || String(x.data)>String(ultimo.data)) ultimo=x;
   }
   return {qtd, ultimo, media: litros>0?valor/litros:null};
@@ -10073,8 +10322,8 @@ function sbRenderRodovias(){
 
   const q=_nk(SB.busca||'');
   const filtrados = q ? SB.postos.filter(p=>
-      _nk(p.rodovia).includes(q)||_nk(p.nome).includes(q)||_nk(p.cidade).includes(q)||
-      _nk(p.endereco).includes(q)||_nk(p.uf).includes(q)) : SB.postos;
+      _nk(p.rodovia).includes(q)||_nk(p.rodoviaNome).includes(q)||_nk(p.nome).includes(q)||
+      _nk(p.cidade).includes(q)||_nk(p.endereco).includes(q)||_nk(p.uf).includes(q)) : SB.postos;
   if(!filtrados.length){ alvo.innerHTML='<div class="muted">Nada encontrado para essa busca.</div>'; return; }
 
   const grupos=new Map();
@@ -10093,6 +10342,17 @@ function sbRenderRodovias(){
 
   alvo.innerHTML=ordenados.map(([rodovia,postos],i)=>{
     const total=postos.reduce((s,p)=>s+(est.get(p.chave)?.qtd||0),0);
+    /* Rótulo do grupo: o código manda, o nome acompanha. Como o mesmo código
+       pode atravessar trechos com nomes diferentes, entram os dois nomes mais
+       frequentes e o resto vira "+N" — o título não pode virar uma lista. */
+    const cont=new Map();
+    postos.forEach(p=>{ const n=(p.rodoviaNome||'').trim(); if(n) cont.set(n,(cont.get(n)||0)+1); });
+    const nomes=[...cont.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(x=>x[0]);
+    const temCod=/^[A-Z]{2}-\d{2,3}$/.test(rodovia);
+    const rotulo = rodovia + ((temCod && nomes.length)
+      ? ' · '+nomes.slice(0,2).join(' / ')+(nomes.length>2?` +${nomes.length-2}`:'')
+      : '');
+    const tituloRot = (temCod && nomes.length>2) ? 'Trechos nomeados nesta rodovia: '+nomes.join(', ') : '';
     const linhas=postos.sort((a,b)=>(a.km??1e9)-(b.km??1e9)||a.nome.localeCompare(b.nome)).map(p=>{
       const e=est.get(p.chave)||{};
       const coord=(Number(p.lat)&&Number(p.lng))
@@ -10110,7 +10370,7 @@ function sbRenderRodovias(){
         <td>${coord}</td></tr>`;
     }).join('');
     return `<details${i<2?' open':''}>
-      <summary>${esc(rodovia)} <span class="pill mu">${postos.length} posto(s)</span><em>${num(total,0)} abastecimento(s)</em></summary>
+      <summary${tituloRot?` title="${esc(tituloRot)}"`:''}>${esc(rotulo)} <span class="pill mu">${postos.length} posto(s)</span><em>${num(total,0)} abastecimento(s) S-10</em></summary>
       <table class="tb">
         <thead><tr><th>Posto</th><th class="num">Km</th><th>Cidade/UF</th><th class="num">Abast.</th>
         <th>Último</th><th class="num">R$/L último</th><th class="num">R$/L médio</th><th>Coord.</th></tr></thead>
@@ -10126,14 +10386,19 @@ async function sbExportar(){
     const wb=XL.utils.book_new();
     const add=(nome,dados)=>{ const ws=XL.utils.json_to_sheet(dados.length?dados:[{'—':'sem registros'}]);
       XL.utils.book_append_sheet(wb,ws,nome.slice(0,31)); };
-    add('Abastecimentos', SB.rows.map(r=>({
+    /* a exportação segue o mesmo recorte da tela: só S-10 */
+    add('Abastecimentos S-10', SB.rows.filter(sbEhS10).map(r=>{
+      const cod=sbRodovia(r.endereco); return {
       'ID':r.id,'Data':sbDataBR(r.data),'Status':r.status,'Posto':r.posto,'Endereço':r.endereco,
-      'Rodovia':sbRodovia(r.endereco),'Km':sbKm(r.endereco),'Cidade':r.cidade,'UF':r.uf,'CNPJ':r.cnpj,
+      'Rodovia':cod,'Nome da rodovia':sbNomeRodovia(r.endereco,cod),
+      'Km':sbKm(r.endereco),'Cidade':r.cidade,'UF':r.uf,'CNPJ':r.cnpj,
       'Placa':r.placa,'Combustível':r.combustivel,'Litros':r.litros,'Valor':r.valor,'R$/L':r.preco,
       'Perfil':r.perfil,'Unidade':sbUnidade(r),'Condutor':r.condutor
-    })));
+    };}));
     add('Postos por rodovia', SB.postos.map(p=>{ const e=sbEstatPosto(p.chave); return {
-      'Rodovia':p.rodovia||'—','Km':p.km,'Posto':p.nome,'Endereço':p.endereco,'Cidade':p.cidade,'UF':p.uf,
+      'Rodovia':sbRodoviaLabel(p.rodovia,p.rodoviaNome)||'—',
+      'Código':p.rodovia||'—','Nome da rodovia':p.rodoviaNome||'—',
+      'Km':p.km,'Posto':p.nome,'Endereço':p.endereco,'Cidade':p.cidade,'UF':p.uf,
       'CNPJ':p.cnpj,'Abastecimentos':e.qtd,'Último':e.ultimo?sbDataBR(e.ultimo.data):'—',
       'R$/L médio':e.media!=null?+e.media.toFixed(3):null,'Lat':p.lat,'Lng':p.lng,'Geocodificação':p.geo||'pendente'
     };}));
@@ -10191,9 +10456,10 @@ function sbBind(){
   if(busca){ let t=null; busca.addEventListener('input',()=>{ clearTimeout(t);
     t=setTimeout(()=>{ SB.busca=busca.value; sbRenderRodovias(); },200); }); }
 
-  /* a aba Combustível carrega a base ao ser aberta pela primeira vez */
+  /* a aba Combustível carrega, ao ser aberta pela primeira vez, as duas bases
+     que ela usa: o ShellBox (postos por rodovia) e a SZC (diesel vigente) */
   document.querySelectorAll('#tabsBar .tab[data-v="comb"]').forEach(b=>{
-    b.addEventListener('click',()=>{ sbGarantirBase(); });
+    b.addEventListener('click',()=>{ sbGarantirBase(); try{ dieselGarantirSZC(); }catch(_){} });
   });
 }
 
