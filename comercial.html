@@ -1379,9 +1379,14 @@ const COL = {
   premissas:  'comercial_premissas',
   antt:       'comercial_antt_coeficientes',
   simulacoes: 'comercial_simulacoes',
-  veiculos:   'comercial_veiculos_perfis',   // legado — origem da migração para carretas/cavalos
-  carretas:   'comercial_carretas',
-  cavalos:    'comercial_cavalos',
+  /* Carretas e cavalos moram DENTRO de comercial_veiculos_perfis, separados
+     pelo campo tipo_registro ('carreta' | 'cavalo'); sem esse campo o doc é um
+     perfil de conjunto do modelo antigo. Mesma solução dos clientes dentro de
+     comercial_rotas: evita coleção nova, que exigiria mexer na allowlist do
+     index.html e no firestore.rules (a regra dos três pontos acima). */
+  veiculos:   'comercial_veiculos_perfis',
+  carretas:   'comercial_veiculos_perfis',
+  cavalos:    'comercial_veiculos_perfis',
   config:     'comercial_config'      // chave HERE, diesel vigente, clientes
 };
 
@@ -1581,9 +1586,14 @@ async function carregarAntt(){
   }
 }
 async function carregarVeiculos(){
-  ST.veiculos = await cachedGet('veic', ()=>fsGetCollection(COL.veiculos,{orderBy:'nome'}));
-  if(!ST.veiculos.length){ await seedVeiculos(); ST.veiculos = await fsGetCollection(COL.veiculos,{orderBy:'nome'}); cacheBust('veic'); }
-  await carregarFrota();
+  let docs = await cachedGet('veic', ()=>fsGetCollection(COL.veiculos,{orderBy:'nome'}));
+  const perfis = ds => ds.filter(d=>!(d.data||{}).tipo_registro);
+  if(!perfis(docs).length && !docs.length){
+    await seedVeiculos();
+    docs = await fsGetCollection(COL.veiculos,{orderBy:'nome'}); cacheBust('veic');
+  }
+  ST.veiculos = perfis(docs);                       /* perfis de conjunto — legado */
+  await carregarFrota(docs);
 }
 /* ══ Frota em duas categorias ══════════════════════════════════════════════
    O perfil único de conjunto acabou: quem é cadastrado agora é a CARRETA
@@ -1596,19 +1606,35 @@ async function carregarVeiculos(){
    números, para nenhum custo mudar) e 1 cavalo, deduplicado por modelo +
    tração + pneus. A coleção antiga fica intacta como histórico.
    ══════════════════════════════════════════════════════════════════════════ */
-async function carregarFrota(){
-  ST.carretas = await cachedGet('carretas', ()=>fsGetCollection(COL.carretas,{orderBy:'nome'}));
-  ST.cavalos  = await cachedGet('cavalos',  ()=>fsGetCollection(COL.cavalos ,{orderBy:'nome'}));
-  if(!ST.carretas.length && !ST.cavalos.length){
+function frotaSeparar(docs){
+  ST.carretas = docs.filter(d=>(d.data||{}).tipo_registro==='carreta');
+  ST.cavalos  = docs.filter(d=>(d.data||{}).tipo_registro==='cavalo');
+}
+async function carregarFrota(docs){
+  if(!docs) docs = await cachedGet('veic', ()=>fsGetCollection(COL.veiculos,{orderBy:'nome'}));
+  frotaSeparar(docs);
+  if(!ST.carretas.length && !ST.cavalos.length && ST.veiculos.length){
     try{
+      /* Carimbo de migração: sem ele, apagar a última carreta faria a migração
+         rodar de novo e ressuscitar tudo a partir dos perfis antigos. */
+      const feito = await fsGetDoc(COL.config,'frota_migrada');
+      if(feito) return;
       await migrarPerfisParaFrota();
-      ST.carretas = await fsGetCollection(COL.carretas,{orderBy:'nome'}); cacheBust('carretas');
-      ST.cavalos  = await fsGetCollection(COL.cavalos ,{orderBy:'nome'}); cacheBust('cavalos');
-    }catch(e){ console.warn('[Comercial] migração da frota:', e && e.message); }
+      try{ await fsSetDoc(COL.config,'frota_migrada',{em:agoraISO(), por:ATLAS_CURRENT_USER.email, perfis:ST.veiculos.length},true); }catch(_){}
+      cacheBust('veic');
+      const novos = await fsGetCollection(COL.veiculos,{orderBy:'nome'});
+      ST.veiculos = novos.filter(d=>!(d.data||{}).tipo_registro);
+      frotaSeparar(novos);
+    }catch(e){
+      console.warn('[Comercial] migração da frota:', e && e.message);
+      try{ toast('Não foi possível migrar os perfis para carretas e cavalos: '+((e&&e.message)||'erro'),'rd'); }catch(_){}
+    }
   }
 }
 async function migrarPerfisParaFrota(){
   const carimbo={criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email, origem:'migração dos perfis de conjunto'};
+  /* Grava na MESMA coleção dos perfis, marcado por tipo_registro — coleção
+     nova exigiria allowlist no index.html e regra no firestore.rules. */
   const vistos=new Set();
   for(const v of ST.veiculos){
     const d=v.data||{};
@@ -1621,6 +1647,7 @@ async function migrarPerfisParaFrota(){
     const lisos = Number(d.pneusLisos)>0 ? (sobra(d.pneusLisos, cp.lisos)||rp.lisos) : rp.lisos;
     const borr  = Number(d.pneusBorr )>0 ? (sobra(d.pneusBorr , cp.borr )||rp.borr ) : rp.borr;
     await fsAddDoc(COL.carretas, {
+      tipo_registro:'carreta',
       nome:d.nome||veicTipoCarreta(d), tipo:veicTipoCarreta(d),
       eixos:veicCarretaEixos(d), unidades:un,
       pneusLisos:lisos, pneusBorr:borr,
@@ -1632,11 +1659,11 @@ async function migrarPerfisParaFrota(){
     const k=modelo.toUpperCase()+'|'+tracao+'|'+cp.lisos+'|'+cp.borr;
     if(vistos.has(k)) continue;
     vistos.add(k);
-    await fsAddDoc(COL.cavalos, { nome:modelo||('Cavalo '+tracao), tracao,
+    await fsAddDoc(COL.cavalos, { tipo_registro:'cavalo', nome:modelo||('Cavalo '+tracao), tracao,
       pneusLisos:cp.lisos, pneusBorr:cp.borr, ...carimbo });
   }
   if(!vistos.size){
-    await fsAddDoc(COL.cavalos, { nome:'Cavalo '+VEIC_TRACAO_PADRAO, tracao:VEIC_TRACAO_PADRAO,
+    await fsAddDoc(COL.cavalos, { tipo_registro:'cavalo', nome:'Cavalo '+VEIC_TRACAO_PADRAO, tracao:VEIC_TRACAO_PADRAO,
       pneusLisos:CAVALO_PNEUS_PADRAO.lisos, pneusBorr:CAVALO_PNEUS_PADRAO.borr, ...carimbo });
   }
 }
@@ -6146,7 +6173,8 @@ function carrAtualizarNota(){
 async function carrSalvar(id){
   if(!podeEditarPremissas()){ toast('Sem permissão para editar o cadastro.','am'); return; }
   const opt=v=>(+v>0? +v : null);                      /* vazio = deduzido, nunca 0 */
-  const data={ nome:$('crNome').value.trim(), tipo:$('crTipo').value.trim()||'Outro',
+  const data={ tipo_registro:'carreta',
+    nome:$('crNome').value.trim(), tipo:$('crTipo').value.trim()||'Outro',
     eixos:opt($('crEixos').value), unidades:opt($('crUnid').value),
     pneusLisos:opt($('crLiso').value), pneusBorr:opt($('crBorr').value),
     tara:+$('crTara').value, capacidade:+$('crCap').value,
@@ -6154,8 +6182,16 @@ async function carrSalvar(id){
     categoriaAntt:$('crCat').value, tabelaAntt:$('crTab').value,
     atualizado_em:agoraISO(), atualizado_por:ATLAS_CURRENT_USER.email };
   if(!data.nome){ toast('Nome obrigatório.','am'); return; }
-  if(id) await fsSetDoc(COL.carretas,id,data,true); else await fsAddDoc(COL.carretas,{...data,criado_em:agoraISO()});
-  cacheBust('carretas'); await carregarFrota(); renderVeiculos(); montarSelects(); mdFechar(); toast('Carreta salva.','gn');
+  /* Gravação que falha em silêncio é o pior dos mundos: o modal fechava e a
+     tabela continuava vazia. Agora o erro da ponte/das regras aparece. */
+  try{
+    if(id) await fsSetDoc(COL.carretas,id,data,true); else await fsAddDoc(COL.carretas,{...data,criado_em:agoraISO()});
+  }catch(e){
+    console.error('[Comercial] carrSalvar:', e);
+    toast('Não foi possível salvar a carreta: '+((e&&e.message)||'erro desconhecido'),'rd');
+    return;
+  }
+  cacheBust('veic'); await carregarVeiculos(); renderVeiculos(); montarSelects(); mdFechar(); toast('Carreta salva.','gn');
 }
 function carrExcluir(id){
   if(!podeEditarPremissas()){ toast('Sem permissão para excluir.','am'); return; }
@@ -6171,7 +6207,7 @@ function carrExcluir(id){
 async function carrExcluirOk(id){
   try{
     await fsDeleteDoc(COL.carretas,id);
-    cacheBust('carretas'); await carregarFrota(); renderVeiculos(); montarSelects();
+    cacheBust('veic'); await carregarVeiculos(); renderVeiculos(); montarSelects();
     mdFechar(); toast('Carreta excluída.','gn');
   }catch(e){ toast('Não foi possível excluir: '+((e&&e.message)||'erro desconhecido'),'rd'); }
 }
@@ -6227,12 +6263,19 @@ function cavAtualizarNota(){
 async function cavSalvar(id){
   if(!podeEditarPremissas()){ toast('Sem permissão para editar o cadastro.','am'); return; }
   const num0=v=>(v===''||v==null)?null:+v;      /* zero explícito vale: existe cavalo sem borrachudo */
-  const data={ nome:$('cvNome').value.trim(), tracao:$('cvTracao').value||VEIC_TRACAO_PADRAO,
+  const data={ tipo_registro:'cavalo',
+    nome:$('cvNome').value.trim(), tracao:$('cvTracao').value||VEIC_TRACAO_PADRAO,
     pneusLisos:num0($('cvLiso').value), pneusBorr:num0($('cvBorr').value),
     atualizado_em:agoraISO(), atualizado_por:ATLAS_CURRENT_USER.email };
   if(!data.nome){ toast('Informe o modelo do cavalo.','am'); return; }
-  if(id) await fsSetDoc(COL.cavalos,id,data,true); else await fsAddDoc(COL.cavalos,{...data,criado_em:agoraISO()});
-  cacheBust('cavalos'); await carregarFrota(); renderVeiculos(); montarSelects(); mdFechar(); toast('Cavalo salvo.','gn');
+  try{
+    if(id) await fsSetDoc(COL.cavalos,id,data,true); else await fsAddDoc(COL.cavalos,{...data,criado_em:agoraISO()});
+  }catch(e){
+    console.error('[Comercial] cavSalvar:', e);
+    toast('Não foi possível salvar o cavalo: '+((e&&e.message)||'erro desconhecido'),'rd');
+    return;
+  }
+  cacheBust('veic'); await carregarVeiculos(); renderVeiculos(); montarSelects(); mdFechar(); toast('Cavalo salvo.','gn');
 }
 function cavExcluir(id){
   if(!podeEditarPremissas()){ toast('Sem permissão para excluir.','am'); return; }
@@ -6247,7 +6290,7 @@ function cavExcluir(id){
 async function cavExcluirOk(id){
   try{
     await fsDeleteDoc(COL.cavalos,id);
-    cacheBust('cavalos'); await carregarFrota(); renderVeiculos(); montarSelects();
+    cacheBust('veic'); await carregarVeiculos(); renderVeiculos(); montarSelects();
     mdFechar(); toast('Cavalo excluído.','gn');
   }catch(e){ toast('Não foi possível excluir: '+((e&&e.message)||'erro desconhecido'),'rd'); }
 }
