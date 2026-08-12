@@ -676,14 +676,12 @@ details.cfg-det>.card{margin-top:10px}
               <option value="geral">Carga geral</option>
             </select>
           </label>
-          <label class="fld">Conjunto / veículo
-            <select id="simVeiculo"></select>
-          </label>
+          <input type="hidden" id="simVeiculo">
           <label class="fld">Cavalo mecânico
-            <select id="simCavalo" title="Modelo e tração do cavalo. Automático segue o conjunto selecionado; troque quando a viagem sair com outro cavalo — os pneus liso e borrachudo do custo (E21/E22) acompanham."></select>
+            <select id="simCavalo" title="Unidade de tração da aba Veículos &amp; Eixos: modelo, tração, eixos e pneus liso/borrachudo. Entra na soma de eixos do conjunto e nos pneus do custo (E21/E22)."></select>
           </label>
           <label class="fld">Carreta
-            <select id="simCarreta" title="Eixos e pneus da carreta, por unidade rebocada. Automático segue o conjunto selecionado."></select>
+            <select id="simCarreta" title="Implemento rebocado da aba Veículos &amp; Eixos: tipo, eixos por unidade e quantas unidades o conjunto puxa (bitrem = 2). Traz também tara, capacidade útil, dimensões e categoria ANTT."></select>
           </label>
         </div>
         <div class="sim-calc-note" id="simConjResumo" style="margin-top:8px"></div>
@@ -906,15 +904,28 @@ details.cfg-det>.card{margin-top:10px}
 <!-- ═══════════ 3) VEÍCULOS & EIXOS ═══════════ -->
 <div class="view" id="v-veic">
   <div class="card">
-    <h3>Perfis de veículo/conjunto
-      <span style="margin-left:auto"><button class="btn sm pri" id="btnNovoVeiculo">Novo perfil</button></span>
+    <h3>Carretas
+      <span style="margin-left:auto"><button class="btn sm pri" id="btnNovaCarreta">Nova carreta</button></span>
     </h3>
-    <div class="muted" style="margin-bottom:8px">Cada perfil aponta para a categoria ANTT correta (evita o erro de categoria trocada). Dimensões físicas alimentam o motor HERE (restrições de via).
-      O perfil descreve as duas metades do conjunto: o <b>cavalo mecânico</b> (modelo e tração — 4x2, 6x2, 6x4, 8x4 — com os pneus liso e borrachudo) e a <b>carreta</b> (eixos e pneus, por unidade rebocada).
-      A soma alimenta E21/E22 do custo; o campo <b>Eixos</b> continua sendo o que decide piso ANTT e pedágio.
-      Valores em cinza são deduzidos — a tração dá os pneus do cavalo, a carreta rende 4 lisos por eixo.</div>
-    <table class="tb" id="tbVeiculos">
-      <thead><tr><th>Perfil</th><th class="num">Eixos</th><th>Cavalo mecânico</th><th>Carreta</th><th>Tipo de carreta</th><th class="num">Pneus lisos</th><th class="num">Pneus borrachudos</th><th class="num">Carretas</th><th class="num">Tara (t)</th><th class="num">Cap. útil (t)</th><th>Dimensões (C×L×A m)</th><th>Categoria ANTT</th><th></th></tr></thead>
+    <div class="muted" style="margin-bottom:8px">Cadastro do <b>implemento rebocado</b>: tipo, eixos por unidade e quantas unidades o conjunto puxa —
+      é aqui que o <b>bitrem</b> nasce (2 unidades rebocadas) e o rodotrem também. Tara, capacidade útil, dimensões e categoria ANTT são da carreta:
+      o Simulador soma cavalo + carreta para chegar aos eixos e aos pneus do conjunto.
+      Dimensões físicas alimentam o motor HERE (restrições de via) e a categoria ANTT evita o erro de categoria trocada.
+      Valores em cinza são deduzidos — 4 pneus lisos por eixo é o padrão.</div>
+    <table class="tb" id="tbCarretas">
+      <thead><tr><th>Carreta</th><th>Tipo</th><th class="num">Eixos (por unidade)</th><th class="num">Unidades rebocadas</th><th class="num">Eixos da carreta</th><th class="num">Pneus lisos</th><th class="num">Pneus borrachudos</th><th class="num">Tara (t)</th><th class="num">Cap. útil (t)</th><th>Dimensões (C×L×A m)</th><th>Categoria ANTT</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h3>Cavalo mecânico
+      <span style="margin-left:auto"><button class="btn sm pri" id="btnNovoCavalo">Novo cavalo</button></span>
+    </h3>
+    <div class="muted" style="margin-bottom:8px">Cadastro da <b>unidade de tração</b>: modelo, tração (4x2, 6x2, 6x4, 8x4) e os pneus que ele calça —
+      <b>2 lisos</b> e <b>4 borrachudos</b> por padrão (liso é pneu de eixo livre, borrachudo é pneu de tração).
+      A tração define os eixos do cavalo; esses números entram na soma do conjunto e alimentam E21/E22 do custo.</div>
+    <table class="tb" id="tbCavalos">
+      <thead><tr><th>Cavalo</th><th>Tração</th><th class="num">Eixos</th><th class="num">Pneus lisos</th><th class="num">Pneus borrachudos</th><th class="num">Conjuntos possíveis</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -1368,7 +1379,9 @@ const COL = {
   premissas:  'comercial_premissas',
   antt:       'comercial_antt_coeficientes',
   simulacoes: 'comercial_simulacoes',
-  veiculos:   'comercial_veiculos_perfis',
+  veiculos:   'comercial_veiculos_perfis',   // legado — origem da migração para carretas/cavalos
+  carretas:   'comercial_carretas',
+  cavalos:    'comercial_cavalos',
   config:     'comercial_config'      // chave HERE, diesel vigente, clientes
 };
 
@@ -1464,7 +1477,9 @@ function applyPerm(){
   $('pillUser').textContent = (ATLAS_CURRENT_USER.nome||ATLAS_CURRENT_USER.email||'usuário')+' · '+(perfil()||'—');
   $('pillUser').className = 'pill '+(isGestorOuAdmin()?'ac':'mu');
   const _bnp=$('btnNovaPremissa'); if(_bnp) _bnp.style.display = podeEditarPremissas()?'':'none';
-  $('btnNovoVeiculo').style.display  = podeEditarPremissas()?'':'none';
+  ['btnNovoVeiculo','btnNovaCarreta','btnNovoCavalo'].forEach(id=>{
+    const b=$(id); if(b) b.style.display = podeEditarPremissas()?'':'none';
+  });
   $('btnNovoDiesel').style.display   = podeEditarPremissas()?'':'none';
   $('btnNovoCliente').style.display  = podeEditarPremissas()?'':'none';
   $('btnNovaRota').style.display     = podeEditarPremissas()?'':'none';
@@ -1481,7 +1496,9 @@ const ST = {
   antt:{ coef:[], vigencia:null, resolucao:null, docId:null,
          numero:null, publicacao:null, edicao:null, secao:null, pagina:null,
          altera:null, via:null, arquivo:null, criadoEm:null, criadoPor:null },
-  veiculos:[], premissas:[], clientes:[], rotas:[], diesel:[],
+  veiculos:[],          // legado: perfis de conjunto (só leitura, fonte da migração)
+  carretas:[], cavalos:[],  // cadastros vivos — o conjunto é montado somando os dois
+  premissas:[], clientes:[], rotas:[], diesel:[],
   clientesDocs:[],      // cadastros feitos no Atlas (comercial_rotas tipo:'cliente')
   sa1:[], sa1Meta:null, sa1Carregada:false, // base SA1 do Protheus (bases_cloud/sa1) + metadados da carga
   hereKey:'', hereChamadasMes:0,
@@ -1566,6 +1583,62 @@ async function carregarAntt(){
 async function carregarVeiculos(){
   ST.veiculos = await cachedGet('veic', ()=>fsGetCollection(COL.veiculos,{orderBy:'nome'}));
   if(!ST.veiculos.length){ await seedVeiculos(); ST.veiculos = await fsGetCollection(COL.veiculos,{orderBy:'nome'}); cacheBust('veic'); }
+  await carregarFrota();
+}
+/* ══ Frota em duas categorias ══════════════════════════════════════════════
+   O perfil único de conjunto acabou: quem é cadastrado agora é a CARRETA
+   (implemento rebocado — tipo, eixos por unidade, quantas unidades, tara,
+   capacidade, dimensões e categoria ANTT) e o CAVALO MECÂNICO (tração, eixos
+   e pneus). O conjunto passa a ser o par escolhido no Simulador, e eixos e
+   pneus são a SOMA das duas metades — é assim que o bitrem se monta: uma
+   carreta com 2 unidades rebocadas.
+   A migração roda uma vez: cada perfil antigo vira 1 carreta (com os mesmos
+   números, para nenhum custo mudar) e 1 cavalo, deduplicado por modelo +
+   tração + pneus. A coleção antiga fica intacta como histórico.
+   ══════════════════════════════════════════════════════════════════════════ */
+async function carregarFrota(){
+  ST.carretas = await cachedGet('carretas', ()=>fsGetCollection(COL.carretas,{orderBy:'nome'}));
+  ST.cavalos  = await cachedGet('cavalos',  ()=>fsGetCollection(COL.cavalos ,{orderBy:'nome'}));
+  if(!ST.carretas.length && !ST.cavalos.length){
+    try{
+      await migrarPerfisParaFrota();
+      ST.carretas = await fsGetCollection(COL.carretas,{orderBy:'nome'}); cacheBust('carretas');
+      ST.cavalos  = await fsGetCollection(COL.cavalos ,{orderBy:'nome'}); cacheBust('cavalos');
+    }catch(e){ console.warn('[Comercial] migração da frota:', e && e.message); }
+  }
+}
+async function migrarPerfisParaFrota(){
+  const carimbo={criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email, origem:'migração dos perfis de conjunto'};
+  const vistos=new Set();
+  for(const v of ST.veiculos){
+    const d=v.data||{};
+    const cp=veicCavaloPneus(d), rp=veicCarretaPneus(d), un=Math.max(veicCarretas(d),1);
+    /* Perfil com o TOTAL de pneus digitado à mão (o caso do LS, 18 lisos):
+       o que sobra depois do cavalo é o que a carreta calça, dividido pelas
+       unidades rebocadas. Sem isso a migração mudaria E21/E22 do dia para a
+       noite — a soma das partes daria um número menor que o total cadastrado. */
+    const sobra=(total,doCavalo)=>{ const r=(Number(total)-doCavalo)/un; return r>0?Math.round(r):null; };
+    const lisos = Number(d.pneusLisos)>0 ? (sobra(d.pneusLisos, cp.lisos)||rp.lisos) : rp.lisos;
+    const borr  = Number(d.pneusBorr )>0 ? (sobra(d.pneusBorr , cp.borr )||rp.borr ) : rp.borr;
+    await fsAddDoc(COL.carretas, {
+      nome:d.nome||veicTipoCarreta(d), tipo:veicTipoCarreta(d),
+      eixos:veicCarretaEixos(d), unidades:un,
+      pneusLisos:lisos, pneusBorr:borr,
+      tara:Number(d.tara)||0, capacidade:Number(d.capacidade)||0,
+      comp:Number(d.comp)||18.6, larg:Number(d.larg)||2.6, alt:Number(d.alt)||4.0,
+      categoriaAntt:d.categoriaAntt||'granel_solido', tabelaAntt:d.tabelaAntt||'A',
+      perfil_origem:v.id, ...carimbo });
+    const modelo=String(d.cavaloModelo||'').trim(), tracao=veicTracao(d);
+    const k=modelo.toUpperCase()+'|'+tracao+'|'+cp.lisos+'|'+cp.borr;
+    if(vistos.has(k)) continue;
+    vistos.add(k);
+    await fsAddDoc(COL.cavalos, { nome:modelo||('Cavalo '+tracao), tracao,
+      pneusLisos:cp.lisos, pneusBorr:cp.borr, ...carimbo });
+  }
+  if(!vistos.size){
+    await fsAddDoc(COL.cavalos, { nome:'Cavalo '+VEIC_TRACAO_PADRAO, tracao:VEIC_TRACAO_PADRAO,
+      pneusLisos:CAVALO_PNEUS_PADRAO.lisos, pneusBorr:CAVALO_PNEUS_PADRAO.borr, ...carimbo });
+  }
 }
 async function carregarClientesRotas(){
   /* Clientes cadastrados pelo Atlas moram DENTRO de comercial_rotas com
@@ -1939,11 +2012,9 @@ function montarSelects(){
   _msPend=(window.requestAnimationFrame||setTimeout)(()=>{ _msPend=null; montarSelectsAgora(); },0);
 }
 function montarSelectsAgora(){
-  const sv=$('simVeiculo');
-  sv.innerHTML = _optsMemo('veic','v|'+ST.veiculos.length,
-    ()=>ST.veiculos.map(v=>`<option value="${v.id}">${esc(v.data.nome)} · ${v.data.eixos} eixos</option>`).join(''));
-  /* Cavalo e carreta saem do mesmo cadastro: refazem junto, senão os dois
-     seletores ficam vazios até alguém trocar o conjunto na mão. */
+  /* O conjunto não é mais um seletor: ele é o par cavalo × carreta montado
+     pelos dois selects abaixo. O campo oculto simVeiculo só carrega a chave
+     do par (premissas por veículo e snapshot da simulação). */
   try{ simMontarCavalos(); simMontarCarretasSel(); simRenderResumoConjunto(); }catch(_){}
   const sc=$('simCliente');
   /* Enquanto a SA1 não chega, o combo dizia apenas "— avulso —" e parecia
@@ -3305,8 +3376,8 @@ $('btnSimular').onclick = simular;
 async function simular(){
   const orig=$('simOrigem').value.trim(), dest=$('simDestino').value.trim();
   if(!orig||!dest){ toast('Informe origem e destino.','am'); return; }
-  const veic = ST.veiculos.find(v=>v.id===$('simVeiculo').value);
-  if(!veic){ toast('Selecione um perfil de veículo.','am'); return; }
+  const veic = simVeicAtual();
+  if(!veic){ toast('Selecione a carreta (e o cavalo) do conjunto na aba Veículos & Eixos.','am'); return; }
   const btn=$('btnSimular'); btn.disabled=true; btn.textContent='Consultando HERE…';
   /* Toda simulação começa com os dois trechos marcados e os eixos do conjunto —
      o ajuste de eixo erguido é uma exceção deliberada, nunca um estado herdado. */
@@ -3325,7 +3396,7 @@ async function simular(){
    da linha, pelo movimento das pontas e pelo botão "Recalcular rota". */
 async function simRotear(){
   if(SIMR.ocupado) return;
-  const veic = ST.veiculos.find(v=>v.id===$('simVeiculo').value);
+  const veic = simVeicAtual();
   if(!veic || !SIMR.geoOrig || !SIMR.geoDest) return;
   SIMR.ocupado=true; simMapaStatus(SIMR.vias.length?'Recalculando com as paradas…':'Calculando a rota…');
   try{
@@ -3426,106 +3497,97 @@ function simRenderPracas(){
    outra rota, isenção etc.). Ambos vêm marcados por padrão.
    ══════════════════════════════════════════════════════════════════ */
 function simEixosConjunto(){
-  const v=ST.veiculos.find(x=>x.id===$('simVeiculo').value);
+  const v=simVeicAtual();
   return (v&&Number(v.data.eixos))||5;
 }
 /* ══ Cavalo e carreta do Simulador ═════════════════════════════════════════
-   Os dois seletores funcionam como o de conjunto: a lista sai do cadastro
-   (aba Veículos & conjuntos), nunca de número digitado à mão. "Automático"
-   segue o conjunto selecionado — é o caso normal — e escolher um item só faz
-   sentido quando a viagem sai com um cavalo ou uma carreta diferentes do
-   perfil padrão. A troca não mexe nos eixos do piso ANTT nem no pedágio
-   (esses continuam vindo do campo Eixos do perfil e da tabela de trechos);
-   ela mexe no que muda de fato com o equipamento: os pneus liso e borrachudo
-   que alimentam E21 e E22.
+   Os dois seletores SÃO o conjunto: um lista os cavalos e o outro as carretas
+   cadastradas na aba Veículos & Eixos. Não existe mais um perfil de conjunto
+   pronto para escolher — o conjunto é o par montado aqui, e todo campo que
+   conta eixo ou pneu (piso ANTT, pedágio por eixo, E21/E22, depreciação por
+   carreta, peso e comprimento enviados à HERE) lê a SOMA das duas metades.
+   O bitrem nasce da carreta com 2 unidades rebocadas: 1 cavalo + 2 carretas.
    ══════════════════════════════════════════════════════════════════════════ */
+/* Rótulo curto do cavalo: não repete a tração quando o modelo já a carrega
+   (o cavalo migrado se chama "Cavalo 6x2"). */
+function frotaRotuloCavalo(cav){
+  const m=String((cav&&cav.modelo)||'').trim(), t=String((cav&&cav.tracao)||'').trim();
+  if(!m) return t;
+  return m.toLowerCase().includes(t.toLowerCase())? m : (m+' · '+t);
+}
+/* "Cavalo Scania R 450 · 6x2", mas sem repetir a palavra quando o modelo
+   cadastrado já começa com ela ("Cavalo 6x2", nome que a migração gera). */
+function frotaRotuloCavaloTitulo(cav){
+  const r=frotaRotuloCavalo(cav);
+  return /^cavalo/i.test(r)? r : ('Cavalo '+r);
+}
+function simCavaloId(){ return $('simCavalo')? $('simCavalo').value||'' : ''; }
+function simCarretaId(){ return $('simCarreta')? $('simCarreta').value||'' : ''; }
 function simMontarCavalos(){
   const sel=$('simCavalo'); if(!sel) return;
   const anterior=sel.value;
-  const lista=veicCavalosCadastrados();
-  const conj=simVeicAtual();
-  const auto=conj? veicCavaloRotulo(conj.data) : null;
-  const orfao = anterior && anterior!=='auto' && !lista.some(c=>c.chave===anterior) ? anterior : null;
-  sel.innerHTML = `<option value="auto">Automático${auto?' · '+esc(auto):''}</option>`
-    + lista.map(c=>{
-        const rot=(c.modelo?c.modelo+' · ':'')+c.tracao+' · '+c.lisos+' liso / '+c.borr+' borrachudo';
-        return `<option value="${esc(c.chave)}" title="${esc(c.perfis.filter(Boolean).join(' · '))}">${esc(rot)}</option>`;
-      }).join('')
-    + (orfao?`<option value="${esc(orfao)}" title="Fora dos perfis cadastrados">cavalo fora do cadastro ⚠</option>`:'');
-  if(anterior){ sel.value=anterior; if(sel.value!==anterior) sel.value='auto'; }
+  sel.innerHTML = (ST.cavalos.length?'':'<option value="">— nenhum cavalo cadastrado —</option>')
+    + ST.cavalos.map(c=>{
+        const d=c.data||{}, p=cavPneus(d);
+        return `<option value="${esc(c.id)}" title="${esc(cavRotulo(c))}">${esc(String(d.nome||'').trim()||('Cavalo '+cavTracao(d)))} · ${esc(cavTracao(d))} · ${cavEixos(d)} eixos · ${p.lisos} liso / ${p.borr} borrachudo</option>`;
+      }).join('');
+  if(anterior){ sel.value=anterior; }
+  if(!sel.value && ST.cavalos.length) sel.value=ST.cavalos[0].id;
 }
 function simMontarCarretasSel(){
   const sel=$('simCarreta'); if(!sel) return;
   const anterior=sel.value;
-  const lista=veicCarretasCadastradas();
-  const conj=simVeicAtual();
-  const auto=conj? veicCarretaRotulo(conj.data) : null;
-  const orfao = anterior && anterior!=='auto' && !lista.some(c=>c.chave===anterior) ? anterior : null;
-  sel.innerHTML = `<option value="auto">Automático${auto?' · '+esc(auto):''}</option>`
-    + lista.map(c=>{
-        const rot=c.tipo+' · '+c.eixos+' eixos · '+c.lisos+' liso'+(c.borr?' / '+c.borr+' borrachudo':'');
-        return `<option value="${esc(c.chave)}" title="${esc(c.perfis.filter(Boolean).join(' · '))}">${esc(rot)}</option>`;
-      }).join('')
-    + (orfao?`<option value="${esc(orfao)}" title="Fora dos perfis cadastrados">carreta fora do cadastro ⚠</option>`:'');
-  if(anterior){ sel.value=anterior; if(sel.value!==anterior) sel.value='auto'; }
+  sel.innerHTML = (ST.carretas.length?'':'<option value="">— nenhuma carreta cadastrada —</option>')
+    + ST.carretas.map(c=>{
+        const d=c.data||{}, u=carrUnidades(d), t=carrPneusTotal(d);
+        return `<option value="${esc(c.id)}" title="${esc(carrRotulo(c))}">${esc(d.nome||carrTipo(d))} · ${u>1?u+'× ':''}${carrEixos(d)} eixos = ${carrEixosTotal(d)} · ${t.lisos} liso${t.borr?' / '+t.borr+' borrachudo':''}</option>`;
+      }).join('');
+  if(anterior){ sel.value=anterior; }
+  if(!sel.value && ST.carretas.length) sel.value=ST.carretas[0].id;
 }
-/* Especificação em vigor. Sem escolha manual, é a do conjunto — inclusive
-   para perfil legado, que cai nos padrões (6x2 e 4 pneus por eixo). */
+/* Especificação em vigor — sempre a do cadastro escolhido na tela. */
 function simCavaloSpec(veic){
   const d=(veic||simVeicAtual()||{data:{}}).data||{};
-  const v=$('simCavalo')?$('simCavalo').value:'auto';
-  if(v && v!=='auto'){
-    const c=veicCavalosCadastrados().find(x=>x.chave===v);
-    if(c) return {modelo:c.modelo, tracao:c.tracao, eixos:c.eixos, lisos:c.lisos, borr:c.borr, manual:true};
-  }
   const p=veicCavaloPneus(d);
   return {modelo:String(d.cavaloModelo||'').trim(), tracao:veicTracao(d), eixos:veicCavaloEixos(d),
           lisos:p.lisos, borr:p.borr, manual:false};
 }
 function simCarretaSpec(veic){
   const d=(veic||simVeicAtual()||{data:{}}).data||{};
-  const v=$('simCarreta')?$('simCarreta').value:'auto';
-  if(v && v!=='auto'){
-    const c=veicCarretasCadastradas().find(x=>x.chave===v);
-    if(c) return {tipo:c.tipo, eixos:c.eixos, lisos:c.lisos, borr:c.borr, manual:true};
-  }
   const p=veicCarretaPneus(d);
   return {tipo:veicTipoCarreta(d), eixos:veicCarretaEixos(d), lisos:p.lisos, borr:p.borr, manual:false};
 }
-/* Resumo do conjunto montado na tela — mesma leitura da nota do cadastro. */
+/* Resumo do conjunto montado na tela — é a conta que vale em toda a tela. */
 function simRenderResumoConjunto(){
   const el=$('simConjResumo'); if(!el) return;
   const veic=simVeicAtual();
-  if(!veic){ el.textContent='Selecione um conjunto para ver cavalo, carreta e pneus.'; return; }
+  if(!veic){
+    el.innerHTML = ST.carretas.length
+      ? 'Selecione a carreta para montar o conjunto.'
+      : '<span class="pill am">Sem carreta cadastrada</span> Cadastre uma carreta na aba <b>Veículos &amp; Eixos</b> — é dela que saem eixos, pneus, tara, capacidade e categoria ANTT.';
+    return;
+  }
   const cav=simCavaloSpec(veic), car=simCarretaSpec(veic);
   const nCar=Math.max(veicCarretas(veic.data),1);
-  const eixosComp=cav.eixos+car.eixos*nCar, decl=Number(veic.data.eixos)||0;
-  /* O número exibido é o que o custo vai usar de fato — não a soma bruta das
-     partes: um total digitado no cadastro do perfil vence a soma, e a tela
-     avisa quando os dois discordam em vez de mostrar um e cobrar o outro. */
-  const soma={liso:cav.lisos+car.lisos*nCar, borr:cav.borr+car.borr*nCar};
+  const eixosComp=cav.eixos+car.eixos*nCar;
   const lisos=simPneusLisosAuto(veic), borr=simPneusBorrAuto(veic);
-  const trocado=(cav.manual||car.manual);
+  const semCavalo=!veic.cavaloId;
   el.innerHTML =
-    `Cavalo ${esc(cav.modelo?cav.modelo+' · ':'')}${esc(cav.tracao)} (${cav.eixos} eixo${cav.eixos>1?'s':''}, ${cav.lisos} liso / ${cav.borr} borrachudo)`
-    + ` + ${nCar} carreta${nCar>1?'s':''} de ${car.eixos} eixo${car.eixos>1?'s':''} (${car.lisos} liso${car.borr?` / ${car.borr} borrachudo`:''} cada)`
-    + ` = <b>${eixosComp} eixos</b> · <b>${lisos} pneus lisos</b> · <b>${borr} borrachudos</b>, que é o que entra em E21/E22.`
-    + (trocado?' <span class="pill am" title="Cavalo ou carreta trocados em relação ao perfil do conjunto. Os eixos do piso ANTT e do pedágio não mudam.">fora do perfil</span>':'')
-    + ((lisos!==soma.liso||borr!==soma.borr)
-       ? ` <span class="pill am" title="O perfil tem o total de pneus digitado à mão (${soma.liso} liso / ${soma.borr} borrachudo é o que a soma das partes daria). O total cadastrado é o que vale.">total do cadastro</span>`
-       : '')
-    + (decl>0 && eixosComp!==decl
-       ? ` <span class="pill am" title="Piso ANTT e pedágio seguem usando os eixos do perfil e a tabela de trechos.">perfil cadastrado com ${decl} eixos</span>`
-       : '');
+    (semCavalo? '<span class="pill am" title="Nenhum cavalo selecionado — o conjunto está saindo só com a carreta.">sem cavalo</span> '
+              : `${esc(frotaRotuloCavaloTitulo(cav))} (${cav.eixos} eixo${cav.eixos>1?'s':''}, ${cav.lisos} liso / ${cav.borr} borrachudo) + `)
+    + `${nCar} carreta${nCar>1?'s':''} de ${car.eixos} eixo${car.eixos>1?'s':''} (${car.lisos} liso${car.borr?` / ${car.borr} borrachudo`:''} cada)`
+    + ` = <b>${eixosComp} eixos</b> · <b>${lisos} pneus lisos</b> · <b>${borr} borrachudos</b>, que é o que entra no piso ANTT, no pedágio e em E21/E22.`
+    + (nCar>1? ` <span class="pill ac" title="Conjunto com mais de uma unidade rebocada: eixos, pneus e depreciação da carreta são multiplicados por ${nCar}.">${esc(veic.data.tipoCarreta||'conjunto')} · ${nCar} unidades</span>`:'')
+    + (Number(veic.data.capacidade)>0? ` <span class="muted">· ${num(veic.data.capacidade,1)} t de capacidade útil</span>`:'');
 }
 /* Tipos de carreta do Simulador: mesma fonte dos eixos — a aba Veículos &
-   Eixos. "Automático" segue o tipo do conjunto selecionado; escolher um tipo
-   à mão só faz sentido quando a carreta puxada difere do perfil padrão. */
+   Eixos. "Automático" segue a carreta selecionada; escolher um tipo à mão só
+   faz sentido quando a viagem sai com implemento diferente do cadastro. */
 function simMontarTiposCarreta(){
   const sel=$('simP_tipo_carreta'); if(!sel) return;
   const anterior=sel.value;
   const tipos=veicTiposCadastrados();
-  const conj=ST.veiculos.find(v=>v.id===$('simVeiculo').value);
+  const conj=simVeicAtual();
   const auto=conj? veicTipoCarreta(conj.data) : null;
   const orfao = anterior && anterior!=='auto' && !tipos.some(t=>t.tipo===anterior) ? anterior : null;
   sel.innerHTML = `<option value="auto">Automático${auto?' · '+esc(auto):''}</option>`
@@ -3541,11 +3603,11 @@ function simMontarTiposCarreta(){
    silêncio o que uma simulação anterior gravou. */
 function simEixosCadastrados(){
   const mapa=new Map();
-  ST.veiculos.forEach(v=>{
-    const n=Number(v.data&&v.data.eixos);
+  frotaConjuntosPossiveis().forEach(c=>{
+    const n=Number(c.data&&c.data.eixos);
     if(!Number.isFinite(n)||n<=0) return;
     if(!mapa.has(n)) mapa.set(n,[]);
-    mapa.get(n).push(v.data.nome||'');
+    mapa.get(n).push(c.data.nome||'');
   });
   return [...mapa.entries()].sort((a,b)=>a[0]-b[0]).map(([n,nomes])=>({eixos:n,perfis:nomes}));
 }
@@ -3642,7 +3704,7 @@ function simConferirDistancia(distIda){
 function simRecalcular(){
   const distIV=nVal('simDistIV');
   if(!(distIV>0)){ renderResultadoRota(null); return; }
-  const veic = ST.veiculos.find(v=>v.id===$('simVeiculo').value);
+  const veic = simVeicAtual();
   if(!veic){ renderResultadoRota(null); return; }
   /* Reprecifica os trechos antes de ler E15 — se o campo estiver automático,
      ele já sai com a soma de ida + volta pelos eixos de cada um. */
@@ -3797,12 +3859,14 @@ function simRecalcular(){
     rota_szy_codigo: rotaSZY?(rotaSZY.codigoRaw||rotaSZY.codigo||null):null,
     rota_szy_km_ida: rotaSZY&&rotaSZY.kmIda>0?rotaSZY.kmIda:null,
     veiculo_id: veic.id, veiculo_nome: veic.data.nome, eixos: veic.data.eixos, categoria_antt: categoriaAntt,
-    /* Cavalo e carreta usados NESTA viagem — o perfil pode mudar depois, a
+    /* Cavalo e carreta usados NESTA viagem — o cadastro pode mudar depois, a
        simulação guarda o equipamento que gerou o número. */
+    cavalo_id: veic.cavaloId||null, carreta_id: veic.carretaId||null,
     cavalo_modelo: _simCav.modelo||null, cavalo_tracao: _simCav.tracao,
     cavalo_eixos: _simCav.eixos, cavalo_pneus_liso: _simCav.lisos, cavalo_pneus_borr: _simCav.borr,
     cavalo_do_perfil: !_simCav.manual,
     carreta_tipo: _simCar.tipo||null, carreta_eixos: _simCar.eixos,
+    carreta_unidades: Math.max(veicCarretas(veic.data),1),
     carreta_pneus_liso: _simCar.lisos, carreta_pneus_borr: _simCar.borr,
     carreta_do_perfil: !_simCar.manual,
     pneus_liso_conjunto: fin.pneusLiso, pneus_borr_conjunto: fin.pneusBorr,
@@ -5485,7 +5549,7 @@ function renderPremissas(){
   const lista = ST.premissas.filter(p=> rotaId? p.data.rota_id===rotaId : !p.data.rota_id);
   $('premLista').innerHTML = lista.length? lista.map(p=>{
     const d=p.data;
-    const alvo=[d.filial?('Filial '+d.filial):null, d.veiculo_id?('Veículo '+esc((ST.veiculos.find(v=>v.id===d.veiculo_id)||{data:{}}).data.nome||d.veiculo_id)):null].filter(Boolean).join(' · ')||'Geral';
+    const alvo=[d.filial?('Filial '+d.filial):null, d.veiculo_id?('Conjunto '+esc(frotaNomeConjunto(d.veiculo_id))):null].filter(Boolean).join(' · ')||'Geral';
     return `<div class="card" style="margin-bottom:10px">
       <h3>${esc(alvo)} <span class="pill ${d.encerrada?'mu':'gn'}">${d.encerrada?'encerrada':'vigente'}</span>
         <span class="muted" style="font-weight:400;margin-left:6px">desde ${esc(d.vigencia_inicio||'—')} · por ${esc(d.criado_por||'—')}</span>
@@ -5512,7 +5576,7 @@ function premEditar(baseId){
   mdAbrir('Nova versão de premissas — '+(escopo==='default'?'defaults':'rota específica'),
     `<div class="fields" style="margin-bottom:10px">
        <label class="fld">Filial (opcional)<select id="premFil"><option value="">Todas</option><option>SC</option><option>PR</option><option>SP</option></select></label>
-       <label class="fld">Veículo (opcional)<select id="premVeic"><option value="">Todos</option>${ST.veiculos.map(v=>`<option value="${v.id}" ${base.veiculo_id===v.id?'selected':''}>${esc(v.data.nome)}</option>`).join('')}</select></label>
+       <label class="fld">Conjunto (opcional)<select id="premVeic"><option value="">Todos</option>${frotaConjuntosPossiveis().map(c=>`<option value="${esc(c.id)}" ${base.veiculo_id===c.id?'selected':''}>${esc(c.data.nome)} · ${c.data.eixos} eixos</option>`).join('')}</select></label>
        <label class="fld">Vigência a partir de<input type="date" id="premVig" value="${hoje()}"></label>
      </div>
      <div class="fields" id="premForm">${campos}</div>`,
@@ -5532,8 +5596,16 @@ async function premSalvar(rotaId, baseId){
   cacheBust('prem'); await carregarPremissas(); renderPremissas(); mdFechar(); toast('Nova versão de premissas registrada.','gn');
 }
 
-/* — Veículos — */
+/* — Veículos — A aba passou a ter DUAS categorias (Carretas e Cavalo
+   mecânico); o perfil único de conjunto virou histórico. renderVeiculos()
+   continua existindo como porta única chamada pelo boot e pelos CRUDs. */
 function renderVeiculos(){
+  try{ renderCarretas(); }catch(e){ console.warn('[Comercial] carretas:', e && e.message); }
+  try{ renderCavalos();  }catch(e){ console.warn('[Comercial] cavalos:',  e && e.message); }
+  renderVeiculosLegado();
+}
+function renderVeiculosLegado(){
+  if(!$('tbVeiculos')) return;                 /* tabela de perfis saiu da tela */
   const tb=$('tbVeiculos').querySelector('tbody');
   tb.innerHTML = ST.veiculos.map(v=>{ const d=v.data;
     const tp=veicTipoCarreta(d);
@@ -5682,13 +5754,14 @@ function veicCarretas(d){
   const t=veicTipoCarreta(d);
   return (t==='Bitrem'||t==='Rodotrem')?2:1;
 }
-/* Tipos distintos já cadastrados — alimenta o Simulador e o autocompletar. */
+/* Tipos distintos já cadastrados — agora saem das CARRETAS cadastradas, que
+   é onde o tipo passou a morar. Alimenta o Simulador e o autocompletar. */
 function veicTiposCadastrados(){
   const m=new Map();
-  ST.veiculos.forEach(v=>{
-    const t=veicTipoCarreta(v.data); if(!t) return;
-    if(!m.has(t)) m.set(t,{tipo:t, pneus:veicPneusLisos(v.data), perfis:[]});
-    m.get(t).perfis.push(v.data.nome||'');
+  (ST.carretas||[]).forEach(c=>{
+    const d=c.data||{}, t=carrTipo(d); if(!t) return;
+    if(!m.has(t)) m.set(t,{tipo:t, pneus:carrPneusTotal(d).lisos, perfis:[]});
+    m.get(t).perfis.push(d.nome||'');
   });
   return [...m.values()].sort((a,b)=>a.tipo.localeCompare(b.tipo,'pt-BR'));
 }
@@ -5729,7 +5802,7 @@ function veicRenderDatalist(){
     .sort((a,b)=>a.localeCompare(b,'pt-BR'));
   dm.innerHTML=modelos.map(mo=>`<option value="${esc(mo)}">`).join('');
 }
-$('btnNovoVeiculo').onclick=()=>{ veicRenderDatalist(); veicEditar(null); };
+if($('btnNovoVeiculo')) $('btnNovoVeiculo').onclick=()=>{ veicRenderDatalist(); veicEditar(null); };
 function veicEditar(id){
   veicRenderDatalist();
   const d = id? (ST.veiculos.find(v=>v.id===id)||{data:{}}).data : {};
@@ -5862,6 +5935,321 @@ async function veicExcluirOk(id){
     console.warn('[Comercial] veicExcluir:', e && e.message);
     toast('Não foi possível excluir: '+((e&&e.message)||'erro desconhecido'),'rd');
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CARRETAS E CAVALOS — as duas categorias da aba Veículos & Eixos
+   ──────────────────────────────────────────────────────────────────────────
+   O conjunto deixou de ser um cadastro: é o par (cavalo × carreta) escolhido
+   no Simulador. Tudo o que conta eixo ou pneu passa a ler a SOMA das duas
+   metades — inclusive o bitrem, que é uma carreta com 2 unidades rebocadas.
+     eixos do conjunto  = eixos do cavalo + eixos da carreta × unidades
+     pneus lisos (E21)  = lisos do cavalo + lisos da carreta × unidades
+     pneus borrach.(E22)= borrach. do cavalo + borrach. da carreta × unidades
+   Tara, capacidade útil, dimensões e categoria ANTT ficam na carreta (valem
+   para o conjunto rebocado inteiro, com todas as unidades).
+   ══════════════════════════════════════════════════════════════════════════ */
+const CAVALO_PNEUS_PADRAO = {lisos:2, borr:4};   /* pedido do cadastro: 2 lisos, 4 borrachudos */
+const CARRETA_TIPOS = ['Bitrem','LS','Vanderléia','Rodotrem','Simples','Outro'];
+
+/* ── leitura normalizada da carreta ── */
+function carrTipo(d){ d=d||{}; return String(d.tipo||'').trim()||'Outro'; }
+function carrEixos(d){ d=d||{}; const n=Number(d.eixos); return n>0?n:2; }
+function carrUnidades(d){
+  d=d||{};
+  const n=Number(d.unidades); if(n>0) return n;
+  const t=carrTipo(d);
+  return (t==='Bitrem'||t==='Rodotrem')?2:1;      /* bitrem e rodotrem puxam duas */
+}
+function carrEixosTotal(d){ return carrEixos(d)*carrUnidades(d); }
+function carrPneus(d){
+  d=d||{};
+  return { lisos: Number(d.pneusLisos)>0? Number(d.pneusLisos) : carrEixos(d)*4,
+           borr:  Number(d.pneusBorr)>0?  Number(d.pneusBorr)  : 0 };
+}
+function carrPneusTotal(d){
+  const p=carrPneus(d), u=carrUnidades(d);
+  return { lisos:p.lisos*u, borr:p.borr*u };
+}
+function carrRotulo(c){
+  const d=(c&&c.data)||c||{}, u=carrUnidades(d), p=carrPneus(d);
+  return (d.nome||carrTipo(d))+' · '+(u>1?u+'×':'')+carrEixos(d)+' eixo'+(carrEixos(d)>1?'s':'')
+       + ' = '+carrEixosTotal(d)+' · '+(p.lisos*u)+' liso'+(p.borr?' / '+(p.borr*u)+' borrachudo':'');
+}
+/* ── leitura normalizada do cavalo ── */
+function cavTracao(d){ d=d||{}; const t=String(d.tracao||'').trim(); return VEIC_TRACOES[t]?t:VEIC_TRACAO_PADRAO; }
+function cavEixos(d){ return VEIC_TRACOES[cavTracao(d)].eixos; }
+function cavPneus(d){
+  d=d||{};
+  const n=k=>(d[k]==null||d[k]==='')?null:Number(d[k]);
+  const l=n('pneusLisos'), b=n('pneusBorr');
+  return { lisos: (l!=null&&l>=0)? l : CAVALO_PNEUS_PADRAO.lisos,
+           borr:  (b!=null&&b>=0)? b : CAVALO_PNEUS_PADRAO.borr };
+}
+function cavRotulo(c){
+  const d=(c&&c.data)||c||{}, p=cavPneus(d);
+  return (String(d.nome||'').trim()||'Cavalo')+' · '+cavTracao(d)+' · '+cavEixos(d)+' eixos · '
+       + p.lisos+' liso / '+p.borr+' borrachudo';
+}
+
+/* ── O CONJUNTO — soma das duas metades ──────────────────────────────────
+   Devolve um objeto no MESMO formato do antigo perfil de veículo
+   ({id, data}), com eixos e pneus já somados. Assim tudo o que já lia
+   veic.data (piso ANTT, pedágio por eixo, HERE, E21/E22, depreciação por
+   carreta, snapshot da simulação) continua funcionando sem saber que o
+   cadastro mudou de forma. */
+function frotaConjunto(cavaloId, carretaId){
+  const car=ST.carretas.find(c=>c.id===carretaId);
+  if(!car) return null;
+  const cav=ST.cavalos.find(c=>c.id===cavaloId)||null;
+  const cd=(cav&&cav.data)||{}, rd=car.data||{};
+  const cE=cav?cavEixos(cd):0, cP=cav?cavPneus(cd):{lisos:0,borr:0};
+  const rE=carrEixos(rd), un=carrUnidades(rd), rP=carrPneus(rd);
+  const data={
+    nome:[cav?(String(cd.nome||'').trim()||('Cavalo '+cavTracao(cd))):null, rd.nome||carrTipo(rd)].filter(Boolean).join(' + '),
+    eixos:cE+rE*un,
+    tipoCarreta:carrTipo(rd), carretas:un,
+    cavaloModelo:cav?(String(cd.nome||'').trim()||null):null,
+    cavaloTracao:cav?cavTracao(cd):VEIC_TRACAO_PADRAO,
+    cavaloPneusLisos:cP.lisos, cavaloPneusBorr:cP.borr,
+    carretaEixos:rE, carretaPneusLisos:rP.lisos, carretaPneusBorr:rP.borr,
+    pneusLisos:cP.lisos+rP.lisos*un,          /* E21 — soma do conjunto */
+    pneusBorr :cP.borr +rP.borr *un,          /* E22 — soma do conjunto */
+    tara:Number(rd.tara)||0, capacidade:Number(rd.capacidade)||0,
+    comp:Number(rd.comp)||18.6, larg:Number(rd.larg)||2.6, alt:Number(rd.alt)||4.0,
+    categoriaAntt:rd.categoriaAntt||'granel_solido', tabelaAntt:rd.tabelaAntt||'A'
+  };
+  return {id:'cj:'+(cav?cav.id:'-')+'|'+car.id, cavaloId:cav?cav.id:null, carretaId:car.id, data};
+}
+/* Nome legível de um conjunto a partir da chave gravada (premissas, snapshots).
+   Reconhece a chave nova "cj:<cavalo>|<carreta>" e ainda resolve o id de um
+   perfil antigo, para não deixar registro histórico sem rótulo. */
+function frotaNomeConjunto(id){
+  if(!id) return '—';
+  if(String(id).startsWith('cj:')){
+    const [cavId,carId]=String(id).slice(3).split('|');
+    const c=frotaConjunto(cavId==='-'?null:cavId, carId);
+    if(c) return c.data.nome;
+    const car=ST.carretas.find(x=>x.id===carId);
+    return car? (car.data.nome||carrTipo(car.data)) : 'conjunto removido';
+  }
+  const v=ST.veiculos.find(x=>x.id===id);
+  return v? (v.data.nome||id) : id;
+}
+/* Todos os conjuntos montáveis com o cadastro atual — alimenta as opções de
+   eixos do pedágio e o autocompletar de tipos. */
+function frotaConjuntosPossiveis(){
+  const out=[];
+  ST.carretas.forEach(car=>{
+    if(!ST.cavalos.length){ const c=frotaConjunto(null,car.id); if(c) out.push(c); return; }
+    ST.cavalos.forEach(cav=>{ const c=frotaConjunto(cav.id,car.id); if(c) out.push(c); });
+  });
+  return out;
+}
+
+/* ── Render da tabela de carretas ── */
+function renderCarretas(){
+  const tb=$('tbCarretas'); if(!tb) return;
+  const mu=s=>`<span class="muted">${s}</span>`;
+  tb.querySelector('tbody').innerHTML = ST.carretas.map(c=>{
+    const d=c.data||{}, u=carrUnidades(d), p=carrPneus(d), tot=carrPneusTotal(d);
+    return `<tr><td>${esc(d.nome||'—')}</td>
+      <td>${esc(carrTipo(d))}</td>
+      <td class="num">${carrEixos(d)}${Number(d.eixos)>0?'':mu(' (padrão)')}</td>
+      <td class="num">${u}${Number(d.unidades)>0?'':mu(' (do tipo)')}${u>1?' <span class="pill ac" title="Conjunto rebocado com mais de uma unidade — bitrem, rodotrem.">'+u+' unidades</span>':''}</td>
+      <td class="num">${carrEixosTotal(d)}</td>
+      <td class="num">${tot.lisos}${Number(d.pneusLisos)>0?'':mu(' (4/eixo)')}${u>1?mu(` · ${p.lisos} cada`):''}</td>
+      <td class="num">${tot.borr}${u>1&&tot.borr?mu(` · ${p.borr} cada`):''}</td>
+      <td class="num">${num(d.tara,1)}</td><td class="num">${num(d.capacidade,1)}</td>
+      <td class="mono">${num(d.comp,1)}×${num(d.larg,1)}×${num(d.alt,1)}</td>
+      <td>${esc(d.categoriaAntt||'granel_solido')}</td>
+      <td>${podeEditarPremissas()?`<button class="icon-btn" title="Editar" onclick="carrEditar('${c.id}')">✎</button> <button class="icon-btn danger" title="Excluir carreta" onclick="carrExcluir('${c.id}')">🗑</button>`:''}</td></tr>`;
+  }).join('') || '<tr><td colspan="12" class="empty">Sem carretas cadastradas. Cadastre a primeira — é ela que traz eixos, pneus, tara, capacidade e categoria ANTT para o Simulador.</td></tr>';
+}
+/* ── Render da tabela de cavalos ── */
+function renderCavalos(){
+  const tb=$('tbCavalos'); if(!tb) return;
+  const mu=s=>`<span class="muted">${s}</span>`;
+  const nCar=Math.max(ST.carretas.length,0);
+  tb.querySelector('tbody').innerHTML = ST.cavalos.map(c=>{
+    const d=c.data||{}, p=cavPneus(d);
+    const padrao=VEIC_TRACOES[cavTracao(d)];
+    return `<tr><td>${esc(String(d.nome||'').trim()||'—')}</td>
+      <td>${esc(VEIC_TRACOES[cavTracao(d)].lb)}</td>
+      <td class="num">${cavEixos(d)}</td>
+      <td class="num" title="A escada da tração ${esc(cavTracao(d))} daria ${padrao.lisos} lisos; o cadastro é que manda.">${p.lisos}${(d.pneusLisos==null||d.pneusLisos==='')?mu(' (padrão)'):''}</td>
+      <td class="num" title="A escada da tração ${esc(cavTracao(d))} daria ${padrao.borr} borrachudos; o cadastro é que manda.">${p.borr}${(d.pneusBorr==null||d.pneusBorr==='')?mu(' (padrão)'):''}</td>
+      <td class="num">${nCar}${mu(' carreta'+(nCar===1?'':'s'))}</td>
+      <td>${podeEditarPremissas()?`<button class="icon-btn" title="Editar" onclick="cavEditar('${c.id}')">✎</button> <button class="icon-btn danger" title="Excluir cavalo" onclick="cavExcluir('${c.id}')">🗑</button>`:''}</td></tr>`;
+  }).join('') || '<tr><td colspan="7" class="empty">Sem cavalos cadastrados. Cadastre o primeiro — sem ele o conjunto sai só com a carreta.</td></tr>';
+}
+
+/* ── CRUD da carreta ── */
+function carrRenderDatalist(){
+  let dl=$('listaTiposCarretaCad');
+  if(!dl){ dl=document.createElement('datalist'); dl.id='listaTiposCarretaCad'; document.body.appendChild(dl); }
+  const tipos=[...new Set(CARRETA_TIPOS.concat(ST.carretas.map(c=>carrTipo(c.data))))];
+  dl.innerHTML=tipos.map(t=>`<option value="${esc(t)}">`).join('');
+}
+if($('btnNovaCarreta')) $('btnNovaCarreta').onclick=()=>carrEditar(null);
+function carrEditar(id){
+  if(!podeEditarPremissas()){ toast('Sem permissão para editar o cadastro.','am'); return; }
+  carrRenderDatalist();
+  const d = id? ((ST.carretas.find(c=>c.id===id)||{data:{}}).data||{}) : {};
+  const cats=['granel_solido','carga_geral','neogranel','granel_liquido','frigorificada','conteineirizada','perigosa_granel_solido'];
+  const p=carrPneus(d);
+  mdAbrir(id?'Editar carreta':'Nova carreta',
+    `<div class="fields">
+      <label class="fld">Nome<input type="text" id="crNome" value="${esc(d.nome||'')}" placeholder="ex.: Bitrem graneleiro 7 eixos"></label>
+      <label class="fld">Tipo<input type="text" id="crTipo" list="listaTiposCarretaCad" value="${esc(d.tipo||'')}" placeholder="ex.: Bitrem, LS, Vanderléia"></label>
+      <label class="fld">Eixos por unidade<input type="number" id="crEixos" min="1" max="6" value="${Number(d.eixos)>0?d.eixos:''}" placeholder="${carrEixos(d)} (padrão)"></label>
+      <label class="fld">Unidades rebocadas<input type="number" id="crUnid" min="1" max="4" value="${Number(d.unidades)>0?d.unidades:''}" placeholder="${carrUnidades(d)} (do tipo — bitrem/rodotrem = 2)"></label>
+      <label class="fld">Pneus lisos por unidade<input type="number" id="crLiso" min="0" max="40" value="${Number(d.pneusLisos)>0?d.pneusLisos:''}" placeholder="${p.lisos} (4 por eixo)"></label>
+      <label class="fld">Pneus borrachudos por unidade<input type="number" id="crBorr" min="0" max="40" value="${Number(d.pneusBorr)>0?d.pneusBorr:''}" placeholder="${p.borr} (padrão)"></label>
+    </div>
+    <div class="muted" id="crNota" style="margin:4px 0 8px;font-size:11.5px"></div>
+    <div class="tt-sec">Conjunto rebocado <span class="muted" style="font-weight:400">— valores do implemento inteiro, já com todas as unidades</span></div>
+    <div class="fields">
+      <label class="fld">Tara (t)<input type="number" id="crTara" step="0.1" value="${d.tara!=null?d.tara:15}"></label>
+      <label class="fld">Cap. útil (t)<input type="number" id="crCap" step="0.1" value="${d.capacidade!=null?d.capacidade:27}"></label>
+      <label class="fld">Comprimento (m)<input type="number" id="crComp" step="0.1" value="${d.comp!=null?d.comp:18.6}"></label>
+      <label class="fld">Largura (m)<input type="number" id="crLarg" step="0.1" value="${d.larg!=null?d.larg:2.6}"></label>
+      <label class="fld">Altura (m)<input type="number" id="crAlt" step="0.1" value="${d.alt!=null?d.alt:4.0}"></label>
+      <label class="fld">Categoria ANTT<select id="crCat">${cats.map(c=>`<option ${(d.categoriaAntt||'granel_solido')===c?'selected':''}>${c}</option>`).join('')}</select></label>
+      <label class="fld">Tabela ANTT aplicável<select id="crTab">${['A','B','C','D'].map(t=>`<option ${(d.tabelaAntt||'A')===t?'selected':''}>${t}</option>`).join('')}</select></label>
+    </div>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="carrSalvar('${id||''}')">Salvar</button>`);
+  ['crTipo','crEixos','crUnid','crLiso','crBorr'].forEach(k=>{
+    const el=$(k); if(!el) return;
+    el.addEventListener('input', carrAtualizarNota); el.addEventListener('change', carrAtualizarNota);
+  });
+  carrAtualizarNota();
+}
+/* Espelho ao vivo: quantos eixos e pneus a carreta cadastrada leva para o
+   conjunto, já multiplicados pelas unidades rebocadas. */
+function carrAtualizarNota(){
+  const el=$('crNota'); if(!el) return;
+  const n=id=>{ const e=$(id); const v=e?parseFloat(e.value):NaN; return isNaN(v)?null:v; };
+  const d={tipo:($('crTipo')||{}).value||'', eixos:n('crEixos'), unidades:n('crUnid'),
+           pneusLisos:n('crLiso'), pneusBorr:n('crBorr')};
+  const u=carrUnidades(d), e=carrEixos(d), p=carrPneus(d);
+  const cav=ST.cavalos[0]? cavPneus(ST.cavalos[0].data) : null;
+  const cavE=ST.cavalos[0]? cavEixos(ST.cavalos[0].data) : 0;
+  el.innerHTML = `${u} unidade${u>1?'s':''} de ${e} eixo${e>1?'s':''} (${p.lisos} liso${p.borr?` / ${p.borr} borrachudo`:''} cada) = `
+    + `<b>${e*u} eixos</b> · <b>${p.lisos*u} pneus lisos</b> · <b>${p.borr*u} borrachudos</b> vindos da carreta.`
+    + (u>1?' <span class="pill ac" title="Bitrem, rodotrem e afins: o conjunto puxa mais de um implemento e tudo é somado.">conjunto multiplicado</span>':'')
+    + (cav? `<br>Com o cavalo <b>${esc(String(ST.cavalos[0].data.nome||'').trim()||cavTracao(ST.cavalos[0].data))}</b> o conjunto fecha `
+        + `<b>${cavE+e*u} eixos</b>, <b>${cav.lisos+p.lisos*u} lisos</b> e <b>${cav.borr+p.borr*u} borrachudos</b>.`
+      : '<br><span class="pill am">Sem cavalo cadastrado — o conjunto sai só com a carreta.</span>');
+}
+async function carrSalvar(id){
+  if(!podeEditarPremissas()){ toast('Sem permissão para editar o cadastro.','am'); return; }
+  const opt=v=>(+v>0? +v : null);                      /* vazio = deduzido, nunca 0 */
+  const data={ nome:$('crNome').value.trim(), tipo:$('crTipo').value.trim()||'Outro',
+    eixos:opt($('crEixos').value), unidades:opt($('crUnid').value),
+    pneusLisos:opt($('crLiso').value), pneusBorr:opt($('crBorr').value),
+    tara:+$('crTara').value, capacidade:+$('crCap').value,
+    comp:+$('crComp').value, larg:+$('crLarg').value, alt:+$('crAlt').value,
+    categoriaAntt:$('crCat').value, tabelaAntt:$('crTab').value,
+    atualizado_em:agoraISO(), atualizado_por:ATLAS_CURRENT_USER.email };
+  if(!data.nome){ toast('Nome obrigatório.','am'); return; }
+  if(id) await fsSetDoc(COL.carretas,id,data,true); else await fsAddDoc(COL.carretas,{...data,criado_em:agoraISO()});
+  cacheBust('carretas'); await carregarFrota(); renderVeiculos(); montarSelects(); mdFechar(); toast('Carreta salva.','gn');
+}
+function carrExcluir(id){
+  if(!podeEditarPremissas()){ toast('Sem permissão para excluir.','am'); return; }
+  const c=ST.carretas.find(x=>x.id===id); if(!c){ toast('Carreta não encontrada.','am'); return; }
+  const d=c.data||{};
+  mdAbrir('Excluir carreta',
+    `<p>Excluir <b>${esc(d.nome||'(sem nome)')}</b> — ${esc(carrTipo(d))}, ${carrEixosTotal(d)} eixos?</p>
+     <p class="muted" style="margin-top:6px">A carreta sai da aba e do seletor do Simulador (é dela que vêm eixos, pneus, tara, capacidade e categoria ANTT).
+     Simulações e propostas já geradas não mudam: cada uma guarda o snapshot do conjunto usado no cálculo. Não há desfazer.</p>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn danger" onclick="carrExcluirOk('${id}')">Excluir</button>`);
+}
+async function carrExcluirOk(id){
+  try{
+    await fsDeleteDoc(COL.carretas,id);
+    cacheBust('carretas'); await carregarFrota(); renderVeiculos(); montarSelects();
+    mdFechar(); toast('Carreta excluída.','gn');
+  }catch(e){ toast('Não foi possível excluir: '+((e&&e.message)||'erro desconhecido'),'rd'); }
+}
+
+/* ── CRUD do cavalo ── */
+function cavRenderDatalist(){
+  let dm=$('listaModelosCavaloCad');
+  if(!dm){ dm=document.createElement('datalist'); dm.id='listaModelosCavaloCad'; document.body.appendChild(dm); }
+  const modelos=[...new Set(ST.cavalos.map(c=>String((c.data||{}).nome||'').trim()).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  dm.innerHTML=modelos.map(m=>`<option value="${esc(m)}">`).join('');
+}
+if($('btnNovoCavalo')) $('btnNovoCavalo').onclick=()=>cavEditar(null);
+function cavEditar(id){
+  if(!podeEditarPremissas()){ toast('Sem permissão para editar o cadastro.','am'); return; }
+  cavRenderDatalist();
+  const novo=!id;
+  const d = id? ((ST.cavalos.find(c=>c.id===id)||{data:{}}).data||{}) : {};
+  /* Cavalo novo nasce com 2 lisos e 4 borrachudos — o padrão do cadastro. */
+  const lisos = novo? CAVALO_PNEUS_PADRAO.lisos : cavPneus(d).lisos;
+  const borr  = novo? CAVALO_PNEUS_PADRAO.borr  : cavPneus(d).borr;
+  mdAbrir(id?'Editar cavalo mecânico':'Novo cavalo mecânico',
+    `<div class="fields">
+      <label class="fld">Modelo<input type="text" id="cvNome" list="listaModelosCavaloCad" value="${esc(d.nome||'')}" placeholder="ex.: Scania R 450, Volvo FH 460"></label>
+      <label class="fld">Tração<select id="cvTracao">${Object.keys(VEIC_TRACOES).map(t=>`<option value="${t}" ${cavTracao(d)===t?'selected':''}>${esc(VEIC_TRACOES[t].lb)}</option>`).join('')}</select></label>
+      <label class="fld">Pneus lisos<input type="number" id="cvLiso" min="0" max="30" value="${lisos}" placeholder="${CAVALO_PNEUS_PADRAO.lisos} (padrão)"></label>
+      <label class="fld">Pneus borrachudos<input type="number" id="cvBorr" min="0" max="30" value="${borr}" placeholder="${CAVALO_PNEUS_PADRAO.borr} (padrão)"></label>
+    </div>
+    <div class="muted" id="cvNota" style="margin:4px 0 8px;font-size:11.5px"></div>
+    <div class="muted" style="font-size:11px">A tração define os eixos do cavalo: ${Object.keys(VEIC_TRACOES).map(t=>esc(t)+' → '+VEIC_TRACOES[t].eixos).join(' · ')}.
+      Os pneus nascem em ${CAVALO_PNEUS_PADRAO.lisos} liso / ${CAVALO_PNEUS_PADRAO.borr} borrachudo e podem ser ajustados por cavalo — é o que entra em E21/E22 somado à carreta.</div>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn pri" onclick="cavSalvar('${id||''}')">Salvar</button>`);
+  ['cvTracao','cvLiso','cvBorr'].forEach(k=>{
+    const el=$(k); if(!el) return;
+    el.addEventListener('input', cavAtualizarNota); el.addEventListener('change', cavAtualizarNota);
+  });
+  cavAtualizarNota();
+}
+function cavAtualizarNota(){
+  const el=$('cvNota'); if(!el) return;
+  const n=id=>{ const e=$(id); const v=e?parseFloat(e.value):NaN; return isNaN(v)?null:v; };
+  const d={tracao:($('cvTracao')||{}).value||'', pneusLisos:n('cvLiso'), pneusBorr:n('cvBorr')};
+  const e=cavEixos(d), p=cavPneus(d), t=VEIC_TRACOES[cavTracao(d)];
+  const car=ST.carretas[0];
+  el.innerHTML = `Cavalo ${esc(cavTracao(d))}: <b>${e} eixo${e>1?'s':''}</b> · <b>${p.lisos} liso</b> · <b>${p.borr} borrachudo</b>.`
+    + `<span class="muted" title="Referência da tração — o cadastro é que manda."> (escada da tração ${esc(cavTracao(d))}: ${t.lisos} liso / ${t.borr} borrachudo)</span>`
+    + (car? `<br>Com a carreta <b>${esc(car.data.nome||carrTipo(car.data))}</b> o conjunto fecha `
+        + `<b>${e+carrEixosTotal(car.data)} eixos</b>, <b>${p.lisos+carrPneusTotal(car.data).lisos} lisos</b> e `
+        + `<b>${p.borr+carrPneusTotal(car.data).borr} borrachudos</b>.`
+      : '<br><span class="pill am">Sem carreta cadastrada — cadastre uma para montar o conjunto.</span>');
+}
+async function cavSalvar(id){
+  if(!podeEditarPremissas()){ toast('Sem permissão para editar o cadastro.','am'); return; }
+  const num0=v=>(v===''||v==null)?null:+v;      /* zero explícito vale: existe cavalo sem borrachudo */
+  const data={ nome:$('cvNome').value.trim(), tracao:$('cvTracao').value||VEIC_TRACAO_PADRAO,
+    pneusLisos:num0($('cvLiso').value), pneusBorr:num0($('cvBorr').value),
+    atualizado_em:agoraISO(), atualizado_por:ATLAS_CURRENT_USER.email };
+  if(!data.nome){ toast('Informe o modelo do cavalo.','am'); return; }
+  if(id) await fsSetDoc(COL.cavalos,id,data,true); else await fsAddDoc(COL.cavalos,{...data,criado_em:agoraISO()});
+  cacheBust('cavalos'); await carregarFrota(); renderVeiculos(); montarSelects(); mdFechar(); toast('Cavalo salvo.','gn');
+}
+function cavExcluir(id){
+  if(!podeEditarPremissas()){ toast('Sem permissão para excluir.','am'); return; }
+  const c=ST.cavalos.find(x=>x.id===id); if(!c){ toast('Cavalo não encontrado.','am'); return; }
+  const d=c.data||{};
+  mdAbrir('Excluir cavalo mecânico',
+    `<p>Excluir <b>${esc(String(d.nome||'').trim()||'(sem modelo)')}</b> — ${esc(cavTracao(d))}, ${cavEixos(d)} eixos?</p>
+     <p class="muted" style="margin-top:6px">O cavalo sai da aba e do seletor do Simulador. Simulações e propostas já geradas não mudam. Não há desfazer.</p>`,
+    `<button class="btn" onclick="mdFechar()">Cancelar</button>
+     <button class="btn danger" onclick="cavExcluirOk('${id}')">Excluir</button>`);
+}
+async function cavExcluirOk(id){
+  try{
+    await fsDeleteDoc(COL.cavalos,id);
+    cacheBust('cavalos'); await carregarFrota(); renderVeiculos(); montarSelects();
+    mdFechar(); toast('Cavalo excluído.','gn');
+  }catch(e){ toast('Não foi possível excluir: '+((e&&e.message)||'erro desconhecido'),'rd'); }
 }
 
 /* — Tabela ANTT — */
@@ -6613,7 +7001,7 @@ $('btnTestarApi').onclick = async ()=>{
 };
 $('btnApiTeste').onclick = async ()=>{
   try{
-    const veic=ST.veiculos[0]?.data||{eixos:6};
+    const veic=(simVeicAtual()||{}).data||{eixos:6,tara:15,capacidade:27,comp:18.6,larg:2.6,alt:4.0};
     const [o,d]=await Promise.all([hereGeocode($('apiTOrig').value||'Itajaí, SC'), hereGeocode($('apiTDest').value||'Capinzal, SC')]);
     const r=await hereRota(o,d,veic);
     $('apiRaw').textContent=JSON.stringify(r.raw,null,2).slice(0,20000);
@@ -9838,7 +10226,14 @@ function simRestaurarAuto(id){
   else if(id==='simP_arla_rs'){ simAtualizarArlaMedio(true); return; }
   simRecalcular();
 }
-function simVeicAtual(){ return ST.veiculos.find(v=>v.id===($('simVeiculo')?$('simVeiculo').value:'')); }
+/* O conjunto da tela é montado na hora a partir dos dois seletores — cavalo e
+   carreta. O campo oculto simVeiculo guarda a chave do par para o histórico
+   de premissas e para o snapshot da simulação. */
+function simVeicAtual(){
+  const conj=(typeof frotaConjunto==='function')? frotaConjunto(simCavaloId(), simCarretaId()) : null;
+  const hid=$('simVeiculo'); if(hid) hid.value = conj? conj.id : '';
+  return conj;
+}
 /* Achado 10: com retorno vazio, a distância cobrada é ida + volta; sem ele,
    só a ida. É o mesmo fator que o campo E13 usa quando está automático. */
 function simFatorVolta(){ return ($('simRetornoVazio') && $('simRetornoVazio').value==='sim')?2:1; }
@@ -9964,7 +10359,7 @@ function simPremRenderNota(){
 /* ══ Pré-preenchimento ══ */
 async function simPrefill(){
   const chave=simRotaChave();
-  const filial=$('simFilial').value, veicId=$('simVeiculo').value;
+  const filial=$('simFilial').value, veicId=(simVeicAtual()||{}).id||null;
   const base=simPremDefaults();
   _simPremBaseId=null;
   const pe=premissasEfetivas(chave, filial, veicId);
@@ -10023,20 +10418,20 @@ function simRotaMudou(){ simPrefill(); }
 /* ══ Ações do painel ══ */
 function simPremIniciar(){
   simPremRender();
-  ['simFilial','simVeiculo','simCarga','simCliente'].forEach(id=>{
+  ['simFilial','simCarga','simCliente'].forEach(id=>{
     const el=$(id); if(!el) return;
     el.addEventListener('change',()=>{
       if(id==='simFilial'){ simAtualizarDieselMedio(); simAtualizarArlaMedio(); }
-      if(id==='simVeiculo'){ simSincronizarEixos(); simTonAuto(); }
       try{ simRecalcular(); }catch(_){}
     });
   });
-  /* Cavalo e carreta: trocar o equipamento não reconsulta a rota (os eixos do
-     pedágio e do piso não mudam) — só refaz os pneus e o resumo. */
+  /* Cavalo e carreta SÃO o conjunto: trocar qualquer um dos dois refaz os
+     eixos (piso ANTT e pedágio), a tonelagem automática (capacidade útil da
+     carreta), os pneus de E21/E22 e o resumo. */
   ['simCavalo','simCarreta'].forEach(id=>{
     const el=$(id); if(!el) return;
     el.addEventListener('change',()=>{
-      simRenderResumoConjunto();
+      simSincronizarEixos(); simTonAuto();
       try{ simRecalcular(); }catch(_){}
     });
   });
@@ -10076,7 +10471,7 @@ function simPremIniciar(){
     const chave=simRotaChave();
     if(!chave){ toast('Selecione uma rota cadastrada para amarrar as premissas.','am'); return; }
     const data=Object.assign({}, simPremValores(), {
-      rota_id:chave, filial:$('simFilial').value||null, veiculo_id:$('simVeiculo').value||null,
+      rota_id:chave, filial:$('simFilial').value||null, veiculo_id:(simVeicAtual()||{}).id||null,
       vigencia_inicio:hoje(), criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email,
       origem_registro:'simulador', encerrada:false });
     try{
