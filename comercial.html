@@ -467,6 +467,34 @@ path.sim-rota-alt{cursor:pointer}
 .kpi.gn{background:var(--gn-bg);border-color:var(--gn-bd)}
 .kpi.rd{background:var(--rd-bg);border-color:var(--rd-bd)}
 
+/* Aviso do semáforo quando o número líquido não acompanha o bruto (achado 1).
+   Fica DENTRO do semáforo, com fundo próprio, para ninguém confundir com a
+   cor do gate — o verde continua sendo o verde da regra. */
+.sem-liq{margin-top:7px;padding:6px 9px;border-radius:6px;background:#fff8e6;border:1px solid #f0d79a;
+  color:#7a5a10;font-size:11.5px;line-height:1.4}
+
+/* Tarifas de referência (achado 11) */
+.tar-ref{margin-top:11px;padding-top:9px;border-top:1px solid var(--bd)}
+.tar-ref-tt{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--hd);margin-bottom:6px}
+.tar-ref-tt em{font-style:normal;font-family:var(--m);font-size:9.5px;color:var(--mu);font-weight:600;letter-spacing:0;margin-left:4px}
+.tar-ref-chips{display:flex;gap:6px;flex-wrap:wrap}
+.tar-chip{display:flex;flex-direction:column;align-items:flex-start;gap:1px;cursor:pointer;
+  border:1px solid var(--bd2);background:var(--sf);border-radius:8px;padding:6px 10px;text-align:left;font:inherit}
+.tar-chip em{font-style:normal;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mu);font-weight:700}
+.tar-chip b{font-family:var(--m);font-size:14px;font-weight:600;color:var(--tx)}
+.tar-chip:hover{border-color:var(--ac);background:var(--ac-bg)}
+.tar-chip:hover b{color:var(--ac)}
+.tar-chip.on{border-color:var(--ac);background:var(--ac-bg)}
+.tar-chip.on b{color:var(--ac)}
+.tar-chip.off{color:var(--mu);font-size:11px;padding:8px 10px;cursor:default;opacity:.7}
+.tar-ref-nota{margin-top:6px;font-size:10.5px;color:var(--mu);line-height:1.4}
+
+/* Aviso de tonelagem fora da capacidade do conjunto (achado 4) */
+.sim-ton-aviso{grid-column:1/-1;font-size:10.5px;line-height:1.35;margin-top:3px}
+.sim-ton-aviso.rd{color:var(--rd);font-weight:600}
+.sim-ton-aviso.mu{color:var(--mu)}
+#simTon.fora{border-color:var(--rd);background:var(--rd-bg)}
+
 .sim-trechos{margin-top:10px}
 .sim-trechos input[type=number]{width:52px;text-align:right;font-family:var(--m);font-size:11.5px;padding:2px 5px}
 .sim-trechos select{min-width:80px;font-family:var(--m);font-size:11.5px;padding:2px 4px}
@@ -689,12 +717,12 @@ details.cfg-det>.card{margin-top:10px}
             <input type="hidden" id="simAltoDesempenho" value="nao">
           </div>
           <div class="sim-cond-item">
-            <span class="sim-cond-lb">Retorno vazio<i class="sim-info" title="Quando marcado, soma 92% do custo de deslocamento do retorno ao piso: 0,92 × distância × CCD.">i</i></span>
+            <span class="sim-cond-lb">Retorno vazio<i class="sim-info" title="Governa o trecho de volta nos DOIS lados da conta. Sim: soma 92% do deslocamento de retorno ao piso (0,92 × distância × CCD) e cobra a volta vazia no custo — distância, diesel pelo consumo de vazio e pedágio da volta. Não: a volta sai do piso e sai do custo, porque quem paga o retorno é outra carga. Padrão desta operação: sim, silo volta vazio.">i</i></span>
             <div class="sim-toggle" data-target="simRetornoVazio">
-              <button type="button" data-value="sim">Sim</button>
-              <button type="button" class="on" data-value="nao">Não</button>
+              <button type="button" class="on" data-value="sim">Sim</button>
+              <button type="button" data-value="nao">Não</button>
             </div>
-            <input type="hidden" id="simRetornoVazio" value="nao">
+            <input type="hidden" id="simRetornoVazio" value="sim">
           </div>
         </div>
         <div class="sim-cond-foot">
@@ -704,7 +732,7 @@ details.cfg-det>.card{margin-top:10px}
     </div>
 
     <div class="sim-acao-row">
-      <div id="simCondAviso" class="sim-calc-note">Configuração ativa: composição veicular, Tabela A, sem retorno vazio.</div>
+      <div id="simCondAviso" class="sim-calc-note">Configuração ativa: composição veicular, Tabela A, com retorno vazio de 92% do deslocamento. O custo cobra ida carregada + volta vazia.</div>
       <button class="btn pri" id="btnSimular">Calcular rota e piso</button>
     </div>
   </div>
@@ -768,10 +796,19 @@ details.cfg-det>.card{margin-top:10px}
           <div class="kpi"><div class="lb">Piso ANTT / viagem</div><div class="vl" id="kPiso">—</div></div>
           <div class="kpi"><div class="lb">Receita/viagem (tarifa×ton)</div><div class="vl" id="kTarifa">—</div></div>
           <div class="kpi"><div class="lb">Δ vs. piso</div><div class="vl" id="kDelta">—</div></div>
+          <div class="kpi"><div class="lb">Δ frete efetivo vs. piso</div><div class="vl" id="kDeltaLiq" title="Receita − impostos − pedágio, comparada com o piso. O piso da ANTT não inclui pedágio (Lei 13.703), então é este o número comparável.">—</div></div>
           <div class="kpi"><div class="lb">CPK interno (ref.)</div><div class="vl" id="kCpk" title="Custo/km do módulo CPK, se disponível">—</div></div>
         </div>
         <div class="muted" style="margin-top:8px;font-size:11.5px" id="kPisoDetalhe"></div>
         <div class="muted" style="font-size:11.5px">Pedágio é obrigação do contratante e <b>não compõe</b> o piso (Lei 13.703) — tratado à parte.</div>
+
+        <!-- ── Tarifas de referência (achado 11) ── -->
+        <div class="tar-ref" id="simTarifasRef" style="display:none">
+          <div class="tar-ref-tt">Tarifas de referência <em>— clique para usar</em></div>
+          <div class="tar-ref-chips" id="simTarifasRefChips"></div>
+          <div class="tar-ref-nota" id="simTarifasRefNota"></div>
+        </div>
+
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn ok" id="btnLiberar" disabled>Liberar rota</button>
           <button class="btn" id="btnSalvarSim" disabled>Salvar simulação (rascunho)</button>
@@ -798,7 +835,8 @@ details.cfg-det>.card{margin-top:10px}
 
         <div class="sim-res-tt">Rentabilidade <em>— frota própria, por viagem</em></div>
         <div class="grid4">
-          <div class="kpi"><div class="lb">Receita / viagem</div><div class="vl" id="kResReceita">—</div></div>
+          <div class="kpi"><div class="lb">Receita Bruta / viagem</div><div class="vl" id="kResReceita">—</div></div>
+          <div class="kpi ac"><div class="lb">Receita Líquida / viagem</div><div class="vl" id="kResReceitaLiq" title="Receita bruta da viagem descontados PIS/COFINS e ICMS">—</div></div>
           <div class="kpi"><div class="lb">Resultado / tonelada</div><div class="vl" id="kResResTon">—</div></div>
           <div class="kpi"><div class="lb">EBIT (%)</div><div class="vl" id="kResEbitPct">—</div></div>
           <div class="kpi"><div class="lb">EBIT / viagem</div><div class="vl" id="kResEbitVg">—</div></div>
@@ -885,7 +923,7 @@ details.cfg-det>.card{margin-top:10px}
     </h3>
     <div class="muted" style="margin-bottom:8px">Cada perfil aponta para a categoria ANTT correta (evita o erro de categoria trocada). Dimensões físicas alimentam o motor HERE (restrições de via).</div>
     <table class="tb" id="tbVeiculos">
-      <thead><tr><th>Perfil</th><th class="num">Eixos</th><th>Tipo de carreta</th><th class="num">Pneus lisos</th><th class="num">Tara (t)</th><th class="num">Cap. útil (t)</th><th>Dimensões (C×L×A m)</th><th>Categoria ANTT</th><th></th></tr></thead>
+      <thead><tr><th>Perfil</th><th class="num">Eixos</th><th>Tipo de carreta</th><th class="num">Pneus lisos</th><th class="num">Carretas</th><th class="num">Tara (t)</th><th class="num">Cap. útil (t)</th><th>Dimensões (C×L×A m)</th><th>Categoria ANTT</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -1816,11 +1854,11 @@ async function carregarAuditoria(){
 /* Seeds mínimos de perfis de veículo (frota real Comix: bitrem/LS + demais) */
 async function seedVeiculos(){
   const seeds = [
-    {nome:'Bitrem 7 eixos', eixos:7, tipoCarreta:'Bitrem', pneusLisos:22, tara:21, capacidade:37, tabelaAntt:'A', comp:19.8, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
-    {nome:'LS (Carreta 5 eixos)', eixos:5, tipoCarreta:'LS', pneusLisos:18, tara:15, capacidade:32, tabelaAntt:'A', comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
-    {nome:'Vanderléia 6 eixos', eixos:6, tipoCarreta:'Vanderléia', tara:18, capacidade:33, comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
-    {nome:'Rodotrem 9 eixos', eixos:9, tipoCarreta:'Rodotrem', tara:27, capacidade:48, comp:30.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
-    {nome:'Carreta Simples 3 eixos', eixos:3, tipoCarreta:'Simples', tara:12, capacidade:16, comp:14.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'}
+    {nome:'Bitrem 7 eixos', eixos:7, tipoCarreta:'Bitrem', pneusLisos:22, carretas:2, tara:21, capacidade:37, tabelaAntt:'A', comp:19.8, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'LS (Carreta 5 eixos)', eixos:5, tipoCarreta:'LS', pneusLisos:18, carretas:1, tara:15, capacidade:32, tabelaAntt:'A', comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Vanderléia 6 eixos', eixos:6, tipoCarreta:'Vanderléia', carretas:1, tara:18, capacidade:33, comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Rodotrem 9 eixos', eixos:9, tipoCarreta:'Rodotrem', carretas:2, tara:27, capacidade:48, comp:30.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Carreta Simples 3 eixos', eixos:3, tipoCarreta:'Simples', carretas:1, tara:12, capacidade:16, comp:14.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'}
   ];
   for(const s of seeds){ await fsAddDoc(COL.veiculos, {...s, criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email}); }
 }
@@ -2901,6 +2939,12 @@ function custosViagem(inp){
   const alimMes  = g('alimentacao_mes',325);                      // E32
   const cvCusto  = g('custo_cavalo',350000), cvVida=Math.max(g('vida_cavalo_anos',10),1);   // E33/E35
   const crCusto  = g('custo_carreta',150000), crVida=Math.max(g('vida_carreta_anos',15),1); // E34/E36
+  /* Quantidade de unidades rebocadas (achado 6). A planilha depreciava sempre
+     UMA carreta — Bitrem e Rodotrem puxam duas, e a depreciação saía pela
+     metade justamente no custo que não aparece em nota fiscal nenhuma. O
+     cadastro do perfil manda (inp.carretasAuto), a premissa da rota vence o
+     cadastro e, sem os dois, continua 1: nenhum resultado antigo se mexe. */
+  const carretas = Math.max(g('qtd_carretas', Number(inp.carretasAuto)>0?Number(inp.carretasAuto):1),1);
   const agImpPct   = g('ag_impostos',0.0165);        // S5
   const agComixPct = g('ag_comissao_comix',0.26);    // S6
   const agDeprecMes= g('ag_deprec_mensal',500);      // S7
@@ -2917,23 +2961,96 @@ function custosViagem(inp){
        quilômetro: fica fora do CPK da rota e é somada só no Simulador (J23). */
     pessoalFixo:  (-salario)*encFator/V - alimMes/V,
     deprecCavalo: -(cvCusto/cvVida)/12/V,                                                  // J27
-    deprecCarreta:-(crCusto/crVida)/12/V,                                                  // J28
+    deprecCarreta:-(crCusto/crVida)/12/V*carretas,                                         // J28 × nº de carretas
     p:{ pisCofins,icms,aliq,consumo,diesel,lubMes,lubRend,pecasMes,qLiso,qBorr,vLiso,vBorr,
         pneuRend,docAno,salario,comisPct,encFator,alimMes,cvCusto,cvVida,crCusto,crVida,
-        agImpPct,agComixPct,agDeprecMes,agSalPct,V }
+        agImpPct,agComixPct,agDeprecMes,agSalPct,V,carretas }
+  };
+}
+
+/* ══ CUSTOS ESPECÍFICOS DA OPERAÇÃO (achado 9) ═══════════════════════════
+   Arla, custo do tempo parado no cliente e descarga pressurizada por
+   compressor — as três linhas que o motor de análise de rotas já cobrava e
+   o Simulador ignorava. A mais grave era o compressor: o Simulador oferecia
+   o tipo de carga "Granel sólido pressurizado" e não cobrava um centavo por
+   ele, que é exatamente o custo que separa esta operação das outras.
+
+   Ficam FORA de custosViagem() de propósito: rtCustoRota() já calcula as
+   suas com as premissas do próprio módulo, e somá-las lá dentro dobraria o
+   custo daquele motor. Custos saem NEGATIVOS, como no resto do módulo. ══ */
+function custosExtras(inp){
+  const P=inp.premissas||{};
+  const g=(k,def)=>{ const v=Number(P[k]); return isNaN(v)?def:v; };
+  const litros=Number(inp.litrosDiesel)||0;
+
+  /* Arla — percentual dos litros de diesel, mesmo critério do motor de rotas.
+     Sem preço apurado, a linha vale zero em vez de chutar um número. */
+  const arlaPct = g('arla_pct',0.05);
+  const arlaRS  = (inp.arlaRS!=null && Number(inp.arlaRS)>0) ? Number(inp.arlaRS) : g('arla_rs',0);
+  const arlaL   = litros*arlaPct;
+  const arlaVal = arlaL*(arlaRS>0?arlaRS:0);
+
+  /* Tempo parado no cliente — carga + espera, ao custo de oportunidade/hora.
+     Custo de oportunidade zero (padrão) mantém a linha visível valendo zero:
+     o comercial vê que existe e decide se quer precificar a hora parada. */
+  const tCarga  = g('tempo_carga_h',1.5);
+  const tEspera = g('espera_cliente_h',1.0);
+  const custoH  = g('custo_oportunidade_h',0);
+  const tParado = tCarga+tEspera;
+  const tempoVal= tParado*custoH;
+
+  /* Descarga pressurizada por compressor — §17.1 do módulo de rotas.
+     Amarrada ao tipo de carga: liga sozinha em granel pressurizado. */
+  const ligado  = !!inp.compressor;
+  const taxaTh  = Math.max(g('comp_taxa_th',25),0.1);
+  const tInfo   = g('comp_tempo_h',0);
+  const tDesc   = ligado ? (tInfo>0? tInfo : (Number(inp.ton)>0? Number(inp.ton)/taxaTh : 0)) : 0;
+  const limpH   = g('comp_limpeza_h',0.25);
+  const cDiesel = ligado ? tDesc*g('comp_consumo_lh',8)*(Number(inp.dieselRS)||0) : 0;
+  const cTecnico= ligado ? tDesc*(g('comp_manut_h',0)+g('comp_deprec_h',0)) : 0;
+  const cOport  = (ligado && custoH>0) ? (tDesc+limpH)*custoH : 0;
+  const cOutros = ligado ? g('comp_outros',0) : 0;
+  const compVal = cDiesel+cTecnico+cOport+cOutros;
+
+  return {
+    arla:-arlaVal, tempo:-tempoVal, compressor:-compVal,
+    total:-(arlaVal+tempoVal+compVal),
+    det:{ arlaPct, arlaRS, arlaL,
+          tCarga, tEspera, tParado, custoH,
+          compLigado:ligado, compTempoH:tDesc, compTaxaTh:taxaTh, compInformado:tInfo>0,
+          compDiesel:cDiesel, compTecnico:cTecnico, compOportunidade:cOport,
+          compOutros:cOutros, compLimpezaH:limpH, compConsumoLh:g('comp_consumo_lh',8) }
   };
 }
 
 function calcularFinanceiro(inp){
-  /* inp: {tarifaTon, ton, viagensMes, distIVKm, pedagioIV, premissas P, dieselRS, tipoCarreta} */
+  /* inp: {tarifaTon, ton, viagensMes, distIVKm, pedagioIV, premissas P, dieselRS,
+           tipoCarreta, kmCarregado, kmVazio, arlaRS, compressor, carretasAuto} */
   const V=Math.max(inp.viagensMes,1);
   const linhas=(v)=>({viagem:v, mes:v*V, ano:v*V*12});
+
+  /* ── Litros com consumo diferenciado (achado 9) ────────────────────────
+     O trecho carregado e o trecho vazio nunca gastaram o mesmo — o núcleo
+     de custo já aceitava receber os litros prontos, e era só o Simulador
+     que não os mandava. Sem os km por trecho, cai no consumo único (E17) e
+     nada muda. */
+  const P0=inp.premissas||{};
+  const gN=(k,def)=>{ const v=Number(P0[k]); return isNaN(v)?def:v; };
+  const consUnico = Math.max(gN('consumo_kml',2.2),.1);
+  const consCarr  = Math.max(gN('consumo_carregado', consUnico),.1);
+  const consVaz   = Math.max(gN('consumo_vazio',     consUnico),.1);
+  const kmCarr = Number(inp.kmCarregado);
+  const kmVaz  = Number(inp.kmVazio);
+  const temTrechos = Number.isFinite(kmCarr) && Number.isFinite(kmVaz) && (kmCarr+kmVaz)>0;
+  const litros = temTrechos ? (kmCarr/consCarr + kmVaz/consVaz) : (inp.distIVKm/consUnico);
+  const litrosPadrao = inp.distIVKm/consUnico;
 
   /* Premissas e fórmulas de custo vêm do núcleo compartilhado com a análise
      de rotas — uma única definição para os dois motores. */
   const N = custosViagem({ distKm:inp.distIVKm, pedagio:inp.pedagioIV, viagensMes:V,
                            premissas:inp.premissas, dieselRS:inp.dieselRS,
-                           tipoCarreta:inp.tipoCarreta, pneusLisosAuto:inp.pneusLisosAuto });
+                           tipoCarreta:inp.tipoCarreta, pneusLisosAuto:inp.pneusLisosAuto,
+                           carretasAuto:inp.carretasAuto, litrosDiesel:litros });
   const { aliq, comisPct, encFator, salario, alimMes, agComixPct } = N.p;
 
   /* ═ Bloco 1 — RESULTADO FROTA (colunas J/K/L) ═ */
@@ -2955,15 +3072,22 @@ function calcularFinanceiro(inp){
      por viagem × 5% já É a comissão daquela viagem). Efeito medido nas 107 abas
      de rota: a comissão fica em média 27x menor, e o fator cresce justamente nas
      rotas mais produtivas.
-     O regime fica EXPLÍCITO e auditável, com a planilha como padrão — nenhuma
-     rota muda de resultado sem alguém escolher o regime. */
-  const regimeComissao = String(inp.premissas&&inp.premissas.regime_comissao || 'planilha');
+     O regime fica EXPLÍCITO e auditável. Desde a revisão do achado 2 o PADRÃO
+     é "por viagem + encargos" — o erro crescia justamente nas rotas mais
+     produtivas, que são as que mais vão para proposta. "Como na planilha"
+     continua disponível para conferir contra os arquivos antigos. */
+  const regimeComissao = String(inp.premissas&&inp.premissas.regime_comissao || 'viagem_com_encargos');
   const comissaoViagem =
-        regimeComissao==='viagem_com_encargos' ? RL*comisPct*encFator   /* comissão é base de encargos */
-      : regimeComissao==='viagem_sem_encargos' ? RL*comisPct            /* comissão líquida por viagem */
-      : RL*comisPct*encFator/V;                                          /* planilha (padrão) */
+        regimeComissao==='planilha'            ? RL*comisPct*encFator/V  /* rateio herdado da planilha */
+      : regimeComissao==='viagem_sem_encargos' ? RL*comisPct             /* comissão líquida por viagem */
+      : RL*comisPct*encFator;                                            /* por viagem + encargos (padrão) */
   const CP   = (-salario)*encFator/V - comissaoViagem - alimMes/V;
-  const OUT  = CO+CP;                                          // J17
+  /* ── Custos específicos da operação (achado 9) ── */
+  const EX = custosExtras({ premissas:inp.premissas, litrosDiesel:litros, dieselRS:N.p.diesel,
+                            arlaRS:inp.arlaRS, compressor:inp.compressor, ton:inp.ton });
+  const cArla = EX.arla, cTempo = EX.tempo, cComp = EX.compressor;
+  const CE   = EX.total;                                       // novo agrupador
+  const OUT  = CO+CP+CE;                                       // J17 + específicos
   const RO   = LB+OUT;                                         // J24
   const dCav = N.deprecCavalo;                                 // J27
   const dCar = N.deprecCarreta;                                // J28
@@ -2975,6 +3099,7 @@ function calcularFinanceiro(inp){
     lucroBruto:linhas(LB), lucroBrutoPct: RL?LB/RL:null,
     outros:linhas(OUT), co:linhas(CO), lubrificante:linhas(cLub), pecas:linhas(cPecas),
     pneus:linhas(cPneus), docSeguros:linhas(cDoc), pessoal:linhas(CP),
+    especificos:linhas(CE), arla:linhas(cArla), tempoParado:linhas(cTempo), compressor:linhas(cComp),
     resultadoOper:linhas(RO), resultadoOperPct: RL?RO/RL:null,
     deprecCavalo:linhas(dCav), deprecCarreta:linhas(dCar),
     ebit:linhas(EBIT), ebitPct: RL?EBIT/RL:null,
@@ -3007,7 +3132,40 @@ function calcularFinanceiro(inp){
      bloco COMIX por Agregados; S7 e S8 só existiam para este bloco e ficam agora
      sem efeito no cálculo (mantidas no cadastro por compatibilidade dos
      snapshots já gravados). */
-  return { aliq, receitaViagem:RB, regimeComissao, comissaoViagem:-comissaoViagem, frota, comixAgregado };
+  /* ── Álgebra da tarifa mínima (achado 11) ──────────────────────────────
+     Todo custo que não depende da tarifa cabe numa constante. Escrevendo
+     EBIT = RL×(1−f) + K, com f = fator da comissão sobre a receita líquida,
+     a tarifa que atinge qualquer margem-alvo sai numa linha:
+        RL = −K ÷ (1 − f − margem)   →   tarifa = RL ÷ (ton × (1 − alíquota))
+     É a conta mais simples do módulo, e era a única que ele não fazia. */
+  const fComissao = regimeComissao==='planilha' ? comisPct*encFator/V
+                  : regimeComissao==='viagem_sem_encargos' ? comisPct
+                  : comisPct*encFator;
+  const fixoPessoal = salario*encFator/V + alimMes/V;
+  const K = CD+CO+CE+dCav+dCar-fixoPessoal;
+
+  return { aliq, receitaViagem:RB, regimeComissao, comissaoViagem:-comissaoViagem,
+           litros, litrosPadrao, difCombustivel:(litros-litrosPadrao)*N.p.diesel,
+           consumoCarregado:consCarr, consumoVazio:consVaz, consumoUnico:consUnico,
+           consumoDiferenciado:temTrechos && (consCarr!==consVaz),
+           kmCarregado:temTrechos?kmCarr:null, kmVazio:temTrechos?kmVaz:null,
+           carretas:N.p.carretas, extras:EX,
+           algebra:{ aliq, f:fComissao, K, ton:inp.ton },
+           frota, comixAgregado };
+}
+
+/* Tarifa (R$/ton) que entrega a margem EBIT pedida — inverso de
+   calcularFinanceiro, sobre a mesma álgebra. margem=0 devolve o ponto de
+   equilíbrio. Volta null quando não há solução com sentido comercial. */
+function tarifaParaMargem(alg, margem){
+  if(!alg || !(alg.ton>0)) return null;
+  const den = 1 - alg.f - (Number(margem)||0);
+  if(!(den>0)) return null;
+  const RL = -alg.K/den;
+  if(!(RL>0)) return null;
+  const base = alg.ton*(1-alg.aliq);
+  if(!(base>0)) return null;
+  return RL/base;
 }
 </script>
 
@@ -3023,6 +3181,7 @@ function bindSimCondicoes(){
         alvo.value=btn.dataset.value;
         grupo.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===btn));
         atualizarCondicoesAntt();
+        try{ simRecalcular(); }catch(_){}
       });
     });
   });
@@ -3037,7 +3196,27 @@ function atualizarCondicoesAntt(){
   const tabela=tabelaAnttAplicavel(composicao,alto);
   const regra=TABELA_ANTT_REGRAS[tabela];
   pill.textContent=`Tabela ${tabela} · ${regra.rotulo}`; pill.className='pill ac';
-  aviso.textContent=`Configuração ativa: ${regra.contratacao}, Tabela ${tabela}${retorno?', com retorno vazio de 92% do deslocamento':', sem retorno vazio'}. Para B/D, os eixos continuam sendo os da composição veicular utilizada.`;
+  aviso.textContent=`Configuração ativa: ${regra.contratacao}, Tabela ${tabela}${retorno?', com retorno vazio de 92% do deslocamento':', sem retorno vazio'}. Para B/D, os eixos continuam sendo os da composição veicular utilizada.`+
+    (retorno?' O custo cobra ida carregada + volta vazia.':' O custo cobra apenas a ida — a volta não entra nem no piso nem no custo.');
+  simAplicarRetornoVazio();
+}
+/* ══ Achado 10 — a chave do retorno vazio agora manda no custo ═══════════
+   Antes ela só somava 92% da volta ao piso; o custo assumia ida e volta de
+   qualquer jeito, então com a chave desligada a tela cobrava um retorno que
+   o piso não remunerava. Agora ela reconfigura o trecho de volta inteiro:
+   distância cobrada, pedágio da volta e rótulo do campo E13. ══ */
+function simAplicarRetornoVazio(){
+  const on = $('simRetornoVazio') && $('simRetornoVazio').value==='sim';
+  const lb=$('simDistIVLb');
+  if(lb) lb.innerHTML = (on?'Distância ida-volta (km)':'Distância da ida (km)')+
+    ' <i>E13</i> <button type="button" class="rest" data-auto="simDistIV" title="Voltar ao valor automático">↺</button>';
+  const d=$('simDistIV');
+  if(d && d.dataset.manual!=='1' && SIMR.atual) d.value=+(SIMR.atual.distKm*(on?2:1)).toFixed(1);
+  /* Sem retorno vazio não há trecho de volta para pedagiar. */
+  const cv=$('simPedVoltaOn');
+  if(cv){ cv.disabled=!on; if(!on) cv.checked=false; else if(cv.dataset.desligado!=='1') cv.checked=true; }
+  const linhaVolta=$('simEixosVolta');
+  if(linhaVolta) linhaVolta.disabled=!on;
 }
 /* ══════════════════════════════════════════════════════════════════
    FLUXO DO SIMULADOR v6
@@ -3060,7 +3239,8 @@ async function simular(){
   /* Toda simulação começa com os dois trechos marcados e os eixos do conjunto —
      o ajuste de eixo erguido é uma exceção deliberada, nunca um estado herdado. */
   if($('simPedIdaOn')) $('simPedIdaOn').checked=true;
-  if($('simPedVoltaOn')) $('simPedVoltaOn').checked=true;
+  if($('simPedVoltaOn')){ $('simPedVoltaOn').checked=true; $('simPedVoltaOn').dataset.desligado=''; }
+  simAplicarRetornoVazio();
   try{
     const [gO,gD] = await Promise.all([hereGeocode(orig), hereGeocode(dest)]);
     SIMR.geoOrig=gO; SIMR.geoDest=gD; SIMR.vias=[]; SIMR.sel=0;
@@ -3093,9 +3273,11 @@ function simAplicarRota(){
   (r.polylines||[]).forEach(pl=>{ try{ SIMR.pontos=SIMR.pontos.concat(decodeFlexPolyline(pl)); }catch(_){} });
   simDesenhar(); simRenderMapBar();
 
-  const distIda=r.distKm, distIV=distIda*2;
+  /* E13 = distância efetivamente rodada e cobrada. Com retorno vazio, é ida
+     mais volta; sem ele, só a ida — a chave manda no custo (achado 10). */
+  const distIda=r.distKm, distIV=distIda*simFatorVolta();
   $('kDistIda').textContent=num(distIda,1)+' km';
-  $('kDistIV').textContent=num(distIV,1)+' km';
+  $('kDistIV').textContent=num(distIda*2,1)+' km';
   $('kTempo').textContent=Math.floor(r.durMin/60)+'h'+String(Math.round(r.durMin%60)).padStart(2,'0');
   if(SIMR.geoOrig&&SIMR.geoDest) $('simRotaInfo').textContent='· '+SIMR.geoOrig.label+' → '+SIMR.geoDest.label+(SIMR.vias.length?' · '+SIMR.vias.length+' parada(s)':'');
 
@@ -3264,12 +3446,23 @@ function simRecalcular(){
      ele já sai com a soma de ida + volta pelos eixos de cada um. */
   const trechos=simRenderTrechos();
   if(SIMR.atual) simRenderPracas();
-  const distIda=distIV/2, pedagioIV=nVal('simPedIV');
+  const pedagioIV=nVal('simPedIV');
   const tarifa=nVal('simTarifa'), ton=nVal('simTon'), viagens=Math.max(nVal('simViagens'),1);
 
   const composicao=$('simComposicao').value==='sim';
   const altoDesempenho=$('simAltoDesempenho').value==='sim';
   const retornoVazio=$('simRetornoVazio').value==='sim';
+  /* ── Achado 10: a chave "retorno vazio" passa a ligar e desligar o trecho
+     de volta NO CUSTO, não só no piso. Antes ela acrescentava 92% da volta
+     ao piso e o custo cobrava a volta de qualquer jeito — com a chave
+     desligada, a tela cobrava um retorno que o piso não remunerava.
+     Agora o campo E13 é a distância efetivamente rodada e cobrada:
+       · retorno vazio  → E13 = ida + volta, metade carregada, metade vazia;
+       · sem retorno vazio → E13 = só a ida, 100% carregada (a volta ou não
+         acontece, ou é carga de terceiro e tem receita própria). */
+  const distIda = retornoVazio ? distIV/2 : distIV;
+  const kmCarregado = distIda;
+  const kmVazio     = retornoVazio ? distIV-distIda : 0;
   const tabelaAntt=tabelaAnttAplicavel(composicao,altoDesempenho);
   const regraTabelaAntt=TABELA_ANTT_REGRAS[tabelaAntt];
   const categoriaAntt=({granel_pressurizado:'granel_pressurizada',granel:'granel_solido',geral:'carga_geral'})[$('simCarga').value]
@@ -3278,16 +3471,24 @@ function simRecalcular(){
 
   const P=simPremValores();
   const tipoCarreta=simTipoCarreta(veic);
+  /* Descarga pressurizada por compressor: amarrada ao tipo de carga, com
+     desligamento manual pela premissa (achado 9). */
+  const compAuto = $('simCarga').value==='granel_pressurizado';
+  const compressorOn = P.comp_ativo==='sim' ? true : (P.comp_ativo==='nao' ? false : compAuto);
   const fin = calcularFinanceiro({ tarifaTon:tarifa, ton, viagensMes:viagens, distIVKm:distIV,
                                    pedagioIV, premissas:P, dieselRS:(P.diesel_rs!=null?P.diesel_rs:null),
-                                   tipoCarreta, pneusLisosAuto:simPneusLisosAuto(veic) });
+                                   tipoCarreta, pneusLisosAuto:simPneusLisosAuto(veic),
+                                   carretasAuto:simCarretasAuto(veic),
+                                   kmCarregado, kmVazio,
+                                   arlaRS:(P.arla_rs!=null?P.arla_rs:null), compressor:compressorOn });
   const receitaViagem = fin.receitaViagem;
   renderFinanceiro(fin);
+  simConferirCapacidade(veic, ton);
   const pillReg=$('simPremOrigem');
-  if(pillReg && fin.regimeComissao!=='planilha'){
-    pillReg.textContent='comissão fora do padrão da planilha';
+  if(pillReg && fin.regimeComissao==='planilha'){
+    pillReg.textContent='comissão no rateio antigo da planilha';
     pillReg.className='pill am';
-    pillReg.title='Regime de comissão alterado: '+brl(fin.comissaoViagem)+' por viagem. O resultado NÃO é comparável com a planilha.';
+    pillReg.title='Regime "Como na planilha": a comissão é diluída pelo nº de viagens do mês ('+brl(fin.comissaoViagem)+' por viagem) e sai cerca de '+num(viagens,0)+'x menor que a comissão real da viagem. Mantido só para conferir contra os arquivos antigos.';
   }
 
   /* ── Piso ANTT — sobre a distância de IDA; pedágio fora (Lei 13.703) ── */
@@ -3306,26 +3507,64 @@ function simRecalcular(){
     sem.className='semaforo am';
     sem.innerHTML=`<div class="dot"></div><div><div class="tit">Piso ANTT indisponível</div><div class="sub">${esc(avisoPiso)}</div></div>`;
     $('kPiso').textContent='—'; $('kDelta').textContent='—'; $('kPisoDetalhe').textContent='';
+    if($('kDeltaLiq')) $('kDeltaLiq').textContent='—';
     $('kTarifa').innerHTML = receitaViagem>0? brl(receitaViagem)+' <small>('+brl(tarifa)+'/t)</small>':'—';
     $('btnLiberar').disabled=true; $('btnSalvarSim').disabled=(receitaViagem<=0);
     ST.sim=null;
-    renderResultadoRota(simCtxResultado({fin,tarifa,ton,distIV,distIda,pedagioIV,piso:null,status:'sem_piso',veic,trechos}));
+    /* Sem piso ainda dá para calcular equilíbrio e margem-alvo — só a tarifa
+       do piso fica de fora. */
+    simRenderTarifasRef(fin, null, ton, pedagioIV, (P.margem_alvo!=null?Number(P.margem_alvo):0.12), tarifa);
+    renderResultadoRota(simCtxResultado({fin,tarifa,ton,distIV,distIda,pedagioIV,piso:null,status:'sem_piso',veic,trechos,retornoVazio,kmCarregado,kmVazio}));
     return;
   }
 
   const margemAlvo = (P.margem_alvo!=null? Number(P.margem_alvo): 0.12);
+
+  /* ── Achado 1: maçã com laranja ───────────────────────────────────────
+     A receita comparada com o piso embute o pedágio; o piso, por lei, não
+     (Lei 13.703). Rota com pedágio caro ganhava um colchão falso de
+     conformidade e podia acender verde com o frete efetivo abaixo do piso.
+     O semáforo CONTINUA governado pela receita bruta — é assim que a regra
+     é aplicada hoje e não é o simulador que muda a lei — mas a tela passa a
+     dizer, em separado, quando a receita líquida (sem imposto) e o frete
+     efetivo (sem imposto e sem pedágio) caem abaixo do piso. */
+  const receitaLiqViagem = fin.frota.receitaLiq.viagem;      // receita − impostos
+  const freteEfetivo     = receitaLiqViagem - pedagioIV;     // ainda sem o pedágio
+  const temTarifa        = tarifa>0 && ton>0;
+  const alertaLiq        = temTarifa && receitaViagem>=piso.valor && receitaLiqViagem < piso.valor;
+  const alertaFrete      = temTarifa && receitaViagem>=piso.valor && freteEfetivo   < piso.valor;
+
   let status, cor, tit, sub;
-  if(tarifa<=0||ton<=0){ status='sem_tarifa'; cor=''; tit='Informe tarifa (R$/ton) e toneladas'; sub='O piso ANTT desta rota é '+brl(piso.valor)+' por viagem.'; }
+  if(!temTarifa){ status='sem_tarifa'; cor=''; tit='Informe tarifa (R$/ton) e toneladas'; sub='O piso ANTT desta rota é '+brl(piso.valor)+' por viagem.'; }
   else if(receitaViagem < piso.valor){ status='vermelho'; cor='rd'; tit='🔴 Abaixo do piso ANTT'; sub='Receita/viagem '+brl(receitaViagem)+' ('+brl(tarifa)+'/t × '+num(ton,1)+'t) < piso. Liberação exige justificativa + gestor/admin.'; }
   else if(fin.frota.ebitPct!=null && fin.frota.ebitPct < margemAlvo){ status='amarelo'; cor='am'; tit='🟡 Acima do piso, abaixo da margem-alvo'; sub='EBIT '+pct(fin.frota.ebitPct)+' < alvo '+pct(margemAlvo)+'. Liberável, mas atenção.'; }
   else { status='verde'; cor='gn'; tit='🟢 Conforme'; sub='Receita/viagem ≥ piso ANTT e EBIT dentro do alvo.'; }
 
+  /* Aviso secundário — nunca derruba o verde, mas não deixa passar batido. */
+  let avisoLiquido='';
+  if(alertaFrete||alertaLiq){
+    const qual = alertaFrete
+      ? `frete efetivo ${brl(freteEfetivo)} (receita − impostos − pedágio)`
+      : `receita líquida ${brl(receitaLiqViagem)} (receita − impostos)`;
+    avisoLiquido=`<div class="sem-liq">⚠️ Verde pela receita bruta, mas o ${qual} está `+
+      `${brl(piso.valor-(alertaFrete?freteEfetivo:receitaLiqViagem))} <b>abaixo</b> do piso de ${brl(piso.valor)}. `+
+      `O piso não inclui pedágio (Lei 13.703) — quanto mais caro o pedágio da rota, maior a folga aparente.</div>`;
+  }
+
   sem.className='semaforo '+cor;
-  sem.innerHTML=`<div class="dot"></div><div><div class="tit">${tit}</div><div class="sub">${esc(sub)}${_simAlertaDist}</div></div>`;
+  sem.innerHTML=`<div class="dot"></div><div><div class="tit">${tit}</div><div class="sub">${esc(sub)}${_simAlertaDist}</div>${avisoLiquido}</div>`;
   $('kPiso').textContent=brl(piso.valor);
   $('kTarifa').innerHTML = receitaViagem>0? brl(receitaViagem)+' <small>('+brl(tarifa)+'/t)</small>':'—';
   $('kDelta').textContent = receitaViagem>0? (receitaViagem>=piso.valor?'+':'')+brl(receitaViagem-piso.valor):'—';
   $('kDelta').style.color = receitaViagem>=piso.valor?'var(--gn)':'var(--rd)';
+  /* Δ do frete efetivo — o número que o achado 1 diz ser o comparável */
+  const kdl=$('kDeltaLiq');
+  if(kdl){
+    kdl.innerHTML = temTarifa? (freteEfetivo>=piso.valor?'+':'')+brl(freteEfetivo-piso.valor)+
+                    ' <small>('+brl(freteEfetivo)+')</small>' : '—';
+    kdl.style.color = !temTarifa?'':(freteEfetivo>=piso.valor?'var(--gn)':'var(--rd)');
+  }
+  simRenderTarifasRef(fin, piso, ton, pedagioIV, margemAlvo, tarifa);
   $('kPisoDetalhe').textContent=`Ida: ${num(distIda,1)} km × R$ ${num(piso.ccd,4)} (CCD) + R$ ${num(piso.cc,2)} (CC) = ${brl(piso.valorIda)}`+
     (retornoVazio?` · Retorno vazio: 0,92 × ${num(distIda,1)} km × R$ ${num(piso.ccd,4)} = ${brl(piso.retornoVazio)}`:'')+
     ` · Total: ${brl(piso.valor)} · Tabela ${piso.tabela} (${regraTabelaAntt.rotulo}) · ${piso.eixos} eixos`+
@@ -3378,11 +3617,29 @@ function simRecalcular(){
     ebit_pct_frota: fin.frota.ebitPct, ebit_viagem:+(fin.frota.ebit.viagem).toFixed(2),
     ebit_mes:+(fin.frota.ebit.mes).toFixed(2), ebit_ano:+(fin.frota.ebit.ano).toFixed(2),
     ebit_comix_agregado:+(fin.comixAgregado.ebit.viagem).toFixed(2),
+    /* ── Revisão de agosto/2026 (manual de premissas) ── */
+    receita_liquida_viagem:+receitaLiqViagem.toFixed(2),
+    frete_efetivo_viagem:+freteEfetivo.toFixed(2),
+    alerta_liquido_abaixo_piso: !!(alertaLiq||alertaFrete),
+    regime_comissao: fin.regimeComissao, comissao_viagem:+fin.comissaoViagem.toFixed(2),
+    km_carregado:+kmCarregado.toFixed(2), km_vazio:+kmVazio.toFixed(2),
+    consumo_carregado:fin.consumoCarregado, consumo_vazio:fin.consumoVazio,
+    litros_diesel:+fin.litros.toFixed(2), litros_consumo_unico:+fin.litrosPadrao.toFixed(2),
+    qtd_carretas:fin.carretas,
+    arla_viagem:+(-fin.frota.arla.viagem).toFixed(2),
+    tempo_parado_viagem:+(-fin.frota.tempoParado.viagem).toFixed(2),
+    compressor_ativo:compressorOn,
+    compressor_viagem:+(-fin.frota.compressor.viagem).toFixed(2),
+    compressor_tempo_h: fin.extras.det.compTempoH||0,
+    tarifa_ref_piso: _SIM_TARIFAS_REF.piso, tarifa_ref_equilibrio: _SIM_TARIFAS_REF.equilibrio,
+    tarifa_ref_margem: _SIM_TARIFAS_REF.margem, margem_alvo_usada: margemAlvo,
+    capacidade_conjunto_t: (veic.data.capacidade||null),
+    ton_acima_da_capacidade: !!(veic.data.capacidade>0 && ton>veic.data.capacidade),
     status, estado:'simulada'
   };
   $('btnLiberar').disabled = !(status==='verde'||status==='amarelo'||status==='vermelho');
   $('btnSalvarSim').disabled = false;
-  renderResultadoRota(simCtxResultado({fin,tarifa,ton,distIV,distIda,pedagioIV,piso,status,veic,trechos}));
+  renderResultadoRota(simCtxResultado({fin,tarifa,ton,distIV,distIda,pedagioIV,piso,status,veic,trechos,retornoVazio,kmCarregado,kmVazio}));
   carregarHistRota();
 }
 
@@ -3400,7 +3657,8 @@ function simCtxResultado(o){
        ("Avenida Brasil, ...") ele é a melhor reserva para achar a cidade */
     origemTexto: $('simOrigem').value.trim()||'',
     destinoTexto: $('simDestino').value.trim()||'',
-    retornoVazio: $('simRetornoVazio').value==='sim',
+    retornoVazio: (o.retornoVazio!=null? o.retornoVazio : $('simRetornoVazio').value==='sim'),
+    kmCarregado:o.kmCarregado, kmVazio:o.kmVazio,
     tipoRotulo: rotuloCarga,
     cliente: cli? (cli.data.nome||'') : '',
     veiculo: o.veic? (o.veic.data.nome||'') : '',
@@ -3421,6 +3679,94 @@ function simPneusLisosAuto(veic){
   if(doTipo) return doTipo.pneus;
   return veicPneusLisos(veic&&veic.data);
 }
+/* Quantidade de carretas do conjunto (achado 6) — cadastro primeiro, depois
+   a dedução pelo tipo (Bitrem e Rodotrem puxam duas unidades rebocadas). */
+function simCarretasAuto(veic){ return veicCarretas(veic&&veic.data); }
+
+/* ══ Achado 4 — toneladas × capacidade do conjunto ═══════════════════════
+   E10 era campo livre: dava para simular 45 t num LS de 32 t. A receita saía
+   com 45 t enquanto a rota (restrições de via e pedágio) tinha sido calculada
+   com o peso do conjunto cheio de fábrica — receita e roteirização olhando
+   pesos diferentes na mesma simulação. Aqui o excesso vira aviso na tela, sem
+   travar: existe carga com autorização especial, e a decisão é do comercial. */
+function simConferirCapacidade(veic, ton){
+  const el=$('simTonAviso'); if(!el) return;
+  const cap=Number(veic&&veic.data&&veic.data.capacidade)||0;
+  const inp=$('simTon');
+  if(!(cap>0)||!(ton>0)){ el.textContent=''; el.className='sim-ton-aviso'; if(inp) inp.classList.remove('fora'); return; }
+  if(ton>cap+0.001){
+    el.innerHTML=`⚠️ ${num(ton,1)} t acima da capacidade útil do conjunto (${num(cap,1)} t) — excesso de ${num(ton-cap,1)} t.`;
+    el.className='sim-ton-aviso rd'; if(inp) inp.classList.add('fora');
+  }else if(ton<cap*0.85){
+    el.innerHTML=`Capacidade útil do conjunto: ${num(cap,1)} t — a simulação está com ${pct(ton/cap)} de aproveitamento.`;
+    el.className='sim-ton-aviso mu'; if(inp) inp.classList.remove('fora');
+  }else{ el.textContent=''; el.className='sim-ton-aviso'; if(inp) inp.classList.remove('fora'); }
+}
+
+/* ══ Achado 11 — tarifas de referência ═══════════════════════════════════
+   O comercial digitava uma tarifa, olhava o resultado, digitava outra. O
+   caminho inverso — dada a margem-alvo e o piso, qual é o R$/tonelada? —
+   é uma linha de álgebra sobre fórmulas que já existiam (tarifaParaMargem).
+   Nada é aplicado sozinho numa rota que já tem tarifa: os chips só mudam o
+   campo quando alguém clica. A exceção é a rota que ainda não tem tarifa
+   nenhuma, que nasce com a da margem-alvo para o comercial partir de um
+   número plausível em vez de zero. ══ */
+var _SIM_TARIFAS_REF={piso:null,equilibrio:null,margem:null};
+function simRenderTarifasRef(fin, piso, ton, pedagioIV, margemAlvo, tarifaAtual){
+  const box=$('simTarifasRef'), chips=$('simTarifasRefChips'), nota=$('simTarifasRefNota');
+  if(!box||!chips) return;
+  const alg=fin&&fin.algebra;
+  if(!alg||!(ton>0)){ box.style.display='none'; _SIM_TARIFAS_REF={piso:null,equilibrio:null,margem:null}; return; }
+
+  /* Piso: a tarifa em que o frete efetivo (receita − impostos − pedágio)
+     alcança o piso legal. É o número comparável do achado 1 — a tarifa que
+     só empata pela receita bruta fica no tooltip, porque é a que o semáforo
+     usa e as duas juntas explicam a diferença. */
+  const tPiso  = piso? (piso.valor+pedagioIV)/(ton*(1-alg.aliq)) : null;
+  const tPisoB = piso? piso.valor/ton : null;
+  const tEquil = tarifaParaMargem(alg,0);
+  const tMarg  = tarifaParaMargem(alg,margemAlvo);
+  _SIM_TARIFAS_REF={ piso:tPiso!=null?+tPiso.toFixed(4):null,
+                     equilibrio:tEquil!=null?+tEquil.toFixed(4):null,
+                     margem:tMarg!=null?+tMarg.toFixed(4):null };
+
+  const chip=(v,lb,dica)=> v==null||!(v>0)
+    ? `<span class="tar-chip off" title="sem solução com as premissas atuais">${lb} —</span>`
+    : `<button type="button" class="tar-chip${(tarifaAtual>0&&Math.abs(tarifaAtual-v)<0.005)?' on':''}" data-t="${v.toFixed(4)}" title="${esc(dica)}">`+
+      `<em>${lb}</em><b>${brl(v)}/t</b></button>`;
+
+  chips.innerHTML =
+    chip(tPiso,'piso ANTT', 'Tarifa em que a receita menos impostos e menos pedágio alcança o piso de '+brl(piso?piso.valor:0)+'.'+
+        (tPisoB!=null?' Só pela receita bruta (critério do semáforo) bastariam '+brl(tPisoB)+'/t.':''))+
+    chip(tEquil,'equilíbrio','Tarifa em que o EBIT da viagem fica exatamente em zero, com as premissas da tela.')+
+    chip(tMarg,'margem-alvo '+pct(margemAlvo,0),'Tarifa que entrega a margem-alvo de EBIT com as premissas da tela.');
+
+  if(nota) nota.innerHTML = 'Calculadas sobre as premissas que estão na tela — mudou uma premissa, mudam as três. '+
+    'A tarifa digitada continua valendo; clicar num chip é que a substitui.';
+  box.style.display='';
+
+  chips.querySelectorAll('button.tar-chip[data-t]').forEach(b=>{
+    b.onclick=()=>{
+      const v=parseFloat(b.dataset.t); if(!(v>0)) return;
+      const el=$('simTarifa'); if(!el) return;
+      el.value=+v.toFixed(2);
+      try{ simRecalcular(); }catch(_){}
+      toast('Tarifa ajustada para '+brl(v)+'/t ('+b.querySelector('em').textContent+').','gn');
+    };
+  });
+
+  /* Rota ainda sem tarifa nenhuma: parte da margem-alvo. */
+  if(!(tarifaAtual>0) && tMarg>0 && !_simTarifaSemeada){
+    _simTarifaSemeada=true;
+    const el=$('simTarifa');
+    if(el && !(nVal('simTarifa')>0)){
+      el.value=+tMarg.toFixed(2);
+      if(nota) nota.innerHTML='Rota sem tarifa: o campo nasceu com a tarifa da margem-alvo ('+brl(tMarg)+'/t). '+nota.innerHTML;
+      setTimeout(()=>{ try{ simRecalcular(); }catch(_){} },0);
+    }
+  }
+}
+var _simTarifaSemeada=false;
 
 /* ══ Resultado financeiro — layout idêntico ao da aba de rota da planilha:
    Por Viagem · Por Mês · Anual · Análise Vertical (AV% = linha anual ÷
@@ -3451,6 +3797,10 @@ function renderFinanceiro(fin){
       ${row('Pneus',F.pneus,F.receitaBruta,'sub')}
       ${row('Documentação/Seguros',F.docSeguros,F.receitaBruta,'sub')}
       ${row('Custo Pessoal',F.pessoal,F.receitaBruta,'sub')}
+      ${row('Custos específicos da operação',F.especificos,F.receitaBruta,'sub')}
+      ${row('Arla',F.arla,F.receitaBruta,'sub')}
+      ${row('Tempo de carga e espera no cliente',F.tempoParado,F.receitaBruta,'sub')}
+      ${row('Descarga pressurizada por compressor',F.compressor,F.receitaBruta,'sub')}
       ${row('Resultado Operacional',F.resultadoOper,F.receitaBruta,'tot')}
       ${rowPct('Resultado Operacional (%)',F.resultadoOperPct)}
       ${row('Depreciação Cavalo',F.deprecCavalo,F.receitaBruta)}
@@ -3485,7 +3835,28 @@ function renderFinanceiro(fin){
       ${rowTon(X.resultadoTon)}
     </tbody></table></div></details>`;
 
-  $('simFinanceiro').innerHTML = tbF+tbX;
+  /* Rodapé de conferência: mostra de onde saíram os litros e o que a
+     diferença de consumo custou (ou economizou) em relação ao consumo único
+     da planilha — o comercial precisa saber quando o número mudou e por quê. */
+  const nt=[];
+  if(fin.kmCarregado!=null){
+    nt.push(`Diesel: ${num(fin.kmCarregado,1)} km carregado ÷ ${num(fin.consumoCarregado,2)} km/l`+
+            (fin.kmVazio>0?` + ${num(fin.kmVazio,1)} km vazio ÷ ${num(fin.consumoVazio,2)} km/l`:' (sem trecho vazio)')+
+            ` = <b>${num(fin.litros,1)} l</b>`+
+            (Math.abs(fin.litros-fin.litrosPadrao)>0.05
+              ? ` · consumo único de ${num(fin.consumoUnico,2)} km/l daria ${num(fin.litrosPadrao,1)} l `+
+                `(${fin.difCombustivel<0?'economia':'custo a mais'} de ${brl(Math.abs(fin.difCombustivel))}/viagem)`
+              : ''));
+  }
+  const ex=fin.extras&&fin.extras.det;
+  if(ex && ex.compLigado && ex.compTempoH>0)
+    nt.push(`Descarga pressurizada: ${num(ex.compTempoH,2)} h `+
+            (ex.compInformado?'informadas':`(${num(fin.algebra.ton||0,1)} t ÷ ${num(ex.compTaxaTh,1)} t/h)`)+
+            ` × ${num(ex.compConsumoLh,1)} l/h de diesel + manutenção, depreciação e limpeza.`);
+  if(fin.carretas>1) nt.push(`Depreciação da carreta multiplicada por <b>${fin.carretas}</b> unidades rebocadas.`);
+  const rodape = nt.length? `<div class="sim-res-nota" style="margin-top:8px">${nt.join(' · ')}</div>` : '';
+
+  $('simFinanceiro').innerHTML = tbF+rodape+tbX;
   const dc=$('detComix');
   if(dc) dc.addEventListener('toggle',()=>{ SIM_COMIX_ABERTO=dc.open; });
 }
@@ -3508,7 +3879,7 @@ function renderResultadoRota(ctx){
   const rot=$('simResRotulo'), pil=$('simResStatus'), nota=$('simResNota');
 
   if(!ctx || !(ctx.ton>0) || !(ctx.tarifa>0)){
-    ['kResFreteT','kResPedT','kResImpT','kResTotT','kResReceita','kResResTon','kResEbitPct',
+    ['kResFreteT','kResPedT','kResImpT','kResTotT','kResReceita','kResReceitaLiq','kResResTon','kResEbitPct',
      'kResEbitVg','kResEbitMes','kResRkm','kResCkm','kResLbPct','kResDelta'].forEach(id=>set(id,'—',''));
     if(rot) rot.textContent = ctx&&ctx.origem? '· '+ctx.origem+' → '+ctx.destino : '';
     if(pil){ pil.className='pill mu'; pil.textContent='sem cálculo'; }
@@ -3532,6 +3903,10 @@ function renderResultadoRota(ctx){
   set('kResImpT',   brl(impostoTon));
   set('kResTotT',   brl(ctx.tarifa));
   set('kResReceita',brl(receita));
+  /* Receita líquida da viagem — receita bruta menos PIS/COFINS e ICMS. É o
+     número que a operação de fato recebe para rodar, e ganha o mesmo
+     destaque visual do "Valor total do frete / t" pela classe .kpi.ac. */
+  set('kResReceitaLiq', brl(F.receitaLiq.viagem));
   set('kResResTon', F.resultadoTon!=null? brl(F.resultadoTon)+'/t':'—', F.resultadoTon>=0?'var(--gn)':'var(--rd)');
   set('kResEbitPct',pct(F.ebitPct), F.ebitPct>=0?'var(--gn)':'var(--rd)');
   set('kResEbitVg', brl(F.ebit.viagem), F.ebit.viagem>=0?'var(--gn)':'var(--rd)');
@@ -3558,7 +3933,7 @@ function renderResultadoRota(ctx){
     distIda:ctx.distIda, distIV:ctx.distIV,
     tarifa:ctx.tarifa, ton:ctx.ton, aliq:ctx.aliq,
     freteLiqTon, pedagioTon, impostoTon, totalTon:ctx.tarifa,
-    receita, pedagioIV:ctx.pedagioIV,
+    receita, receitaLiq:F.receitaLiq.viagem, pedagioIV:ctx.pedagioIV,
     resultadoTon:F.resultadoTon, ebitPct:F.ebitPct, ebitViagem:F.ebit.viagem,
     ebitMes:F.ebit.mes, ebitAno:F.ebit.ano,
     lucroBrutoPct:F.lucroBrutoPct, rkm, ckm,
@@ -4763,9 +5138,18 @@ const PV_PREM_ROTULO={
   alimentacao_mes:'Alimentação/mês', regime_comissao:'Regime da comissão',
   custo_cavalo:'Custo cavalo', custo_carreta:'Custo carreta', vida_cavalo_anos:'Vida cavalo (anos)',
   vida_carreta_anos:'Vida carreta (anos)', ag_impostos:'Impostos agregado', ag_comissao_comix:'Comissão COMIX',
-  margem_alvo:'Margem-alvo EBIT', cpk_ref:'CPK interno ref.'
+  margem_alvo:'Margem-alvo EBIT', cpk_ref:'CPK interno ref.',
+  consumo_carregado:'Consumo carregado (km/L)', consumo_vazio:'Consumo vazio (km/L)',
+  qtd_carretas:'Carretas do conjunto',
+  arla_pct:'Arla s/ diesel', arla_rs:'Arla (R$/L)',
+  tempo_carga_h:'Tempo de carga (h)', espera_cliente_h:'Espera no cliente (h)',
+  custo_oportunidade_h:'Custo de oportunidade (R$/h)',
+  comp_ativo:'Descarga pressurizada', comp_taxa_th:'Descarga — vazão (t/h)',
+  comp_tempo_h:'Descarga — horas', comp_consumo_lh:'Descarga — consumo (L/h)',
+  comp_manut_h:'Descarga — manutenção (R$/h)', comp_deprec_h:'Descarga — depreciação (R$/h)',
+  comp_limpeza_h:'Descarga — limpeza (h)', comp_outros:'Descarga — outros (R$)'
 };
-const PV_PREM_PCT=new Set(['pis_cofins','icms','comissao_pct','ag_impostos','ag_comissao_comix','margem_alvo']);
+const PV_PREM_PCT=new Set(['pis_cofins','icms','comissao_pct','ag_impostos','ag_comissao_comix','margem_alvo','arla_pct']);
 function pvPremHTML(prem){
   const ks=Object.keys(prem||{}).filter(k=>prem[k]!=null&&prem[k]!=='');
   if(!ks.length) return '<div class="muted">Sem snapshot de premissas nesta rota (linha adicionada à mão).</div>';
@@ -4871,7 +5255,9 @@ const PREM_CAMPOS = [
   ['— Receita (células E5–E10) —'],
   ['pis_cofins','PIS+COFINS (%) [E6]',.0965,true],['icms','ICMS (%) [E8]',.12,true],['margem_alvo','Margem-alvo EBIT (%)',.12,true],
   ['— Custo Direto (E13–E17) —'],
-  ['consumo_kml','Consumo caminhão (km/L) [E17]',2.2],
+  ['consumo_kml','Consumo de referência (km/L) [E17 — reserva]',2.2],
+  ['consumo_carregado','Consumo carregado (km/L)',2.0],
+  ['consumo_vazio','Consumo vazio (km/L)',3.0],
   ['— Custo Operacional (E18–E28) —'],
   ['lubrificante_mes','Lubrificante (R$) [E18]',1500],['lubrificante_rend_km','Rendimento lubrif. (km) [E19]',30000],
   ['pecas_mes','Peças-Serviços/mês (R$) [E20]',1000],
@@ -4886,6 +5272,20 @@ const PREM_CAMPOS = [
   ['— Custo Equipamento (E33–E36) —'],
   ['custo_cavalo','Custo cavalo (R$) [E33]',350000],['custo_carreta','Custo carreta (R$) [E34]',150000],
   ['vida_cavalo_anos','Vida útil cavalo (anos) [E35]',10],['vida_carreta_anos','Vida útil carreta (anos) [E36]',15],
+  ['qtd_carretas','Carretas do conjunto (vazio = do cadastro)',null],
+  ['— Custos específicos da operação —'],
+  ['arla_pct','Arla sobre os litros de diesel (%)',.05,true],
+  ['arla_rs','Arla (R$/L) — vazio = média apurada',null],
+  ['tempo_carga_h','Tempo de carga (h)',1.5],
+  ['espera_cliente_h','Espera no cliente (h)',1.0],
+  ['custo_oportunidade_h','Custo de oportunidade (R$/h)',0],
+  ['comp_taxa_th','Descarga — vazão do compressor (t/h)',25],
+  ['comp_tempo_h','Descarga — horas informadas (vazio = por vazão)',null],
+  ['comp_consumo_lh','Descarga — consumo do compressor (L/h)',8],
+  ['comp_manut_h','Descarga — manutenção (R$/h)',0],
+  ['comp_deprec_h','Descarga — depreciação (R$/h)',0],
+  ['comp_limpeza_h','Descarga — limpeza e purga (h)',.25],
+  ['comp_outros','Descarga — outros custos (R$/viagem)',0],
   ['cpk_ref','CPK interno ref. (R$/km, do módulo CPK)',null],
   ['— Premissas Agregados (S5–S8) —'],
   ['ag_impostos','Impostos (%) [S5]',.0165,true],['ag_comissao_comix','Taxa comissão COMIX (%) [S6]',.26,true],
@@ -4952,10 +5352,11 @@ function renderVeiculos(){
     const tp=veicTipoCarreta(d);
     return `<tr><td>${esc(d.nome)}</td><td class="num">${d.eixos}</td><td>${esc(tp)}${d.tipoCarreta?'':'<span class="muted" style="font-size:10px"> (do nome)</span>'}</td>
       <td class="num">${d.pneusLisos>0?d.pneusLisos:`<span class="muted">${veicPneusLisos(d)}</span>`}</td>
+      <td class="num">${d.carretas>0?d.carretas:`<span class="muted">${veicCarretas(d)}</span>`}</td>
       <td class="num">${num(d.tara,1)}</td><td class="num">${num(d.capacidade,1)}</td>
       <td class="mono">${num(d.comp,1)}×${num(d.larg,1)}×${num(d.alt,1)}</td><td>${esc(d.categoriaAntt||'granel_solido')}</td>
       <td>${podeEditarPremissas()?`<button class="icon-btn" title="Editar" onclick="veicEditar('${v.id}')">✎</button> <button class="icon-btn danger" title="Excluir conjunto" onclick="veicExcluir('${v.id}')">🗑</button>`:''}</td></tr>`;
-  }).join('') || '<tr><td colspan="9" class="empty">Sem perfis.</td></tr>';
+  }).join('') || '<tr><td colspan="10" class="empty">Sem perfis.</td></tr>';
 }
 /* Tipo de carreta do perfil. Enquanto o campo não estiver preenchido no
    cadastro, é deduzido do nome — do mesmo jeito que o Simulador fazia antes,
@@ -4977,6 +5378,16 @@ function veicPneusLisos(d){
   if(Number(d.pneusLisos)>0) return Number(d.pneusLisos);
   const t=veicTipoCarreta(d);
   return t==='LS'?18: t==='Bitrem'?22: 30;
+}
+/* Unidades rebocadas do conjunto (achado 6). O cadastro manda; sem ele, o
+   tipo decide — Bitrem e Rodotrem puxam duas carretas, o resto puxa uma.
+   A depreciação da carreta era calculada uma vez só, então esses dois
+   conjuntos apareciam melhores do que são frente ao LS. */
+function veicCarretas(d){
+  d=d||{};
+  if(Number(d.carretas)>0) return Number(d.carretas);
+  const t=veicTipoCarreta(d);
+  return (t==='Bitrem'||t==='Rodotrem')?2:1;
 }
 /* Tipos distintos já cadastrados — alimenta o Simulador e o autocompletar. */
 function veicTiposCadastrados(){
@@ -5004,6 +5415,7 @@ function veicEditar(id){
       <label class="fld">Eixos<input type="number" id="vEixos" value="${d.eixos||5}" min="2" max="11"></label>
       <label class="fld">Tipo de carreta<input type="text" id="vTipo" list="listaTiposCarreta" value="${esc(d.tipoCarreta||veicTipoCarreta(d))}" placeholder="ex.: Bitrem, LS, Vanderléia"></label>
       <label class="fld">Pneus lisos (qtde)<input type="number" id="vPneus" min="0" max="60" value="${d.pneusLisos>0?d.pneusLisos:''}" placeholder="${veicPneusLisos(d)} (padrão do tipo)"></label>
+      <label class="fld">Carretas (unidades rebocadas)<input type="number" id="vCarretas" min="1" max="4" value="${d.carretas>0?d.carretas:''}" placeholder="${veicCarretas(d)} (padrão do tipo)"></label>
       <label class="fld">Tara (t)<input type="number" id="vTara" step="0.1" value="${d.tara||15}"></label>
       <label class="fld">Cap. útil (t)<input type="number" id="vCap" step="0.1" value="${d.capacidade||27}"></label>
       <label class="fld">Comprimento (m)<input type="number" id="vComp" step="0.1" value="${d.comp||18.6}"></label>
@@ -5018,6 +5430,7 @@ function veicEditar(id){
 async function veicSalvar(id){
   const data={nome:$('vNome').value.trim(),eixos:+$('vEixos').value,
     tipoCarreta:$('vTipo').value.trim(), pneusLisos:(+$('vPneus').value>0? +$('vPneus').value : null),
+    carretas:(+$('vCarretas').value>0? +$('vCarretas').value : null),
     tara:+$('vTara').value,capacidade:+$('vCap').value,
     comp:+$('vComp').value,larg:+$('vLarg').value,alt:+$('vAlt').value,categoriaAntt:$('vCat').value,tabelaAntt:$('vTab').value,
     atualizado_em:agoraISO(),atualizado_por:ATLAS_CURRENT_USER.email};
@@ -8890,14 +9303,15 @@ const SIM_PREM_BLOCOS = [
     {k:'icms',         lb:'ICMS',                         cel:'E8',  pct:true},
     {id:'simP_tipo_carreta', tipo:'select', lb:'Tipo de carreta', cel:'E9', dinamico:'tipos',
       opts:[['auto','Automático (do conjunto)']]},
-    {id:'simTon',      lb:'Toneladas transportadas',      cel:'E10', step:'0.1'}
+    {id:'simTon',      lb:'Toneladas transportadas',      cel:'E10', step:'0.1', auto:true, aviso:'simTonAviso'}
   ]},
   {tt:'Custo Direto', cel:'E13–E17', linhas:[
-    {id:'simDistIV',   lb:'Distância ida-volta (km)',     cel:'E13', step:'0.1', auto:true},
+    {id:'simDistIV',   lb:'Distância rodada (km)',        cel:'E13', step:'0.1', auto:true, id2:'simDistIVLb'},
     {id:'simViagens',  lb:'Viagens/mês',                  cel:'E14', step:'1'},
-    {id:'simPedIV',    lb:'Pedágio/viagem ida-volta (R$)',cel:'E15', step:'0.01', auto:true},
+    {id:'simPedIV',    lb:'Pedágio/viagem (R$)',          cel:'E15', step:'0.01', auto:true},
     {k:'diesel_rs',    lb:'Diesel (R$/L)',                cel:'E16', step:'0.001', auto:true},
-    {k:'consumo_kml',  lb:'Consumo caminhão (km/L)',      cel:'E17', step:'0.01'}
+    {k:'consumo_carregado', lb:'Consumo carregado (km/L)', cel:'E17a', step:'0.01'},
+    {k:'consumo_vazio',     lb:'Consumo vazio (km/L)',     cel:'E17b', step:'0.01'}
   ]},
   {tt:'Custo Operacional', cel:'E18–E28', linhas:[
     {k:'lubrificante_mes',     lb:'Lubrificante/mês (R$)',   cel:'E18'},
@@ -8917,14 +9331,38 @@ const SIM_PREM_BLOCOS = [
     {k:'comissao_pct',      lb:'Comissão s/ fat. líquido',        cel:'E30', pct:true},
     {k:'fator_encargos',    lb:'Conversão encargos e provisões',  cel:'E31', step:'0.01'},
     {k:'alimentacao_mes',   lb:'Alimentação mensal (R$)',         cel:'E32', step:'0.01'},
+    /* Achado 2: o padrão passou a ser "por viagem + encargos". A opção da
+       planilha continua na lista, agora rotulada pelo que ela realmente faz. */
     {k:'regime_comissao', tipo:'select', lb:'Regime da comissão', cel:'J23', texto:true,
-      opts:[['planilha','Como na planilha'],['viagem_com_encargos','Por viagem + encargos'],['viagem_sem_encargos','Por viagem, sem encargos']]}
+      opts:[['viagem_com_encargos','Por viagem + encargos (padrão)'],
+            ['viagem_sem_encargos','Por viagem, sem encargos'],
+            ['planilha','Como na planilha (rateado pelas viagens)']]}
   ]},
   {tt:'Custo Equipamento', cel:'E33–E36', linhas:[
     {k:'custo_cavalo',      lb:'Custo equipamento cavalo (R$)',  cel:'E33'},
     {k:'custo_carreta',     lb:'Custo equipamento carreta (R$)', cel:'E34'},
     {k:'vida_cavalo_anos',  lb:'Vida útil cavalo (anos)',        cel:'E35'},
-    {k:'vida_carreta_anos', lb:'Vida útil carreta (anos)',       cel:'E36'}
+    {k:'vida_carreta_anos', lb:'Vida útil carreta (anos)',       cel:'E36'},
+    {k:'qtd_carretas',      lb:'Carretas do conjunto',           cel:'—', step:'1', auto:true, vazioAuto:true}
+  ]},
+  /* Achado 9 — o que o motor de análise de rotas já cobrava e o Simulador não */
+  {tt:'Arla e tempo parado', cel:'rotas §19', linhas:[
+    {k:'arla_pct',             lb:'Arla sobre o diesel',       cel:'—', pct:true},
+    {k:'arla_rs',              lb:'Arla (R$/L)',               cel:'—', step:'0.001', auto:true},
+    {k:'tempo_carga_h',        lb:'Tempo de carga (h)',        cel:'—', step:'0.25'},
+    {k:'espera_cliente_h',     lb:'Espera no cliente (h)',     cel:'—', step:'0.25'},
+    {k:'custo_oportunidade_h', lb:'Custo de oportunidade (R$/h)', cel:'—', step:'0.01'}
+  ]},
+  {tt:'Descarga pressurizada', cel:'rotas §17.1', linhas:[
+    {k:'comp_ativo', tipo:'select', lb:'Cobrar a descarga', cel:'—', texto:true,
+      opts:[['auto','Automático (pelo tipo de carga)'],['sim','Sempre cobrar'],['nao','Não cobrar']]},
+    {k:'comp_taxa_th',    lb:'Vazão do compressor (t/h)',   cel:'—', step:'0.5'},
+    {k:'comp_tempo_h',    lb:'Horas informadas (opcional)', cel:'—', step:'0.25'},
+    {k:'comp_consumo_lh', lb:'Consumo do compressor (L/h)', cel:'—', step:'0.1'},
+    {k:'comp_manut_h',    lb:'Manutenção (R$/h)',           cel:'—', step:'0.01'},
+    {k:'comp_deprec_h',   lb:'Depreciação (R$/h)',          cel:'—', step:'0.01'},
+    {k:'comp_limpeza_h',  lb:'Limpeza e purga (h)',         cel:'—', step:'0.05'},
+    {k:'comp_outros',     lb:'Outros custos (R$/viagem)',   cel:'—', step:'0.01'}
   ]},
   /* S7 e S8 alimentavam só o bloco "Resultado Agregados (visão do parceiro)",
      que saiu do módulo — ficaram fora do painel para não sugerir efeito que
@@ -8954,14 +9392,15 @@ function simPremRender(){
     const linhas=b.linhas.map(l=>{
       const id = l.id || ('simP_'+l.k);
       const rest = l.auto? ` <button type="button" class="rest" data-auto="${id}" title="Voltar ao valor automático">↺</button>`:'';
-      const rot = `<span>${esc(l.lb)} <i>${esc(l.cel)}</i>${rest}</span>`;
+      const rot = `<span${l.id2?` id="${l.id2}"`:''}>${esc(l.lb)} <i>${esc(l.cel)}</i>${rest}</span>`;
+      const aviso = l.aviso? `<div class="sim-ton-aviso" id="${l.aviso}"></div>`:'';
       if(l.tipo==='select'){
         return `<div class="sim-prem-linha">${rot}<select id="${id}"`+(l.k?` data-k="${l.k}" data-texto="1"`:'')+`>`+
-               l.opts.map(o=>`<option value="${o[0]}">${esc(o[1])}</option>`).join('')+`</select></div>`;
+               l.opts.map(o=>`<option value="${o[0]}">${esc(o[1])}</option>`).join('')+`</select>${aviso}</div>`;
       }
       return `<div class="sim-prem-linha">${rot}<input type="number" id="${id}" step="${l.step||'any'}"`+
              (l.k?` data-k="${l.k}" data-pct="${l.pct?1:0}"`:'')+
-             (l.auto?' data-autofield="1"':'')+`></div>`;
+             (l.auto?' data-autofield="1"':'')+`>${aviso}</div>`;
     }).join('');
     return `<div class="sim-prem-bloco"><div class="tt"><span>${esc(b.tt)}</span><em>${esc(b.cel)}</em></div>${linhas}</div>`;
   }).join('');
@@ -8992,13 +9431,19 @@ function simSetAuto(id, valor){
 function simRestaurarAuto(id){
   const el=$(id); if(!el) return;
   el.dataset.manual=''; el.classList.add('auto');
-  if(id==='simDistIV' && SIMR.atual) el.value=+(SIMR.atual.distKm*2).toFixed(1);
+  if(id==='simDistIV' && SIMR.atual) el.value=+(SIMR.atual.distKm*simFatorVolta()).toFixed(1);
   else if(id==='simPedIV' && SIMR.atual) el.value=+(SIMR.atual.pedagioIda*2).toFixed(2);
   else if(id==='simEixosIda'||id==='simEixosVolta'){ simMontarEixos(); el.value=simEixosConjunto(); }
-  else if(id==='simP_pneus_qtd_liso') el.value='';
+  else if(id==='simP_pneus_qtd_liso'||id==='simP_qtd_carretas') el.value='';
+  else if(id==='simTon'){ const v=simVeicAtual(); el.value=(v&&Number(v.data.capacidade)>0)? +Number(v.data.capacidade).toFixed(1):''; }
   else if(id==='simP_diesel_rs'){ simAtualizarDieselMedio(true); return; }
+  else if(id==='simP_arla_rs'){ simAtualizarArlaMedio(true); return; }
   simRecalcular();
 }
+function simVeicAtual(){ return ST.veiculos.find(v=>v.id===($('simVeiculo')?$('simVeiculo').value:'')); }
+/* Achado 10: com retorno vazio, a distância cobrada é ida + volta; sem ele,
+   só a ida. É o mesmo fator que o campo E13 usa quando está automático. */
+function simFatorVolta(){ return ($('simRetornoVazio') && $('simRetornoVazio').value==='sim')?2:1; }
 
 function simPremValores(){
   const P={};
@@ -9086,9 +9531,36 @@ async function simAtualizarDieselMedio(forcar){
   simPremRenderNota();
 }
 
+/* Preço do Arla — mesma apuração do diesel (média ponderada por litros do
+   realizado da SZC), com a janela de litragem própria do Arla. Sem
+   abastecimento apurado, a linha do Arla fica valendo zero em vez de chutar
+   um preço: custo inventado é pior que custo ausente. */
+var _simArlaFonte='', _simArlaNota='';
+async function simAtualizarArlaMedio(forcar){
+  const el=$('simP_arla_rs');
+  if(el && el.dataset.manual==='1' && !forcar) return;
+  const op=$('simFilial')?$('simFilial').value||'':'';
+  try{ await rtCarregarSZC(false); }catch(_){}
+  const mesOp=simUltimoMesSZC(op)||simUltimoMesSZC('');
+  let m=null;
+  if(mesOp) m=rtPrecoMedio('arla',mesOp,op);
+  if(!(m&&m.preco>0) && mesOp) m=rtPrecoMedio('arla',mesOp,'');
+  if(m&&m.preco>0){
+    const valor=+m.preco.toFixed(3); _simArlaFonte='media_realizada';
+    _simArlaNota=`Arla R$ ${num(valor,3)}/l — média ponderada de ${m.qtdMedia} abastecimento(s) de ${dtSimplesBR(mesOp+'-01').slice(3)}`+
+      (m.op&&m.op!=='todas'?` na operação ${esc(m.op)}`:' (consolidado)')+'.';
+    if(el){ el.dataset.manual=''; el.value=valor; el.classList.add('auto'); }
+  }else{
+    _simArlaFonte='sem_apuracao';
+    _simArlaNota='Arla sem abastecimento apurado no SZC — a linha do Arla fica em zero até informar o R$/L.';
+    if(el && el.dataset.manual!=='1'){ el.value=''; el.classList.add('auto'); }
+  }
+  simPremRenderNota();
+}
+
 function simPremRenderNota(){
   const el=$('simPremNota'); if(!el) return;
-  el.innerHTML=[_simPremNota,_simDieselNota].filter(Boolean).map(t=>'<div>'+t+'</div>').join('');
+  el.innerHTML=[_simPremNota,_simDieselNota,_simArlaNota].filter(Boolean).map(t=>'<div>'+t+'</div>').join('');
 }
 
 /* ══ Pré-preenchimento ══ */
@@ -9107,11 +9579,21 @@ async function simPrefill(){
   const sim=simUltimaSimulacao(chave);
   if(sim && sim.data.premissas_valores){
     Object.assign(base, sim.data.premissas_valores);
+    /* Achado 2 — migração do regime da comissão. Toda simulação anterior a
+       esta revisão gravou "planilha" porque era o PADRÃO, não porque alguém
+       escolheu. Reaproveitar esse valor manteria o erro vivo para sempre nas
+       rotas antigas, que são justamente as que mais vão para proposta.
+       As simulações desta revisão em diante gravam o regime também no topo
+       do snapshot: é esse carimbo que distingue escolha de herança. */
+    if(sim.data.regime_comissao==null && base.regime_comissao==='planilha') delete base.regime_comissao;
     const daRota = (sim.data.rota_chave===chave||sim.data.rota_id===chave) && !!chave;
     fonte='última simulação'+(daRota?' desta rota':' registrada')+' · '+dtBR(sim.data.ts)+
           (sim.data.usuario_nome||sim.data.usuario?(' · '+esc(sim.data.usuario_nome||sim.data.usuario)):'');
     if(sim.data.tarifa_ton!=null && !nVal('simTarifa')) $('simTarifa').value=sim.data.tarifa_ton;
-    if(sim.data.ton!=null && !nVal('simTon')) $('simTon').value=sim.data.ton;
+    /* Tonelagem da última simulação vence a capacidade do cadastro — é um
+       número que alguém já usou nesta rota. Marcada como manual para o
+       preenchimento automático não passar por cima. */
+    if(sim.data.ton!=null && !nVal('simTon')){ $('simTon').value=sim.data.ton; $('simTon').dataset.manual='1'; $('simTon').classList.remove('auto'); }
     if(sim.data.viagens_mes!=null) $('simViagens').value=sim.data.viagens_mes;
     if(sim.data.tipo_carreta && $('simP_tipo_carreta')) $('simP_tipo_carreta').value=
       (['LS','Bitrem','Outro'].includes(sim.data.tipo_carreta)?sim.data.tipo_carreta:'auto');
@@ -9121,9 +9603,21 @@ async function simPrefill(){
   _simPremNota='Pré-preenchido com: '+fonte+'. Todos os campos são editáveis — o resultado recalcula a cada alteração.';
   const pill=$('simPremOrigem'); if(pill){ pill.textContent='premissas: '+(sim?'última simulação':(pe?'vigentes':'padrão')); pill.className='pill '+(sim?'ac':'mu'); }
   simPremRenderNota();
-  if(RT.szcCarregado) await simAtualizarDieselMedio();
+  /* Achado 4: toneladas partem da capacidade útil do conjunto — campo
+     automático, então uma tonelagem digitada à mão nunca é sobrescrita. */
+  simTonAuto();
+  _simTarifaSemeada=false;      /* a semente da margem-alvo vale por rota */
+  if(RT.szcCarregado){ await simAtualizarDieselMedio(); await simAtualizarArlaMedio(); }
   else { _simDieselNota='Apurando o custo médio do diesel da operação…'; simPremRenderNota(); simDieselAgendar(); }
   try{ simRecalcular(); }catch(_){}
+}
+
+/* Toneladas automáticas = capacidade útil do conjunto selecionado. */
+function simTonAuto(forcar){
+  const el=$('simTon'); if(!el) return;
+  if(el.dataset.manual==='1' && !forcar) return;
+  const v=simVeicAtual(); const cap=Number(v&&v.data&&v.data.capacidade)||0;
+  if(cap>0){ el.dataset.manual=''; el.value=+cap.toFixed(1); el.classList.add('auto'); }
 }
 
 function simRotaMudou(){ simPrefill(); }
@@ -9134,8 +9628,8 @@ function simPremIniciar(){
   ['simFilial','simVeiculo','simCarga','simCliente'].forEach(id=>{
     const el=$(id); if(!el) return;
     el.addEventListener('change',()=>{
-      if(id==='simFilial'){ simAtualizarDieselMedio(); }
-      if(id==='simVeiculo'){ simSincronizarEixos(); }
+      if(id==='simFilial'){ simAtualizarDieselMedio(); simAtualizarArlaMedio(); }
+      if(id==='simVeiculo'){ simSincronizarEixos(); simTonAuto(); }
       try{ simRecalcular(); }catch(_){}
     });
   });
@@ -9154,8 +9648,12 @@ function simPremIniciar(){
     try{ simRecalcular(); }catch(_){}      /* a volta só reprecifica */
   });
   ['simPedIdaOn','simPedVoltaOn'].forEach(id=>{
-    const c=$(id); if(c) c.addEventListener('change',()=>{ try{ simRecalcular(); }catch(_){} });
+    const c=$(id); if(c) c.addEventListener('change',()=>{
+      if(id==='simPedVoltaOn') c.dataset.desligado = c.checked?'':'1';
+      try{ simRecalcular(); }catch(_){}
+    });
   });
+  simAplicarRetornoVazio();
   document.querySelectorAll('.sim-trechos button.rest').forEach(b=>{
     b.addEventListener('click',()=>simRestaurarAuto(b.dataset.auto));
   });
