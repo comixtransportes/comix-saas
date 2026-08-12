@@ -106,6 +106,8 @@ input[type=number]{font-family:var(--m)}
 .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 .grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+/* Subtítulo de bloco dentro do modal — separa cavalo e carreta no perfil */
+.tt-sec{margin:12px 0 6px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--mu);border-top:1px solid var(--bd);padding-top:8px}
 /* Formulários dos modais de premissas: rótulo no topo, campo SEMPRE na base
    da célula. Sem isso, um rótulo de duas linhas empurra o seu campo para
    baixo e desalinha a linha inteira. */
@@ -677,7 +679,14 @@ details.cfg-det>.card{margin-top:10px}
           <label class="fld">Conjunto / veículo
             <select id="simVeiculo"></select>
           </label>
+          <label class="fld">Cavalo mecânico
+            <select id="simCavalo" title="Modelo e tração do cavalo. Automático segue o conjunto selecionado; troque quando a viagem sair com outro cavalo — os pneus liso e borrachudo do custo (E21/E22) acompanham."></select>
+          </label>
+          <label class="fld">Carreta
+            <select id="simCarreta" title="Eixos e pneus da carreta, por unidade rebocada. Automático segue o conjunto selecionado."></select>
+          </label>
         </div>
+        <div class="sim-calc-note" id="simConjResumo" style="margin-top:8px"></div>
       </section>
 
       <section class="sim-parameter-card">
@@ -900,9 +909,12 @@ details.cfg-det>.card{margin-top:10px}
     <h3>Perfis de veículo/conjunto
       <span style="margin-left:auto"><button class="btn sm pri" id="btnNovoVeiculo">Novo perfil</button></span>
     </h3>
-    <div class="muted" style="margin-bottom:8px">Cada perfil aponta para a categoria ANTT correta (evita o erro de categoria trocada). Dimensões físicas alimentam o motor HERE (restrições de via).</div>
+    <div class="muted" style="margin-bottom:8px">Cada perfil aponta para a categoria ANTT correta (evita o erro de categoria trocada). Dimensões físicas alimentam o motor HERE (restrições de via).
+      O perfil descreve as duas metades do conjunto: o <b>cavalo mecânico</b> (modelo e tração — 4x2, 6x2, 6x4, 8x4 — com os pneus liso e borrachudo) e a <b>carreta</b> (eixos e pneus, por unidade rebocada).
+      A soma alimenta E21/E22 do custo; o campo <b>Eixos</b> continua sendo o que decide piso ANTT e pedágio.
+      Valores em cinza são deduzidos — a tração dá os pneus do cavalo, a carreta rende 4 lisos por eixo.</div>
     <table class="tb" id="tbVeiculos">
-      <thead><tr><th>Perfil</th><th class="num">Eixos</th><th>Tipo de carreta</th><th class="num">Pneus lisos</th><th class="num">Carretas</th><th class="num">Tara (t)</th><th class="num">Cap. útil (t)</th><th>Dimensões (C×L×A m)</th><th>Categoria ANTT</th><th></th></tr></thead>
+      <thead><tr><th>Perfil</th><th class="num">Eixos</th><th>Cavalo mecânico</th><th>Carreta</th><th>Tipo de carreta</th><th class="num">Pneus lisos</th><th class="num">Pneus borrachudos</th><th class="num">Carretas</th><th class="num">Tara (t)</th><th class="num">Cap. útil (t)</th><th>Dimensões (C×L×A m)</th><th>Categoria ANTT</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -1833,11 +1845,14 @@ async function carregarAuditoria(){
 /* Seeds mínimos de perfis de veículo (frota real Comix: bitrem/LS + demais) */
 async function seedVeiculos(){
   const seeds = [
-    {nome:'Bitrem 7 eixos', eixos:7, tipoCarreta:'Bitrem', pneusLisos:22, carretas:2, tara:21, capacidade:37, tabelaAntt:'A', comp:19.8, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
-    {nome:'LS (Carreta 5 eixos)', eixos:5, tipoCarreta:'LS', pneusLisos:18, carretas:1, tara:15, capacidade:32, tabelaAntt:'A', comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
-    {nome:'Vanderléia 6 eixos', eixos:6, tipoCarreta:'Vanderléia', carretas:1, tara:18, capacidade:33, comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
-    {nome:'Rodotrem 9 eixos', eixos:9, tipoCarreta:'Rodotrem', carretas:2, tara:27, capacidade:48, comp:30.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
-    {nome:'Carreta Simples 3 eixos', eixos:3, tipoCarreta:'Simples', carretas:1, tara:12, capacidade:16, comp:14.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'}
+    /* cavaloTracao/carretaEixos reproduzem exatamente os pneus lisos que a
+       planilha já usava (6x2 + carretas × 4 pneus/eixo), então o seed novo e
+       o perfil antigo dão o mesmo custo. */
+    {nome:'Bitrem 7 eixos', eixos:7, tipoCarreta:'Bitrem', pneusLisos:22, carretas:2, cavaloTracao:'6x2', carretaEixos:2, tara:21, capacidade:37, tabelaAntt:'A', comp:19.8, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'LS (Carreta 5 eixos)', eixos:5, tipoCarreta:'LS', pneusLisos:18, carretas:1, cavaloTracao:'6x2', carretaEixos:2, tara:15, capacidade:32, tabelaAntt:'A', comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Vanderléia 6 eixos', eixos:6, tipoCarreta:'Vanderléia', carretas:1, cavaloTracao:'6x2', carretaEixos:3, tara:18, capacidade:33, comp:18.6, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Rodotrem 9 eixos', eixos:9, tipoCarreta:'Rodotrem', carretas:2, cavaloTracao:'6x2', carretaEixos:3, tara:27, capacidade:48, comp:30.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'},
+    {nome:'Carreta Simples 3 eixos', eixos:3, tipoCarreta:'Simples', carretas:1, cavaloTracao:'4x2', carretaEixos:1, tara:12, capacidade:16, comp:14.0, larg:2.6, alt:4.0, categoriaAntt:'granel_solido'}
   ];
   for(const s of seeds){ await fsAddDoc(COL.veiculos, {...s, criado_em:agoraISO(), criado_por:ATLAS_CURRENT_USER.email}); }
 }
@@ -1927,6 +1942,9 @@ function montarSelectsAgora(){
   const sv=$('simVeiculo');
   sv.innerHTML = _optsMemo('veic','v|'+ST.veiculos.length,
     ()=>ST.veiculos.map(v=>`<option value="${v.id}">${esc(v.data.nome)} · ${v.data.eixos} eixos</option>`).join(''));
+  /* Cavalo e carreta saem do mesmo cadastro: refazem junto, senão os dois
+     seletores ficam vazios até alguém trocar o conjunto na mão. */
+  try{ simMontarCavalos(); simMontarCarretasSel(); simRenderResumoConjunto(); }catch(_){}
   const sc=$('simCliente');
   /* Enquanto a SA1 não chega, o combo dizia apenas "— avulso —" e parecia
      quebrado. A opção desabilitada abaixo é o que o combobox exibe na caixa
@@ -2961,7 +2979,11 @@ function custosViagem(inp){
   const qtdLisoAuto = Number(inp.pneusLisosAuto)>0 ? Number(inp.pneusLisosAuto)
                     : inp.tipoCarreta==='LS'?18: inp.tipoCarreta==='Bitrem'?22:30;
   const qLiso    = P.pneus_qtd_liso!=null? Number(P.pneus_qtd_liso): qtdLisoAuto;
-  const qBorr    = g('pneus_qtd_borr',4);                         // E22
+  /* Pneus borrachudos (E22). Mesma escada do liso: o cavalo cadastrado manda
+     (é dele que vem o pneu de tração), a premissa da rota vence o cadastro e,
+     sem os dois, continua o 4 da planilha — nenhum cálculo antigo se mexe. */
+  const qtdBorrAuto = Number(inp.pneusBorrAuto)>0 ? Number(inp.pneusBorrAuto) : 4;
+  const qBorr    = P.pneus_qtd_borr!=null? Number(P.pneus_qtd_borr): qtdBorrAuto;  // E22
   const vLiso    = g('pneus_valor_liso',1700);                    // E23
   const vBorr    = g('pneus_valor_borr',2800);                    // E24
   const pneuRend = Math.max(g('pneus_rendimento_km',120000),1);   // E25
@@ -3083,6 +3105,7 @@ function calcularFinanceiro(inp){
   const N = custosViagem({ distKm:inp.distIVKm, pedagio:inp.pedagioIV, viagensMes:V,
                            premissas:inp.premissas, dieselRS:inp.dieselRS,
                            tipoCarreta:inp.tipoCarreta, pneusLisosAuto:inp.pneusLisosAuto,
+                           pneusBorrAuto:inp.pneusBorrAuto,
                            carretasAuto:inp.carretasAuto, litrosDiesel:litros });
   const { aliq, comisPct, encFator, salario, alimMes, agComixPct } = N.p;
 
@@ -3182,7 +3205,7 @@ function calcularFinanceiro(inp){
            consumoCarregado:consCarr, consumoVazio:consVaz, consumoUnico:consUnico,
            consumoDiferenciado:temTrechos && (consCarr!==consVaz),
            kmCarregado:temTrechos?kmCarr:null, kmVazio:temTrechos?kmVaz:null,
-           carretas:N.p.carretas, extras:EX,
+           carretas:N.p.carretas, pneusLiso:N.p.qLiso, pneusBorr:N.p.qBorr, extras:EX,
            algebra:{ aliq, f:fComissao, K, ton:inp.ton },
            frota, comixAgregado };
 }
@@ -3406,6 +3429,95 @@ function simEixosConjunto(){
   const v=ST.veiculos.find(x=>x.id===$('simVeiculo').value);
   return (v&&Number(v.data.eixos))||5;
 }
+/* ══ Cavalo e carreta do Simulador ═════════════════════════════════════════
+   Os dois seletores funcionam como o de conjunto: a lista sai do cadastro
+   (aba Veículos & conjuntos), nunca de número digitado à mão. "Automático"
+   segue o conjunto selecionado — é o caso normal — e escolher um item só faz
+   sentido quando a viagem sai com um cavalo ou uma carreta diferentes do
+   perfil padrão. A troca não mexe nos eixos do piso ANTT nem no pedágio
+   (esses continuam vindo do campo Eixos do perfil e da tabela de trechos);
+   ela mexe no que muda de fato com o equipamento: os pneus liso e borrachudo
+   que alimentam E21 e E22.
+   ══════════════════════════════════════════════════════════════════════════ */
+function simMontarCavalos(){
+  const sel=$('simCavalo'); if(!sel) return;
+  const anterior=sel.value;
+  const lista=veicCavalosCadastrados();
+  const conj=simVeicAtual();
+  const auto=conj? veicCavaloRotulo(conj.data) : null;
+  const orfao = anterior && anterior!=='auto' && !lista.some(c=>c.chave===anterior) ? anterior : null;
+  sel.innerHTML = `<option value="auto">Automático${auto?' · '+esc(auto):''}</option>`
+    + lista.map(c=>{
+        const rot=(c.modelo?c.modelo+' · ':'')+c.tracao+' · '+c.lisos+' liso / '+c.borr+' borrachudo';
+        return `<option value="${esc(c.chave)}" title="${esc(c.perfis.filter(Boolean).join(' · '))}">${esc(rot)}</option>`;
+      }).join('')
+    + (orfao?`<option value="${esc(orfao)}" title="Fora dos perfis cadastrados">cavalo fora do cadastro ⚠</option>`:'');
+  if(anterior){ sel.value=anterior; if(sel.value!==anterior) sel.value='auto'; }
+}
+function simMontarCarretasSel(){
+  const sel=$('simCarreta'); if(!sel) return;
+  const anterior=sel.value;
+  const lista=veicCarretasCadastradas();
+  const conj=simVeicAtual();
+  const auto=conj? veicCarretaRotulo(conj.data) : null;
+  const orfao = anterior && anterior!=='auto' && !lista.some(c=>c.chave===anterior) ? anterior : null;
+  sel.innerHTML = `<option value="auto">Automático${auto?' · '+esc(auto):''}</option>`
+    + lista.map(c=>{
+        const rot=c.tipo+' · '+c.eixos+' eixos · '+c.lisos+' liso'+(c.borr?' / '+c.borr+' borrachudo':'');
+        return `<option value="${esc(c.chave)}" title="${esc(c.perfis.filter(Boolean).join(' · '))}">${esc(rot)}</option>`;
+      }).join('')
+    + (orfao?`<option value="${esc(orfao)}" title="Fora dos perfis cadastrados">carreta fora do cadastro ⚠</option>`:'');
+  if(anterior){ sel.value=anterior; if(sel.value!==anterior) sel.value='auto'; }
+}
+/* Especificação em vigor. Sem escolha manual, é a do conjunto — inclusive
+   para perfil legado, que cai nos padrões (6x2 e 4 pneus por eixo). */
+function simCavaloSpec(veic){
+  const d=(veic||simVeicAtual()||{data:{}}).data||{};
+  const v=$('simCavalo')?$('simCavalo').value:'auto';
+  if(v && v!=='auto'){
+    const c=veicCavalosCadastrados().find(x=>x.chave===v);
+    if(c) return {modelo:c.modelo, tracao:c.tracao, eixos:c.eixos, lisos:c.lisos, borr:c.borr, manual:true};
+  }
+  const p=veicCavaloPneus(d);
+  return {modelo:String(d.cavaloModelo||'').trim(), tracao:veicTracao(d), eixos:veicCavaloEixos(d),
+          lisos:p.lisos, borr:p.borr, manual:false};
+}
+function simCarretaSpec(veic){
+  const d=(veic||simVeicAtual()||{data:{}}).data||{};
+  const v=$('simCarreta')?$('simCarreta').value:'auto';
+  if(v && v!=='auto'){
+    const c=veicCarretasCadastradas().find(x=>x.chave===v);
+    if(c) return {tipo:c.tipo, eixos:c.eixos, lisos:c.lisos, borr:c.borr, manual:true};
+  }
+  const p=veicCarretaPneus(d);
+  return {tipo:veicTipoCarreta(d), eixos:veicCarretaEixos(d), lisos:p.lisos, borr:p.borr, manual:false};
+}
+/* Resumo do conjunto montado na tela — mesma leitura da nota do cadastro. */
+function simRenderResumoConjunto(){
+  const el=$('simConjResumo'); if(!el) return;
+  const veic=simVeicAtual();
+  if(!veic){ el.textContent='Selecione um conjunto para ver cavalo, carreta e pneus.'; return; }
+  const cav=simCavaloSpec(veic), car=simCarretaSpec(veic);
+  const nCar=Math.max(veicCarretas(veic.data),1);
+  const eixosComp=cav.eixos+car.eixos*nCar, decl=Number(veic.data.eixos)||0;
+  /* O número exibido é o que o custo vai usar de fato — não a soma bruta das
+     partes: um total digitado no cadastro do perfil vence a soma, e a tela
+     avisa quando os dois discordam em vez de mostrar um e cobrar o outro. */
+  const soma={liso:cav.lisos+car.lisos*nCar, borr:cav.borr+car.borr*nCar};
+  const lisos=simPneusLisosAuto(veic), borr=simPneusBorrAuto(veic);
+  const trocado=(cav.manual||car.manual);
+  el.innerHTML =
+    `Cavalo ${esc(cav.modelo?cav.modelo+' · ':'')}${esc(cav.tracao)} (${cav.eixos} eixo${cav.eixos>1?'s':''}, ${cav.lisos} liso / ${cav.borr} borrachudo)`
+    + ` + ${nCar} carreta${nCar>1?'s':''} de ${car.eixos} eixo${car.eixos>1?'s':''} (${car.lisos} liso${car.borr?` / ${car.borr} borrachudo`:''} cada)`
+    + ` = <b>${eixosComp} eixos</b> · <b>${lisos} pneus lisos</b> · <b>${borr} borrachudos</b>, que é o que entra em E21/E22.`
+    + (trocado?' <span class="pill am" title="Cavalo ou carreta trocados em relação ao perfil do conjunto. Os eixos do piso ANTT e do pedágio não mudam.">fora do perfil</span>':'')
+    + ((lisos!==soma.liso||borr!==soma.borr)
+       ? ` <span class="pill am" title="O perfil tem o total de pneus digitado à mão (${soma.liso} liso / ${soma.borr} borrachudo é o que a soma das partes daria). O total cadastrado é o que vale.">total do cadastro</span>`
+       : '')
+    + (decl>0 && eixosComp!==decl
+       ? ` <span class="pill am" title="Piso ANTT e pedágio seguem usando os eixos do perfil e a tabela de trechos.">perfil cadastrado com ${decl} eixos</span>`
+       : '');
+}
 /* Tipos de carreta do Simulador: mesma fonte dos eixos — a aba Veículos &
    Eixos. "Automático" segue o tipo do conjunto selecionado; escolher um tipo
    à mão só faz sentido quando a carreta puxada difere do perfil padrão. */
@@ -3461,8 +3573,11 @@ function simSincronizarEixos(){
   const n=simEixosConjunto();
   simMontarEixos();                 /* a opção precisa existir antes do valor */
   simMontarTiposCarreta();
+  simMontarCavalos();
+  simMontarCarretasSel();
   simSetAuto('simEixosIda', n);
   simSetAuto('simEixosVolta', n);
+  simRenderResumoConjunto();
 }
 function simPedagioTrechos(){
   const r=SIMR.atual;
@@ -3558,6 +3673,10 @@ function simRecalcular(){
 
   const P=simPremValores();
   const tipoCarreta=simTipoCarreta(veic);
+  /* Equipamento em vigor na tela — do perfil, ou trocado nos seletores de
+     cavalo e carreta. Alimenta os pneus e vai inteiro para o snapshot. */
+  const _simCav=simCavaloSpec(veic), _simCar=simCarretaSpec(veic);
+  simRenderResumoConjunto();
   /* Descarga pressurizada por compressor: amarrada ao tipo de carga, com
      desligamento manual pela premissa (achado 9). */
   const compAuto = $('simCarga').value==='granel_pressurizado';
@@ -3565,6 +3684,7 @@ function simRecalcular(){
   const fin = calcularFinanceiro({ tarifaTon:tarifa, ton, viagensMes:viagens, distIVKm:distIV,
                                    pedagioIV, premissas:P, dieselRS:(P.diesel_rs!=null?P.diesel_rs:null),
                                    tipoCarreta, pneusLisosAuto:simPneusLisosAuto(veic),
+                                   pneusBorrAuto:simPneusBorrAuto(veic),
                                    carretasAuto:simCarretasAuto(veic),
                                    kmCarregado, kmVazio,
                                    arlaRS:(P.arla_rs!=null?P.arla_rs:null), compressor:compressorOn });
@@ -3677,6 +3797,15 @@ function simRecalcular(){
     rota_szy_codigo: rotaSZY?(rotaSZY.codigoRaw||rotaSZY.codigo||null):null,
     rota_szy_km_ida: rotaSZY&&rotaSZY.kmIda>0?rotaSZY.kmIda:null,
     veiculo_id: veic.id, veiculo_nome: veic.data.nome, eixos: veic.data.eixos, categoria_antt: categoriaAntt,
+    /* Cavalo e carreta usados NESTA viagem — o perfil pode mudar depois, a
+       simulação guarda o equipamento que gerou o número. */
+    cavalo_modelo: _simCav.modelo||null, cavalo_tracao: _simCav.tracao,
+    cavalo_eixos: _simCav.eixos, cavalo_pneus_liso: _simCav.lisos, cavalo_pneus_borr: _simCav.borr,
+    cavalo_do_perfil: !_simCav.manual,
+    carreta_tipo: _simCar.tipo||null, carreta_eixos: _simCar.eixos,
+    carreta_pneus_liso: _simCar.lisos, carreta_pneus_borr: _simCar.borr,
+    carreta_do_perfil: !_simCar.manual,
+    pneus_liso_conjunto: fin.pneusLiso, pneus_borr_conjunto: fin.pneusBorr,
     eixos_ida: trechos.eIda, eixos_volta: trechos.eVolta,
     eixos_conjunto: veic.data.eixos, eixo_erguido_volta: trechos.eVolta<trechos.eIda,
     pedagio_ida:+trechos.pedIda.toFixed(2), pedagio_volta:+trechos.pedVolta.toFixed(2),
@@ -3758,13 +3887,27 @@ function simTipoCarreta(veic){
   if(forc && forc!=='auto') return forc;
   return veicTipoCarreta(veic&&veic.data);
 }
-/* Pneus lisos do tipo escolhido — do cadastro, não do código. Sem cadastro,
-   cai na regra da planilha (E21). */
+/* Pneus lisos (E21). Ordem: cavalo/carreta escolhidos na tela → pneus do tipo
+   de carreta do cadastro → regra da planilha. A premissa da rota continua
+   vencendo todos eles. */
 function simPneusLisosAuto(veic){
+  const cav=simCavaloSpec(veic), car=simCarretaSpec(veic);
+  /* Cavalo ou carreta trocados na tela: a conta é do equipamento escolhido —
+     é justamente por isso que a pessoa trocou. Sem troca, vale o perfil, e lá
+     o total digitado no cadastro tem precedência sobre a soma das partes. */
+  if(cav.manual||car.manual) return cav.lisos + car.lisos*Math.max(veicCarretas(veic&&veic.data),1);
+  if(veicTemComposicao((veic&&veic.data)||{})) return veicPneusLisos(veic&&veic.data);
   const tipo=simTipoCarreta(veic);
   const doTipo=veicTiposCadastrados().find(t=>t.tipo===tipo);
   if(doTipo) return doTipo.pneus;
   return veicPneusLisos(veic&&veic.data);
+}
+/* Pneus borrachudos (E22) — o borrachudo é pneu de tração, então quem manda é
+   o cavalo. Perfil legado, sem cavalo descrito, mantém o 4 da planilha. */
+function simPneusBorrAuto(veic){
+  const cav=simCavaloSpec(veic), car=simCarretaSpec(veic);
+  if(cav.manual||car.manual) return cav.borr + car.borr*Math.max(veicCarretas(veic&&veic.data),1);
+  return veicPneusBorr(veic&&veic.data);
 }
 /* Quantidade de carretas do conjunto (achado 6) — cadastro primeiro, depois
    a dedução pelo tipo (Bitrem e Rodotrem puxam duas unidades rebocadas). */
@@ -3838,7 +3981,7 @@ function renderFinanceiro(fin){
       ${row('Custo Operacional',F.co,F.receitaBruta,'sub')}
       ${row('Lubrificante',F.lubrificante,F.receitaBruta,'sub')}
       ${row('Peças e Serviço',F.pecas,F.receitaBruta,'sub')}
-      ${row('Pneus',F.pneus,F.receitaBruta,'sub')}
+      ${row(`Pneus <span class="muted" style="font-weight:400" title="Quantidades de E21/E22 — do cavalo e da carreta do conjunto, ou da premissa da rota quando ela preenche o campo.">· ${fin.pneusLiso} liso / ${fin.pneusBorr} borrachudo</span>`,F.pneus,F.receitaBruta,'sub')}
       ${row('Documentação/Seguros',F.docSeguros,F.receitaBruta,'sub')}
       ${row('Custo Pessoal',F.pessoal,F.receitaBruta,'sub')}
       ${row('Custos específicos da operação',F.especificos,F.receitaBruta,'sub')}
@@ -5306,7 +5449,7 @@ const PREM_CAMPOS = [
   ['lubrificante_mes','Lubrificante (R$) [E18]',1500],['lubrificante_rend_km','Rendimento lubrif. (km) [E19]',30000],
   ['pecas_mes','Peças-Serviços/mês (R$) [E20]',1000],
   ['pneus_qtd_liso','Pneus lisos (qtde) [E21 — vazio = auto por carreta]',null],
-  ['pneus_qtd_borr','Pneus borrachudos (qtde) [E22]',4],
+  ['pneus_qtd_borr','Pneus borrachudos (qtde) [E22 — vazio = auto pelo cavalo]',null],
   ['pneus_valor_liso','Valor pneu liso (R$) [E23]',1700],['pneus_valor_borr','Valor borrachudo (R$) [E24]',2800],
   ['pneus_rendimento_km','Rendimento pneus (km) [E25]',120000],
   ['licenciamento_ano','Licenciamento anual (R$) [E26]',4500],['seguro_ano','Seguro anual (R$) [E27]',11400],['laudos_ano','Laudos anual (R$) [E28]',420],
@@ -5394,13 +5537,29 @@ function renderVeiculos(){
   const tb=$('tbVeiculos').querySelector('tbody');
   tb.innerHTML = ST.veiculos.map(v=>{ const d=v.data;
     const tp=veicTipoCarreta(d);
-    return `<tr><td>${esc(d.nome)}</td><td class="num">${d.eixos}</td><td>${esc(tp)}${d.tipoCarreta?'':'<span class="muted" style="font-size:10px"> (do nome)</span>'}</td>
-      <td class="num">${d.pneusLisos>0?d.pneusLisos:`<span class="muted">${veicPneusLisos(d)}</span>`}</td>
-      <td class="num">${d.carretas>0?d.carretas:`<span class="muted">${veicCarretas(d)}</span>`}</td>
+    const temC=veicTemComposicao(d);
+    const cp=veicCavaloPneus(d), rp=veicCarretaPneus(d), nCar=Math.max(veicCarretas(d),1);
+    const eixosComp=veicEixosComposicao(d);
+    const divergeEixos = temC && Number(d.eixos)>0 && eixosComp!==Number(d.eixos);
+    const mu=s=>`<span class="muted">${s}</span>`;                 /* deduzido, não cadastrado */
+    const cavalo = `${esc(String(d.cavaloModelo||'').trim())||mu('— sem modelo —')}`
+      + `<div class="muted" style="font-size:10px">${temC?esc(veicTracao(d)):mu(veicTracao(d)+' (padrão)')}`
+      + ` · ${cp.lisos} liso / ${cp.borr} borrachudo</div>`;
+    const carreta = `${veicCarretaEixos(d)} eixo(s)`
+      + `<div class="muted" style="font-size:10px">${rp.lisos} liso${rp.borr?` / ${rp.borr} borrachudo`:''} por carreta`
+      + `${nCar>1?` · ×${nCar}`:''}</div>`;
+    return `<tr><td>${esc(d.nome)}</td>
+      <td class="num">${d.eixos}${divergeEixos?` <span class="pill am" title="Cavalo ${veicCavaloEixos(d)} + ${nCar}×${veicCarretaEixos(d)} = ${eixosComp} eixos. O piso ANTT e o pedágio seguem usando o campo Eixos.">≠ ${eixosComp}</span>`:''}</td>
+      <td>${cavalo}</td>
+      <td>${carreta}</td>
+      <td>${esc(tp)}${d.tipoCarreta?'':'<span class="muted" style="font-size:10px"> (do nome)</span>'}</td>
+      <td class="num">${d.pneusLisos>0?d.pneusLisos:mu(veicPneusLisos(d))}</td>
+      <td class="num">${d.pneusBorr>0?d.pneusBorr:mu(veicPneusBorr(d))}</td>
+      <td class="num">${d.carretas>0?d.carretas:mu(veicCarretas(d))}</td>
       <td class="num">${num(d.tara,1)}</td><td class="num">${num(d.capacidade,1)}</td>
       <td class="mono">${num(d.comp,1)}×${num(d.larg,1)}×${num(d.alt,1)}</td><td>${esc(d.categoriaAntt||'granel_solido')}</td>
       <td>${podeEditarPremissas()?`<button class="icon-btn" title="Editar" onclick="veicEditar('${v.id}')">✎</button> <button class="icon-btn danger" title="Excluir conjunto" onclick="veicExcluir('${v.id}')">🗑</button>`:''}</td></tr>`;
-  }).join('') || '<tr><td colspan="10" class="empty">Sem perfis.</td></tr>';
+  }).join('') || '<tr><td colspan="13" class="empty">Sem perfis.</td></tr>';
 }
 /* Tipo de carreta do perfil. Enquanto o campo não estiver preenchido no
    cadastro, é deduzido do nome — do mesmo jeito que o Simulador fazia antes,
@@ -5415,13 +5574,103 @@ function veicTipoCarreta(d){
   if(/vanderl/i.test(n)) return 'Vanderléia';
   return 'Outro';
 }
-/* Pneus lisos do conjunto: o cadastro manda; sem ele vale a regra da
-   planilha (E21: LS=18, Bitrem=22, demais 30). */
+/* ══ Cavalo mecânico ══════════════════════════════════════════════════════
+   O perfil deixou de ser um bloco só ("7 eixos, 22 pneus lisos") e passou a
+   descrever as duas metades do conjunto, que é como a oficina e o comprador
+   de pneu enxergam: o CAVALO (modelo e tração) e a CARRETA (eixos e pneus).
+
+   A tração define, sozinha, os eixos e a distribuição liso × borrachudo do
+   cavalo — borrachudo é pneu de tração, liso é pneu de eixo livre:
+     4x2 → 2 eixos:  2 lisos (direcional) + 4 borrachudos (trativo)
+     6x2 → 3 eixos:  2 lisos + 4 lisos (eixo morto/truck livre) + 4 borrachudos
+     6x4 → 3 eixos:  2 lisos + 8 borrachudos (os dois traseiros são trativos)
+     8x4 → 4 eixos:  4 lisos (dois direcionais) + 8 borrachudos
+   A carreta puxa 4 pneus lisos por eixo.
+
+   Confere com o que a planilha já usava e por isso nada muda de resultado:
+     LS      = cavalo 6x2 (6 lisos) + 1 carreta de 3 eixos (12)  = 18 ✔ E21
+     Bitrem  = cavalo 6x2 (6 lisos) + 2 carretas de 2 eixos (16) = 22 ✔ E21
+     Rodotrem= cavalo 6x2 (6 lisos) + 2 carretas de 3 eixos (24) = 30 ✔ E21
+   ══════════════════════════════════════════════════════════════════════════ */
+const VEIC_TRACOES = {
+  '4x2': {eixos:2, lisos:2, borr:4,  lb:'4x2 · 2 eixos'},
+  '6x2': {eixos:3, lisos:6, borr:4,  lb:'6x2 · 3 eixos (truck livre)'},
+  '6x4': {eixos:3, lisos:2, borr:8,  lb:'6x4 · 3 eixos (traçado)'},
+  '8x4': {eixos:4, lisos:4, borr:8,  lb:'8x4 · 4 eixos (bitruck traçado)'}
+};
+const VEIC_TRACAO_PADRAO='6x2';
+/* Tração do cavalo. Sem cadastro vale 6x2 — é a configuração da frota e a
+   única que reproduz os pneus lisos que a planilha vinha usando. */
+function veicTracao(d){
+  d=d||{};
+  const t=String(d.cavaloTracao||'').trim();
+  return VEIC_TRACOES[t]?t:VEIC_TRACAO_PADRAO;
+}
+function veicCavaloEixos(d){ return VEIC_TRACOES[veicTracao(d)].eixos; }
+/* Pneus do cavalo: o cadastro manda campo a campo; sem ele, a tração decide. */
+function veicCavaloPneus(d){
+  d=d||{}; const t=VEIC_TRACOES[veicTracao(d)];
+  return { lisos: Number(d.cavaloPneusLisos)>0? Number(d.cavaloPneusLisos): t.lisos,
+           borr:  Number(d.cavaloPneusBorr)>=0 && d.cavaloPneusBorr!=null && d.cavaloPneusBorr!==''
+                  ? Number(d.cavaloPneusBorr): t.borr };
+}
+function veicCavaloRotulo(d){
+  d=d||{}; const m=String(d.cavaloModelo||'').trim();
+  return (m? m+' · ':'')+veicTracao(d);
+}
+/* ══ Carreta ══ Eixos por carreta: o cadastro manda; sem ele, sobra o que o
+   cavalo não usa, dividido pelas unidades rebocadas. */
+function veicCarretaEixos(d){
+  d=d||{};
+  if(Number(d.carretaEixos)>0) return Number(d.carretaEixos);
+  const resto=(Number(d.eixos)||0)-veicCavaloEixos(d);
+  const n=Math.round(resto/Math.max(veicCarretas(d),1));
+  return n>0?n:2;
+}
+function veicCarretaPneus(d){
+  d=d||{};
+  return { lisos: Number(d.carretaPneusLisos)>0? Number(d.carretaPneusLisos): veicCarretaEixos(d)*4,
+           borr:  Number(d.carretaPneusBorr)>0?  Number(d.carretaPneusBorr): 0 };
+}
+function veicCarretaRotulo(d){
+  d=d||{}; const p=veicCarretaPneus(d);
+  return veicCarretaEixos(d)+' eixos · '+p.lisos+' liso'+(p.borr?' / '+p.borr+' borrachudo':'');
+}
+/* Eixos que a descrição cavalo + carretas produz. Serve de conferência contra
+   o campo "Eixos" do perfil, que continua sendo a chave do piso ANTT e do
+   pedágio — aqui ninguém sobrescreve aquele número em silêncio. */
+function veicEixosComposicao(d){
+  d=d||{};
+  return veicCavaloEixos(d)+veicCarretaEixos(d)*Math.max(veicCarretas(d),1);
+}
+/* O perfil já descreve cavalo/carreta? Enquanto não descrever, tudo continua
+   caindo na regra antiga da planilha — nenhum perfil legado muda de custo. */
+function veicTemComposicao(d){
+  d=d||{};
+  return !!(d.cavaloTracao||d.cavaloModelo||Number(d.cavaloPneusLisos)>0||Number(d.cavaloPneusBorr)>0
+            ||Number(d.carretaEixos)>0||Number(d.carretaPneusLisos)>0||Number(d.carretaPneusBorr)>0);
+}
+/* Pneus lisos do conjunto: o total digitado no cadastro manda; depois a soma
+   cavalo + carretas; sem nada disso vale a regra da planilha (E21: LS=18,
+   Bitrem=22, demais 30). */
 function veicPneusLisos(d){
   d=d||{};
   if(Number(d.pneusLisos)>0) return Number(d.pneusLisos);
+  if(veicTemComposicao(d)){
+    return veicCavaloPneus(d).lisos + veicCarretaPneus(d).lisos*Math.max(veicCarretas(d),1);
+  }
   const t=veicTipoCarreta(d);
   return t==='LS'?18: t==='Bitrem'?22: 30;
+}
+/* Pneus borrachudos (E22). Mesma escada; sem cadastro continua 4, que é o
+   default histórico da planilha. */
+function veicPneusBorr(d){
+  d=d||{};
+  if(Number(d.pneusBorr)>0) return Number(d.pneusBorr);
+  if(veicTemComposicao(d)){
+    return veicCavaloPneus(d).borr + veicCarretaPneus(d).borr*Math.max(veicCarretas(d),1);
+  }
+  return 4;
 }
 /* Unidades rebocadas do conjunto (achado 6). O cadastro manda; sem ele, o
    tipo decide — Bitrem e Rodotrem puxam duas carretas, o resto puxa uma.
@@ -5443,23 +5692,73 @@ function veicTiposCadastrados(){
   });
   return [...m.values()].sort((a,b)=>a.tipo.localeCompare(b.tipo,'pt-BR'));
 }
+/* Cavalos distintos já cadastrados — modelo + tração é a identidade. Alimenta
+   o seletor do Simulador e o autocompletar do modelo. Só entram perfis que de
+   fato descrevem o cavalo: um perfil legado não inventa um cavalo na lista. */
+function veicCavalosCadastrados(){
+  const m=new Map();
+  ST.veiculos.forEach(v=>{
+    const d=v.data||{}; if(!veicTemComposicao(d)) return;
+    const modelo=String(d.cavaloModelo||'').trim(), tracao=veicTracao(d), p=veicCavaloPneus(d);
+    const k=modelo.toUpperCase()+'|'+tracao+'|'+p.lisos+'|'+p.borr;
+    if(!m.has(k)) m.set(k,{chave:k, modelo, tracao, eixos:veicCavaloEixos(d), lisos:p.lisos, borr:p.borr, perfis:[]});
+    m.get(k).perfis.push(d.nome||'');
+  });
+  return [...m.values()].sort((a,b)=>
+    (a.modelo||'~').localeCompare(b.modelo||'~','pt-BR') || a.tracao.localeCompare(b.tracao));
+}
+/* Carretas distintas já cadastradas — eixos + pneus é a identidade. */
+function veicCarretasCadastradas(){
+  const m=new Map();
+  ST.veiculos.forEach(v=>{
+    const d=v.data||{}; if(!veicTemComposicao(d)) return;
+    const tipo=veicTipoCarreta(d), e=veicCarretaEixos(d), p=veicCarretaPneus(d);
+    const k=tipo.toUpperCase()+'|'+e+'|'+p.lisos+'|'+p.borr;
+    if(!m.has(k)) m.set(k,{chave:k, tipo, eixos:e, lisos:p.lisos, borr:p.borr, perfis:[]});
+    m.get(k).perfis.push(d.nome||'');
+  });
+  return [...m.values()].sort((a,b)=>a.eixos-b.eixos || a.tipo.localeCompare(b.tipo,'pt-BR'));
+}
 function veicRenderDatalist(){
   let dl=$('listaTiposCarreta');
   if(!dl){ dl=document.createElement('datalist'); dl.id='listaTiposCarreta'; document.body.appendChild(dl); }
   dl.innerHTML=veicTiposCadastrados().map(t=>`<option value="${esc(t.tipo)}">`).join('');
+  let dm=$('listaModelosCavalo');
+  if(!dm){ dm=document.createElement('datalist'); dm.id='listaModelosCavalo'; document.body.appendChild(dm); }
+  const modelos=[...new Set(ST.veiculos.map(v=>String((v.data||{}).cavaloModelo||'').trim()).filter(Boolean))]
+    .sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  dm.innerHTML=modelos.map(mo=>`<option value="${esc(mo)}">`).join('');
 }
 $('btnNovoVeiculo').onclick=()=>{ veicRenderDatalist(); veicEditar(null); };
 function veicEditar(id){
   veicRenderDatalist();
   const d = id? (ST.veiculos.find(v=>v.id===id)||{data:{}}).data : {};
   const cats=['granel_solido','carga_geral','neogranel','granel_liquido','frigorificada','conteineirizada','perigosa_granel_solido'];
+  const cp=veicCavaloPneus(d), rp=veicCarretaPneus(d);
   mdAbrir(id?'Editar perfil de veículo':'Novo perfil de veículo',
     `<div class="fields">
       <label class="fld">Nome<input type="text" id="vNome" value="${esc(d.nome||'')}"></label>
       <label class="fld">Eixos<input type="number" id="vEixos" value="${d.eixos||5}" min="2" max="11"></label>
       <label class="fld">Tipo de carreta<input type="text" id="vTipo" list="listaTiposCarreta" value="${esc(d.tipoCarreta||veicTipoCarreta(d))}" placeholder="ex.: Bitrem, LS, Vanderléia"></label>
-      <label class="fld">Pneus lisos (qtde)<input type="number" id="vPneus" min="0" max="60" value="${d.pneusLisos>0?d.pneusLisos:''}" placeholder="${veicPneusLisos(d)} (padrão do tipo)"></label>
       <label class="fld">Carretas (unidades rebocadas)<input type="number" id="vCarretas" min="1" max="4" value="${d.carretas>0?d.carretas:''}" placeholder="${veicCarretas(d)} (padrão do tipo)"></label>
+    </div>
+    <div class="tt-sec">Cavalo mecânico</div>
+    <div class="fields">
+      <label class="fld">Modelo do cavalo<input type="text" id="vCavModelo" list="listaModelosCavalo" value="${esc(d.cavaloModelo||'')}" placeholder="ex.: Scania R 450, Volvo FH 460"></label>
+      <label class="fld">Tração<select id="vCavTracao">${Object.keys(VEIC_TRACOES).map(t=>`<option value="${t}" ${veicTracao(d)===t?'selected':''}>${esc(VEIC_TRACOES[t].lb)}</option>`).join('')}</select></label>
+      <label class="fld">Pneus lisos do cavalo<input type="number" id="vCavLiso" min="0" max="30" value="${d.cavaloPneusLisos>0?d.cavaloPneusLisos:''}" placeholder="${cp.lisos} (padrão da tração)"></label>
+      <label class="fld">Pneus borrachudos do cavalo<input type="number" id="vCavBorr" min="0" max="30" value="${(d.cavaloPneusBorr!=null&&d.cavaloPneusBorr!=='')?d.cavaloPneusBorr:''}" placeholder="${cp.borr} (padrão da tração)"></label>
+    </div>
+    <div class="tt-sec">Carreta <span class="muted" style="font-weight:400">— por unidade rebocada</span></div>
+    <div class="fields">
+      <label class="fld">Eixos da carreta<input type="number" id="vCarEixos" min="1" max="6" value="${d.carretaEixos>0?d.carretaEixos:''}" placeholder="${veicCarretaEixos(d)} (do total de eixos)"></label>
+      <label class="fld">Pneus lisos da carreta<input type="number" id="vCarLiso" min="0" max="40" value="${d.carretaPneusLisos>0?d.carretaPneusLisos:''}" placeholder="${rp.lisos} (4 por eixo)"></label>
+      <label class="fld">Pneus borrachudos da carreta<input type="number" id="vCarBorr" min="0" max="40" value="${d.carretaPneusBorr>0?d.carretaPneusBorr:''}" placeholder="${rp.borr} (padrão)"></label>
+      <label class="fld">Pneus lisos do conjunto — total<input type="number" id="vPneus" min="0" max="60" value="${d.pneusLisos>0?d.pneusLisos:''}" placeholder="${veicPneusLisos(d)} (soma cavalo + carretas)"></label>
+      <label class="fld">Pneus borrachudos do conjunto — total<input type="number" id="vPneusBorr" min="0" max="60" value="${d.pneusBorr>0?d.pneusBorr:''}" placeholder="${veicPneusBorr(d)} (soma cavalo + carretas)"></label>
+    </div>
+    <div class="muted" id="vComposicaoNota" style="margin:4px 0 8px;font-size:11.5px"></div>
+    <div class="fields">
       <label class="fld">Tara (t)<input type="number" id="vTara" step="0.1" value="${d.tara||15}"></label>
       <label class="fld">Cap. útil (t)<input type="number" id="vCap" step="0.1" value="${d.capacidade||27}"></label>
       <label class="fld">Comprimento (m)<input type="number" id="vComp" step="0.1" value="${d.comp||18.6}"></label>
@@ -5470,11 +5769,66 @@ function veicEditar(id){
     </div>`,
     `<button class="btn" onclick="mdFechar()">Cancelar</button>
      <button class="btn pri" onclick="veicSalvar('${id||''}')">Salvar</button>`);
+  veicLigarNotaComposicao();
+}
+/* Espelho ao vivo do que o formulário está montando: quantos eixos o cavalo e
+   as carretas somam e quantos pneus saem daí. É onde o erro de digitação
+   aparece antes de virar custo — um 6x4 com 3 carretas fecha 12 eixos e o
+   campo "Eixos" continua dizendo 7. */
+function veicFormComposicao(){
+  const n=id=>{ const el=$(id); const v=el?parseFloat(el.value):NaN; return isNaN(v)?null:v; };
+  return { nome:'', eixos:n('vEixos')||0, tipoCarreta:($('vTipo')||{}).value||'',
+    carretas:n('vCarretas'), cavaloModelo:($('vCavModelo')||{}).value||'',
+    cavaloTracao:($('vCavTracao')||{}).value||'', cavaloPneusLisos:n('vCavLiso'),
+    cavaloPneusBorr:(($('vCavBorr')||{}).value===''?null:n('vCavBorr')),
+    carretaEixos:n('vCarEixos'), carretaPneusLisos:n('vCarLiso'), carretaPneusBorr:n('vCarBorr'),
+    pneusLisos:n('vPneus'), pneusBorr:n('vPneusBorr') };
+}
+function veicAtualizarNotaComposicao(){
+  const el=$('vComposicaoNota'); if(!el) return;
+  const d=veicFormComposicao();
+  d.cavaloTracao=d.cavaloTracao||VEIC_TRACAO_PADRAO;      /* o select sempre tem valor */
+  const nCar=Math.max(veicCarretas(d),1), ce=veicCavaloEixos(d), re=veicCarretaEixos(d);
+  const cp=veicCavaloPneus(d), rp=veicCarretaPneus(d);
+  const eixosComp=ce+re*nCar, decl=Number(d.eixos)||0;
+  const somaLiso=cp.lisos+rp.lisos*nCar, somaBorr=cp.borr+rp.borr*nCar;
+  const lisos=veicPneusLisos(d), borr=veicPneusBorr(d);   /* total digitado vence a soma */
+  const diverge = decl>0 && eixosComp!==decl;
+  el.innerHTML =
+    `Cavalo ${esc(veicTracao(d))} (${ce} eixo${ce>1?'s':''}, ${cp.lisos} liso / ${cp.borr} borrachudo)`
+    + ` + ${nCar} carreta${nCar>1?'s':''} de ${re} eixo${re>1?'s':''} (${rp.lisos} liso${rp.borr?` / ${rp.borr} borrachudo`:''} cada)`
+    + ` = <b>${eixosComp} eixos</b> · <b>${lisos} pneus lisos</b> (E21) · <b>${borr} borrachudos</b> (E22).`
+    + ((lisos!==somaLiso||borr!==somaBorr)
+       ? ` <span class="pill am" title="A soma das partes daria ${somaLiso} liso / ${somaBorr} borrachudo. Apague o total do conjunto para usar a soma.">total do conjunto digitado à mão</span>`
+       : '')
+    + (diverge
+       ? ` <span class="pill am" title="O piso ANTT e o pedágio continuam usando o campo Eixos.">campo Eixos diz ${decl}</span>`
+       : '');
+}
+function veicLigarNotaComposicao(){
+  ['vEixos','vCarretas','vCavModelo','vCavTracao','vCavLiso','vCavBorr',
+   'vCarEixos','vCarLiso','vCarBorr','vPneus','vPneusBorr','vTipo'].forEach(id=>{
+    const el=$(id); if(!el) return;
+    el.addEventListener('input', veicAtualizarNotaComposicao);
+    el.addEventListener('change', veicAtualizarNotaComposicao);
+  });
+  veicAtualizarNotaComposicao();
 }
 async function veicSalvar(id){
+  const opt=v=>(+v>0? +v : null);                    /* vazio = deduzido, nunca 0 */
   const data={nome:$('vNome').value.trim(),eixos:+$('vEixos').value,
-    tipoCarreta:$('vTipo').value.trim(), pneusLisos:(+$('vPneus').value>0? +$('vPneus').value : null),
-    carretas:(+$('vCarretas').value>0? +$('vCarretas').value : null),
+    tipoCarreta:$('vTipo').value.trim(), pneusLisos:opt($('vPneus').value),
+    pneusBorr:opt($('vPneusBorr').value),
+    carretas:opt($('vCarretas').value),
+    cavaloModelo:$('vCavModelo').value.trim()||null,
+    cavaloTracao:$('vCavTracao').value||VEIC_TRACAO_PADRAO,
+    cavaloPneusLisos:opt($('vCavLiso').value),
+    /* borrachudo do cavalo aceita zero explícito: existe cavalo rodando com
+       liso nos quatro cantos, e nesse caso o vazio (auto) diria outra coisa */
+    cavaloPneusBorr:($('vCavBorr').value===''? null : +$('vCavBorr').value),
+    carretaEixos:opt($('vCarEixos').value),
+    carretaPneusLisos:opt($('vCarLiso').value),
+    carretaPneusBorr:opt($('vCarBorr').value),
     tara:+$('vTara').value,capacidade:+$('vCap').value,
     comp:+$('vComp').value,larg:+$('vLarg').value,alt:+$('vAlt').value,categoriaAntt:$('vCat').value,tabelaAntt:$('vTab').value,
     atualizado_em:agoraISO(),atualizado_por:ATLAS_CURRENT_USER.email};
@@ -9362,7 +9716,7 @@ const SIM_PREM_BLOCOS = [
     {k:'lubrificante_rend_km', lb:'Rendimento lubrif. (km)', cel:'E19'},
     {k:'pecas_mes',            lb:'Peças-serviços/mês (R$)', cel:'E20'},
     {k:'pneus_qtd_liso',       lb:'Qtde pneu liso',          cel:'E21', auto:true, vazioAuto:true},
-    {k:'pneus_qtd_borr',       lb:'Qtde pneu borrachudo',    cel:'E22'},
+    {k:'pneus_qtd_borr',       lb:'Qtde pneu borrachudo',    cel:'E22', auto:true, vazioAuto:true},
     {k:'pneus_valor_liso',     lb:'Valor pneu liso (R$)',    cel:'E23'},
     {k:'pneus_valor_borr',     lb:'Valor borrachudo (R$)',   cel:'E24'},
     {k:'pneus_rendimento_km',  lb:'Rendimento pneus (km)',   cel:'E25'},
@@ -9478,7 +9832,7 @@ function simRestaurarAuto(id){
   if(id==='simDistIV' && SIMR.atual) el.value=+(SIMR.atual.distKm*simFatorVolta()).toFixed(1);
   else if(id==='simPedIV' && SIMR.atual) el.value=+(SIMR.atual.pedagioIda*2).toFixed(2);
   else if(id==='simEixosIda'||id==='simEixosVolta'){ simMontarEixos(); el.value=simEixosConjunto(); }
-  else if(id==='simP_pneus_qtd_liso'||id==='simP_qtd_carretas') el.value='';
+  else if(id==='simP_pneus_qtd_liso'||id==='simP_pneus_qtd_borr'||id==='simP_qtd_carretas') el.value='';
   else if(id==='simTon'){ const v=simVeicAtual(); el.value=(v&&Number(v.data.capacidade)>0)? +Number(v.data.capacidade).toFixed(1):''; }
   else if(id==='simP_diesel_rs'){ simAtualizarDieselMedio(true); return; }
   else if(id==='simP_arla_rs'){ simAtualizarArlaMedio(true); return; }
@@ -9674,6 +10028,15 @@ function simPremIniciar(){
     el.addEventListener('change',()=>{
       if(id==='simFilial'){ simAtualizarDieselMedio(); simAtualizarArlaMedio(); }
       if(id==='simVeiculo'){ simSincronizarEixos(); simTonAuto(); }
+      try{ simRecalcular(); }catch(_){}
+    });
+  });
+  /* Cavalo e carreta: trocar o equipamento não reconsulta a rota (os eixos do
+     pedágio e do piso não mudam) — só refaz os pneus e o resumo. */
+  ['simCavalo','simCarreta'].forEach(id=>{
+    const el=$(id); if(!el) return;
+    el.addEventListener('change',()=>{
+      simRenderResumoConjunto();
       try{ simRecalcular(); }catch(_){}
     });
   });
