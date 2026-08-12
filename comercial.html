@@ -473,21 +473,7 @@ path.sim-rota-alt{cursor:pointer}
 .sem-liq{margin-top:7px;padding:6px 9px;border-radius:6px;background:#fff8e6;border:1px solid #f0d79a;
   color:#7a5a10;font-size:11.5px;line-height:1.4}
 
-/* Tarifas de referência (achado 11) */
-.tar-ref{margin-top:11px;padding-top:9px;border-top:1px solid var(--bd)}
-.tar-ref-tt{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--hd);margin-bottom:6px}
-.tar-ref-tt em{font-style:normal;font-family:var(--m);font-size:9.5px;color:var(--mu);font-weight:600;letter-spacing:0;margin-left:4px}
-.tar-ref-chips{display:flex;gap:6px;flex-wrap:wrap}
-.tar-chip{display:flex;flex-direction:column;align-items:flex-start;gap:1px;cursor:pointer;
-  border:1px solid var(--bd2);background:var(--sf);border-radius:8px;padding:6px 10px;text-align:left;font:inherit}
-.tar-chip em{font-style:normal;font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--mu);font-weight:700}
-.tar-chip b{font-family:var(--m);font-size:14px;font-weight:600;color:var(--tx)}
-.tar-chip:hover{border-color:var(--ac);background:var(--ac-bg)}
-.tar-chip:hover b{color:var(--ac)}
-.tar-chip.on{border-color:var(--ac);background:var(--ac-bg)}
-.tar-chip.on b{color:var(--ac)}
-.tar-chip.off{color:var(--mu);font-size:11px;padding:8px 10px;cursor:default;opacity:.7}
-.tar-ref-nota{margin-top:6px;font-size:10.5px;color:var(--mu);line-height:1.4}
+/* (bloco "Tarifas de referência" removido do Simulador a pedido do comercial) */
 
 /* Aviso de tonelagem fora da capacidade do conjunto (achado 4) */
 .sim-ton-aviso{grid-column:1/-1;font-size:10.5px;line-height:1.35;margin-top:3px}
@@ -717,12 +703,12 @@ details.cfg-det>.card{margin-top:10px}
             <input type="hidden" id="simAltoDesempenho" value="nao">
           </div>
           <div class="sim-cond-item">
-            <span class="sim-cond-lb">Retorno vazio<i class="sim-info" title="Governa o trecho de volta nos DOIS lados da conta. Sim: soma 92% do deslocamento de retorno ao piso (0,92 × distância × CCD) e cobra a volta vazia no custo — distância, diesel pelo consumo de vazio e pedágio da volta. Não: a volta sai do piso e sai do custo, porque quem paga o retorno é outra carga. Padrão desta operação: sim, silo volta vazio.">i</i></span>
+            <span class="sim-cond-lb">Retorno vazio<i class="sim-info" title="Governa o trecho de volta nos DOIS lados da conta. Sim: soma 92% do deslocamento de retorno ao piso (0,92 × distância × CCD) e cobra a volta vazia no custo — distância, diesel pelo consumo de vazio e pedágio da volta. Não: a volta sai do piso e sai do custo, porque quem paga o retorno é outra carga. Nasce em Não — ligue quando a viagem for de silo que volta vazio. O pedágio da volta é decidido à parte, na tabela de trechos.">i</i></span>
             <div class="sim-toggle" data-target="simRetornoVazio">
-              <button type="button" class="on" data-value="sim">Sim</button>
-              <button type="button" data-value="nao">Não</button>
+              <button type="button" data-value="sim">Sim</button>
+              <button type="button" class="on" data-value="nao">Não</button>
             </div>
-            <input type="hidden" id="simRetornoVazio" value="sim">
+            <input type="hidden" id="simRetornoVazio" value="nao">
           </div>
         </div>
         <div class="sim-cond-foot">
@@ -732,7 +718,7 @@ details.cfg-det>.card{margin-top:10px}
     </div>
 
     <div class="sim-acao-row">
-      <div id="simCondAviso" class="sim-calc-note">Configuração ativa: composição veicular, Tabela A, com retorno vazio de 92% do deslocamento. O custo cobra ida carregada + volta vazia.</div>
+      <div id="simCondAviso" class="sim-calc-note">Configuração ativa: composição veicular, Tabela A, sem retorno vazio. O custo cobra apenas a ida — a volta não entra nem no piso nem no custo.</div>
       <button class="btn pri" id="btnSimular">Calcular rota e piso</button>
     </div>
   </div>
@@ -801,13 +787,6 @@ details.cfg-det>.card{margin-top:10px}
         </div>
         <div class="muted" style="margin-top:8px;font-size:11.5px" id="kPisoDetalhe"></div>
         <div class="muted" style="font-size:11.5px">Pedágio é obrigação do contratante e <b>não compõe</b> o piso (Lei 13.703) — tratado à parte.</div>
-
-        <!-- ── Tarifas de referência (achado 11) ── -->
-        <div class="tar-ref" id="simTarifasRef" style="display:none">
-          <div class="tar-ref-tt">Tarifas de referência <em>— clique para usar</em></div>
-          <div class="tar-ref-chips" id="simTarifasRefChips"></div>
-          <div class="tar-ref-nota" id="simTarifasRefNota"></div>
-        </div>
 
         <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn ok" id="btnLiberar" disabled>Liberar rota</button>
@@ -2223,20 +2202,67 @@ async function hereRevGeo(lat,lng){
   }catch(_){ return null; }
 }
 
-/* Decodificador do HERE Flexible Polyline (algoritmo oficial, port JS enxuto) */
+/* ══════════════════════════════════════════════════════════════════
+   Decodificador do HERE Flexible Polyline (algoritmo oficial)
+
+   ⚠ CORREÇÃO DA ROTA NO MEIO DO OCEANO ⚠
+   O alfabeto estava com os DOIS ÚLTIMOS caracteres trocados: terminava
+   em "..._-" quando o oficial da HERE termina em "...-_" — ou seja,
+   '-' vale 62 e '_' vale 63, e não o contrário
+   (heremaps/flexible-polyline, ENCODING_TABLE/DECODING_TABLE).
+
+   Cada caractere carrega 5 bits do varint. Trocar '_' por '-' erra o
+   grupo de 5 bits em ±1. Quando o caractere trocado é o PRIMEIRO da
+   longitude do ponto inicial — o único ponto absoluto da polyline, os
+   demais são deltas —, o bit errado é justamente o bit de sinal do
+   zigue-zague: a longitude sai POSITIVA. Como todo o resto são deltas,
+   a linha inteira anda 2 × |longitude de origem| para leste, mantendo
+   forma, escala e latitude. Com origem em São Francisco do Sul
+   (−48,638°) isso dá +97,276° e joga o traçado no Índico, a leste de
+   Madagascar — exatamente o que aparecia na tela. Nem a HERE nem o
+   Leaflet estavam errados: a HERE devolvia a geometria certa (por isso
+   os 693,4 km batiam) e o Leaflet desenhava fielmente o que recebia.
+
+   De quebra, a leitura do varint saiu do bitwise de 32 bits (`|` e `<<`
+   truncam em 32 bits e deslocam módulo 32, corrompendo varints longos —
+   os que a HERE emite com precisão 7 ou terceira dimensão) e passou a
+   ser aritmética pura, com validação de versão, de faixa e de caractere.
+   ══════════════════════════════════════════════════════════════════ */
+const _FLEX_ALFABETO='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+const _FLEX_TBL=(()=>{ const t=Object.create(null);
+  for(let i=0;i<_FLEX_ALFABETO.length;i++) t[_FLEX_ALFABETO[i]]=i; return t; })();
+
 function decodeFlexPolyline(encoded){
-  const DEC='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
-  const tbl={}; for(let i=0;i<DEC.length;i++) tbl[DEC[i]]=i;
+  const s=String(encoded==null?'':encoded);
+  const tbl=_FLEX_TBL;
   let idx=0;
-  function readUInt(){ let res=0,shift=0,b;
-    do{ b=tbl[encoded[idx++]]; res|=(b&0x1F)<<shift; shift+=5; }while(b>=0x20);
-    return res>>>0; }
-  function readInt(){ const u=readUInt(); return (u&1)? ~(u>>>1) : (u>>>1); }
-  const header=readUInt(); // versão
+  /* Varint em aritmética de ponto flutuante: sem `|` e sem `<<`, que
+     truncariam em 32 bits. 12 grupos de 5 bits (60) cobrem com folga
+     qualquer coordenada válida em qualquer precisão da HERE. */
+  function readUInt(){
+    let res=0, mult=1, b, n=0;
+    do{
+      const c=s[idx++];
+      b=tbl[c];
+      if(b===undefined) throw new Error('Polyline da HERE com caractere fora do alfabeto: '+JSON.stringify(c===undefined?'<fim>':c));
+      res += (b%32)*mult;
+      mult *= 32;
+      if(++n>12) throw new Error('Polyline da HERE com varint fora de faixa.');
+    }while(b>=0x20);
+    return res;
+  }
+  /* Zigue-zague: par → positivo; ímpar → negativo. É este bit que o
+     alfabeto trocado invertia. */
+  function readInt(){ const u=readUInt(); const v=Math.floor(u/2); return (u%2)? -(v+1) : v; }
+
+  if(!s){ return []; }
+  const versao=readUInt();
+  if(versao!==1) throw new Error('Flexible Polyline em versão não suportada: '+versao);
   const meta=readUInt();
-  const precision=meta&15;
-  const thirdDim=(meta>>4)&7;
-  const thirdPrec=(meta>>7)&15;
+  const precision=meta%16;
+  const thirdDim=Math.floor(meta/16)%8;
+  const thirdPrec=Math.floor(meta/128)%16;
+  if(precision>15) throw new Error('Flexible Polyline com precisão inválida: '+precision);
   const factor=Math.pow(10,precision);
   const zFactor=Math.pow(10,thirdPrec);
   /* thirdDim: 0=ausente · 1=nível · 2=altitude · 3=elevação.
@@ -2245,10 +2271,15 @@ function decodeFlexPolyline(encoded){
      índices 0 e 1, então a terceira posição é aditiva e não quebra nada. */
   const temZ = (thirdDim===2||thirdDim===3);
   let lat=0,lng=0,z=0; const pts=[];
-  while(idx<encoded.length){
+  while(idx<s.length){
     lat+=readInt(); lng+=readInt();
     if(thirdDim) z+=readInt();
-    pts.push(temZ ? [lat/factor, lng/factor, z/zFactor] : [lat/factor, lng/factor]);
+    const la=lat/factor, ln=lng/factor;
+    /* Rede de segurança: coordenada impossível é erro de leitura, não
+       geometria. Melhor estourar aqui do que desenhar linha no oceano. */
+    if(!Number.isFinite(la)||!Number.isFinite(ln)||Math.abs(la)>90||Math.abs(ln)>180)
+      throw new Error('Polyline da HERE gerou coordenada inválida: '+la+', '+ln);
+    pts.push(temZ ? [la, ln, z/zFactor] : [la, ln]);
   }
   return pts;
 }
@@ -2659,8 +2690,10 @@ function simDesenhar(){
   (r.polylines||[]).forEach(pl=>{
     try{
       const pts=decodeFlexPolyline(pl);
+      /* smoothFactor 1 (padrão do Leaflet): a simplificação é refeita a cada
+         zoom, então quanto menor a tolerância mais a linha gruda na via. */
       const ln=L.polyline(pts,{renderer:_simRenderer,color:'#1a56db',weight:5,opacity:.9,
-                               smoothFactor:1.6,bubblingMouseEvents:false,className:'sim-rota-sel'});
+                               smoothFactor:1,bubblingMouseEvents:false,className:'sim-rota-sel'});
       ln.on('mouseover',()=>_simMap._cursorRota&&_simMap._cursorRota('grab'));
       ln.on('mouseout', ()=>_simMap._cursorRota&&_simMap._cursorRota(''));
       ln.on('mousedown',ev=>{
@@ -3174,11 +3207,23 @@ function tarifaParaMargem(alg, margem){
    FLUXO DO SIMULADOR — cálculo, semáforo, liberação com auditoria
    ══════════════════════════════════════════════════════════════════ */
 function bindSimCondicoes(){
+  /* Retorno vazio nasce em NÃO — o navegador pode restaurar o valor de um
+     input hidden ao recarregar a página, então o padrão é forçado aqui e os
+     botões do toggle são alinhados ao campo, para que valor e visual nunca
+     discordem. Quem liga o retorno vazio é sempre o comercial, por clique.
+     Isto NÃO mexe no pedágio da volta, que é decisão separada. */
+  const rv=$('simRetornoVazio');
+  if(rv && !rv.dataset.tocado) rv.value='nao';
+  if(rv && rv.value!=='sim' && rv.value!=='nao') rv.value='nao';
+  document.querySelectorAll('.sim-toggle[data-target]').forEach(grupo=>{
+    const alvo=$(grupo.dataset.target);
+    if(alvo) grupo.querySelectorAll('button[data-value]').forEach(b=>b.classList.toggle('on',b.dataset.value===alvo.value));
+  });
   document.querySelectorAll('.sim-toggle[data-target]').forEach(grupo=>{
     grupo.querySelectorAll('button[data-value]').forEach(btn=>{
       btn.addEventListener('click',()=>{
         const alvo=$(grupo.dataset.target); if(!alvo) return;
-        alvo.value=btn.dataset.value;
+        alvo.value=btn.dataset.value; alvo.dataset.tocado='1';
         grupo.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===btn));
         atualizarCondicoesAntt();
         try{ simRecalcular(); }catch(_){}
@@ -3212,11 +3257,15 @@ function simAplicarRetornoVazio(){
     ' <i>E13</i> <button type="button" class="rest" data-auto="simDistIV" title="Voltar ao valor automático">↺</button>';
   const d=$('simDistIV');
   if(d && d.dataset.manual!=='1' && SIMR.atual) d.value=+(SIMR.atual.distKm*(on?2:1)).toFixed(1);
-  /* Sem retorno vazio não há trecho de volta para pedagiar. */
-  const cv=$('simPedVoltaOn');
-  if(cv){ cv.disabled=!on; if(!on) cv.checked=false; else if(cv.dataset.desligado!=='1') cv.checked=true; }
-  const linhaVolta=$('simEixosVolta');
-  if(linhaVolta) linhaVolta.disabled=!on;
+  /* ── Retorno vazio NÃO manda mais no pedágio da volta ──────────────────
+     Antes, "Retorno vazio = Não" desabilitava e desmarcava "Considerar
+     pedágio" da volta, e ainda travava os eixos da volta. Só que as duas
+     coisas são decisões separadas: o enquadramento do piso ANTT diz se a
+     volta entra na conta do piso; o pedágio da volta é negociação com o
+     contratante e pode existir (ou não) em qualquer dos dois casos —
+     retorno pago por outra carga, praça só num sentido, eixo erguido.
+     Agora o comercial marca e desmarca a volta livremente, com retorno
+     vazio ligado ou desligado. */
 }
 /* ══════════════════════════════════════════════════════════════════
    FLUXO DO SIMULADOR v6
@@ -3270,7 +3319,11 @@ function simAplicarRota(){
   const r=SIMR.rotas[SIMR.sel]; if(!r) return;
   SIMR.atual=r;
   SIMR.pontos=[];
-  (r.polylines||[]).forEach(pl=>{ try{ SIMR.pontos=SIMR.pontos.concat(decodeFlexPolyline(pl)); }catch(_){} });
+  (r.polylines||[]).forEach(pl=>{
+    try{ SIMR.pontos=SIMR.pontos.concat(decodeFlexPolyline(pl)); }
+    catch(e){ console.error('[Comercial] geometria da rota:', e.message); }
+  });
+  simGeomConferir();
   simDesenhar(); simRenderMapBar();
 
   /* E13 = distância efetivamente rodada e cobrada. Com retorno vazio, é ida
@@ -3287,6 +3340,40 @@ function simAplicarRota(){
 
   simConferirDistancia(distIda);
   simRecalcular();
+}
+
+/* ══ Conferência da geometria ═════════════════════════════════════════
+   A polyline decodificada tem de começar na origem e terminar no destino
+   que a própria HERE geocodificou. Se as pontas não fecharem, a linha não
+   está sobre a via real e é melhor avisar do que desenhar traçado errado
+   — foi exatamente esse tipo de falha silenciosa (rota no oceano) que
+   passou despercebido. Tolerância folgada: a HERE encosta origem e
+   destino no acesso viário mais próximo, o que pode dar alguns km. ══ */
+const _SIM_GEOM_TOL_KM=25;
+function _simKm(a,b){
+  if(!a||!b) return Infinity;
+  const R=6371, r=Math.PI/180;
+  const la1=Number(a.lat!=null?a.lat:a[0]), ln1=Number(a.lng!=null?a.lng:a[1]);
+  const la2=Number(b.lat!=null?b.lat:b[0]), ln2=Number(b.lng!=null?b.lng:b[1]);
+  if(![la1,ln1,la2,ln2].every(Number.isFinite)) return Infinity;
+  const dla=(la2-la1)*r, dln=(ln2-ln1)*r;
+  const h=Math.sin(dla/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dln/2)**2;
+  return 2*R*Math.asin(Math.min(1,Math.sqrt(h)));
+}
+function simGeomConferir(){
+  const P=SIMR.pontos, O=SIMR.geoOrig, D=SIMR.geoDest;
+  if(!P||!P.length){ if(SIMR.atual) simMapaStatus('Sem geometria para esta rota — confira a chave HERE.'); return false; }
+  if(!O||!D) return true;
+  const d0=_simKm(P[0],O), dN=_simKm(P[P.length-1],D);
+  if(d0>_SIM_GEOM_TOL_KM || dN>_SIM_GEOM_TOL_KM){
+    console.error('[Comercial] geometria fora do lugar — início a '+d0.toFixed(1)+' km da origem e fim a '+dN.toFixed(1)+' km do destino.',
+                  {origem:O, destino:D, primeiro:P[0], ultimo:P[P.length-1]});
+    _tileAviso('A geometria devolvida não fecha com origem e destino — o traçado pode não corresponder à via real. '+
+               '<a href="#" onclick="simRotear();return false;">Recalcular rota</a>');
+    return false;
+  }
+  _tileAviso('');
+  return true;
 }
 
 function simRenderPracas(){
@@ -3703,68 +3790,25 @@ function simConferirCapacidade(veic, ton){
   }else{ el.textContent=''; el.className='sim-ton-aviso'; if(inp) inp.classList.remove('fora'); }
 }
 
-/* ══ Achado 11 — tarifas de referência ═══════════════════════════════════
-   O comercial digitava uma tarifa, olhava o resultado, digitava outra. O
-   caminho inverso — dada a margem-alvo e o piso, qual é o R$/tonelada? —
-   é uma linha de álgebra sobre fórmulas que já existiam (tarifaParaMargem).
-   Nada é aplicado sozinho numa rota que já tem tarifa: os chips só mudam o
-   campo quando alguém clica. A exceção é a rota que ainda não tem tarifa
-   nenhuma, que nasce com a da margem-alvo para o comercial partir de um
-   número plausível em vez de zero. ══ */
+/* ══ Tarifas de referência — bloco REMOVIDO da tela ══════════════════════
+   Os chips "piso ANTT / equilíbrio / margem-alvo" saíram do Simulador a
+   pedido do comercial, junto com a semente automática da tarifa: quem
+   digita a tarifa agora é sempre a pessoa, nunca a tela.
+
+   Os três números continuam sendo CALCULADOS aqui, sem nenhum efeito
+   visual, porque a simulação salva grava tarifa_ref_piso / _equilibrio /
+   _margem — apagar o cálculo mudaria o formato dos registros já gravados
+   no Firestore e quebraria comparações históricas. ══ */
 var _SIM_TARIFAS_REF={piso:null,equilibrio:null,margem:null};
 function simRenderTarifasRef(fin, piso, ton, pedagioIV, margemAlvo, tarifaAtual){
-  const box=$('simTarifasRef'), chips=$('simTarifasRefChips'), nota=$('simTarifasRefNota');
-  if(!box||!chips) return;
   const alg=fin&&fin.algebra;
-  if(!alg||!(ton>0)){ box.style.display='none'; _SIM_TARIFAS_REF={piso:null,equilibrio:null,margem:null}; return; }
-
-  /* Piso: a tarifa em que o frete efetivo (receita − impostos − pedágio)
-     alcança o piso legal. É o número comparável do achado 1 — a tarifa que
-     só empata pela receita bruta fica no tooltip, porque é a que o semáforo
-     usa e as duas juntas explicam a diferença. */
+  if(!alg||!(ton>0)){ _SIM_TARIFAS_REF={piso:null,equilibrio:null,margem:null}; return; }
   const tPiso  = piso? (piso.valor+pedagioIV)/(ton*(1-alg.aliq)) : null;
-  const tPisoB = piso? piso.valor/ton : null;
   const tEquil = tarifaParaMargem(alg,0);
   const tMarg  = tarifaParaMargem(alg,margemAlvo);
   _SIM_TARIFAS_REF={ piso:tPiso!=null?+tPiso.toFixed(4):null,
                      equilibrio:tEquil!=null?+tEquil.toFixed(4):null,
                      margem:tMarg!=null?+tMarg.toFixed(4):null };
-
-  const chip=(v,lb,dica)=> v==null||!(v>0)
-    ? `<span class="tar-chip off" title="sem solução com as premissas atuais">${lb} —</span>`
-    : `<button type="button" class="tar-chip${(tarifaAtual>0&&Math.abs(tarifaAtual-v)<0.005)?' on':''}" data-t="${v.toFixed(4)}" title="${esc(dica)}">`+
-      `<em>${lb}</em><b>${brl(v)}/t</b></button>`;
-
-  chips.innerHTML =
-    chip(tPiso,'piso ANTT', 'Tarifa em que a receita menos impostos e menos pedágio alcança o piso de '+brl(piso?piso.valor:0)+'.'+
-        (tPisoB!=null?' Só pela receita bruta (critério do semáforo) bastariam '+brl(tPisoB)+'/t.':''))+
-    chip(tEquil,'equilíbrio','Tarifa em que o EBIT da viagem fica exatamente em zero, com as premissas da tela.')+
-    chip(tMarg,'margem-alvo '+pct(margemAlvo,0),'Tarifa que entrega a margem-alvo de EBIT com as premissas da tela.');
-
-  if(nota) nota.innerHTML = 'Calculadas sobre as premissas que estão na tela — mudou uma premissa, mudam as três. '+
-    'A tarifa digitada continua valendo; clicar num chip é que a substitui.';
-  box.style.display='';
-
-  chips.querySelectorAll('button.tar-chip[data-t]').forEach(b=>{
-    b.onclick=()=>{
-      const v=parseFloat(b.dataset.t); if(!(v>0)) return;
-      const el=$('simTarifa'); if(!el) return;
-      el.value=+v.toFixed(2);
-      try{ simRecalcular(); }catch(_){}
-      toast('Tarifa ajustada para '+brl(v)+'/t ('+b.querySelector('em').textContent+').','gn');
-    };
-  });
-
-  /* Rota ainda sem tarifa nenhuma: parte da margem-alvo. */
-  if(!(tarifaAtual>0) && tMarg>0 && !_simTarifaSemeada){
-    _simTarifaSemeada=true;
-    const el=$('simTarifa');
-    if(el && !(nVal('simTarifa')>0)){
-      el.value=+tMarg.toFixed(2);
-      if(nota) nota.innerHTML='Rota sem tarifa: o campo nasceu com a tarifa da margem-alvo ('+brl(tMarg)+'/t). '+nota.innerHTML;
-      setTimeout(()=>{ try{ simRecalcular(); }catch(_){} },0);
-    }
-  }
 }
 var _simTarifaSemeada=false;
 
