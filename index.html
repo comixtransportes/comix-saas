@@ -2726,12 +2726,50 @@ function atlasResolvePlacaFrotaFromRow(row){
   return { placa, frota };
 }
 
+/* Dias CORRIDOS entre duas datas ISO. Mantido para outros usos. */
 function atlasDiffDaysISO(inicioISO, fimISO){
   if (!inicioISO || !fimISO) return 0;
   const a = new Date(inicioISO + 'T00:00:00');
   const b = new Date(fimISO + 'T00:00:00');
   if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
   return Math.floor((b.getTime() - a.getTime()) / 86400000);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DIAS ÚTEIS — regra ÚNICA de "dias sem carregamento", espelhada de
+   diasUteisEntre() do frota.html. NÃO conta domingos nem feriados nacionais
+   fixos; SÁBADO CONTA (transportes operam sábado).
+   O painel e este e-mail precisam usar exatamente a mesma contagem: qualquer
+   alteração aqui tem de ser replicada em frota.html › diasUteisEntre().
+   ══════════════════════════════════════════════════════════════════════════ */
+const ATLAS_FERIADOS_FIXOS = new Set([
+  "01-01", // Ano Novo
+  "04-21", // Tiradentes
+  "05-01", // Dia do Trabalho
+  "09-07", // Independência
+  "10-12", // Nossa Senhora Aparecida
+  "11-02", // Finados
+  "11-15", // Proclamação da República
+  "11-20", // Consciência Negra (nacional desde 2024)
+  "12-25", // Natal
+]);
+
+function atlasDiasUteisISO(inicioISO, fimISO){
+  if (!inicioISO || !fimISO) return 0;
+  const a = new Date(inicioISO + 'T00:00:00');
+  const b = new Date(fimISO + 'T00:00:00');
+  if (isNaN(a.getTime()) || isNaN(b.getTime())) return 0;
+  let count = 0;
+  const cur = new Date(a); cur.setHours(0,0,0,0);
+  const fim = new Date(b); fim.setHours(0,0,0,0);
+  while (cur < fim){
+    const dow = cur.getDay();
+    const mmdd = String(cur.getMonth()+1).padStart(2,'0') + '-' + String(cur.getDate()).padStart(2,'0');
+    // 0 = domingo → pula; sábado (6) conta.
+    if (dow !== 0 && !ATLAS_FERIADOS_FIXOS.has(mmdd)) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
 }
 
 /* Status do ativo — mesma regra de cadastros.html e frota.html.
@@ -2838,7 +2876,8 @@ function atlasBuildFrotaSemCarregamentoPorCadastro(rows, unidade, hojeISO, limit
     }
     if (!ult || !ult.ultimoCarregamentoISO) return;
 
-    const diasSemCarregar = atlasDiffDaysISO(ult.ultimoCarregamentoISO, hojeISO);
+    // Mesma contagem do painel (frota.html): dias úteis, sem domingos e feriados.
+    const diasSemCarregar = atlasDiasUteisISO(ult.ultimoCarregamentoISO, hojeISO);
     if (diasSemCarregar <= limite) return;
 
     itens.push({
@@ -2886,7 +2925,8 @@ function atlasBuildFrotaSemCarregamentoPorSZB(rows, unidade, hojeISO, limiteDias
   return Array.from(mapa.values())
     .map(item => ({
       ...item,
-      diasSemCarregar: atlasDiffDaysISO(item.ultimoCarregamentoISO, hojeISO),
+      // Mesma contagem do painel (frota.html): dias úteis, sem domingos e feriados.
+      diasSemCarregar: atlasDiasUteisISO(item.ultimoCarregamentoISO, hojeISO),
       ultimoCarregamentoBR: atlasFormatDateBR(item.ultimoCarregamentoISO)
     }))
     .filter(item => item.diasSemCarregar > limite)
@@ -2935,9 +2975,10 @@ function atlasFrotaResumoText(itens){
     const partes = [frotaTxt, item.placa].filter(Boolean);
     let id = partes.join(' / ') || '-';
     if (!item.frota && item.emManutencao) id += marca; // sem nº de frota, marca ao fim
-    return `- ${id} — ${item.diasSemCarregar} dias sem carregamento; último carregamento em ${item.ultimoCarregamentoBR || '-'}.`;
+    return `- ${id} — ${item.diasSemCarregar} dias úteis sem carregamento; último carregamento em ${item.ultimoCarregamentoBR || '-'}.`;
   });
   if (itens.some(i => i.emManutencao)) linhas.push('', '🔧 = veículo em manutenção (O.S aguardando finalização).');
+  linhas.push('', 'Contagem em dias úteis (não contam domingos nem feriados nacionais) — mesma regra do painel de Frota.');
   return linhas.join('\n');
 }
 
@@ -2956,16 +2997,18 @@ function atlasFrotaResumoHtml(itens){
       <td style="padding:6px 8px;border:1px solid #dbe4ef;">${atlasEscapeHtml(item.ultimoCarregamentoBR || '-')}</td>
     </tr>`;
   }).join('');
-  const legenda = itens.some(i => i.emManutencao)
+  const legendaManut = itens.some(i => i.emManutencao)
     ? '<p style="font-family:Arial,sans-serif;font-size:12px;color:#64748b;margin:6px 0 0;">🔧 = veículo em manutenção (O.S aguardando finalização).</p>'
     : '';
+  const legenda = legendaManut +
+    '<p style="font-family:Arial,sans-serif;font-size:12px;color:#64748b;margin:6px 0 0;">Contagem em <strong>dias úteis</strong> (não contam domingos nem feriados nacionais) — mesma regra do painel de Frota.</p>';
   return `
     <table style="border-collapse:collapse;width:100%;font-family:Arial,sans-serif;font-size:13px;">
       <thead>
         <tr>
           <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:left;">Frota</th>
           <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:left;">Placa</th>
-          <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:right;">Dias</th>
+          <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:right;">Dias úteis</th>
           <th style="padding:6px 8px;border:1px solid #dbe4ef;background:#f1f5f9;text-align:left;">Último carregamento</th>
         </tr>
       </thead>
@@ -3069,8 +3112,8 @@ async function atlasQueueFrotaSemCarregamentoEvento({ eventId, unidade, ev, iten
     };
 
     const subjectTpl = ev.assunto || `Atlas | Frota sem carregamento — ${unidade}`;
-    const textTpl = ev.templateText || `Olá,\n\nSegue o acompanhamento das frotas da unidade ${unidade} que estão há mais de 5 dias sem carregamento registrado no Atlas.\n\n{FROTAS_PLACAS}\n\nAtlas — Comix Transportes`;
-    const htmlTpl = ev.templateHtml || `<p>Olá,</p><p>Segue o acompanhamento das frotas da unidade <strong>{UNIDADE}</strong> que estão há mais de 5 dias sem carregamento registrado no Atlas.</p>{FROTAS_PLACAS}<p>Atlas — Comix Transportes</p>`;
+    const textTpl = ev.templateText || `Olá,\n\nSegue o acompanhamento das frotas da unidade ${unidade} que estão há mais de 5 dias úteis sem carregamento registrado no Atlas.\n\n{FROTAS_PLACAS}\n\nAtlas — Comix Transportes`;
+    const htmlTpl = ev.templateHtml || `<p>Olá,</p><p>Segue o acompanhamento das frotas da unidade <strong>{UNIDADE}</strong> que estão há mais de 5 dias úteis sem carregamento registrado no Atlas.</p>{FROTAS_PLACAS}<p>Atlas — Comix Transportes</p>`;
 
     const subject = atlasApplyTemplate(subjectTpl, varsText);
     const text = atlasApplyTemplate(textTpl, varsText);
