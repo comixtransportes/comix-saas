@@ -2483,22 +2483,26 @@ function _szbParseDate(val) {
 
   // Já é um objeto Date
   if (val instanceof Date) {
-    return isNaN(val.getTime()) ? null : val;
+    if (isNaN(val.getTime())) return null;
+    /* Datas vindas do Firestore/JSON chegam como meia-noite UTC ("2026-07-30T00:00:00Z").
+     * Lidas com getDate() em UTC-3 isso vira o DIA ANTERIOR (29/07 21:00).
+     * Se o horário for meia-noite UTC exata, trata-se de data-only → remonta pelos
+     * componentes UTC. Caso contrário, é um instante real → usa componentes locais. */
+    if (val.getUTCHours() === 0 && val.getUTCMinutes() === 0 && val.getUTCSeconds() === 0) {
+      return new Date(val.getUTCFullYear(), val.getUTCMonth(), val.getUTCDate());
+    }
+    return new Date(val.getFullYear(), val.getMonth(), val.getDate());
   }
 
   // Número serial Excel (forma como index.html salva via raw:true)
   if (typeof val === "number" && isFinite(val) && val > 0) {
-    // SheetJS converte serial Excel → {y,m,d,H,M,S}
-    try {
-      if (typeof XLSX !== "undefined" && XLSX.SSF && XLSX.SSF.parse_date_code) {
-        const o = XLSX.SSF.parse_date_code(val);
-        if (o && o.y) return new Date(o.y, (o.m||1)-1, o.d||1);
-      }
-    } catch(e) {}
-    // Fallback manual: Excel epoch = 1899-12-30 (com bug do 1900 bissexto)
-    const ms = (val - 25569) * 86400 * 1000;
-    const d = new Date(ms);
-    return isNaN(d.getTime()) ? null : d;
+    /* Excel epoch = 1899-12-30 (com bug do 1900 bissexto).
+     * (val - 25569) * 86400000 produz MEIA-NOITE UTC — precisa ser remontado em data
+     * LOCAL pelos componentes UTC, senão perde 1 dia em fusos negativos (UTC-3). */
+    const ms = Math.round((val - 25569) * 86400 * 1000);
+    const d0 = new Date(ms);
+    if (isNaN(d0.getTime())) return null;
+    return new Date(d0.getUTCFullYear(), d0.getUTCMonth(), d0.getUTCDate());
   }
 
   // String numérica que representa serial Excel
@@ -2524,6 +2528,15 @@ function _szbParseDate(val) {
   }
 
   return null;
+}
+
+/* Formata uma Date como YYYY-MM-DD usando componentes LOCAIS.
+ * toISOString() converte para UTC e desloca o dia em fusos positivos. */
+function _dataLocalISO(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return "";
+  return d.getFullYear() + "-" +
+         String(d.getMonth() + 1).padStart(2, "0") + "-" +
+         String(d.getDate()).padStart(2, "0");
 }
 
 function processarSzbRows(rows) {
@@ -2592,7 +2605,7 @@ function processarSzbRows(rows) {
       const dias = diasUteisEntre(ultima, hoje);
       const vg = entry.viagem || {};
       out[v.id] = {
-        ultima_viagem: ultima.toISOString().slice(0, 10),
+        ultima_viagem: _dataLocalISO(ultima),
         dias_sem_viagem: dias,
         dias_operados_30d: null,
         dias_trabalhados_filial_30d: null,
@@ -2645,7 +2658,7 @@ function gerarSzbMock() {
     opsDias = Math.min(opsDias, maxTrab);
 
     out[v.id] = {
-      ultima_viagem: ultima.toISOString().slice(0,10),
+      ultima_viagem: _dataLocalISO(ultima),
       dias_sem_viagem: dias,
       dias_operados_30d: opsDias,
       dias_trabalhados_filial_30d: maxTrab,
@@ -4598,7 +4611,7 @@ function exportarExcel() {
     const blob = new Blob([out], { type: "application/vnd.ms-excel.sheet.macroEnabled.12" });
     const url = URL.createObjectURL(blob);
     const aEl = document.createElement("a");
-    const ts = new Date().toISOString().slice(0, 10);
+    const ts = _dataLocalISO(new Date());
     aEl.href = url; aEl.download = "FROTA_COMIX_" + ts + ".xlsm";
     document.body.appendChild(aEl); aEl.click(); document.body.removeChild(aEl);
     setTimeout(() => URL.revokeObjectURL(url), 4000);
