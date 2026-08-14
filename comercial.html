@@ -989,6 +989,7 @@ details.cfg-det>.card{margin-top:10px}
       Apurado da <b>SZC</b> pela <b>mesma regra do custo médio de diesel do P&amp;D</b> — não é digitação:
       último mês com abastecimento da filial · combustível diesel (Arla fora) · preço unitário = Valor ÷ Qtd Litros ·
       janela de litragem de <b>50 a 1.200 l</b> · descarte do preço abaixo de <b>50%</b> da média ponderada dos demais ·
+      descarte de tudo que estiver <b>fora de ±20% da mediana</b> do período (para cima ou para baixo) ·
       <b>média ponderada por litros</b>. O Simulador consome esse mesmo número.
       O lançamento manual continua existindo e assume quando a filial não tem abastecimento apurado no período.
     </div>
@@ -1025,6 +1026,9 @@ details.cfg-det>.card{margin-top:10px}
       <div style="margin-top:6px">A base guarda o arquivo <b>inteiro</b>, mas toda a apuração desta aba considera
       <b>apenas abastecimentos de diesel S-10</b> — S-500, gasolina, etanol e Arla ficam gravados e fora das contas,
       das médias e do preço que o Simulador consome.</div>
+      <div style="margin-top:6px">Vale aqui a mesma <b>banda de ±20% sobre a mediana</b> do módulo de Rotas: o R$/L que
+      escapa dessa faixa fica gravado, mas não entra em média de posto, média de unidade nem em cotação — e aparece
+      marcado na tabela abaixo, para ser corrigido na origem em vez de virar custo.</div>
     </div>
 
     <div class="sb-drop" id="sbDrop">
@@ -7363,8 +7367,16 @@ function renderDiesel(){
     const amostra = d
       ? `<span title="${esc(`${v.origem==='manual'?'Amostra do realizado (não do preço exibido) — ':''}`+
           `${d.qtd} abastecimento(s) no mês · ${d.foraDaJanela} fora da janela ${d.janela} · `+
-          `${d.foraDaCurva} com preço abaixo de 50% da média dos demais · ${num(d.litros,0)} l no total`)}">`+
-        `${v.origem==='manual'?'<span class="muted">':''}${num(d.qtdMedia,0)} abast.${v.origem==='manual'?'</span>':''}</span>`
+          `${d.foraDaCurva} com preço abaixo de 50% da média dos demais · `+
+          `${d.foraDaBanda||0} fora da banda de ${d.banda}`+
+          (d.bandaAtiva?` (R$ ${num(d.bandaMin,3)} a R$ ${num(d.bandaMax,3)}/l · mediana R$ ${num(d.bandaRef,3)})`:'')+
+          ` · ${num(d.litros,0)} l no total`)}">`+
+        `${v.origem==='manual'?'<span class="muted">':''}${num(d.qtdMedia,0)} abast.${v.origem==='manual'?'</span>':''}</span>`+
+        /* o descarte não pode ficar só no tooltip: se a banda cortou algo, é
+           porque existe lançamento errado na SZC esperando correção */
+        (d.foraDaBanda>0
+          ? ` <span class="pill am" title="${esc(`${d.foraDaBanda} lançamento(s) com R$/L fora de ±${Math.round(RT_CFG.precoDesvioMax*100)}% da mediana do mês foram desconsiderados na média. Vale conferir a nota na origem.`)}">${d.foraDaBanda} descartado(s)</span>`
+          : '')
       : '—';
     const vig = v.origem==='apurado'
       ? esc(mesRotulo(ap.mes))
@@ -8561,7 +8573,7 @@ async function rtExportar(){
       {Premissa:'Arla (% do diesel)',Valor:((RT.custoGeral||RT_CUSTO_PADRAO).arlaPct*100)+'%'},
       {Premissa:'Preço do diesel',Valor:(()=>{const m=rtPrecoMedio('diesel',String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0'),'');return m.preco>0?`R$ ${num(m.preco,3)}/l — média ponderada de ${m.qtdMedia} abastecimentos`:'sem abastecimento no período';})()},
       {Premissa:'Preço do Arla',Valor:(()=>{const m=rtPrecoMedio('arla',String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0'),'');return m.preco>0?`R$ ${num(m.preco,3)}/l — média ponderada de ${m.qtdMedia} abastecimentos`:'sem abastecimento no período';})()},
-      {Premissa:'Regra do preço médio',Valor:`abastecimentos do período · janela diesel ${RT_CFG.dieselLitrosMin}–${RT_CFG.dieselLitrosMax} l · descarte abaixo de ${RT_CFG.precoForaDaCurva*100}% da média dos demais · ponderação por litros`},
+      {Premissa:'Regra do preço médio',Valor:`abastecimentos do período · janela diesel ${RT_CFG.dieselLitrosMin}–${RT_CFG.dieselLitrosMax} l · descarte abaixo de ${RT_CFG.precoForaDaCurva*100}% da média dos demais · descarte fora de ${precoBandaRotulo()} · ponderação por litros`},
       {Premissa:'Taxa de descarga (t/h)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compTaxaTh},
       {Premissa:'Consumo do compressor (l/h)',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compConsumoLh},
       {Premissa:'Fonte de energia do compressor',Valor:(RT.custoGeral||RT_CUSTO_PADRAO).compFonte==='tdf'?'tomada de força do cavalo':'motor independente'},
@@ -9498,7 +9510,7 @@ function rtCustoModal(r){
   const mes=String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0');
   const mD=rtPrecoMedio('diesel',mes,r?r.op:''), mA=rtPrecoMedio('arla',mes,r?r.op:'');
   const chip=(m,nome)=> m.preco>0
-    ? `<span class="pill gn">${nome}: R$ ${num(m.preco,3)}/l</span> <span class="muted">média ponderada de ${num(m.qtdMedia,0)} de ${num(m.qtd,0)} abastecimentos${m.foraDaJanela?` · ${m.foraDaJanela} fora da janela`:''}${m.foraDaCurva?` · ${m.foraDaCurva} com preço fora da curva`:''} · janela ${esc(m.janela)}</span>`
+    ? `<span class="pill gn">${nome}: R$ ${num(m.preco,3)}/l</span> <span class="muted">média ponderada de ${num(m.qtdMedia,0)} de ${num(m.qtd,0)} abastecimentos${m.foraDaJanela?` · ${m.foraDaJanela} fora da janela`:''}${m.foraDaCurva?` · ${m.foraDaCurva} com preço fora da curva`:''}${m.foraDaBanda?` · ${m.foraDaBanda} fora de ${esc(precoBandaRotulo())}`:''} · janela ${esc(m.janela)}</span>`
     : `<span class="pill am">${nome}: sem abastecimento no período</span>`;
 
   mdAbrir(r?'Premissas de custo da rota':'Premissas de custo — configuração geral',
@@ -9705,8 +9717,67 @@ function rtBlocoMemoria(r){
 Object.assign(RT_CFG,{
   dieselLitrosMin:50, dieselLitrosMax:1200,
   arlaLitrosMin:0,    arlaLitrosMax:0,        /* 0 = sem janela            */
-  precoForaDaCurva:0.5                        /* corte em 50% da média     */
+  precoForaDaCurva:0.5,                       /* corte em 50% da média     */
+  precoDesvioMax:0.20,                        /* banda ±20% (ver abaixo)   */
+  precoBandaMinAmostra:3                      /* abaixo disso, sem banda   */
 });
+
+/* ══ Banda de ±20% no R$/L — o teto que faltava ════════════════════════════
+   O corte antigo (precoForaDaCurva) só olha para BAIXO: descarta o preço
+   abaixo de 50% da média dos demais. Não existia teto, e por isso uma nota
+   de 100 l por R$ 64.400 (R$ 644,00/l, SZC 02/08/2026) atravessou a janela
+   de litragem, atravessou o corte de curva e virou preço vigente da filial:
+   a média de SC subiu de 5,781 para 8,145 — 41% de custo que não existe.
+
+   Duas decisões que não são detalhe:
+
+   1) A referência é a MEDIANA ponderada por litros, não a média. Usar a
+      média é morder o próprio rabo: um outlier grande o bastante puxa a
+      referência para cima e passa a descartar abastecimento legítimo por
+      "estar abaixo". Em ago/26 SC a média já estava 19% contaminada pela
+      linha de R$ 644 — a mediana (5,790) não se moveu um centavo.
+
+   2) A banda é simétrica: fora de ±20% da mediana, para cima OU para baixo.
+      Medido sobre os 24.936 abastecimentos da base, isso descarta 0,67% das
+      linhas e não move nenhum mês fechado mais que 0,9%. O que ela derruba
+      é exatamente o que precisa cair: as 16 linhas acima de R$ 9,00/l e as
+      digitações com fator 10/100.
+
+   Abaixo de precoBandaMinAmostra registros a banda não se aplica — com dois
+   ou três abastecimentos a mediana não é referência, é sorteio. */
+function medianaPonderada(arr, getP, getL){
+  const v=arr.map(x=>({p:+getP(x)||0, l:+getL(x)||0})).filter(x=>x.p>0&&x.l>0)
+             .sort((a,b)=>a.p-b.p);
+  if(!v.length) return 0;
+  const meta=v.reduce((s,x)=>s+x.l,0)/2;
+  let ac=0;
+  for(const x of v){ ac+=x.l; if(ac>=meta) return x.p; }
+  return v[v.length-1].p;
+}
+/* Devolve {ok(r), ref, min, max, ativa} para aplicar a banda a uma amostra.
+
+   refArr (opcional) é a população que CALCULA a mediana, quando ela precisa
+   ser diferente da população que a banda vai filtrar. Não é preciosismo: a
+   mediana é ponderada por litros, então uma linha de 65.127 l (SZC, SP,
+   21/10/2024 — litragem trocada com outro campo) sozinha carrega 82% do peso
+   do mês e ARRASTA a mediana para R$ 0,056/l. A partir daí a banda inverte
+   de lado e passa a rejeitar os abastecimentos corretos. Por isso a
+   referência sai sempre da amostra já dentro da janela de litragem. */
+function precoBanda(arr, getP, getL, refArr){
+  const d=RT_CFG.precoDesvioMax;
+  const ref_pop=(refArr && refArr.length) ? refArr : arr;
+  if(!(d>0) || ref_pop.length<RT_CFG.precoBandaMinAmostra)
+    return {ativa:false, ref:0, min:0, max:Infinity, ok:()=>true};
+  const ref=medianaPonderada(ref_pop, getP, getL);
+  if(!(ref>0)) return {ativa:false, ref:0, min:0, max:Infinity, ok:()=>true};
+  const min=ref*(1-d), max=ref*(1+d);
+  return {ativa:true, ref, min, max, ok:r=>{ const p=+getP(r)||0; return p>=min && p<=max; }};
+}
+/* Rótulo curto para tooltip/exportação — a regra tem que aparecer na tela. */
+function precoBandaRotulo(){
+  return RT_CFG.precoDesvioMax>0
+    ? `±${Math.round(RT_CFG.precoDesvioMax*100)}% da mediana` : 'sem banda';
+}
 Object.assign(RT,{ szc:[], szcMeta:null, szcCarregado:false, precoCache:new Map() });
 
 async function rtCarregarSZC(force){
@@ -9765,13 +9836,17 @@ function rtPrecoMedio(tipo, mes, op, soS10){
     : base;
 
   /* preço fora da curva, medido contra a média ponderada dos demais */
-  const limpa = naJanela.filter((r,_,arr)=>{
+  const semCurva = naJanela.filter((r,_,arr)=>{
     if(arr.length<=1) return true;
     const outrosL=arr.reduce((a,x)=>a+(x===r?0:x.litros),0);
     const outrosV=arr.reduce((a,x)=>a+(x===r?0:x.precoUnit*x.litros),0);
     const media = outrosL>0 ? outrosV/outrosL : 0;
     return media<=0 || r.precoUnit >= media*RT_CFG.precoForaDaCurva;
   });
+
+  /* banda de ±20% sobre a mediana ponderada — o teto que faltava */
+  const banda = precoBanda(semCurva, r=>r.precoUnit, r=>r.litros);
+  const limpa = banda.ativa ? semCurva.filter(banda.ok) : semCurva;
 
   const lm=limpa.reduce((a,r)=>a+r.litros,0);
   const vm=limpa.reduce((a,r)=>a+r.precoUnit*r.litros,0);
@@ -9780,7 +9855,13 @@ function rtPrecoMedio(tipo, mes, op, soS10){
     litros:litrosTot, valor:valorTot,
     qtd:qtdBruta, qtdMedia:limpa.length,
     foraDaJanela: base.length-naJanela.length,
-    foraDaCurva:  naJanela.length-limpa.length,
+    foraDaCurva:  naJanela.length-semCurva.length,
+    foraDaBanda:  semCurva.length-limpa.length,
+    bandaAtiva:   banda.ativa,
+    bandaRef:     banda.ativa ? +banda.ref.toFixed(3) : null,
+    bandaMin:     banda.ativa ? +banda.min.toFixed(3) : null,
+    bandaMax:     banda.ativa ? +banda.max.toFixed(3) : null,
+    banda:        banda.ativa ? precoBandaRotulo() : 'sem banda (amostra curta)',
     descartados:  qtdBruta-limpa.length,
     mes, op:op||'todas', tipo, soS10:!!soS10,
     janela: (lMin>0||lMax>0) ? `${lMin||0}–${lMax||'∞'} l` : 'sem janela'
@@ -12839,15 +12920,30 @@ function sbDieselDaRota(){
   if(!naRota.length) return null;
   const idx=new Map(naRota.map(p=>[p.chave,p]));
 
-  let melhor=null;
+  /* Este é o caso mais exposto da aba: o preço vem de UMA linha — o último
+     abastecimento em um posto da rota. Sem banda, um lançamento errado vira
+     o diesel da cotação inteira, sem média nenhuma para diluí-lo. A
+     referência aqui é a mediana dos abastecimentos nos postos DA ROTA. */
+  const naRotaRows=[];
+  for(const x of SB.rows){
+    if(!sbEhDiesel(x) || !(x.preco>0) || !(x.litros>0) || !sbLancamentoValido(x)) continue;
+    if(!idx.has(sbChaveMemo(x))) continue;
+    naRotaRows.push(x);
+  }
+  const banda=precoBanda(naRotaRows, x=>x.preco, x=>x.litros,
+    naRotaRows.filter(x=>x.litros>=SB_LITROS_MIN && x.litros<=SB_LITROS_MAX));
+
+  let melhor=null, rejeitados=0;
   for(const x of SB.rows){
     if(!sbEhDiesel(x) || !(x.preco>0) || !sbLancamentoValido(x)) continue;
     const p=idx.get(sbChaveMemo(x)); if(!p) continue;
+    if(banda.ativa && !banda.ok(x)){ rejeitados++; continue; }
     if(!melhor || String(x.data)>String(melhor.linha.data)) melhor={linha:x, posto:p};
   }
   if(!melhor) return null;
   return { valor:+Number(melhor.linha.preco).toFixed(3), fonte:'posto_rota',
-           linha:melhor.linha, posto:melhor.posto, postos:naRota };
+           linha:melhor.linha, posto:melhor.posto, postos:naRota,
+           foraDaBanda:rejeitados, bandaRef:banda.ativa?+banda.ref.toFixed(3):null };
 }
 function sbMediaUnidade(filial){
   const alvo=String(filial||'').toUpperCase();
@@ -12871,17 +12967,26 @@ function sbMediaUnidade(filial){
      mesma regra do módulo, só que em O(n) usando os totais */
   const totL=usar.reduce((a,x)=>a+x.litros,0);
   const totV=usar.reduce((a,x)=>a+x.preco*x.litros,0);
-  const limpa=usar.filter(x=>{
+  const semCurva=usar.filter(x=>{
     const oL=totL-x.litros, oV=totV-x.preco*x.litros;
     const media=oL>0?oV/oL:0;
     return media<=0 || x.preco>=media*SB_FORA_CURVA;
   });
+  /* e a mesma banda de ±20% do módulo — aqui a janela é de 3 meses, então a
+     mediana é calculada sobre o período inteiro: é ela que define o patamar */
+  const banda=precoBanda(semCurva, x=>x.preco, x=>x.litros);
+  const limpa=banda.ativa?semCurva.filter(banda.ok):semCurva;
+
   const L=limpa.reduce((a,x)=>a+x.litros,0);
   const V=limpa.reduce((a,x)=>a+x.preco*x.litros,0);
   if(!(L>0)) return null;
   return { valor:+(V/L).toFixed(3), fonte:'media_unidade', unidade:alvo||'consolidado',
            qtd:limpa.length, qtdBruta:periodo.length, litros:L,
-           de, ate:max.slice(0,7), descartados:periodo.length-limpa.length };
+           de, ate:max.slice(0,7), descartados:periodo.length-limpa.length,
+           foraDaCurva:usar.length-semCurva.length, foraDaBanda:semCurva.length-limpa.length,
+           bandaAtiva:banda.ativa, bandaRef:banda.ativa?+banda.ref.toFixed(3):null,
+           bandaMin:banda.ativa?+banda.min.toFixed(3):null,
+           bandaMax:banda.ativa?+banda.max.toFixed(3):null };
 }
 
 /* ══ Etiqueta e cor do E16 ═════════════════════════════════════════════════ */
@@ -12926,7 +13031,8 @@ function sbAplicarDieselE16(forcar){
     const ondeNaRodovia=(p.rodovia?sbRodoviaLabel(p.rodovia,p.rodoviaNome):'via urbana')+(p.km!=null?' · km '+num(p.km,p.km%1?1:0):'');
     sbRenderChip('rota','posto na rota',
       `Último abastecimento na rota: ${p.nome} — ${ondeNaRodovia}, ${p.cidade}/${p.uf}, `+
-      `em ${sbDataBR(rota.linha.data)}. ${rota.postos.length} posto(s) da base identificado(s) no trecho.`);
+      `em ${sbDataBR(rota.linha.data)}. ${rota.postos.length} posto(s) da base identificado(s) no trecho.`+
+      (rota.foraDaBanda?` ${rota.foraDaBanda} lançamento(s) do trecho ignorados por R$/L fora de ±${Math.round(RT_CFG.precoDesvioMax*100)}% da mediana (R$ ${num(rota.bandaRef,3)}/l).`:''));
     _simDieselFonte='shellbox_posto_rota';
     _simDieselNota=`Diesel R$ ${num(rota.valor,3)}/l — <b>último abastecimento na rota</b>: `+
       `${esc(p.nome)} (${esc(ondeNaRodovia)}, ${esc(p.cidade)}/${esc(p.uf)}) em ${esc(sbDataBR(rota.linha.data))}`+
@@ -12944,11 +13050,12 @@ function sbAplicarDieselE16(forcar){
     sbRenderChip('media','média da unidade',
       `Nenhum posto da base ShellBox foi identificado no trecho calculado. `+
       `Valor = média ponderada por litros de ${med.qtd} abastecimento(s) do ${rot}, `+
-      `período ${med.de} a ${med.ate}.`);
+      `período ${med.de} a ${med.ate}.`+
+      (med.foraDaBanda?` ${med.foraDaBanda} fora da banda de ±${Math.round(RT_CFG.precoDesvioMax*100)}% (R$ ${num(med.bandaMin,3)} a R$ ${num(med.bandaMax,3)}/l).`:''));
     _simDieselFonte='shellbox_media_unidade';
     _simDieselNota=`Diesel R$ ${num(med.valor,3)}/l — <b>média ponderada da ${esc(rot)}</b> `+
       `(${med.qtd} de ${med.qtdBruta} abastecimentos, ${num(med.litros,0)} l, ${esc(med.de)} a ${esc(med.ate)})`+
-      `${med.descartados?` · ${med.descartados} descartado(s) por litragem ou preço fora da curva`:''}`+
+      `${med.descartados?` · ${med.descartados} descartado(s) por litragem, preço fora da curva ou fora de ${esc(precoBandaRotulo())}`:''}`+
       ` — <b>sem posto da base ShellBox no trecho calculado</b>.`;
     try{ simPremRenderNota(); }catch(_){}
     return true;
@@ -13100,15 +13207,34 @@ function sbRenderResumo(){
    todos já dentro do recorte S-10: o "Abast." da tabela precisa bater com a
    amostra que gerou a média, senão a coluna vira armadilha de leitura. */
 function sbEstatPosto(chave){
-  let qtd=0, ultimo=null, litros=0, valor=0;
+  let qtd=0, ultimo=null;
+  const cand=[];
   for(const x of SB.rows){
     if(!sbEhS10(x)) continue;
     if(sbChaveMemo(x)!==chave) continue;
     qtd++;
-    if(x.preco>0 && x.litros>0 && sbLancamentoValido(x)){ litros+=x.litros; valor+=x.preco*x.litros; }
+    if(x.preco>0 && x.litros>0 && sbLancamentoValido(x)) cand.push(x);
     if(!ultimo || String(x.data)>String(ultimo.data)) ultimo=x;
   }
-  return {qtd, ultimo, media: litros>0?valor/litros:null};
+  /* banda de ±20% também aqui: a coluna "R$/L médio" do posto alimenta a
+     leitura de rodovia e é onde o erro de digitação de um posto específico
+     aparece concentrado — sem teto, um lançamento errado vira o preço do
+     posto inteiro. A referência é a mediana do PRÓPRIO posto: postos de
+     rodovia e de cidade têm patamares diferentes e não devem se contaminar. */
+  /* a mediana sai só dos abastecimentos dentro da janela de litragem: fora
+     dela aparece transferência de tanque, que distorce a ponderação */
+  const refP=cand.filter(x=>x.litros>=SB_LITROS_MIN && x.litros<=SB_LITROS_MAX);
+  const banda=precoBanda(cand, x=>x.preco, x=>x.litros, refP);
+  const limpa=banda.ativa?cand.filter(banda.ok):cand;
+  const litros=limpa.reduce((a,x)=>a+x.litros,0);
+  const valor =limpa.reduce((a,x)=>a+x.preco*x.litros,0);
+  /* o "último" só é exibido como preço se ele mesmo estiver dentro da banda —
+     senão a linha mostraria um R$/L que a média já rejeitou */
+  const ultimoSuspeito = !!(ultimo && ultimo.preco>0 && banda.ativa && !banda.ok(ultimo));
+  return {qtd, ultimo, ultimoSuspeito,
+          media: litros>0?valor/litros:null,
+          qtdMedia:limpa.length, foraDaBanda:cand.length-limpa.length,
+          bandaRef:banda.ativa?+banda.ref.toFixed(3):null};
 }
 
 function sbRenderRodovias(){
@@ -13177,8 +13303,12 @@ function sbRenderRodovias(){
         <td>${esc(p.cidade||'—')}/${esc(p.uf||'—')}</td>
         <td class="num">${num(e.qtd||0,0)}</td>
         <td>${e.ultimo?esc(sbDataBR(e.ultimo.data)):'—'}</td>
-        <td class="num">${e.ultimo&&e.ultimo.preco>0?num(e.ultimo.preco,3):'—'}</td>
-        <td class="num">${e.media!=null?num(e.media,3):'—'}</td>
+        <td class="num">${e.ultimo&&e.ultimo.preco>0
+            ? (e.ultimoSuspeito
+                ? `<span class="pill rd" title="${esc(`R$ ${num(e.ultimo.preco,3)}/l está fora de ±${Math.round(RT_CFG.precoDesvioMax*100)}% da mediana deste posto (R$ ${num(e.bandaRef,3)}/l) — desconsiderado na média e não usado em cotação.`)}">${num(e.ultimo.preco,3)}</span>`
+                : num(e.ultimo.preco,3))
+            : '—'}</td>
+        <td class="num" ${e.foraDaBanda>0?`title="${esc(`${e.qtdMedia} de ${e.qtd} abastecimento(s) na média · ${e.foraDaBanda} fora de ±${Math.round(RT_CFG.precoDesvioMax*100)}% da mediana do posto (R$ ${num(e.bandaRef,3)}/l)`)}"`:''}>${e.media!=null?num(e.media,3):'—'}${e.foraDaBanda>0?' <span class="pill am">−'+e.foraDaBanda+'</span>':''}</td>
         <td>${coord}</td></tr>`;
     }).join('');
     return `<details${i<2?' open':''}>
@@ -13212,7 +13342,11 @@ async function sbExportar(){
       'Código':p.rodovia||'—','Nome da rodovia':p.rodoviaNome||'—',
       'Km':p.km,'Posto':p.nome,'Endereço':p.endereco,'Cidade':p.cidade,'UF':p.uf,
       'CNPJ':p.cnpj,'Abastecimentos':e.qtd,'Último':e.ultimo?sbDataBR(e.ultimo.data):'—',
-      'R$/L médio':e.media!=null?+e.media.toFixed(3):null,'Lat':p.lat,'Lng':p.lng,'Geocodificação':p.geo||'pendente'
+      'R$/L médio':e.media!=null?+e.media.toFixed(3):null,
+      'Abast. na média':e.qtdMedia!=null?e.qtdMedia:null,
+      'Descartados (banda ±20%)':e.foraDaBanda||0,
+      'Mediana do posto (R$/L)':e.bandaRef,
+      'Lat':p.lat,'Lng':p.lng,'Geocodificação':p.geo||'pendente'
     };}));
     XL.writeFile(wb,'ShellBox_postos_por_rodovia.xlsx');
   }catch(e){ toast('Exportação falhou: '+(e.message||e),'rd'); }
