@@ -3510,6 +3510,38 @@ async function dbProc(file,id){
     const res=document.getElementById('dbres-'+id);
     const __resExtra = recStats ? ` (+${dbFmt(recStats.added)} novas${recStats.removed?`, −${dbFmt(recStats.removed)} removidas`:''})` : '';
     res.className='db-res ok';res.textContent=`✓ ${dbFmt(rows.length)} registros em ${sec}s${__resExtra}`;
+
+    /* ── Auditoria de R$/L da SZC ──
+       Roda só para a SZC e só depois de a carga já ter dado certo: é aviso,
+       nunca bloqueio. O que ela encontra aqui é exatamente o que os módulos
+       vão descartar adiante — mostrar na carga é o que dá chance de corrigir
+       a nota na origem antes de a reunião de resultado discutir o número. */
+    if(id==='szc'){
+      try{
+        const aud=atlasAuditarSZC(rows);
+        if(aud.fora.length || aud.futuras.length){
+          const av=document.createElement('div');
+          av.className='db-res'; av.style.cssText='margin-top:6px;background:var(--am-bg,#fffbeb);color:var(--am,#b45309);border-radius:6px;padding:6px 8px;font-size:11px;line-height:1.45';
+          const partes=[];
+          if(aud.fora.length){
+            const t=aud.fora[0];
+            partes.push(`⚠ ${dbFmt(aud.fora.length)} abastecimento(s) com R$/L fora de ±${ATLAS_SZC_DESVIO_MAX*100}% da mediana do mês/filial `+
+              `— serão desconsiderados nas médias. Maior desvio: R$ ${t.p.toFixed(2)}/l em ${t.iso.split('-').reverse().join('/')} `+
+              `(${t.veic||'sem placa'}${t.forn?' · '+t.forn:''}), contra mediana de R$ ${t.ref.toFixed(3)}/l.`);
+          }
+          if(aud.futuras.length){
+            const f=aud.futuras[0];
+            partes.push(`⚠ ${dbFmt(aud.futuras.length)} lançamento(s) com <b>data futura</b> — o mais distante é ${f.iso.split('-').reverse().join('/')} `+
+              `(${f.op}${f.veic?' · '+f.veic:''}). Um registro assim vira o "último mês" da filial e sequestra o preço vigente: corrija a data na origem.`);
+          }
+          av.innerHTML=partes.join('<br>');
+          res.parentNode.insertBefore(av, res.nextSibling);
+          aud.fora.slice(0,10).forEach(t=>dbLog(`⚠ SZC R$/L fora da banda — ${t.iso} ${t.grupo} · ${t.litros} l · R$ ${t.valor} → R$ ${t.p.toFixed(2)}/l (mediana R$ ${t.ref.toFixed(3)})`,'err'));
+          aud.futuras.slice(0,10).forEach(t=>dbLog(`⚠ SZC data futura — ${t.iso} · ${t.op} · ${t.veic}`,'err'));
+          toast(`SZC carregada com ${aud.fora.length+aud.futuras.length} inconsistência(s) de preço/data — veja o detalhe no card.`,'am');
+        }
+      }catch(e){ console.warn('[Atlas SZC] auditoria:', e && e.message); }
+    }
     const tsEl=document.getElementById('dbts-'+id);
     if(tsEl)tsEl.textContent=new Date(tsNow).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     const usEl=document.getElementById('dbus-'+id);
@@ -3788,6 +3820,76 @@ function atlasRowPDOp(row) {
          atlasPDOpFromValue(row['Filial incl']) ||
          atlasPDOpFromValue(row['Unidade']) ||
          null;
+}
+/* ══ Auditoria de R$/L da SZC no momento da carga ══════════════════════════
+   Esta tela é onde a SZC entra no Atlas — e é o único ponto em que dá para
+   avisar ANTES de o número virar custo em três módulos (PD Diário, Rotas e
+   Simulador). A regra de apuração já descarta, lá na frente, o abastecimento
+   com R$/L fora de ±20% da mediana do mês/filial; aqui ele NÃO é removido —
+   a base guarda o arquivo inteiro, por princípio — mas é contado e mostrado.
+
+   O caso que motivou isto: SZC de 02/08/2026, 100 l por R$ 64.400 (R$ 644/l).
+   A linha atravessou a janela de litragem e o corte de curva (que só olhava
+   para baixo) e levou o diesel de SC de R$ 5,78 para R$ 8,15 — 41% de custo
+   inexistente, publicado sem um único aviso na tela. Descartar em silêncio
+   também não resolve: o erro está na nota, e alguém precisa corrigi-la. */
+const ATLAS_SZC_DESVIO_MAX = 0.20;   /* mesma banda do comercial.html */
+const ATLAS_SZC_L_MIN = 50, ATLAS_SZC_L_MAX = 1200;   /* mesma janela de litragem */
+function atlasSZCMedianaPonderada(v){
+  const a=v.slice().sort((x,y)=>x.p-y.p);
+  if(!a.length) return 0;
+  const meta=a.reduce((s,x)=>s+x.l,0)/2;
+  let ac=0;
+  for(const x of a){ ac+=x.l; if(ac>=meta) return x.p; }
+  return a[a.length-1].p;
+}
+function atlasAuditarSZC(rows){
+  const MES_HOJE=new Date().toISOString().slice(0,7);
+  const grupos=new Map();
+  const futuras=[];
+  for(const r of (rows||[])){
+    const comb=String(r['Combustivel']||r['Combustível']||'');
+    if(!/diesel/i.test(comb) || /arla/i.test(comb)) continue;
+    const d=r['Data Emissao']||r['Data Emissão']||r['Data'];
+    let iso='';
+    if(d instanceof Date && !isNaN(d)) iso=d.toISOString().slice(0,10);
+    else if(typeof d==='number' && isFinite(d)) iso=new Date(Date.UTC(1899,11,30)+Math.round(d)*864e5).toISOString().slice(0,10);
+    else { const m=String(d||'').match(/^(\d{4})-(\d{2})-(\d{2})/); if(m) iso=m[0]; }
+    if(!iso) continue;
+    const mes=iso.slice(0,7);
+    const l=Number(r['Qtd Litros'])||0, v=Number(r['Valor'])||0;
+    const p = l>0 ? v/l : (Number(r['Unit Venda'])||0);
+    if(!(l>0) || !(v>0) || !(p>0)) continue;
+    /* data futura: um único registro assim reposiciona o "último mês com
+       abastecimento" da filial e sequestra o preço vigente inteiro */
+    if(mes>MES_HOJE) futuras.push({iso, op:atlasRowPDOp(r)||'?', veic:r['Veiculo']||'', p});
+    const k=(atlasRowPDOp(r)||'?')+'|'+mes;
+    if(!grupos.has(k)) grupos.set(k,[]);
+    grupos.get(k).push({p, l, iso, veic:r['Veiculo']||'', forn:r['Nome']||'', valor:v, litros:l});
+  }
+  const fora=[];
+  for(const [k,arr] of grupos){
+    /* A mediana é ponderada por litros, então ela precisa sair da amostra
+       DENTRO da janela de litragem. Sem isso, uma linha de 65.127 l (existe:
+       SZC, SP, 21/10/2024) carrega 82% do peso do mês, puxa a mediana para
+       R$ 0,056/l e a banda inverte de lado — passa a acusar justamente os
+       abastecimentos corretos. A janela decide a referência; a banda é
+       aplicada depois a todas as linhas do grupo. */
+    const ref_pop=arr.filter(x=>x.l>=ATLAS_SZC_L_MIN && x.l<=ATLAS_SZC_L_MAX);
+    if(ref_pop.length<3) continue;
+    const ref=atlasSZCMedianaPonderada(ref_pop);
+    if(!(ref>0)) continue;
+    const min=ref*(1-ATLAS_SZC_DESVIO_MAX), max=ref*(1+ATLAS_SZC_DESVIO_MAX);
+    for(const x of arr){
+      /* fora da janela de litragem a apuração já ignora a linha por outro
+         motivo — acusar de novo aqui só geraria ruído no card */
+      if(x.l<ATLAS_SZC_L_MIN || x.l>ATLAS_SZC_L_MAX) continue;
+      if(x.p<min || x.p>max) fora.push({...x, grupo:k, ref, min, max});
+    }
+  }
+  fora.sort((a,b)=>Math.abs(b.p/b.ref-1)-Math.abs(a.p/a.ref-1));
+  futuras.sort((a,b)=>b.iso.localeCompare(a.iso));
+  return {fora, futuras};
 }
 function atlasScopeRowsForCurrentUser(table, rows) {
   const id = String(table || '').toLowerCase();
