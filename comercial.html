@@ -116,6 +116,52 @@ input[type=number]{font-family:var(--m)}
 .rcl-leg span::before{content:'';display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;background:currentColor}
 @media(max-width:1100px){ .rcl-kpis{grid-template-columns:repeat(2,1fr)} }
 
+/* ╔══════════════════ RCLMEM-INICIO (CSS) ══════════════════════════════════╗
+   ║ CAMADA TEMPORÁRIA DE VALIDAÇÃO — MEMÓRIA DE CÁLCULO EM HOVER DE 3 s     ║
+   ║                                                                         ║
+   ║ Existe para conferir, número por número, de onde cada valor da sub-aba   ║
+   ║ Rota clientes vem. Sai do ar quando as premissas estiverem validadas:    ║
+   ║ apagar este bloco de CSS e o bloco RCLMEM do JavaScript. Os atributos    ║
+   ║ data-mem espalhados pela tela ficam inertes sem o motor — não é preciso  ║
+   ║ caçá-los um a um.                                                       ║
+   ╚═════════════════════════════════════════════════════════════════════════╝ */
+[data-mem]{cursor:help;position:relative}
+[data-mem]:hover{outline:1px dotted var(--ac);outline-offset:1px;border-radius:3px}
+#rclMemPop{position:fixed;z-index:9999;max-width:520px;min-width:280px;background:var(--wh);
+  border:1px solid var(--ac);border-radius:9px;box-shadow:0 8px 28px rgba(0,0,0,.20);
+  padding:11px 13px;font-size:11.5px;line-height:1.55;color:var(--tx);display:none;
+  max-height:70vh;overflow:auto}
+#rclMemPop.on{display:block}
+#rclMemPop .mm-t{font-weight:700;font-size:12px;margin-bottom:5px;color:var(--ac);
+  display:flex;align-items:center;gap:6px}
+#rclMemPop .mm-t span.pill{font-size:9.5px}
+#rclMemPop .mm-s{font-family:var(--m);font-size:10.5px;color:var(--mu);
+  background:var(--sf);border-radius:5px;padding:5px 7px;margin:5px 0;
+  white-space:pre-wrap;word-break:break-word}
+#rclMemPop .mm-l{display:flex;justify-content:space-between;gap:12px;
+  border-top:1px dotted var(--bd);padding:3px 0}
+#rclMemPop .mm-l b{font-family:var(--m);font-weight:600;white-space:nowrap}
+#rclMemPop .mm-o{color:var(--mu);font-size:10.5px;margin-top:6px;font-style:italic}
+#rclMemPop .mm-w{color:var(--rd);font-weight:600}
+#rclMemPop .mm-src{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.03em;
+  padding:1px 5px;border-radius:4px;border:1px solid var(--bd2);color:var(--mu);background:var(--sf)}
+.mem-hint{position:fixed;z-index:9998;background:var(--tx);color:#fff;font-size:9.5px;
+  padding:2px 6px;border-radius:4px;opacity:.85;pointer-events:none;display:none}
+.mem-hint.on{display:block}
+/* ╚══════════════════ RCLMEM-FIM (CSS) ═══════════════════════════════════╝ */
+
+/* Indicador da fonte do dado — mesma família do selo do posto na rota */
+.src-tag{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.04em;
+  padding:1px 5px;border-radius:4px;margin-left:5px;vertical-align:middle;border:1px solid}
+.src-tag.szy{color:#0369a1;background:#e0f2fe;border-color:#7dd3fc}
+.src-tag.here{color:#7c2d12;background:#ffedd5;border-color:#fdba74}
+.src-tag.map{color:#166534;background:#dcfce7;border-color:#86efac}
+.src-tag.cpk{color:#5b21b6;background:#ede9fe;border-color:#c4b5fd}
+.src-tag.sim{color:#9d174d;background:#fce7f3;border-color:#f9a8d4}
+.src-tag.szc{color:#854d0e;background:#fef9c3;border-color:#fde047}
+.src-tag.prem{color:#475569;background:#f1f5f9;border-color:#cbd5e1}
+.src-tag.alerta{color:#b91c1c;background:#fee2e2;border-color:#fca5a5}
+
 /* Buttons */
 .btn{font-family:var(--f);font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:var(--r);border:1px solid var(--bd);background:var(--wh);color:var(--tx);cursor:pointer;transition:.12s}
 .btn:hover{background:var(--ht)}
@@ -1091,7 +1137,7 @@ details.cfg-det>.card{margin-top:10px}
 <div class="subtabs" id="rotSubtabs">
   <button class="subtab on" data-sv="rcl" title="Resultado real por cliente e por rota do Protheus">Rota clientes</button>
   <button class="subtab" data-sv="ana" title="Inventário da SZY, simulação HERE, complexidade e CPK por rota">Análise de Rotas</button>
-  <span class="tabs-r"><span class="pill mu" id="rotSubPill">Resultado por cliente · custo híbrido</span></span>
+  <span class="tabs-r"><span class="pill mu" id="rotSubPill">Resultado por cliente · custo realizado (Mapinha + CPK)</span></span>
 </div>
 
 <!-- ═══════════ 7.1) ROTA CLIENTES ═══════════ -->
@@ -1100,8 +1146,8 @@ details.cfg-det>.card{margin-top:10px}
   <div class="card">
     <h3>Resultado por cliente e rota
       <span class="tabs-r">
-        <button class="btn sm" id="rclBtnPrem" title="Premissas do resultado: impostos, comissão, overhead e o modelo de consumo">⚙ Premissas do resultado</button>
-        <button class="btn sm" id="rclBtnDiag" title="Aderência do modelo de consumo ao diesel realizado da SZC">🔎 Aderência</button>
+        <button class="btn sm" id="rclBtnPrem" title="Premissas do resultado: impostos, comissão, distância, fonte de cada linha de custo e modelo de consumo">⚙ Premissas do resultado</button>
+        <button class="btn sm" id="rclBtnDiag" title="Aderência do modelo de consumo e conciliação com o realizado do Mapinha e do CPK">🔎 Aderência e realizado</button>
         <button class="btn sm" id="rclBtnRecalc" title="Refaz o cálculo com as premissas atuais">↻ Recalcular</button>
         <button class="btn sm" id="rclBtnExport" title="Exportação executiva (.xlsx)">⬇ Excel</button>
       </span>
@@ -1147,7 +1193,7 @@ details.cfg-det>.card{margin-top:10px}
 
   <!-- Diagnóstico do modelo de consumo (colapsável) -->
   <div class="card" id="rclCardDiag" style="display:none">
-    <h3>Aderência do modelo de consumo
+    <h3>Aderência do consumo e conciliação com o realizado
       <span class="tabs-r"><span class="pill mu" id="rclDiagPill">—</span></span>
     </h3>
     <div id="rclDiag"></div>
@@ -10375,6 +10421,102 @@ try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG; window.__
    faz com o número que volta.
    ══════════════════════════════════════════════════════════════════════════ */
 
+/* ╔══════════════════════ RCLMEM-INICIO (JS) ═══════════════════════════════╗
+   ║ MEMÓRIA DE CÁLCULO EM HOVER — CAMADA TEMPORÁRIA DE VALIDAÇÃO            ║
+   ║                                                                         ║
+   ║ Parar o mouse 3 segundos sobre qualquer valor da sub-aba Rota clientes  ║
+   ║ abre um painel com: de onde o número veio (qual módulo, qual base, qual ║
+   ║ documento), a fórmula aplicada, os insumos com os seus valores e as     ║
+   ║ ressalvas. É a régua para validarmos premissa por premissa.             ║
+   ║                                                                         ║
+   ║ COMO REMOVER quando a validação terminar:                               ║
+   ║   1. apagar este bloco inteiro, de RCLMEM-INICIO (JS) até RCLMEM-FIM;   ║
+   ║   2. apagar o bloco RCLMEM-INICIO/FIM do CSS, lá no topo do arquivo;    ║
+   ║   3. pronto. Os atributos data-mem="…" espalhados pela tela ficam       ║
+   ║      inertes — são atributos de dados, não afetam layout nem cálculo.   ║
+   ║      Se quiser limpá-los também, a função mem() vira `()=>''`.          ║
+   ╚═════════════════════════════════════════════════════════════════════════╝ */
+const RCLMEM = { ligado:true, atrasoMs:3000, _t:null, _pop:null, _hint:null, _alvo:null };
+
+/* mem(titulo, corpo) → atributo pronto para colar dentro de uma tag HTML.
+   corpo aceita:
+     {formula:'…', fonte:'…', selo:'MAPINHA', linhas:[[rótulo,valor],…],
+      obs:'…', alerta:'…'}                                                  */
+function mem(titulo, c){
+  if(!RCLMEM.ligado) return '';
+  try{
+    const o = (typeof c==='string') ? {obs:c} : (c||{});
+    const pack = JSON.stringify({t:titulo, ...o});
+    return ` data-mem="${String(pack).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]))}"`;
+  }catch(_){ return ''; }
+}
+/* Envelopa um valor já formatado com a sua própria memória de cálculo. */
+function memv(valorHtml, titulo, c){ return `<span${mem(titulo,c)}>${valorHtml}</span>`; }
+
+function rclMemHtml(d){
+  const esc2=s=>esc(s==null?'':String(s));
+  let h = `<div class="mm-t">${esc2(d.t)}${d.selo?` <span class="mm-src">${esc2(d.selo)}</span>`:''}</div>`;
+  if(d.fonte)   h += `<div><b>Origem:</b> ${esc2(d.fonte)}</div>`;
+  if(d.formula) h += `<div class="mm-s">${esc2(d.formula)}</div>`;
+  if(Array.isArray(d.linhas) && d.linhas.length)
+    h += d.linhas.filter(l=>l && l.length).map(l=>
+      `<div class="mm-l"><span>${esc2(l[0])}</span><b>${l[1]==null?'—':l[1]}</b></div>`).join('');
+  if(d.obs)    h += `<div class="mm-o">${esc2(d.obs)}</div>`;
+  if(d.alerta) h += `<div class="mm-o mm-w">⚠ ${esc2(d.alerta)}</div>`;
+  return h;
+}
+function rclMemPop(){
+  if(RCLMEM._pop) return RCLMEM._pop;
+  const p=document.createElement('div'); p.id='rclMemPop';
+  document.body.appendChild(p); RCLMEM._pop=p; return p;
+}
+function rclMemHint(){
+  if(RCLMEM._hint) return RCLMEM._hint;
+  const h=document.createElement('div'); h.className='mem-hint'; h.textContent='memória de cálculo em 3s…';
+  document.body.appendChild(h); RCLMEM._hint=h; return h;
+}
+function rclMemMostrar(el, x, y){
+  let d=null;
+  try{ d=JSON.parse(el.getAttribute('data-mem')||'null'); }catch(_){}
+  if(!d) return;
+  const p=rclMemPop(); p.innerHTML=rclMemHtml(d); p.classList.add('on');
+  const r=p.getBoundingClientRect();
+  let px=Math.min(x+14, window.innerWidth  - r.width  - 12);
+  let py=Math.min(y+16, window.innerHeight - r.height - 12);
+  p.style.left=Math.max(8,px)+'px'; p.style.top=Math.max(8,py)+'px';
+}
+function rclMemEsconder(){
+  clearTimeout(RCLMEM._t); RCLMEM._t=null; RCLMEM._alvo=null;
+  if(RCLMEM._pop)  RCLMEM._pop.classList.remove('on');
+  if(RCLMEM._hint) RCLMEM._hint.classList.remove('on');
+}
+(function rclMemBind(){
+  if(!RCLMEM.ligado) return;
+  document.addEventListener('mouseover', ev=>{
+    const el = ev.target && ev.target.closest ? ev.target.closest('[data-mem]') : null;
+    if(!el || el===RCLMEM._alvo) return;
+    rclMemEsconder(); RCLMEM._alvo=el;
+    const x=ev.clientX, y=ev.clientY;
+    const hint=rclMemHint(); hint.classList.add('on');
+    hint.style.left=Math.min(x+14, window.innerWidth-160)+'px';
+    hint.style.top =Math.min(y+16, window.innerHeight-26)+'px';
+    RCLMEM._t=setTimeout(()=>{ hint.classList.remove('on'); rclMemMostrar(el,x,y); }, RCLMEM.atrasoMs);
+  }, true);
+  document.addEventListener('mouseout', ev=>{
+    const el = ev.target && ev.target.closest ? ev.target.closest('[data-mem]') : null;
+    if(el && el===RCLMEM._alvo){
+      const para = ev.relatedTarget;
+      if(para && (para===RCLMEM._pop || (RCLMEM._pop && RCLMEM._pop.contains(para)))) return;
+      rclMemEsconder();
+    }
+  }, true);
+  document.addEventListener('scroll', rclMemEsconder, true);
+  window.addEventListener('blur', rclMemEsconder);
+  document.addEventListener('keydown', e=>{ if(e.key==='Escape') rclMemEsconder(); });
+})();
+/* ╚══════════════════════ RCLMEM-FIM (JS) ═════════════════════════════════╝ */
+
+
 const RCL_CFG = {
   /* ── Física do consumo ──────────────────────────────────────────────────
      LHV volumétrico do diesel S-10 ≈ 35,8 MJ/l. Rendimento global (motor +
@@ -10425,7 +10567,47 @@ const RCL_PADRAO = {
   aproveitarRetorno: true,
   janelaRetornoDias: 2,
   /* ── Faturamento ── */
-  cfcSeparado: true
+  cfcSeparado: true,
+
+  /* ══ FONTE DE CADA LINHA DE CUSTO ══════════════════════════════════════
+     Cada linha do custo por viagem passa a declarar de ONDE vem o número.
+       'realizado'  → nivelado pelo realizado do Mapinha (R$ do fechamento)
+       'cpk'        → premissa/base do módulo CPK
+       'simulador'  → premissa da aba Simulador (planilha E-…)
+       'modelo'     → a fórmula antiga de custosViagem(), como estava
+     Trocar qualquer uma para 'modelo' devolve exatamente o comportamento
+     anterior daquela linha — nada aqui é irreversível.                    */
+  fonteDiesel:      'realizado',   /* realizado · modelo                    */
+  fonteArla:        'realizado',   /* realizado · modelo — regra dos 5% fica */
+  fontePedagio:     'realizado',   /* realizado · here · modelo             */
+  fontePneus:       'realizado',   /* realizado · modelo                    */
+  fonteLubrificante:'realizado',   /* realizado · modelo                    */
+  fontePecas:       'realizado',   /* realizado · modelo                    */
+  fonteDocSeguros:  'realizado',   /* realizado · modelo                    */
+  fontePessoal:     'cpk',         /* cpk · modelo                          */
+  fonteDeprec:      'cpk',         /* cpk · modelo                          */
+  fonteAlimentacao: 'simulador',   /* simulador · modelo                    */
+  fonteTempo:       'simulador',   /* simulador · modelo                    */
+  /* Pessoal do CPK: quais valores da Premissa (CPK) entram.
+       'ambos'  → Custo Frota 35% + Custo Agregado 65% (= base final após AE)
+       'frota'  → só o Custo Frota 35%, como o CPK faz hoje                 */
+  pessoalCpkBase:   'ambos',
+  arlaPct:          0.05,          /* regra dos 5% sobre os litros de diesel */
+  /* ══ DISTÂNCIA ═════════════════════════════════════════════════════════
+     Cidade a cidade a SZY manda (é o cadastro contratado); a HERE entra
+     quando a SZY não tem, e sempre que o percurso for porta a porta.      */
+  distPreferida:    'szy',         /* szy · here                            */
+  distAlertaPct:    0.10,          /* discrepância SZY × HERE que vira aviso */
+  /* ══ NIVELAMENTO PELO REALIZADO ════════════════════════════════════════
+     'medido' distribui o total do Mapinha sobre exatamente o km/viagens que
+     este módulo mediu no período — a soma das rotas fecha com o Mapinha por
+     construção. 'taxa' usa a taxa do Mapinha sem forçar o fechamento.     */
+  nivelamento:      'medido',      /* medido · taxa                         */
+  /* Sobrescritas manuais das taxas do realizado (vazio = calcula do Mapinha) */
+  ovDieselRS: null, ovArlaRS: null, ovPedagioKm: null, ovPneusKm: null,
+  ovLubKm: null, ovPecasViagem: null, ovDocViagem: null, ovPessoalViagem: null,
+  ovDeprecCavaloViagem: null, ovDeprecCarretaViagem: null,
+  ovAlimentacaoViagem: null, ovTempoHora: null
 };
 
 const RCL = {
@@ -10434,6 +10616,7 @@ const RCL = {
   diag: null, ref: null, precos: null, meses: [],
   abertos: new Set(), sel: null,
   calculado: false, aviso: [],
+  real: null, realCarregado: false,   /* realizado do Mapinha / CPK          */
   _prom: null
 };
 
@@ -10534,6 +10717,322 @@ function rclSZCJanela(meses, op){
     precoDiesel: lD>0 ? vD/lD : null, litrosDiesel: lD, qtdDiesel: qD, descartados: dD,
     precoArla:   lA>0 ? vA/lA : null, litrosArla:   lA, qtdArla:   qA,
     op: op||'todas', meses: meses.length
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   REALIZADO — MAPINHA, CPK E SIMULADOR
+   ──────────────────────────────────────────────────────────────────────────
+   A partir daqui o custo da rota deixa de ser inteiramente modelado. Cada
+   linha declara a sua origem e o número sai de onde a empresa já fecha o mês:
+
+     Mapinha (DRE do fechamento)   diesel, Arla, pedágio, pneus, lubrificante,
+                                   peças e serviços, documentação e seguros
+     CPK (premissa e depreciação)  pessoal (Frota 35% + Agregado 65%) e a
+                                   depreciação por placa de cavalo e carreta
+     Simulador (premissas E-…)     alimentação e custo do tempo parado
+
+   O princípio é o mesmo do diesel desde o início do módulo: **o modelo
+   REPARTE entre rotas, o realizado define o NÍVEL**. O Mapinha diz quanto a
+   frota gastou de pneu no mês; o modelo diz qual rota rodou mais quilômetro.
+   A multiplicação dos dois é o custo de pneu daquela rota — e a soma de
+   todas fecha, por construção, com o Mapinha.
+
+   Chave de rateio por natureza do custo (decidida com o comercial):
+     por KM      diesel, Arla, pedágio, pneus, lubrificante
+     por VIAGEM  peças, documentação e seguros, pessoal, depreciação,
+                 alimentação, tempo
+
+   Nenhuma coleção nova: mapinha_mensal, mapinha_lancamentos,
+   mapinha_premissas, mapinha_pedagios, cpk_lancamentos e veiculos já estão
+   na allowlist da ponte do index.html. Nada a mexer no firestore.rules.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Centros de custo do grupo C.O que pertencem ao AGREGADO — ficam fora do
+   custo da frota própria, exatamente como no CPK. */
+const RCLR_CO_AGREGADO = new Set(['10.01','11.01','12.01']);
+/* Diesel: mesmos códigos do Mapinha. .01 = frota própria, .02 = agregado. */
+const RCLR_DIESEL = {
+  '01.01':'interno', '02.01':'externo', '04.01':'arla',   /* frota   */
+  '01.02':null,      '02.02':null,      '04.02':null      /* agregado */
+};
+const RCLR_DIESEL_CREDITO = new Set(['22.01']);           /* reembolso abate  */
+/* Natureza do C.O por código, quando o nome do centro de custo não resolver. */
+const RCLR_CO_COD = { '05.01':'lub', '06.01':'pecas', '07.01':'pneus',
+                      '08.01':'doc', '03.01':'pecas', '23.01':'pecas' };
+
+function rclrNorm(s){
+  return String(s==null?'':s).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+}
+/* Classifica um lançamento do C.O na linha de custo que ele alimenta.
+   O NOME do centro de custo manda (é o que o financeiro digita e revisa); o
+   código é só a rede de segurança. A classificação aparece na memória de
+   cálculo para poder ser conferida centro a centro. */
+function rclrNaturezaCO(cod, nome){
+  const n = rclrNorm(nome);
+  if(/pneu|recap|borrachar|camara|rodagem/.test(n))                    return 'pneus';
+  if(/lubrific|\boleo\b|graxa|aditivo/.test(n))                        return 'lub';
+  if(/licenc|seguro|ipva|dpvat|laudo|document|crlv|antt|rntrc|tacograf|multa/.test(n)) return 'doc';
+  if(/pec|servi|manuten|oficina|revis|reform|melhor|funilar|eletric|solda/.test(n))    return 'pecas';
+  return RCLR_CO_COD[String(cod||'').trim()] || 'outros';
+}
+function rclrPlacaProp(placa, mapaVeic){
+  const p=rclPlaca(placa); if(!p) return false;
+  const v=mapaVeic.get(p); if(!v) return false;
+  const vinc=rclrNorm(v.vinculo||v.tipo_vinculo||v.tipoVinculo||'');
+  if(/agregad|terceir/.test(vinc)) return false;
+  return /propri|frota|comix/.test(vinc) || !vinc;
+}
+function rclrTipoVeic(v){
+  const t=rclrNorm([v&&v.tipo, v&&v.categoria, v&&v.especie, v&&v.subtipo, v&&v.modelo].filter(Boolean).join(' '));
+  if(/carreta|semi|reboque|silo|tanque|bitrem|rodotrem|vanderleia|implement/.test(t)) return 'carreta';
+  if(/cavalo|mecan|caminh|trator|truck/.test(t)) return 'cavalo';
+  if(/apoio|utilitar|camionet|picape|pickup|passeio/.test(t)) return 'apoio';
+  return 'outro';
+}
+
+/* Bucket vazio de uma unidade. Tudo em R$ do PERÍODO INTEIRO. */
+function rclrBucket(filial){
+  return { filial, mesesLidos:[], mesesSem:[],
+    dieselRS:0, dieselInterno:0, dieselExterno:0, dieselReembolso:0, arlaRS:0,
+    pedagioRS:0, pedagioPlacasProp:0, pedagioSemCadastro:0,
+    pneusRS:0, lubRS:0, pecasRS:0, docRS:0, coOutrosRS:0, coAgregadoRS:0,
+    pessoalFrota35:0, pessoalAgregado65:0, pessoalBaseFinal:0, pessoalRS:0,
+    deprecCavaloRS:0, deprecCarretaRS:0, deprecApoioRS:0,
+    nLanc:0, nPlacasDep:0, temPremissaCpk:false };
+}
+function rclrSomar(a,b){
+  const out={...a};
+  Object.keys(b).forEach(k=>{
+    if(typeof b[k]==='number') out[k]=(out[k]||0)+b[k];
+    else if(Array.isArray(b[k])) out[k]=(out[k]||[]).concat(b[k]);
+    else if(typeof b[k]==='boolean') out[k]=out[k]||b[k];
+  });
+  out.filial='consolidado';
+  return out;
+}
+
+/* ══ Carregamento do realizado ════════════════════════════════════════════
+   Uma leitura por mês em mapinha_lancamentos e em mapinha_pedagios, uma da
+   coleção de premissas e uma do documento de depreciação. Tudo cacheado por
+   janela — trocar a ordenação ou o filtro da tela não relê nada. */
+async function rclRealCarregar(meses){
+  const chave = meses.join(',');
+  if(RCL.real && RCL.real.chave===chave) return RCL.real;
+
+  const SIGLAS=['SC','PR','SP'];
+  const falta=[], nota=[];
+
+  /* ── cadastro de veículos: placa → unidade, tipo e vínculo ── */
+  const mapaVeic=new Map();
+  try{
+    (await fsGetCollection('veiculos')).forEach(d=>{
+      const v=d.data||{}; const p=rclPlaca(v.placa||d.id); if(p) mapaVeic.set(p,v);
+    });
+  }catch(e){ falta.push('cadastro de veículos'); }
+  const filialDaPlaca=p=>{
+    const v=mapaVeic.get(rclPlaca(p)); if(!v) return '';
+    return String(v.unidade||v.filial||v.sigla||'').toUpperCase().slice(0,2);
+  };
+
+  /* ── lançamentos do Mapinha, mês a mês ── */
+  const buckets={}; SIGLAS.forEach(s=>buckets[s]=rclrBucket(s));
+  for(const m of meses){
+    let linhas=[];
+    try{ linhas = await fsGetCollection('mapinha_lancamentos',{where:[['mesRef','==',m]]}); }
+    catch(e){ falta.push('lançamentos de '+m); continue; }
+    if(!linhas.length){ SIGLAS.forEach(s=>buckets[s].mesesSem.push(m)); continue; }
+    SIGLAS.forEach(s=>buckets[s].mesesLidos.push(m));
+    linhas.forEach(d=>{
+      const l=d.data||{};
+      if(String(l.status||'').toLowerCase()==='estornado') return;
+      const fil=String(l.filial||'').toUpperCase().slice(0,2);
+      const bk=buckets[fil]; if(!bk) return;
+      const cod=String(l.centroCusto||'').trim();
+      const nome=l.centroCustoNome||'';
+      const v=+l.valor||0;
+      bk.nLanc++;
+      if(RCLR_DIESEL_CREDITO.has(cod)){ bk.dieselReembolso+=Math.abs(v); return; }
+      if(Object.prototype.hasOwnProperty.call(RCLR_DIESEL,cod)){
+        const cls=RCLR_DIESEL[cod];
+        if(cls==='interno') bk.dieselInterno+=v;
+        else if(cls==='externo') bk.dieselExterno+=v;
+        else if(cls==='arla')    bk.arlaRS+=v;
+        return;                                     /* .02 = agregado → fora */
+      }
+      const grp=String(l.grupoDre||'').toUpperCase();
+      if(grp!=='CO') return;                        /* CP, CE e CAPEX à parte */
+      if(RCLR_CO_AGREGADO.has(cod)){ bk.coAgregadoRS+=v; return; }
+      const nat=rclrNaturezaCO(cod,nome);
+      if(nat==='pneus') bk.pneusRS+=v;
+      else if(nat==='lub')   bk.lubRS+=v;
+      else if(nat==='pecas') bk.pecasRS+=v;
+      else if(nat==='doc')   bk.docRS+=v;
+      else bk.coOutrosRS+=v;
+    });
+  }
+  SIGLAS.forEach(s=>{
+    const b=buckets[s];
+    b.dieselRS = b.dieselInterno + b.dieselExterno - b.dieselReembolso;
+  });
+
+  /* ── pedágio: 1 documento por mês, detalhado por placa ── */
+  for(const m of meses){
+    let doc=null;
+    try{ doc = await fsGetDoc('mapinha_pedagios','PED_'+m); }catch(_){}
+    if(!doc || !doc.data){ falta.push('pedágio de '+m); continue; }
+    const placas = Array.isArray(doc.data.placas)?doc.data.placas:[];
+    if(placas.length){
+      placas.forEach(p=>{
+        const fil = String(p.filial||filialDaPlaca(p.placa)||'').toUpperCase().slice(0,2);
+        const bk=buckets[fil]; if(!bk) return;
+        const val=+p.comix||0;
+        bk.pedagioRS+=val;
+        if(p.semCadastro) bk.pedagioSemCadastro+=val;
+        else if(rclrPlacaProp(p.placa,mapaVeic)) bk.pedagioPlacasProp+=val;
+      });
+    } else {
+      const pf=doc.data.porFilial||{};
+      Object.keys(pf).forEach(s=>{ if(buckets[s]) buckets[s].pedagioRS += (+pf[s].comix||0); });
+    }
+  }
+
+  /* ── pessoal: Premissa (CPK) do Mapinha, resolvida por vigência ──────────
+     A premissa é carry-forward: vale do mês de vigência em diante até que
+     outra a substitua. Somamos uma parcela por mês da janela, porque cada
+     mês tem a sua folha. */
+  let premAll=[];
+  try{ premAll = await fsGetCollection('mapinha_premissas'); }
+  catch(e){ falta.push('premissas do Mapinha'); }
+  const cpkDaFilial=(fil,mes)=>{
+    const cands=(premAll||[]).map(d=>({id:d.id,...(d.data||{})}))
+      .filter(p=>String(p.filial||'').toUpperCase()===fil && p.vigencia && p.vigencia<=mes)
+      .sort((a,b)=>String(a.vigencia).localeCompare(String(b.vigencia)));
+    let o={};
+    cands.forEach(p=>{
+      const src=(p.custoPessoalCpk&&typeof p.custoPessoalCpk==='object')?p.custoPessoalCpk
+              :((p.cpPremissaCpk&&typeof p.cpPremissaCpk==='object')?p.cpPremissaCpk:{});
+      const flat={ custoFrota35:p.cpkCustoFrota35, custoAgregado65:p.cpkCustoAgregado65,
+                   baseFinalAposAE:p.cpkBaseFinalAposAE, baseDiretaSemAE:p.cpkBaseDiretaSemAE,
+                   aeAlocado:p.cpkAEAlocado };
+      ['custoFrota35','custoAgregado65','baseFinalAposAE','baseDiretaSemAE','aeAlocado'].forEach(k=>{
+        const v = (flat[k]!==undefined&&flat[k]!==null&&flat[k]!=='') ? flat[k] : src[k];
+        if(v!==undefined && v!==null && v!=='') o[k]=+v||0;
+      });
+    });
+    return o;
+  };
+  SIGLAS.forEach(s=>{
+    const b=buckets[s];
+    meses.forEach(m=>{
+      const o=cpkDaFilial(s,m);
+      if(!Object.keys(o).length) return;
+      b.temPremissaCpk=true;
+      b.pessoalFrota35    += (+o.custoFrota35||0);
+      b.pessoalAgregado65 += (+o.custoAgregado65||0);
+      b.pessoalBaseFinal  += (+o.baseFinalAposAE|| ((+o.custoFrota35||0)+(+o.custoAgregado65||0)));
+    });
+  });
+
+  /* ── depreciação por placa: cpk_lancamentos/DEPRECIACAO ──────────────────
+     Uma parcela por mês da janela, com a MESMA fórmula do módulo CPK
+     (cpkDepCalc): linear sobre o valor depreciável, percentual anual ou
+     valor manual, respeitando data de compra, prazo e status.             */
+  let depDoc=null;
+  try{ depDoc = await fsGetDoc('cpk_lancamentos','DEPRECIACAO'); }catch(_){}
+  if(!depDoc || !depDoc.data || !depDoc.data.veiculos) falta.push('base de depreciação do CPK');
+  const veicsDep=(depDoc&&depDoc.data&&depDoc.data.veiculos)||{};
+  Object.keys(veicsDep).forEach(pl=>{
+    const rec=veicsDep[pl]||{};
+    const placa=rclPlaca(rec.placa||pl); if(!placa) return;
+    const cad=mapaVeic.get(placa);
+    if(cad && !rclrPlacaProp(placa,mapaVeic)) return;          /* só frota própria */
+    const fil=String(rec.unidade||(cad&&(cad.unidade||cad.filial))||'').toUpperCase().slice(0,2);
+    const bk=buckets[fil]; if(!bk) return;
+    const tipo = rclrTipoVeic({...(cad||{}), tipo:rec.tipo||(cad&&cad.tipo)});
+    let soma=0;
+    meses.forEach(m=>{ soma += rclrDepMes(rec, m); });
+    if(!(soma>0)) return;
+    bk.nPlacasDep++;
+    if(tipo==='carreta')      bk.deprecCarretaRS+=soma;
+    else if(tipo==='apoio')   bk.deprecApoioRS+=soma;
+    else                      bk.deprecCavaloRS+=soma;
+  });
+
+  const total=SIGLAS.map(s=>buckets[s]).reduce((a,b)=>rclrSomar(a,b), rclrBucket('consolidado'));
+  RCL.real={ chave, meses:meses.slice(), porOp:buckets, total, falta:[...new Set(falta)], nota,
+             lidoEm:agoraISO() };
+  RCL.realCarregado=true;
+  return RCL.real;
+}
+
+/* Depreciação mensal de uma placa numa competência — transcrição fiel do
+   cpkDepCalc() do módulo CPK. Se as duas contas divergirem, o CPK por rota
+   deixa de bater com o CPK por placa, que é o que este módulo persegue. */
+function rclrDepMes(rec, mes){
+  const nN=v=>{ const x=Number(String(v==null?'':v).toString().replace(/\./g,'').replace(',','.')); return isNaN(x)?0:x; };
+  const vc=nN(rec.valorCompra), vrIn=nN(rec.valorResidual);
+  const per=Math.round(nN(rec.periodoMeses)), perc=nN(rec.percentualAnual), manual=nN(rec.valorManualMensal);
+  const metodo=String(rec.metodo||'linear').toLowerCase();
+  const status=String(rec.status||'ativo').toLowerCase();
+  if(status!=='ativo') return 0;
+  const vr=Math.min(Math.max(0,vrIn), vc>0?vc:vrIn);
+  const depreciavel=Math.max(0, vc-vr);
+  let base=0;
+  if(metodo==='manual') base=Math.max(0,manual);
+  else if(metodo==='percentual') base=(vc>0&&perc>0)? vc*(perc/100)/12 : 0;
+  else base=(per>0)? depreciavel/per : 0;
+  if(!(base>0)) return 0;
+  let mesesMax=Infinity;
+  if(metodo==='linear' && per>0) mesesMax=per;
+  else if(depreciavel>0) mesesMax=Math.ceil(depreciavel/base - 1e-9);
+  /* mês de referência da compra, aceitando ISO e dd/mm/aaaa */
+  const dc=String(rec.dataCompra||'').trim();
+  let mc=null;
+  let mm=dc.match(/^(\d{4})-(\d{2})/);            if(mm) mc=mm[1]+'-'+mm[2];
+  if(!mc){ mm=dc.match(/^(\d{2})\/(\d{2})\/(\d{4})/); if(mm) mc=mm[3]+'-'+mm[2]; }
+  if(!mc || !mes || mc>mes) return 0;
+  const [ay,am]=mc.split('-').map(Number), [by,bm]=mes.split('-').map(Number);
+  const decorridos=(by-ay)*12+(bm-am)+1;
+  if(decorridos<1 || decorridos>(isFinite(mesesMax)?mesesMax:decorridos)) return 0;
+  if(depreciavel>0){
+    const restanteAntes=depreciavel-base*(decorridos-1);
+    return Math.max(0, Math.min(base, restanteAntes));
+  }
+  return base;
+}
+
+/* ══ Taxas do realizado ═══════════════════════════════════════════════════
+   Converte o R$ do período em R$/km e R$/viagem usando exatamente o km e as
+   viagens que ESTE módulo mediu. A consequência é desejada: a soma do custo
+   de todas as rotas fecha com o Mapinha. A ressalva também é explícita — o
+   Mapinha cobre TODO o rodado da frota (transferência, ida para manutenção,
+   reposicionamento) e o módulo só mede o km faturado, então esta taxa
+   carrega o rodado improdutivo. É o indicador de cobertura que mostra isso. */
+function rclrTaxas(bk, kmMedido, viagensMedidas, P){
+  const km=Math.max(kmMedido||0, 1), vg=Math.max(viagensMedidas||0, 1);
+  /* Toda taxa sai como NÚMERO puro — quem consome multiplica direto por km ou
+     por viagem. O registro de quais vieram de sobrescrita manual fica à parte,
+     em .manual, para a memória de cálculo poder marcá-las. */
+  const manual={};
+  const g=(nome, ov, calc)=>{
+    if(ov!=null && ov>=0){ manual[nome]=true; return ov; }
+    const v=calc; return (isFinite(v)?v:0);
+  };
+  const nb=k=>{ const v=Number(bk&&bk[k]); return isFinite(v)?v:0; };
+  const pessoalRS = P.pessoalCpkBase==='frota' ? nb('pessoalFrota35')
+                                               : (nb('pessoalFrota35') + nb('pessoalAgregado65'));
+  return {
+    km, viagens:vg, manual,
+    pedagioKm:  g('pedagioKm', P.ovPedagioKm,  nb('pedagioRS')/km),
+    pneusKm:    g('pneusKm',   P.ovPneusKm,    nb('pneusRS')/km),
+    lubKm:      g('lubKm',     P.ovLubKm,      nb('lubRS')/km),
+    pecasVg:    g('pecasVg',   P.ovPecasViagem,nb('pecasRS')/vg),
+    docVg:      g('docVg',     P.ovDocViagem,  nb('docRS')/vg),
+    pessoalVg:  g('pessoalVg', P.ovPessoalViagem, pessoalRS/vg),
+    depCavVg:   g('depCavVg',  P.ovDeprecCavaloViagem,  nb('deprecCavaloRS')/vg),
+    depCarVg:   g('depCarVg',  P.ovDeprecCarretaViagem, nb('deprecCarretaRS')/vg),
+    pessoalRS
   };
 }
 
@@ -10778,13 +11277,52 @@ function rclPreConsumo(buckets, ref, perfil, P){
 function rclPreparo(bk, ctx){
   const r=bk.rota, P=ctx.P;
   const Pb=rtPremissasCusto(r);
-  /* distância: a HERE mede o percurso de caminhão; a SZY é o cadastro. */
-  let kmIda=null, kmVolta=null, fonteDist='szy';
+  /* ══ DISTÂNCIA ADOTADA ══════════════════════════════════════════════════
+     Regra nova (ago/2026), decidida com o comercial:
+
+       cidade a cidade  →  a distância SALVA NA SZY manda. É o percurso
+                           contratado, o que a tarifa cobra e o que a
+                           operação reconhece. Um modelo de custo que usa
+                           outro quilômetro discute com o contrato.
+       porta a porta    →  a HERE manda, porque aí o cálculo é rua a rua /
+                           CEP a CEP, e o cadastro da SZY não chega nesse
+                           nível de resolução.
+       sem SZY          →  a HERE entra como suprimento.
+
+     A HERE nunca é descartada: ela vira o CONTROLE. Sempre que as duas
+     divergirem mais que o limite (padrão 10%), a rota sai marcada e a
+     memória de cálculo mostra as duas medições lado a lado. Divergência
+     grande quase nunca é erro da HERE — é rota cadastrada com o km de outro
+     trecho, ou desvio permanente que ninguém atualizou na SZY.            */
   const here = (r.here && !r.here.erro && r.here.ida) ? r.here : null;
-  if(here){ kmIda=here.ida.km; kmVolta=here.volta?here.volta.km:null; fonteDist='here'; }
-  if(!(kmIda>0)){ kmIda=r.kmIda||null; kmVolta=r.kmVolta||null; fonteDist='szy'; }
+  const szyIda = r.kmIda>0 ? r.kmIda : null;
+  const szyVolta = r.kmVolta>0 ? r.kmVolta : null;
+  const hereIda = here && here.ida.km>0 ? here.ida.km : null;
+  const hereVolta = here && here.volta && here.volta.km>0 ? here.volta.km : null;
+  /* Percurso porta a porta: a simulação foi construída sobre endereço, não
+     sobre o centroide da cidade. O carimbo do geocoder diz qual foi. */
+  const gf=(here&&here.geo)||{};
+  const portaAPorta = /endereco|cep|porta|logradouro/i.test(String(gf.oFonte||'')+' '+String(gf.dFonte||''));
+  const prefereHere = (P.distPreferida==='here') || portaAPorta;
+
+  let kmIda=null, kmVolta=null, fonteDist='szy';
+  if(prefereHere && hereIda){ kmIda=hereIda; kmVolta=hereVolta; fonteDist='here'; }
+  else if(szyIda){ kmIda=szyIda; kmVolta=szyVolta; fonteDist='szy'; }
+  else if(hereIda){ kmIda=hereIda; kmVolta=hereVolta; fonteDist='here'; }
   if(!(kmIda>0)) return null;
   if(!(kmVolta>0)) kmVolta=kmIda;
+
+  /* Divergência SZY × HERE — só existe quando as duas medições existem. */
+  let distDelta=null, distAlerta=false;
+  if(szyIda>0 && hereIda>0){
+    const totSzy = szyIda + (szyVolta>0?szyVolta:szyIda);
+    const totHere= hereIda + (hereVolta>0?hereVolta:hereIda);
+    distDelta = totHere/totSzy - 1;
+    distAlerta = Math.abs(distDelta) > (P.distAlertaPct>0 ? P.distAlertaPct : 0.10);
+  }
+  const distMeta = { szyIda, szyVolta, hereIda, hereVolta, portaAPorta,
+                     delta:distDelta, alerta:distAlerta,
+                     limite:(P.distAlertaPct>0?P.distAlertaPct:0.10) };
   /* pedágio por trecho: a base de praças por eixo quando a HERE devolveu,
      senão o que estiver cadastrado como premissa da rota. */
   let pIda = here&&here.ida ? here.ida.pedagio : null;
@@ -10802,7 +11340,7 @@ function rclPreparo(bk, ctx){
   const ap=ctx.aprovIdx.get(r.k3);
   const temPlaca = !!(ap && ap.comPlaca>0);
   const aprov = (P.aproveitarRetorno && temPlaca && ap.tot>0) ? ap.ok/ap.tot : 0;
-  return {Pb, kmIda, kmVolta, fonteDist, pIda, pVolta, pedOk, tonViagem, cons, norm, fator, kmlC, kmlV, temPlaca, aprov};
+  return {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, tonViagem, cons, norm, fator, kmlC, kmlV, temPlaca, aprov};
 }
 
 /* Passo 1 da calibração: só os LITROS. Não chama o motor de custo — as
@@ -10811,9 +11349,12 @@ function rclPreparo(bk, ctx){
    aba sem mudar um centavo do resultado. */
 function rclLitrosBucket(bk, ctx){
   const q=rclPreparo(bk, ctx);
-  if(!q){ bk.litrosAtrib=0; return; }
+  if(!q){ bk.litrosAtrib=0; bk.kmAtrib=0; return; }
   const lIda=q.kmIda/Math.max(q.kmlC,0.1), lVolta=q.kmVolta/Math.max(q.kmlV,0.1);
   bk.litrosAtrib=(lIda + (1-q.aprov)*lVolta)*bk.viagens;
+  /* O km medido já sai daqui: é ele que vira o denominador das taxas do
+     realizado no passo seguinte, antes de o motor de custo rodar. */
+  bk.kmAtrib=(q.kmIda + (1-q.aprov)*q.kmVolta)*bk.viagens;
 }
 
 function rclCustoBucket(bk, ctx){
@@ -10821,7 +11362,7 @@ function rclCustoBucket(bk, ctx){
   const nMeses=Math.max(RCL.meses.length,1);
   const q=rclPreparo(bk, ctx);
   if(!q){ bk.erro='sem distância na SZY nem na HERE'; bk.custo=null; bk.litrosAtrib=0; return; }
-  const {Pb, kmIda, kmVolta, fonteDist, pIda, pVolta, pedOk, tonViagem, cons, norm, fator, kmlC, kmlV, temPlaca, aprov}=q;
+  const {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, tonViagem, cons, norm, fator, kmlC, kmlV, temPlaca, aprov}=q;
 
   const pr = ctx.precos[r.op] || ctx.precos._geral || {};
   const prG = ctx.precos._geral || {};
@@ -10848,20 +11389,111 @@ function rclCustoBucket(bk, ctx){
     if(typeof a!=='number'){ linhas[k]=a; return; }
     linhas[k]= a - aprov*(a-(typeof b==='number'?b:a));
   });
-  const custoViagem = cFull.total - aprov*(cFull.total-(cIda.erro?cFull.total:cIda.total));
   const litrosViagem= cFull.litros - aprov*(cFull.litros-(cIda.erro?cFull.litros:cIda.litros));
   const kmViagem    = kmIda + (1-aprov)*kmVolta;
 
-  const varia = ['diesel','arla','pedagio','pneus','lubrificante','compressor']
-                  .reduce((a,k)=>a+(typeof linhas[k]==='number'?linhas[k]:0),0);
-  const fixo  = ['pecas','docSeguros','pessoal','deprecCavalo','deprecCarreta','alimentacao','limpeza','tempo']
-                  .reduce((a,k)=>a+(typeof linhas[k]==='number'?linhas[k]:0),0);
+  /* ══════════════════════════════════════════════════════════════════════
+     SUBSTITUIÇÃO PELO REALIZADO
+     ──────────────────────────────────────────────────────────────────────
+     Até aqui o custo é o modelado, exatamente como sempre foi. Agora cada
+     linha cuja premissa diz 'realizado' / 'cpk' / 'simulador' é TROCADA
+     pelo número que vem da fonte escolhida. O modelo não sai de cena: ele
+     é quem diz quanto quilômetro e quantas viagens esta rota tem, e é essa
+     repartição que multiplica a taxa do realizado.
+
+     Guarda de segurança em todas: sem a fonte carregada, ou sem taxa
+     apurável, a linha CAI DE VOLTA no modelado em vez de virar zero. Custo
+     que some é pior que custo aproximado.
+     ══════════════════════════════════════════════════════════════════════ */
+  const T  = ctx.taxas ? (ctx.taxas[r.op] || ctx.taxas._geral) : null;
+  const rb = ctx.realBk ? (ctx.realBk[r.op] || ctx.realBk._geral) : null;
+  const fontes={};
+  /* Convenção de sinal: rtCustoRota() devolve TODA linha de custo como número
+     POSITIVO (ele já inverte o sinal do núcleo custosViagem). Qualquer troca
+     tem de respeitar isso, senão a linha substituída passa a ABATER o total em
+     vez de somar — e a margem de contribuição vira ficção. */
+  const troca=(chave, fonteDesejada, valor, selo)=>{
+    if(fonteDesejada==='modelo' || valor==null || !isFinite(valor)){ fontes[chave]='modelo'; return; }
+    linhas[chave] = Math.abs(valor);
+    fontes[chave] = selo;
+  };
+
+  /* ── Diesel: litros do modelo × preço efetivo do Mapinha ──────────────
+     O preço efetivo é o R$ de diesel do fechamento dividido pelos litros
+     abastecidos na SZC. Reconcilia o custo com o que a contabilidade
+     registrou — inclui frete do combustível, ajustes e o reembolso que
+     abate — coisa que a média simples da nota de bomba não enxerga.     */
+  const precoEfetDiesel = (T && T.precoDieselEfetivo>0) ? T.precoDieselEfetivo : null;
+  troca('diesel', P.fonteDiesel, precoEfetDiesel!=null ? litrosViagem*precoEfetDiesel : null, 'mapinha');
+
+  /* ── Arla: regra dos 5% mantida; só o preço vem do Mapinha ── */
+  const precoEfetArla = (T && T.precoArlaEfetivo>0) ? T.precoArlaEfetivo : null;
+  const arlaPctUsado  = P.arlaPct>0 ? P.arlaPct : 0.05;
+  troca('arla', P.fonteArla,
+        precoEfetArla!=null ? litrosViagem*arlaPctUsado*precoEfetArla : null, 'mapinha');
+
+  /* ── Pedágio: a HERE dá o FORMATO (qual rota passa por mais praça) e o
+     Mapinha dá o NÍVEL. Onde a HERE não mediu praça, cai no R$/km. ──── */
+  if(P.fontePedagio==='realizado' && T){
+    const modelado = pedOk ? ((pIda||0) + (1-aprov)*(pVolta||0)) : null;
+    const val = (modelado!=null && T.pedagioFator>0) ? modelado*T.pedagioFator
+              : (T.pedagioKm>0 ? T.pedagioKm*kmViagem : null);
+    troca('pedagio', 'realizado', val, pedOk&&T.pedagioFator>0?'mapinha+here':'mapinha');
+  } else if(P.fontePedagio==='here'){ fontes.pedagio='here'; }
+  else fontes.pedagio='modelo';
+
+  troca('pneus',        P.fontePneus,        T? T.pneusKm*kmViagem : null,  'mapinha');
+  troca('lubrificante', P.fonteLubrificante, T? T.lubKm*kmViagem   : null,  'mapinha');
+  troca('pecas',        P.fontePecas,        T? T.pecasVg          : null,  'mapinha');
+  troca('docSeguros',   P.fonteDocSeguros,   T? T.docVg            : null,  'mapinha');
+  troca('pessoal',      P.fontePessoal==='cpk'?'cpk':'modelo', T? T.pessoalVg : null, 'cpk');
+  troca('deprecCavalo', P.fonteDeprec==='cpk'?'cpk':'modelo',  T? T.depCavVg  : null, 'cpk');
+  troca('deprecCarreta',P.fonteDeprec==='cpk'?'cpk':'modelo',  T? T.depCarVg  : null, 'cpk');
+
+  /* ── Alimentação e tempo: premissas do Simulador ──────────────────────
+     Alimentação estava ENTERRADA dentro da linha de pessoal do núcleo
+     (pessoalFixo = salário×encargos/V + alimentação/V). Agora ela sai de
+     lá e ganha linha própria com o E32 do Simulador — sem isso, trocar o
+     pessoal pelo CPK apagaria a alimentação sem que ninguém percebesse. */
+  const prSim = premissasEfetivas(null, r.op, null) || {};
+  if(P.fonteAlimentacao==='simulador'){
+    const alimMes = P.ovAlimentacaoViagem!=null && P.ovAlimentacaoViagem>=0
+                  ? null : (Number(prSim.alimentacao_mes)||0);
+    const val = P.ovAlimentacaoViagem!=null && P.ovAlimentacaoViagem>=0
+              ? P.ovAlimentacaoViagem : (alimMes>0 ? alimMes/Math.max(viagensMes,0.01) : null);
+    troca('alimentacao','simulador', val, 'simulador');
+  } else fontes.alimentacao='modelo';
+
+  if(P.fonteTempo==='simulador'){
+    const tCarga  = Number(prSim.tempo_carga_h);
+    const tEspera = Number(prSim.espera_cliente_h);
+    const custoH  = P.ovTempoHora!=null && P.ovTempoHora>=0
+                  ? P.ovTempoHora : Number(prSim.custo_oportunidade_h);
+    const tParado = (isNaN(tCarga)?1.5:tCarga) + (isNaN(tEspera)?1.0:tEspera);
+    const val = (custoH>0) ? tParado*custoH : 0;
+    linhas.tempo = Math.abs(val); fontes.tempo='simulador';
+    bk._tempoDet = { tCarga:isNaN(tCarga)?1.5:tCarga, tEspera:isNaN(tEspera)?1.0:tEspera, custoH:custoH||0, tParado };
+  } else fontes.tempo='modelo';
+
+  /* Total recomposto das linhas — não pode mais vir de cFull.total, que
+     ainda carrega os valores modelados que acabamos de trocar. */
+  const ORDEM_VAR = ['diesel','arla','pedagio','pneus','lubrificante','compressor'];
+  const ORDEM_FIX = ['pecas','docSeguros','pessoal','deprecCavalo','deprecCarreta','alimentacao','limpeza','tempo'];
+  const varia = ORDEM_VAR.reduce((a,k)=>a+(typeof linhas[k]==='number'?linhas[k]:0),0);
+  const fixo  = ORDEM_FIX.reduce((a,k)=>a+(typeof linhas[k]==='number'?linhas[k]:0),0);
+  const custoViagem = varia+fixo;
+  const custoModelado = cFull.total - aprov*(cFull.total-(cIda.erro?cFull.total:cIda.total));
 
   bk.custo={
-    fonteDist, kmIda, kmVolta, kmViagem, aprov, temPlaca, pedOk,
-    pIda, pVolta, cons, fator, norm, precoDiesel:cFull.dieselRS, precoArla:linhas.precoArla,
+    fonteDist, distMeta, kmIda, kmVolta, kmViagem, aprov, temPlaca, pedOk,
+    pIda, pVolta, cons, fator, norm,
+    precoDiesel: precoEfetDiesel!=null?precoEfetDiesel:cFull.dieselRS,
+    precoArla:   precoEfetArla!=null  ?precoEfetArla  :linhas.precoArla,
+    precoDieselModelo: cFull.dieselRS, arlaPct: arlaPctUsado,
     litrosViagem, kmlC, kmlV, tonViagem, viagensMes,
-    linhas, variavel:varia, fixo, custoViagem,
+    linhas, fontes, taxas:T, realBk:rb, tempoDet:bk._tempoDet||null,
+    variavel:varia, fixo, custoViagem, custoModelado,
+    desvioModelo: custoModelado>0 ? custoViagem/custoModelado-1 : null,
     cpk: kmViagem>0 ? custoViagem/kmViagem : null,
     custoTon: tonViagem>0 ? custoViagem/tonViagem : null,
     cheio:cFull, so_ida:cIda,
@@ -10947,7 +11579,70 @@ function rclCalcular(){
     const a=ader[op];
     return (a && a.fator!=null) ? a.aplicado : ader._geral.aplicado;
   };
-  const ctx2={P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:fatorDe};
+  /* PASSO 3 — TAXAS DO REALIZADO ═══════════════════════════════════════════
+     Agora que o km e as viagens de cada rota estão medidos, o R$ do Mapinha
+     vira R$/km e R$/viagem. Uma taxa por operação (cada filial fecha o seu
+     mês) e uma consolidada para as rotas cuja operação não tem fechamento.  */
+  const real = RCL.real && RCL.real.chave===RCL.meses.join(',') ? RCL.real : null;
+  const taxas={}, realBk={};
+  if(real){
+    const monta=(op)=>{
+      const alvo = op ? buckets.filter(b=>b.rota.op===op) : buckets;
+      const bkR  = op ? real.porOp[op] : real.total;
+      if(!bkR) return null;
+      const km = alvo.reduce((a,b)=>a+(b.kmAtrib||0),0);
+      const vg = alvo.reduce((a,b)=>a+(b.viagens||0),0);
+      const t  = rclrTaxas(bkR, km, vg, P);
+      /* Preço efetivo do diesel: R$ do fechamento ÷ litros abastecidos na
+         SZC. É o que amarra o custo de diesel do módulo ao DRE. */
+      const szc = (op?precos[op]:precos._geral)||{};
+      /* Banda de sanidade do preço derivado. O preço efetivo é uma DIVISÃO:
+         R$ do fechamento ÷ litros. Quando o denominador está incompleto — SZC
+         de um mês faltando, por exemplo — o quociente explode e contaminaria
+         todo o custo de diesel sem que nada na tela acusasse. Fora da banda o
+         módulo devolve o preço da SZC e registra o motivo. */
+      const saoPreco=(v,lo,hi)=> (v!=null && isFinite(v) && v>=lo && v<=hi) ? v : null;
+      const dieselCalc = (bkR.dieselRS>0 && szc.litrosDiesel>0) ? bkR.dieselRS/szc.litrosDiesel : null;
+      const dieselOk   = saoPreco(dieselCalc, 2, 15);
+      t.precoDieselEfetivo = (P.ovDieselRS!=null && P.ovDieselRS>0) ? P.ovDieselRS
+        : (dieselOk!=null ? dieselOk : (szc.precoDiesel||null));
+      t.precoDieselFonte = (P.ovDieselRS!=null && P.ovDieselRS>0) ? 'manual'
+        : (dieselOk!=null ? 'mapinha÷szc'
+          : (dieselCalc!=null ? 'szc — preço do Mapinha fora da banda R$ 2–15/l' : 'szc'));
+      const litrosArlaMod = alvo.reduce((a,b)=>a+(b.litrosAtrib||0),0)*(P.arlaPct>0?P.arlaPct:0.05);
+      const arlaSzc  = (bkR.arlaRS>0 && szc.litrosArla>0) ? bkR.arlaRS/szc.litrosArla : null;
+      const arlaMod  = (bkR.arlaRS>0 && litrosArlaMod>0)  ? bkR.arlaRS/litrosArlaMod  : null;
+      const arlaOk   = saoPreco(arlaSzc, 0.5, 20) || saoPreco(arlaMod, 0.5, 20);
+      t.precoArlaEfetivo = (P.ovArlaRS!=null && P.ovArlaRS>0) ? P.ovArlaRS
+        : (arlaOk!=null ? arlaOk : (szc.precoArla||null));
+      t.precoArlaFonte = (P.ovArlaRS!=null && P.ovArlaRS>0) ? 'manual'
+        : (arlaOk!=null ? (saoPreco(arlaSzc,0.5,20)!=null?'mapinha÷szc':'mapinha÷modelo')
+          : ((arlaSzc!=null||arlaMod!=null) ? 'szc — preço do Mapinha fora da banda R$ 0,50–20/l' : 'szc'));
+      if(t.precoDieselFonte.indexOf('fora da banda')>-1)
+        RCL.aviso.push(`Preço efetivo do diesel de ${op||'consolidado'} saiu em ${brl(dieselCalc)}/l (R$ do Mapinha ÷ litros da SZC) — fora da banda sã. O módulo usou o preço da SZC. Costuma indicar SZC incompleta no período.`);
+      /* Pedágio: fator que faz a soma do pedágio HERE das rotas fechar com o
+         Mapinha. Fora da banda 0,5–2,0 o fator não é aplicado (a base de
+         praças ou o import de pedágio está incompleto) e cai no R$/km. */
+      const pedMod = alvo.reduce((a,b)=>{
+        const q=b._pedMod; return a + (q>0?q:0);
+      },0);
+      t.pedagioKm = (P.ovPedagioKm!=null && P.ovPedagioKm>=0) ? P.ovPedagioKm : bkR.pedagioRS/Math.max(km,1);
+      t.pedagioFator = (pedMod>0 && bkR.pedagioRS>0) ? bkR.pedagioRS/pedMod : 0;
+      if(!(t.pedagioFator>=0.5 && t.pedagioFator<=2.0)) t.pedagioFator=0;
+      t.pedagioModelado=pedMod; t.pedagioRealizado=bkR.pedagioRS;
+      t.cobertura = { km, viagens:vg, meses:real.meses.length };
+      return t;
+    };
+    /* pedágio modelado por bucket, para o fator acima */
+    buckets.forEach(bk=>{
+      const q=rclPreparo(bk, {P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:fatorDe});
+      bk._pedMod = (q && q.pedOk) ? ((q.pIda||0)+(1-q.aprov)*(q.pVolta||0))*bk.viagens : 0;
+    });
+    ops.forEach(op=>{ const t=monta(op); if(t){ taxas[op]=t; realBk[op]=real.porOp[op]; } });
+    taxas._geral=monta(''); realBk._geral=real.total;
+  }
+
+  const ctx2={P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:fatorDe, taxas:real?taxas:null, realBk:real?realBk:null};
   buckets.forEach(bk=>rclCustoBucket(bk, ctx2));
 
   /* ── Agregação: rota → cliente ── */
@@ -11004,18 +11699,27 @@ function rclCalcular(){
   RCL.porRota=V.porRota; RCL.rotas=rotas; RCL.clientes=[...clientes.values()];
   RCL.ref=ref; RCL.precos=precos; RCL.calculado=true; RCL.norm=nrm;
   RCL.diag={ ader, ref, precos, ops, norm:nrm, meses:RCL.meses.slice(),
+             real, taxas:real?taxas:null, realBk:real?realBk:null,
              orfaos:V.orfaos, ambiguos:V.ambiguos, usados:V.usados,
              cfc:V.cfc, cfcValor:V.cfcValor,
              rotasComViagem:buckets.length,
              comHere:buckets.filter(b=>b.rota.here&&!b.rota.here.erro).length,
              comPedagio:buckets.filter(b=>b.custo&&b.custo.pedOk).length,
              comPlaca:buckets.filter(b=>b.custo&&b.custo.temPlaca).length,
+             comSZY:buckets.filter(b=>b.custo&&b.custo.fonteDist==='szy').length,
+             distDivergente:buckets.filter(b=>b.custo&&b.custo.distMeta&&b.custo.distMeta.alerta).length,
              semDist:buckets.filter(b=>!b.custo).length };
   if(!ref.ok) RCL.aviso.push('Nenhuma rota simulada na HERE com perfil de elevação — o modelo de consumo por relevo está desligado e todas as rotas usam o km/l da premissa.');
   if(P.aderencia && ader._geral.fator!=null && !ader._geral.dentro)
     RCL.aviso.push(`Fator de aderência consolidado de ${num(ader._geral.fator,2)} está fora da banda ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)} e NÃO foi aplicado. Costuma indicar SZC ou SZB incompletos no período.`);
   if(!RCL.diag.comPlaca && P.aproveitarRetorno)
     RCL.aviso.push('Nenhum CT-e do período trouxe placa — o aproveitamento de retorno não pôde ser medido e toda volta está sendo cobrada como vazia.');
+  if(!real)
+    RCL.aviso.push('Realizado do Mapinha/CPK não carregou — todas as linhas de custo caíram no modelo (comportamento anterior). Confira o fechamento do período no Mapinha.');
+  else if(real.falta.length)
+    RCL.aviso.push('Faltou no realizado: '+real.falta.join(' · ')+'. As linhas sem fonte caíram no modelo.');
+  if(RCL.diag.distDivergente)
+    RCL.aviso.push(`${num(RCL.diag.distDivergente,0)} rota(s) com divergência acima de ${pct(P.distAlertaPct||0.10,0)} entre a distância da SZY e a medida pela HERE. O cálculo seguiu com a SZY; a memória de cálculo de cada uma mostra as duas medições.`);
 }
 
 /* Completude: quanto do número desta rota veio de dado e quanto de premissa.
@@ -11029,6 +11733,13 @@ function rclCompletude(bk, P){
     {k:'ader',  l:'Diesel realizado na SZC', ok:!!(bk.custo&&bk.custo.fator!==1), p:0.10},
     {k:'ton',   l:'Peso faturado',           ok:!!(bk.ton>0), p:0.10}
   ];
+  /* A divergência de distância não tira ponto — a rota pode estar corretamente
+     cadastrada e a HERE é que pegou outro traçado. Mas fica listada como
+     pendência de conferência, que é o papel deste indicador. */
+  const out0=it.reduce((a,x)=>a+(x.ok?x.p:0),0);
+  if(bk.custo && bk.custo.distMeta && bk.custo.distMeta.alerta)
+    it.push({k:'dist', l:'Distância SZY × HERE divergente — conferir', ok:false, p:0});
+  void out0;
   const pct=it.reduce((a,x)=>a+(x.ok?x.p:0),0);
   return {pct, itens:it, falta:it.filter(x=>!x.ok).map(x=>x.l)};
 }
@@ -11135,17 +11846,17 @@ function rclRender(){
         ${cl.sa1?'<span class="src szy" title="Nome oficial vindo da SA1">SA1</span>':''}
         ${cl.cfcQtd?`<span class="pv-tag rev" title="${cl.cfcQtd} carta(s)-frete complementar(es): ${brl(cl.cfcValor)}">CFC</span>`:''}
         <span class="muted" style="font-weight:400"> · ${cl.rotas.length} rota${cl.rotas.length===1?'':'s'}</span></td>
-      <td class="num">${num(cl.viagens,0)}</td>
-      <td class="num">${num(cl.ton,1)}</td>
-      <td class="num">${brl(cl.receitaBruta)}</td>
-      <td class="num">${brl(cl.tarifaTon)}</td>
-      <td class="num">${brl(cl.custoOp)}</td>
-      <td class="num">${brl(cl.custoTon)}</td>
-      <td class="num ${sg(cl.margemContrib)}">${brl(cl.margemContrib)}</td>
-      <td class="num ${sg(cl.resultado)}">${brl(cl.resultado)}</td>
-      <td class="num ${sg(cl.margemPct)}">${pct(cl.margemPct,1)}</td>
-      <td class="num">${brl(cl.cpk)}</td>
-      <td class="num">${rclPillCompl(cl.completude)}</td>
+      <td class="num"${mem('Viagens do cliente',{selo:'SZB',formula:`soma das viagens das ${cl.rotas.length} rota(s) deste cliente na janela`,linhas:[['Toneladas', num(cl.ton,1)+' t'],['t por viagem', num(cl.viagens>0?cl.ton/cl.viagens:0,1)]],obs:'Cartas-frete complementares não contam como viagem.'})}>${num(cl.viagens,0)}</td>
+      <td class="num"${mem('Toneladas do cliente',{selo:'SZB',formula:'soma do peso dos CT-e ÷ 1.000'})}>${num(cl.ton,1)}</td>
+      <td class="num"${mem('Receita bruta do cliente',{selo:'SZB',formula:`${brl(cl.receitaBruta)} em ${num(cl.viagens,0)} viagens = ${brl(cl.viagens>0?cl.receitaBruta/cl.viagens:null)}/viagem`,linhas:[['Receita líquida', brl(cl.receitaLiquida)],['Impostos', brl(cl.impostos)],['VPK', brl(cl.vpk)]]})}>${brl(cl.receitaBruta)}</td>
+      <td class="num"${mem('Tarifa realizada',{selo:'DERIVADO',formula:`receita bruta ÷ toneladas\n${brl(cl.receitaBruta)} ÷ ${num(cl.ton,1)} = ${brl(cl.tarifaTon)}/t`})}>${brl(cl.tarifaTon)}</td>
+      <td class="num"${mem('Custo total do cliente',{selo:'MAPINHA + CPK',fonte:'Soma do custo operacional de todas as rotas deste cliente. Abra uma rota para ver a memória linha a linha.',formula:`variável ${brl(cl.custoVar)} + fixo ${brl(cl.custoFixo)} = ${brl(cl.custoOp)}`,linhas:[['CPK', brl(cl.cpk)],['Custo por tonelada', brl(cl.custoTon)],['Km atribuídos', num(cl.kmTot,0)+' km']]})}>${brl(cl.custoOp)}</td>
+      <td class="num"${mem('Custo por tonelada',{selo:'DERIVADO',formula:`${brl(cl.custoOp)} ÷ ${num(cl.ton,1)} t = ${brl(cl.custoTon)}`,linhas:[['Tarifa − custo', brl((cl.tarifaTon||0)-(cl.custoTon||0))+'/t']]})}>${brl(cl.custoTon)}</td>
+      <td class="num ${sg(cl.margemContrib)}"${mem('Margem de contribuição',{selo:'CASCATA',formula:`receita líquida − custo variável\n${brl(cl.receitaLiquida)} − ${brl(cl.custoVar)} = ${brl(cl.margemContrib)}`,linhas:[['% da receita', pct(cl.mcPct,2)]]})}>${brl(cl.margemContrib)}</td>
+      <td class="num ${sg(cl.resultado)}"${mem('Resultado do cliente',{selo:'CASCATA',formula:`receita líquida − custo total − comissão − estrutura\n${brl(cl.receitaLiquida)} − ${brl(cl.custoOp)} − ${brl(cl.comissao)} − ${brl(cl.overhead)} = ${brl(cl.resultado)}`,linhas:[['Por viagem', brl(cl.viagens>0?cl.resultado/cl.viagens:null)],['Por tonelada', brl(cl.ton>0?cl.resultado/cl.ton:null)]]})}>${brl(cl.resultado)}</td>
+      <td class="num ${sg(cl.margemPct)}"${mem('Margem',{selo:'DERIVADO',formula:`resultado ÷ receita bruta\n${brl(cl.resultado)} ÷ ${brl(cl.receitaBruta)} = ${pct(cl.margemPct,2)}`})}>${pct(cl.margemPct,1)}</td>
+      <td class="num"${mem('CPK do cliente',{selo:'FECHAMENTO',fonte:'Custo total ÷ km atribuído. É o número que todos os cálculos desta tela perseguem.',formula:`${brl(cl.custoOp)} ÷ ${num(cl.kmTot,0)} km = ${brl(cl.cpk)}`,linhas:[['VPK', brl(cl.vpk)],['VPK − CPK', brl((cl.vpk||0)-(cl.cpk||0))+'/km']],obs:'Abra uma rota para a cadeia completa de como se chega até aqui.'})}>${brl(cl.cpk)}</td>
+      <td class="num"${mem('Completude',{selo:'QUALIDADE',fonte:'Fração do cálculo sustentada por dado medido, não por premissa.',formula:'HERE 25% + elevação 20% + pedágio 20% + placa 15% + SZC 10% + peso 10%',obs:'É o que separa "a rota dá 12%" de "a rota parece dar 12%".'})}>${rclPillCompl(cl.completude)}</td>
     </tr>`);
     if(!ab) return;
     cl.rotas.forEach((r,ri)=>{
@@ -11155,17 +11866,17 @@ function rclRender(){
         <td class="wrp"><span class="pill mu">${esc(r.op||'—')}</span> ${esc(r.codigo||'—')} ·
           ${esc(r.origem)} → ${esc(r.destino)}
           ${r.aprov>0?`<span class="pill gn" title="Retorno aproveitado em ${pct(r.aprov,0)} das viagens">↩ ${pct(r.aprov,0)}</span>`:''}</td>
-        <td class="num">${num(r.viagens,0)}</td>
-        <td class="num">${num(r.ton,1)}</td>
-        <td class="num">${brl(r.receitaBruta)}</td>
-        <td class="num">${brl(r.tarifaTon)}</td>
-        <td class="num">${brl(r.custoOp)}</td>
-        <td class="num">${brl(r.custoTon)}</td>
-        <td class="num ${sg(r.margemContrib)}">${brl(r.margemContrib)}</td>
-        <td class="num ${sg(r.resultado)}">${brl(r.resultado)}</td>
-        <td class="num ${sg(r.margemPct)}">${pct(r.margemPct,1)}</td>
-        <td class="num">${brl(r.cpk)}</td>
-        <td class="num">${rclPillCompl(r.completude.pct)}</td>
+        <td class="num"${mem('Viagens da rota',{selo:'SZB',formula:`${num(r.viagens,0)} CT-e resolvidos para esta rota na janela`,linhas:[['t por viagem', num(r.viagens>0?r.ton/r.viagens:0,1)]]})}>${num(r.viagens,0)}</td>
+        <td class="num"${mem('Toneladas da rota',{selo:'SZB',formula:'soma do peso dos CT-e ÷ 1.000'})}>${num(r.ton,1)}</td>
+        <td class="num"${mem('Receita bruta da rota',{selo:'SZB',formula:`${brl(r.receitaBruta)} ÷ ${num(r.viagens,0)} = ${brl(r.viagens>0?r.receitaBruta/r.viagens:null)}/viagem`,linhas:[['VPK', brl(r.vpk)]]})}>${brl(r.receitaBruta)}</td>
+        <td class="num"${mem('Tarifa realizada',{selo:'DERIVADO',formula:`${brl(r.receitaBruta)} ÷ ${num(r.ton,1)} t = ${brl(r.tarifaTon)}`})}>${brl(r.tarifaTon)}</td>
+        <td class="num"${mem('Custo total da rota',{selo:'MAPINHA + CPK',formula:`${brl(r.custoViagem)}/viagem × ${num(r.viagens,0)} viagens = ${brl(r.custoOp)}`,linhas:[['Variável', brl(r.custoVar)],['Fixo rateado', brl(r.custoFixo)],['Km atribuídos', num(r.kmTot,0)+' km']],obs:'Clique na linha para abrir o custo linha a linha com a memória de cada uma.'})}>${brl(r.custoOp)}</td>
+        <td class="num"${mem('Custo por tonelada',{selo:'DERIVADO',formula:`${brl(r.custoOp)} ÷ ${num(r.ton,1)} t = ${brl(r.custoTon)}`})}>${brl(r.custoTon)}</td>
+        <td class="num ${sg(r.margemContrib)}"${mem('Margem de contribuição',{selo:'CASCATA',formula:`${brl(r.receitaLiquida)} − ${brl(r.custoVar)} = ${brl(r.margemContrib)}`,linhas:[['% da receita', pct(r.mcPct,2)]]})}>${brl(r.margemContrib)}</td>
+        <td class="num ${sg(r.resultado)}"${mem('Resultado da rota',{selo:'CASCATA',formula:`${brl(r.receitaLiquida)} − ${brl(r.custoOp)} − ${brl(r.comissao)} − ${brl(r.overhead)} = ${brl(r.resultado)}`})}>${brl(r.resultado)}</td>
+        <td class="num ${sg(r.margemPct)}"${mem('Margem',{selo:'DERIVADO',formula:`${brl(r.resultado)} ÷ ${brl(r.receitaBruta)} = ${pct(r.margemPct,2)}`})}>${pct(r.margemPct,1)}</td>
+        <td class="num"${mem('CPK da rota',{selo:'FECHAMENTO',formula:`custo total ÷ km atribuído\n${brl(r.custoOp)} ÷ ${num(r.kmTot,0)} km = ${brl(r.cpk)}`,linhas:[['VPK', brl(r.vpk)],['VPK − CPK', brl((r.vpk||0)-(r.cpk||0))+'/km'],['Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l'],['Distância', (r.bucket&&r.bucket.custo?r.bucket.custo.fonteDist:'').toUpperCase()]],obs:'Clique na linha para a cadeia de sete etapas que produz este número.'})}>${brl(r.cpk)}</td>
+        <td class="num"${mem('Completude da rota',{selo:'QUALIDADE',formula:'HERE 25% + elevação 20% + pedágio 20% + placa 15% + SZC 10% + peso 10%',linhas:(r.completude.itens||[]).map(i=>[i.l, i.ok?'sim':'não']),obs:r.completude.falta.length?('Falta: '+r.completude.falta.join(' · ')):'Base completa.'})}>${rclPillCompl(r.completude.pct)}</td>
       </tr>`);
     });
   });
@@ -11200,20 +11911,62 @@ function rclRenderKpis(lista){
   const ad = RCL.diag ? RCL.diag.ader._geral : null;
   const adTxt = !ad || ad.fator==null ? '—' : pct(ad.fator-1,1);
   const adCls = !ad||ad.fator==null ? 'mu' : (!ad.dentro?'rd' : Math.abs(ad.fator-1)<=0.08?'gn':'am');
-  const k=(cls,l,v,s)=>`<div class="rt-kpi ${cls}"><div class="k-l">${l}</div><div class="k-v">${v}</div><div class="k-s">${s||''}</div></div>`;
+  const rl=RCL.diag&&RCL.diag.realBk?RCL.diag.realBk._geral:null;
+  const tx=RCL.diag&&RCL.diag.taxas?RCL.diag.taxas._geral:null;
+  const k=(cls,l,v,s,m)=>`<div class="rt-kpi ${cls}"${m||''}><div class="k-l">${l}</div><div class="k-v">${v}</div><div class="k-s">${s||''}</div></div>`;
   el.innerHTML=
     k('ac','Receita bruta', brl(T.receita),
-       `${num(T.viagens,0)} viagens · ${num(T.ton,0)} t · ${esc(rclRotuloJanela())}`)
+       `${num(T.viagens,0)} viagens · ${num(T.ton,0)} t · ${esc(rclRotuloJanela())}`,
+       mem('Receita bruta do escopo',{selo:'SZB',
+         fonte:'Soma do Valor Total dos CT-e não cancelados da janela, já resolvidos para uma rota da SZY e dentro dos filtros da tela.',
+         formula:`${brl(T.receita)} ÷ ${num(T.viagens,0)} viagens = ${brl(T.viagens>0?T.receita/T.viagens:null)}/viagem`,
+         linhas:[['Receita líquida', brl(T.rl)],['R$/tonelada', brl(T.ton>0?T.receita/T.ton:null)],
+                 ['VPK', brl(T.km>0?T.receita/T.km:null)],
+                 T.cfc?['Carta-frete complementar', brl(T.cfc)]:null],
+         obs:'CT-e órfão (sem rota na SZY) e ambíguo ficam FORA — por isso este total pode não bater com o faturamento cheio do período.'}))
    +k('mu','Custo total', brl(T.custo),
-       `${brl(T.km>0?T.custo/T.km:null)}/km · ${brl(T.ton>0?T.custo/T.ton:null)}/t`)
+       `${brl(T.km>0?T.custo/T.km:null)}/km · ${brl(T.ton>0?T.custo/T.ton:null)}/t`,
+       mem('Custo total do escopo',{selo:'MAPINHA + CPK',
+         fonte:'Soma do custo de todas as rotas visíveis. Cada linha vem da sua fonte: Mapinha para o realizado da rodagem, Premissa (CPK) para pessoal e depreciação, Simulador para alimentação e tempo.',
+         formula:`custo variável + custo fixo\nCPK do escopo = ${brl(T.custo)} ÷ ${num(T.km,0)} km = ${brl(T.km>0?T.custo/T.km:null)}`,
+         linhas:[['Km atribuídos', num(T.km,0)+' km'],['Viagens', num(T.viagens,0)],
+                 rl?['Diesel no Mapinha', brl(rl.dieselRS)]:null,
+                 rl?['Pedágio no Mapinha', brl(rl.pedagioRS)]:null,
+                 rl?['Pneus · lubrificante', brl(rl.pneusRS)+' · '+brl(rl.lubRS)]:null,
+                 rl?['Peças · doc./seguros', brl(rl.pecasRS)+' · '+brl(rl.docRS)]:null,
+                 rl?['Pessoal (CPK)', brl(rl.pessoalFrota35+rl.pessoalAgregado65)]:null,
+                 rl?['Depreciação cavalo · carreta', brl(rl.deprecCavaloRS)+' · '+brl(rl.deprecCarretaRS)]:null,
+                 tx?['Lançamentos lidos', num(rl?rl.nLanc:0,0)]:null],
+         obs:'Nivelamento "medido": o total do Mapinha é distribuído sobre exatamente o km e as viagens que este módulo mediu.',
+         alerta: rl?null:'Realizado não carregado — o custo está inteiramente modelado.'}))
    +k(T.mc>=0?'gn':'rd','Margem de contribuição', brl(T.mc),
-       `${pct(T.receita>0?T.mc/T.receita:null,1)} da receita · receita líquida menos custo variável`)
+       `${pct(T.receita>0?T.mc/T.receita:null,1)} da receita · receita líquida menos custo variável`,
+       mem('Margem de contribuição do escopo',{selo:'CASCATA',
+         formula:`receita líquida − custo variável\n${brl(T.rl)} − ${brl(T.rl-T.mc)} = ${brl(T.mc)}`,
+         linhas:[['% da receita bruta', pct(T.receita>0?T.mc/T.receita:null,2)],
+                 ['Por km', brl(T.km>0?T.mc/T.km:null)]],
+         obs:'É o que a operação entrega para pagar estrutura. Serve para decidir se vale rodar a rota; não serve para decidir se ela se sustenta.'}))
    +k(T.res>=0?'gn':'rd','Resultado', brl(T.res),
-       `depois de impostos, comissão e estrutura`)
+       `depois de impostos, comissão e estrutura`,
+       mem('Resultado do escopo',{selo:'CASCATA',
+         formula:`receita líquida − custo total − comissão − estrutura = ${brl(T.res)}`,
+         linhas:[['Margem sobre a receita', pct(marg,2)],['Por viagem', brl(T.viagens>0?T.res/T.viagens:null)],
+                 ['Por tonelada', brl(T.ton>0?T.res/T.ton:null)],['Por km', brl(T.km>0?T.res/T.km:null)]]}))
    +k(adCls,'Desvio do consumo real', adTxt,
        ad&&ad.fator!=null
          ? `${num(ad.realizado,0)} l comprados × ${num(ad.modelado,0)} l modelados${ad.dentro?'':' — fora da banda, não aplicado'}`
-         : 'sem SZC no período');
+         : 'sem SZC no período',
+       mem('Aderência do modelo de consumo',{selo:'SZC × MODELO',
+         fonte:'A pergunta que este número responde: o modelo físico está prevendo o consumo que a frota realmente teve?',
+         formula:`fator = litros comprados na SZC ÷ litros previstos pelo modelo\n${num(ad?ad.realizado:0,0)} ÷ ${num(ad?ad.modelado:0,0)} = ${ad&&ad.fator!=null?num(ad.fator,4):'—'}\ndesvio = fator − 1 = ${adTxt}`,
+         linhas:[['Litros comprados (SZC)', num(ad?ad.realizado:0,0)+' l'],
+                 ['Litros previstos (modelo)', num(ad?ad.modelado:0,0)+' l'],
+                 ['Fator', ad&&ad.fator!=null?num(ad.fator,4):'—'],
+                 ['Banda sã', num(RCL_CFG.aderenciaMin,2)+' – '+num(RCL_CFG.aderenciaMax,2)],
+                 ['Situação', !ad||ad.fator==null?'sem SZC':(ad.dentro?'aplicado a todas as rotas':'FORA da banda — não aplicado')]],
+         obs:'Fator acima de 1 significa que a frota comprou mais diesel do que o modelo previu para as rotas faturadas. Parte disso é consumo real acima do modelo; parte é quilômetro que não está em rota faturada — transferência, deslocamento para manutenção, reposicionamento. O fator corrige o km/l de todas as rotas da operação de uma vez, para que o custo de diesel do módulo feche com a nota fiscal.',
+         alerta: ad&&ad.fator!=null&&!ad.dentro
+           ? 'Fora da banda o número deixa de ser consumo e vira sintoma de base incompleta (SZC ou SZB faltando no período). Por isso NÃO foi aplicado.' : null}));
 }
 
 function rclRodape(){
@@ -11223,9 +11976,23 @@ function rclRodape(){
   const partes=[
     `Janela: <b>${esc(rclRotuloJanela())}</b> (${d.meses.length} mês${d.meses.length===1?'':'es'})`,
     `${num(d.rotasComViagem,0)} rota(s) com faturamento`,
-    `${num(d.comHere,0)} com percurso medido`,
+    `<span${mem('Distância adotada no escopo',{selo:'SZY × HERE',
+       fonte:'Regra nova: cidade a cidade a SZY manda (percurso contratado); a HERE entra sem cadastro na SZY e sempre que o cálculo for porta a porta.',
+       linhas:[['Rotas pela SZY', num(d.comSZY,0)],
+               ['Rotas com percurso HERE', num(d.comHere,0)],
+               ['Divergência acima do limite', num(d.distDivergente,0)],
+               ['Limite de alerta', pct(P.distAlertaPct||0.10,0)]],
+       obs:'A HERE nunca é descartada: vira o controle da SZY. Divergência grande quase nunca é erro da HERE — é rota cadastrada com o km de outro trecho.'})}>${num(d.comSZY,0)} pela SZY · ${num(d.comHere,0)} medida(s) na HERE${d.distDivergente?` · <b class="pill rd">${num(d.distDivergente,0)} divergente(s)</b>`:''}</span>`,
     `${num(d.comPedagio,0)} com pedágio`,
     `${num(d.comPlaca,0)} com placa`,
+    d.real?`<span${mem('Realizado carregado',{selo:'MAPINHA + CPK',
+       fonte:'Fechamento do Mapinha e base do CPK lidos para esta janela.',
+       linhas:[['Lançamentos lidos', num(d.real.total.nLanc,0)],
+               ['Placas com depreciação', num(d.real.total.nPlacasDep,0)],
+               ['Meses', num(d.real.meses.length,0)],
+               d.real.falta.length?['Faltou', d.real.falta.join(' · ')]:null],
+       obs:'Coleções: mapinha_lancamentos, mapinha_pedagios, mapinha_premissas, cpk_lancamentos/DEPRECIACAO e veiculos. Nenhuma coleção nova.'})}>realizado do Mapinha e do CPK carregado</span>`
+      :`<b class="pill am">realizado não carregado — custo modelado</b>`,
     d.cfc?`${num(d.cfc,0)} carta(s)-frete complementar(es) ${P.cfcSeparado?'fora':'dentro'} do cálculo (${brl(d.cfcValor)})`:'',
     d.ambiguos?`${num(d.ambiguos,0)} CT-e(s) em rota ambígua, fora do resultado`:'',
     d.orfaos?`${num(d.orfaos,0)} CT-e(s) sem rota correspondente na SZY`:'',
@@ -11243,30 +12010,238 @@ function rclPainel(chaveCli, k3){
   const r = cl && cl.rotas.find(x=>x.k3===k3);
   if(!r){ el.innerHTML=''; return; }
   const bk=r.bucket, cu=bk.custo;
-  const L=(a,b,c)=>`<tr><td class="muted">${a}</td><td class="num">${b}</td>${c!==undefined?`<td class="muted" style="font-size:10.5px">${c}</td>`:''}</tr>`;
   const P=rclPrem();
+  const T = cu&&cu.taxas ? cu.taxas : null;
+  const RB= cu&&cu.realBk ? cu.realBk : null;
+  const dm= cu&&cu.distMeta ? cu.distMeta : null;
+  const jan=rclRotuloJanela(), nMes=Math.max(RCL.meses.length,1);
+  const fon=(k)=>(cu&&cu.fontes?cu.fontes[k]:'modelo')||'modelo';
+  const selo=(k)=>({mapinha:'MAPINHA','mapinha+here':'MAPINHA × HERE',cpk:'CPK',simulador:'SIMULADOR',
+                    modelo:'MODELO',here:'HERE'}[fon(k)]||'MODELO');
+  const tag=(k)=>{const f=fon(k);
+    const c={mapinha:'map','mapinha+here':'map',cpk:'cpk',simulador:'sim',modelo:'prem',here:'here'}[f]||'prem';
+    return `<span class="src-tag ${c}">${selo(k)}</span>`;};
 
+  /* L(rótulo, valor, nota, memória) — a memória viaja no rótulo E no valor,
+     para que parar o mouse em qualquer um dos dois abra o mesmo painel. */
+  const L=(a,b,c,m)=>`<tr><td class="muted"${m||''}>${a}</td><td class="num"${m||''}>${b}</td>${c!==undefined?`<td class="muted" style="font-size:10.5px">${c}</td>`:''}</tr>`;
+
+  /* ══ CUSTO POR VIAGEM, LINHA A LINHA ══════════════════════════════════════
+     Cada linha carrega: a fonte, a fórmula aplicada com os números reais que
+     entraram nela, e a ressalva quando houver. */
   const li=cu?cu.linhas:{};
-  const cst=[
-    ['Diesel', li.diesel, `${num(cu?cu.litrosViagem:0,1)} l × ${brl(cu?cu.precoDiesel:null)}`],
-    ['Arla', li.arla, ''],
-    ['Pedágio', li.pedagio, cu&&cu.pedOk?`ida ${brl(cu.pIda)} + volta ${brl(cu.pVolta)}`:'sem base de praças'],
-    ['Pneus', li.pneus, ''], ['Lubrificante', li.lubrificante, ''],
-    ['Descarga pressurizada', li.compressor, ''],
-    ['Peças e serviços', li.pecas, ''], ['Documentação e seguros', li.docSeguros, ''],
-    ['Pessoal (sem comissão)', li.pessoal, ''],
-    ['Depreciação do cavalo', li.deprecCavalo, ''], ['Depreciação da carreta', li.deprecCarreta, ''],
-    ['Tempo parado no cliente', li.tempo, ''],
-    ['Alimentação', li.alimentacao, ''], ['Limpeza', li.limpeza, '']
-  ].filter(x=>typeof x[1]==='number' && Math.abs(x[1])>0.005);
+  const kmV = cu?cu.kmViagem:0;
+  const vgP = bk.viagens||0;
+  const cst=[];
+  const add=(rotulo, chave, valor, nota, memoria)=>{
+    if(typeof valor!=='number' || Math.abs(valor)<=0.005) return;
+    cst.push([rotulo, valor, nota||'', memoria||'', chave]);
+  };
 
+  add('Diesel','diesel',li.diesel,
+      `${num(cu?cu.litrosViagem:0,1)} l × ${brl(cu?cu.precoDiesel:null)}`,
+      mem('Diesel da viagem',{selo:selo('diesel'),
+        fonte: fon('diesel')==='mapinha'
+          ? 'Litros do modelo físico de consumo (calibrado pela SZC) × preço EFETIVO do Mapinha. O preço efetivo é o R$ de diesel do fechamento dividido pelos litros abastecidos na SZC — reconcilia com o DRE, coisa que a média de bomba não faz.'
+          : 'Motor rtCustoRota() → custosViagem(): litros do modelo × preço da premissa/SZC.',
+        formula:`litros da viagem × R$/l\n${num(cu?cu.litrosViagem:0,2)} l × ${num(cu?cu.precoDiesel:0,4)} = ${brl(li.diesel)}`,
+        linhas:[
+          ['Litros da viagem', num(cu?cu.litrosViagem:0,2)+' l'],
+          ['km/l carregado · vazio', num(cu?cu.kmlC:0,2)+' · '+num(cu?cu.kmlV:0,2)],
+          ['Preço adotado', brl(cu?cu.precoDiesel:null)+'/l'],
+          T?['Como o preço saiu', T.precoDieselFonte]:null,
+          RB?['Diesel do Mapinha no período', brl(RB.dieselRS)]:null,
+          RB?['  interno · externo · reembolso', brl(RB.dieselInterno)+' · '+brl(RB.dieselExterno)+' · −'+brl(RB.dieselReembolso)]:null,
+          ['Litros comprados na SZC', num((RCL.precos&&(RCL.precos[r.op]||RCL.precos._geral)||{}).litrosDiesel,0)+' l'],
+          ['Preço se fosse só a SZC', brl((RCL.precos&&(RCL.precos[r.op]||RCL.precos._geral)||{}).precoDiesel)+'/l'],
+          ['Preço do modelo (rtCustoRota)', brl(cu?cu.precoDieselModelo:null)+'/l']
+        ],
+        obs:'Centros de custo somados: 01.01 diesel interno da frota, 02.01 externo da frota, menos 22.01 (reembolso). Diesel de agregado (01.02/02.02) fica fora.',
+        alerta: (cu&&cu.precoDiesel==null)?'Sem preço apurável — a linha caiu no modelo.':null}));
+
+  add('Arla','arla',li.arla,
+      `${pct(cu?cu.arlaPct:0.05,1)} dos litros × ${brl(cu?cu.precoArla:null)}`,
+      mem('Arla 32',{selo:selo('arla'),
+        fonte:'Regra dos 5% mantida: o volume de Arla é uma fração dos litros de diesel da própria viagem. Só o PREÇO passou a vir do Mapinha (CC 04.01, Arla da frota).',
+        formula:`litros de diesel × ${pct(cu?cu.arlaPct:0.05,1)} × R$/l\n${num(cu?cu.litrosViagem:0,2)} × ${num(cu?cu.arlaPct:0.05,3)} × ${num(cu?cu.precoArla:0,4)} = ${brl(li.arla)}`,
+        linhas:[
+          ['Litros de Arla', num((cu?cu.litrosViagem:0)*(cu?cu.arlaPct:0.05),2)+' l'],
+          ['Percentual adotado', pct(cu?cu.arlaPct:0.05,1)],
+          ['Preço adotado', brl(cu?cu.precoArla:null)+'/l'],
+          T?['Como o preço saiu', T.precoArlaFonte]:null,
+          RB?['Arla do Mapinha no período', brl(RB.arlaRS)]:null
+        ],
+        obs:'Os 5% são premissa do módulo (campo arlaPct nas Premissas do resultado), não um número do fabricante — é a média observada da frota.'}));
+
+  add('Pedágio','pedagio',li.pedagio,
+      cu&&cu.pedOk?`ida ${brl(cu.pIda)} + volta ${brl(cu.pVolta)}`:'sem base de praças',
+      mem('Pedágio',{selo:selo('pedagio'),
+        fonte: fon('pedagio')==='mapinha+here'
+          ? 'DOIS dados combinados: a HERE diz quais praças esta rota atravessa (o FORMATO — qual rota paga mais que outra) e o Mapinha diz quanto a frota realmente pagou no mês (o NÍVEL). O fator abaixo é o que reconcilia os dois.'
+          : (fon('pedagio')==='mapinha'
+            ? 'Sem base de praças para esta rota: cai no R$/km do pedágio realizado do Mapinha (aba Pedágios, Valor Cobrado + Vale Comix).'
+            : 'Pedágio medido pela HERE por praça e por eixo, sem nivelamento.'),
+        formula: fon('pedagio')==='mapinha+here'
+          ? `pedágio HERE da viagem × fator de nivelamento\n${brl((cu&&cu.pedOk)?((cu.pIda||0)+(1-cu.aprov)*(cu.pVolta||0)):null)} × ${num(T?T.pedagioFator:1,4)} = ${brl(li.pedagio)}`
+          : `R$/km de pedágio × km da viagem\n${brl(T?T.pedagioKm:null)} × ${num(kmV,1)} km = ${brl(li.pedagio)}`,
+        linhas:[
+          cu&&cu.pedOk?['Praças HERE — ida', brl(cu.pIda)]:null,
+          cu&&cu.pedOk?['Praças HERE — volta', brl(cu.pVolta)]:null,
+          ['Retorno aproveitado', pct(cu?cu.aprov:0,0)],
+          T?['Σ pedágio HERE de todas as rotas', brl(T.pedagioModelado)]:null,
+          T?['Pedágio realizado no Mapinha', brl(T.pedagioRealizado)]:null,
+          T?['Fator de nivelamento', T.pedagioFator>0?num(T.pedagioFator,4):'não aplicado']:null,
+          T?['R$/km de pedágio', brl(T.pedagioKm)]:null
+        ],
+        obs:'O fator só é aplicado dentro da banda 0,50–2,00. Fora dela, a base de praças ou o import de pedágio está incompleto e a linha cai no R$/km.'}));
+
+  add('Pneus','pneus',li.pneus,
+      T?`${brl(T.pneusKm)}/km × ${num(kmV,0)} km`:'',
+      mem('Pneus',{selo:selo('pneus'),
+        fonte:'Mapinha — lançamentos do grupo C.O classificados como pneus (nome do centro de custo contendo pneu / recapagem / borracharia; código 07.01 como rede de segurança). Agregados (12.01) ficam fora.',
+        formula:`R$ de pneus no período ÷ km medido × km da viagem\n${brl(RB?RB.pneusRS:null)} ÷ ${num(T?T.km:0,0)} km = ${brl(T?T.pneusKm:null)}/km × ${num(kmV,1)} km = ${brl(li.pneus)}`,
+        linhas:[
+          RB?['Pneus no período (Mapinha)', brl(RB.pneusRS)]:null,
+          T?['km medido pelo módulo', num(T.km,0)+' km']:null,
+          T?['R$/km de pneu', brl(T.pneusKm)+(T.manual&&T.manual.pneusKm?' (manual)':'')]:null,
+          ['km desta viagem', num(kmV,1)+' km']
+        ],
+        obs:'Rateio por KM porque pneu se gasta rodando: rota longa consome mais que rota curta, e é isso que a divisão por viagem esconderia.'}));
+
+  add('Lubrificante','lubrificante',li.lubrificante,
+      T?`${brl(T.lubKm)}/km × ${num(kmV,0)} km`:'',
+      mem('Lubrificante',{selo:selo('lubrificante'),
+        fonte:'Mapinha — C.O classificado como lubrificante (nome com lubrificante / óleo / graxa / aditivo; código 05.01 de reserva).',
+        formula:`R$ de lubrificante no período ÷ km medido × km da viagem\n${brl(RB?RB.lubRS:null)} ÷ ${num(T?T.km:0,0)} = ${brl(T?T.lubKm:null)}/km × ${num(kmV,1)} = ${brl(li.lubrificante)}`,
+        linhas:[
+          RB?['Lubrificante no período', brl(RB.lubRS)]:null,
+          T?['R$/km', brl(T.lubKm)]:null,
+          ['km desta viagem', num(kmV,1)+' km']
+        ]}));
+
+  add('Descarga pressurizada','compressor',li.compressor,'',
+      mem('Descarga pressurizada',{selo:'MODELO',
+        fonte:'rtCustoRota() §17.1 — diesel do compressor, manutenção/depreciação por hora e custo de oportunidade do tempo de descarga. Não vem do Mapinha porque o fechamento não separa o compressor do resto.',
+        formula:'tempo de descarga = toneladas ÷ taxa (t/h), ou horas informadas na premissa da rota',
+        obs:'É o custo que separa esta operação do granel comum. Continua modelado — candidato natural à próxima rodada de realizado.'}));
+
+  add('Peças e serviços','pecas',li.pecas,
+      T?`${brl(T.pecasVg)}/viagem`:'',
+      mem('Peças e serviços',{selo:selo('pecas'),
+        fonte:'Mapinha — C.O classificado como peças/serviços/manutenção (nome com peç / serv / manuten / oficina / revis / reforma; códigos 06.01, 03.01 e 23.01 de reserva). Empréstimos e custos de placa agregada (11.01) ficam fora.',
+        formula:`R$ de peças no período ÷ viagens medidas\n${brl(RB?RB.pecasRS:null)} ÷ ${num(T?T.viagens:0,0)} viagens = ${brl(li.pecas)}`,
+        linhas:[
+          RB?['Peças e serviços no período', brl(RB.pecasRS)]:null,
+          T?['Viagens medidas no período', num(T.viagens,0)]:null,
+          T?['R$/viagem', brl(T.pecasVg)]:null
+        ],
+        obs:'Rateio por VIAGEM, não por km: manutenção corretiva acompanha o uso do conjunto e o ciclo de oficina, não a quilometragem de um trecho específico.'}));
+
+  add('Documentação e seguros','docSeguros',li.docSeguros,
+      T?`${brl(T.docVg)}/viagem`:'',
+      mem('Documentação e seguros',{selo:selo('docSeguros'),
+        fonte:'Mapinha — C.O classificado como documentação/seguros (nome com licenciamento / seguro / IPVA / DPVAT / laudo / CRLV / ANTT / RNTRC; código 08.01 de reserva).',
+        formula:`R$ do período ÷ viagens medidas\n${brl(RB?RB.docRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.docSeguros)}`,
+        linhas:[
+          RB?['Documentação e seguros no período', brl(RB.docRS)]:null,
+          T?['R$/viagem', brl(T.docVg)]:null
+        ],
+        obs:'Custo de posse, não de rodagem: existe com o caminhão parado. Por isso viagem, não km.'}));
+
+  add('Pessoal (sem comissão)','pessoal',li.pessoal,
+      T?`${brl(T.pessoalVg)}/viagem`:'',
+      mem('Pessoal',{selo:selo('pessoal'),
+        fonte:'Premissa (CPK) do fechamento do Mapinha — a mesma memória de folha com AE diluído que o módulo CPK usa. Não vem dos lançamentos 13/14/15.01 do DRE, que pertencem ao card "Custo de Pessoal — Realizado".',
+        formula: P.pessoalCpkBase==='ambos'
+          ? `(Custo Frota 35% + Custo Agregado 65%) ÷ viagens medidas\n(${brl(RB?RB.pessoalFrota35:null)} + ${brl(RB?RB.pessoalAgregado65:null)}) ÷ ${num(T?T.viagens:0,0)} = ${brl(li.pessoal)}`
+          : `Custo Frota 35% ÷ viagens medidas\n${brl(RB?RB.pessoalFrota35:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.pessoal)}`,
+        linhas:[
+          RB?['Custo Frota 35%', brl(RB.pessoalFrota35)]:null,
+          RB?['Custo Agregado 65%', brl(RB.pessoalAgregado65)]:null,
+          RB?['Base final após AE (referência)', brl(RB.pessoalBaseFinal)]:null,
+          ['Base escolhida', P.pessoalCpkBase==='ambos'?'os dois valores':'só a fatia da frota'],
+          T?['Pessoal considerado no período', brl(T.pessoalRS)]:null,
+          T?['Viagens medidas', num(T.viagens,0)]:null
+        ],
+        obs:'Parcela por mês da janela, resolvendo a vigência da premissa (carry-forward) mês a mês. A comissão NÃO entra aqui — é função da tarifa e aparece depois, na cascata do resultado.',
+        alerta: P.pessoalCpkBase==='ambos'
+          ? 'Escolha em validação: somando Frota 35% + Agregado 65%, a rota da frota própria carrega a folha INTEIRA da unidade, inclusive a parcela que sustenta a operação de agregados. O CPK por placa usa só os 35%. Se a intenção for reproduzir o CPK, trocar a base para "só a fatia da frota" nas Premissas.'
+          : null}));
+
+  add('Depreciação do cavalo','deprecCavalo',li.deprecCavalo,
+      T?`${brl(T.depCavVg)}/viagem`:'',
+      mem('Depreciação do cavalo',{selo:selo('deprecCavalo'),
+        fonte:'Base de depreciação do CPK (cpk_lancamentos/DEPRECIACAO), placa a placa, com a MESMA fórmula do módulo CPK: linear sobre o valor depreciável, percentual anual ou valor manual, respeitando data de compra, prazo, residual e status.',
+        formula:`Σ depreciação mensal das placas × meses da janela ÷ viagens medidas\n${brl(RB?RB.deprecCavaloRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.deprecCavalo)}`,
+        linhas:[
+          RB?['Depreciação de cavalos no período', brl(RB.deprecCavaloRS)]:null,
+          RB?['Placas com depreciação cadastrada', num(RB.nPlacasDep,0)]:null,
+          ['Meses da janela', num(nMes,0)],
+          T?['R$/viagem', brl(T.depCavVg)]:null
+        ],
+        obs:'Custo mensal FIXO: incide mesmo no mês em que a placa não rodou. Placa sem depreciação cadastrada não gera custo — a base incompleta puxa o CPK para baixo, e isso aparece no card de completude.'}));
+
+  add('Depreciação da carreta','deprecCarreta',li.deprecCarreta,
+      T?`${brl(T.depCarVg)}/viagem`:'',
+      mem('Depreciação da carreta',{selo:selo('deprecCarreta'),
+        fonte:'Mesma base do CPK, filtrando os registros classificados como carreta (semirreboque, silo, tanque, bitrem, rodotrem, vanderleia).',
+        formula:`Σ depreciação mensal das carretas no período ÷ viagens medidas\n${brl(RB?RB.deprecCarretaRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.deprecCarreta)}`,
+        linhas:[
+          RB?['Depreciação de carretas no período', brl(RB.deprecCarretaRS)]:null,
+          T?['R$/viagem', brl(T.depCarVg)]:null
+        ],
+        obs:'Carreta não roda km próprio e não tem CPK individual — a sua depreciação é custo da frota, rateado entre as viagens, exatamente como o CPK faz ao diluí-la entre as placas da filial.'}));
+
+  add('Tempo parado no cliente','tempo',li.tempo,
+      cu&&cu.tempoDet?`${num(cu.tempoDet.tParado,2)} h × ${brl(cu.tempoDet.custoH)}/h`:'',
+      mem('Custo do tempo parado',{selo:selo('tempo'),
+        fonte:'Premissas da aba Simulador: tempo de carga, espera no cliente e custo de oportunidade por hora parada.',
+        formula: cu&&cu.tempoDet
+          ? `(carga + espera) × R$/hora\n(${num(cu.tempoDet.tCarga,2)} + ${num(cu.tempoDet.tEspera,2)}) h × ${brl(cu.tempoDet.custoH)} = ${brl(li.tempo)}`
+          : 'tempo parado × custo de oportunidade por hora',
+        linhas: cu&&cu.tempoDet?[
+          ['Tempo de carga', num(cu.tempoDet.tCarga,2)+' h'],
+          ['Espera no cliente', num(cu.tempoDet.tEspera,2)+' h'],
+          ['Custo de oportunidade', brl(cu.tempoDet.custoH)+'/h']
+        ]:null,
+        obs:'Custo de oportunidade zero mantém a linha visível valendo zero: o comercial vê que ela existe e decide se quer precificar a hora parada.'}));
+
+  add('Alimentação','alimentacao',li.alimentacao,
+      `${brl(cu?cu.viagensMes:0)}`.length?'do E32 do Simulador':'',
+      mem('Alimentação',{selo:selo('alimentacao'),
+        fonte:'Premissa alimentacao_mes (célula E32) da aba Simulador, dividida pelas viagens do mês desta rota.',
+        formula:`alimentação mensal ÷ viagens no mês\n${brl(Number((premissasEfetivas(null,r.op,null)||{}).alimentacao_mes)||0)} ÷ ${num(cu?cu.viagensMes:0,2)} = ${brl(li.alimentacao)}`,
+        linhas:[
+          ['Alimentação mensal (E32)', brl(Number((premissasEfetivas(null,r.op,null)||{}).alimentacao_mes)||0)],
+          ['Viagens da rota por mês', num(cu?cu.viagensMes:0,2)]
+        ],
+        obs:'Antes desta rodada a alimentação estava ENTERRADA dentro da linha de pessoal do núcleo (pessoalFixo = salário×encargos÷V + alimentação÷V). Ela saiu de lá e ganhou linha própria — sem isso, trocar o pessoal pelo CPK teria apagado a alimentação em silêncio.'}));
+
+  add('Limpeza','limpeza',li.limpeza,'',
+      mem('Limpeza',{selo:'MODELO',fonte:'Premissa limpezaViagem da rota (Premissas de custo da Análise de Rotas).',
+        obs:'Valor por viagem informado à mão; zero quando não cadastrado.'}));
+
+  const totCusto=cst.reduce((a,x)=>a+x[1],0);
+  const bar=(v,cor)=>`<i style="width:${Math.max(0,Math.min(100,(v/Math.max(r.receitaBruta,1))*100))}%;background:${cor}"></i>`;
+
+  /* ══ Bloco do modelo de consumo (inalterado no cálculo, com memória) ══ */
   const d=cu&&cu.cons&&cu.cons.det;
+  const memFisica=mem('Física do consumo',{selo:'MODELO',
+    fonte:'rclConsumoRota() — energia, não opinião.',
+    formula:'subir: m·g·Δh    descer: −κ·m·g·Δh    curva: ½·m·(v1²−v2²)\ntudo ÷ (η × LHV) = litros',
+    linhas:[['LHV do diesel S-10', num(RCL_CFG.lhvDiesel/1e6,1)+' MJ/l'],
+            ['Rendimento global η', num(RCL_CFG.rendimento,2)],
+            ['Trabalho útil por litro', num(RCL_CFG.rendimento*RCL_CFG.lhvDiesel/1e6,1)+' MJ'],
+            ['Recuperação na descida κ', num(RCL_CFG.recupDescida,2)],
+            ['Curva: desaceleração', RCL_CFG.vCurvaDe+' → '+RCL_CFG.vCurvaPara+' km/h'],
+            ['Teto de acréscimo · economia', pct(RCL_CFG.capExtra,0)+' · '+pct(RCL_CFG.capRecup,0)]],
+    obs:'Tudo medido contra a ROTA MÉDIA da amostra, não em valor absoluto: o km/l da premissa já é média de rotas reais, que já têm serra. Aplicar a física em absoluto contaria a serra duas vezes.'});
   const bloco = d ? `
     <table class="tb">
-      <thead><tr><th>Modelo de consumo</th><th class="num">Ida carregada</th><th class="num">Volta vazia</th></tr></thead>
+      <thead><tr><th${memFisica}>Modelo de consumo</th><th class="num">Ida carregada</th><th class="num">Volta vazia</th></tr></thead>
       <tbody>
         <tr><td class="muted">Distância</td><td class="num">${num(d.ida.km,1)} km</td><td class="num">${d.volta?num(d.volta.km,1)+' km':'—'}</td></tr>
-        <tr><td class="muted">Massa da composição</td><td class="num">${num(d.ida.massaT,1)} t</td><td class="num">${d.volta?num(d.volta.massaT,1)+' t':'—'}</td></tr>
+        <tr><td class="muted"${mem('Massa da composição',{selo:'PERFIL',fonte:'Perfil de veículo ativo (aba Rotas) + peso faturado do CT-e.',formula:'ida = tara + carga · volta = só tara',linhas:[['Toneladas por viagem', num(cu?cu.tonViagem:0,1)+' t']],obs:'É por isso que a mesma serra pesa muito mais no sentido carregado — assimetria que a média de km/l da frota esconde.'})}>Massa da composição</td><td class="num">${num(d.ida.massaT,1)} t</td><td class="num">${d.volta?num(d.volta.massaT,1)+' t':'—'}</td></tr>
         <tr><td class="muted">Ganho de altitude</td><td class="num">${num(d.ida.ganho,0)} m</td><td class="num">${d.volta?num(d.volta.ganho,0)+' m':'—'}</td></tr>
         <tr><td class="muted">Perda de altitude</td><td class="num">${num(d.ida.perda,0)} m</td><td class="num">${d.volta?num(d.volta.perda,0)+' m':'—'}</td></tr>
         <tr><td class="muted">Litros — base da premissa</td><td class="num">${num(d.ida.litrosBase,1)}</td><td class="num">${d.volta?num(d.volta.litrosBase,1):'—'}</td></tr>
@@ -11285,17 +12260,86 @@ function rclPainel(chaveCli, k3){
     </div>`
    : `<div class="muted" style="padding:10px 0">Rota sem perfil de elevação — o consumo está na premissa (${num(cu?cu.kmlC:0,2)} / ${num(cu?cu.kmlV:0,2)} km/l). Simule a rota na HERE pela sub-aba Análise de Rotas.</div>`;
 
-  const totCusto=cst.reduce((a,x)=>a+x[1],0);
-  const bar=(v,cor)=>`<i style="width:${Math.max(0,Math.min(100,(v/Math.max(r.receitaBruta,1))*100))}%;background:${cor}"></i>`;
+  /* ══ Memórias dos indicadores ═════════════════════════════════════════════ */
+  const memCPK=mem('CPK — custo por quilômetro',{selo:'INDICADOR',
+    fonte:'Não é lido de lugar nenhum: é o FECHAMENTO de tudo o que está nesta tela. Custo total da rota no período ÷ quilômetros atribuídos a ela.',
+    formula:`CPK = custo total ÷ km atribuído\n${brl(r.custoOp)} ÷ ${num(r.kmTot,0)} km = ${brl(r.cpk)}`,
+    linhas:[
+      ['Custo variável no período', brl(r.custoVar)],
+      ['Custo fixo rateado', brl(r.custoFixo)],
+      ['= Custo total', brl(r.custoOp)],
+      ['Km atribuídos', num(r.kmTot,0)+' km'],
+      ['CPK', brl(r.cpk)],
+      ['VPK (receita por km)', brl(r.vpk)],
+      ['VPK − CPK', brl((r.vpk||0)-(r.cpk||0))+'/km']
+    ],
+    obs:'A cadeia inteira: km da rota (SZY, controlado pela HERE) × viagens do SZB → o modelo físico reparte diesel e pedágio → o realizado do Mapinha e a premissa do CPK definem o nível de cada linha → soma = custo total → ÷ km = CPK. Cada elo tem a sua própria memória de cálculo nesta tela. Quando o CPK daqui bater com o CPK do módulo por placa, as premissas estão validadas.'});
+
+  const memConsumo=mem('Consumo adotado — como é calculado, calibrado e definido',{selo:'3 CAMADAS',
+    fonte:'Três camadas empilhadas, nesta ordem. Nenhuma delas sozinha é o número final.',
+    formula:`km/l final = km/l do modelo ÷ (normalização × fator de aderência)\n${num(cu&&cu.cons?cu.cons.carregado:0,3)} ÷ (${num(cu?cu.norm:1,4)} × ${num(cu?cu.fator:1,4)}) = ${num(r.kmlC,2)} km/l carregado`,
+    linhas:[
+      ['1. PREMISSA — ponto de partida', num(bk._base?bk._base.carregado:0,2)+' / '+num(bk._base?bk._base.vazio:0,2)+' km/l'],
+      ['2. MODELO — depois da física da rota', num(cu&&cu.cons?cu.cons.carregado:0,2)+' / '+num(cu&&cu.cons?cu.cons.vazio:0,2)],
+      ['   normalização (tira o viés do modelo)', num(cu?cu.norm:1,4)],
+      ['3. CALIBRAÇÃO — fator do realizado', num(cu?cu.fator:1,4)],
+      ['= Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l']
+    ],
+    obs:'DEFINIDO na premissa: 2,0 km/l carregado e 3,0 vazio, que é a média da frota rodando as rotas que ela roda — pode ser sobrescrito por rota ou pelo Simulador. CALCULADO pelo modelo físico: a rota com serra recebe menos km/l e a rota plana recebe mais, contra a rota média da amostra. CALIBRADO pela nota fiscal: o fator de aderência move o nível para que a soma dos litros feche com o que foi comprado. Sem simulação da HERE com elevação, a camada 2 não roda e o número é a premissa pura — e a tela avisa.'});
+
+  const memCalib=mem('Calibração pelo realizado — o que isso significa',{selo:'ADERÊNCIA',
+    fonte:'É o fator de aderência aplicado a ESTA rota. Mesmo número, dito de outra forma.',
+    formula:`fator = litros comprados na SZC ÷ litros que o modelo previu\ndesvio mostrado = fator − 1 = ${cu&&cu.fator!=null?pct(cu.fator-1,2):'—'}`,
+    linhas:[
+      ['Fator aplicado', cu?num(cu.fator,4):'—'],
+      ['Leitura', cu&&cu.fator>1?'a frota gastou MAIS do que o modelo previu → km/l cai':(cu&&cu.fator<1?'a frota gastou MENOS do que o modelo previu → km/l sobe':'não aplicada')],
+      ['Banda sã', num(RCL_CFG.aderenciaMin,2)+' – '+num(RCL_CFG.aderenciaMax,2)],
+      ['Origem do fator', P.aderenciaFonte==='geral'?'consolidado das três filiais':'da operação desta rota']
+    ],
+    obs:'Em uma frase: o modelo diz quanto de diesel DEVERIA ter sido queimado; a nota fiscal diz quanto foi COMPRADO; a razão entre os dois vira um multiplicador que corrige o km/l de todas as rotas da operação de uma vez. "Não aplicada" quer dizer que o fator ficou fora da banda sã e o módulo preferiu não mexer — ou que não houve SZC no período. Não é o modelo estar certo ou errado: é a régua sendo ajustada pelo que a empresa efetivamente pagou.'});
+
+  const memDist=mem('Distância adotada',{selo:cu?(cu.fonteDist||'').toUpperCase():'—',
+    fonte: cu&&cu.fonteDist==='szy'
+      ? 'SZY — a distância cadastrada da rota. Cidade a cidade ela manda: é o percurso contratado, o mesmo que a tarifa cobra.'
+      : 'HERE — percurso medido para caminhão. Entra quando a SZY não tem a rota, ou quando o cálculo é porta a porta (rua a rua / CEP a CEP), nível de resolução que o cadastro não alcança.',
+    formula:`ida ${num(cu?cu.kmIda:0,1)} km + volta ${num(cu?cu.kmVolta:0,1)} km · retorno aproveitado ${pct(cu?cu.aprov:0,0)}\nkm por viagem = ida + (1 − aproveitamento) × volta = ${num(kmV,1)} km`,
+    linhas:[
+      ['SZY — ida · volta', dm&&dm.szyIda?num(dm.szyIda,1)+' · '+num(dm.szyVolta||dm.szyIda,1)+' km':'sem cadastro'],
+      ['HERE — ida · volta', dm&&dm.hereIda?num(dm.hereIda,1)+' · '+num(dm.hereVolta||dm.hereIda,1)+' km':'não simulada'],
+      dm&&dm.delta!=null?['Divergência HERE × SZY', pct(dm.delta,1)]:null,
+      dm?['Limite de alerta', pct(dm.limite,0)]:null,
+      dm&&dm.portaAPorta?['Percurso', 'porta a porta → HERE manda']:['Percurso','cidade a cidade → SZY manda'],
+      ['Fonte adotada', (cu?cu.fonteDist:'').toUpperCase()]
+    ],
+    alerta: dm&&dm.alerta
+      ? `A HERE mede ${pct(Math.abs(dm.delta),1)} ${dm.delta>0?'a MAIS':'a MENOS'} que a SZY. Acima do limite de ${pct(dm.limite,0)}. O cálculo seguiu com a SZY; vale conferir se a rota da SZY está com o km de outro trecho ou se há desvio permanente não atualizado no cadastro.`
+      : null});
+
+  const memRetorno=mem('Retorno aproveitado',{selo:'SZB',
+    fonte:'Varredura do SZB por placa: quando a MESMA placa emite outro CT-e saindo da região onde acabou de entregar, dentro da janela, aquela volta foi paga por outro frete.',
+    formula:`aproveitamento = viagens com retorno pago ÷ viagens da rota\nkm cobrado = ida + (1 − ${num(cu?cu.aprov:0,3)}) × volta`,
+    linhas:[
+      ['Janela de casamento', num(P.janelaRetornoDias||2,0)+' dia(s)'],
+      ['Placa no CT-e', cu&&cu.temPlaca?'sim':'NÃO — volta cobrada inteira'],
+      ['Volta cobrada', pct(1-(cu?cu.aprov:0),0)]
+    ],
+    obs:'A regra é simétrica de propósito: se A→B aproveita a volta e B→A também, cada uma cobra só a sua ida e a soma fecha com o rodado real. Um retorno absorve UMA ida só — sem essa trava, dez viagens seguidas se dariam por aproveitadas em cima do mesmo CT-e.'});
 
   el.innerHTML=`<div class="card">
     <h3>${esc(cl.nome)} · ${esc(r.op||'—')} ${esc(r.codigo||'')} · ${esc(r.origem)} → ${esc(r.destino)}
       <span class="tabs-r">
-        <span class="pill mu">${esc(rclRotuloJanela())}</span>
+        <span class="pill mu">${esc(jan)}</span>
+        ${dm&&dm.alerta?'<span class="src-tag alerta" title="Divergência SZY × HERE acima do limite">Δ DISTÂNCIA</span>':''}
         ${rclPillCompl(r.completude.pct)}
         <button class="btn sm" id="rclFechaPainel">Fechar</button>
       </span>
     </h3>
+
+    <div class="alerta ac" style="margin-bottom:12px"><div style="font-size:10.5px">
+      <b>Modo de validação ligado.</b> Pare o mouse <b>3 segundos</b> sobre qualquer valor desta tela
+      para abrir a memória de cálculo: de onde o número vem, qual módulo o produziu, a fórmula com os
+      insumos reais e as ressalvas. Esta camada sai do ar quando as premissas estiverem validadas.
+    </div></div>
 
     <div class="rcl-bar">
       ${bar(r.impostos,'var(--mu)')}${bar(r.custoVar,'var(--rd)')}${bar(r.custoFixo,'var(--am)')}
@@ -11313,46 +12357,197 @@ function rclPainel(chaveCli, k3){
       <div>
         <h3 style="font-size:12px">Resultado da rota no período</h3>
         <table class="tb">
-          ${L('Viagens faturadas', num(r.viagens,0))}
-          ${L('Toneladas', num(r.ton,1))}
-          ${L('Quilômetros atribuídos', num(r.kmTot,0)+' km')}
-          ${L('Receita bruta', brl(r.receitaBruta))}
-          ${L('Impostos ('+pct(r.aliq,2)+')', '− '+brl(r.impostos))}
-          ${L('<b>Receita líquida</b>', '<b>'+brl(r.receitaLiquida)+'</b>')}
-          ${L('Custo variável', '− '+brl(r.custoVar))}
-          ${L('<b>Margem de contribuição</b>', '<b>'+brl(r.margemContrib)+'</b>', pct(r.mcPct,1)+' da receita')}
-          ${L('Custo fixo rateado', '− '+brl(r.custoFixo))}
-          ${L('Comissão ('+pct(r.comisPct,1)+')', '− '+brl(r.comissao))}
-          ${L('Estrutura', '− '+brl(r.overhead))}
-          ${L('<b>Resultado</b>', `<b class="${r.resultado>=0?'':''}" style="color:${r.resultado>=0?'var(--gn)':'var(--rd)'}">${brl(r.resultado)}</b>`, pct(r.margemPct,1))}
-          ${r.cfcQtd?L('Carta-frete complementar', brl(r.cfcValor), r.cfcQtd+' lançamento(s) '+(P.cfcSeparado?'fora do cálculo':'no cálculo')):''}
+          ${L('Viagens faturadas', num(r.viagens,0), undefined,
+              mem('Viagens faturadas',{selo:'SZB',
+                fonte:'Contagem de CT-e do SZB emitidos na janela, resolvidos para esta rota da SZY pelo rtResolverCTE() — o mesmo resolvedor da Análise de Rotas.',
+                formula:'1 CT-e não cancelado = 1 viagem',
+                linhas:[['Janela', jan],['Meses', num(nMes,0)],['Cliente é', P&&$('rclBase')?($('rclBase').options[$('rclBase').selectedIndex]||{}).text:'—']],
+                obs:'Cartas-frete complementares (placas FSC/FSP/FPR-0000) NÃO contam como viagem: são pagamento suplementar sobre uma viagem que já existe. Contá-las inflaria o custo em uma viagem inteira e afundaria o R$/t.'}))}
+          ${L('Toneladas', num(r.ton,1), undefined,
+              mem('Toneladas',{selo:'SZB',fonte:'Campo peso do CT-e ÷ 1.000.',
+                formula:`${num(r.ton,1)} t em ${num(r.viagens,0)} viagens = ${num(r.viagens>0?r.ton/r.viagens:0,1)} t/viagem`,
+                linhas:[['Média por viagem', num(r.viagens>0?r.ton/r.viagens:0,2)+' t']],
+                obs:'Esta média alimenta a massa do modelo de consumo e o custo por tonelada. Peso zerado no CT-e derruba a completude da rota.'}))}
+          ${L('Quilômetros atribuídos', num(r.kmTot,0)+' km', undefined,
+              mem('Quilômetros atribuídos',{selo:cu?(cu.fonteDist||'').toUpperCase():'—',
+                fonte:'Distância adotada da rota × viagens do cliente, já descontado o retorno aproveitado.',
+                formula:`(ida ${num(cu?cu.kmIda:0,1)} + (1−${num(cu?cu.aprov:0,2)}) × volta ${num(cu?cu.kmVolta:0,1)}) × ${num(r.viagens,0)} viagens = ${num(r.kmTot,0)} km`,
+                linhas:[['km por viagem', num(kmV,1)+' km'],['Fonte da distância', (cu?cu.fonteDist:'').toUpperCase()]],
+                obs:'É o denominador do CPK. Qualquer erro de distância vira erro de CPK na mesma proporção.'}))}
+          ${L('Receita bruta', brl(r.receitaBruta), undefined,
+              mem('Receita bruta',{selo:'SZB',fonte:'Soma do Valor Total dos CT-e deste cliente nesta rota, na janela.',
+                formula:`${brl(r.receitaBruta)} ÷ ${num(r.viagens,0)} viagens = ${brl(r.viagens>0?r.receitaBruta/r.viagens:null)}/viagem`,
+                linhas:[['R$/tonelada', brl(r.tarifaTon)],['R$/km (VPK)', brl(r.vpk)],
+                        r.cfcQtd?['Carta-frete complementar', brl(r.cfcValor)+' ('+(P.cfcSeparado?'fora':'dentro')+')']:null]}))}
+          ${L('Impostos ('+pct(r.aliq,2)+')', '− '+brl(r.impostos), undefined,
+              mem('Impostos sobre a receita',{selo:'PREMISSAS',
+                fonte:'Alíquotas das Premissas do módulo Comercial para a filial desta rota (PIS/COFINS + ICMS), ou a alíquota manual das Premissas do resultado.',
+                formula:`receita bruta × alíquota\n${brl(r.receitaBruta)} × ${pct(r.aliq,3)} = ${brl(r.impostos)}`,
+                linhas:[['Alíquota aplicada', pct(r.aliq,3)],['Origem', P.aliqManual!=null?'manual nas Premissas do resultado':'PIS/COFINS + ICMS das premissas da filial']],
+                obs:'IR/CS e ISS não entram aqui — o módulo trabalha com a alíquota sobre faturamento, não com o resultado tributável.'}))}
+          ${L('<b>Receita líquida</b>', '<b>'+brl(r.receitaLiquida)+'</b>', undefined,
+              mem('Receita líquida',{selo:'CASCATA',formula:`receita bruta − impostos\n${brl(r.receitaBruta)} − ${brl(r.impostos)} = ${brl(r.receitaLiquida)}`,
+                obs:'É a base de tudo o que vem abaixo, inclusive da comissão.'}))}
+          ${L('Custo variável', '− '+brl(r.custoVar), undefined,
+              mem('Custo variável',{selo:'SOMA',
+                fonte:'Linhas que só existem porque o caminhão saiu: diesel, Arla, pedágio, pneus, lubrificante e descarga pressurizada.',
+                formula:`${brl(cu?cu.variavel:null)}/viagem × ${num(r.viagens,0)} viagens = ${brl(r.custoVar)}`,
+                linhas:[['Diesel', brl(Math.abs(li.diesel||0))],['Arla', brl(Math.abs(li.arla||0))],
+                        ['Pedágio', brl(Math.abs(li.pedagio||0))],['Pneus', brl(Math.abs(li.pneus||0))],
+                        ['Lubrificante', brl(Math.abs(li.lubrificante||0))],['Descarga', brl(Math.abs(li.compressor||0))]]}))}
+          ${L('<b>Margem de contribuição</b>', '<b>'+brl(r.margemContrib)+'</b>', pct(r.mcPct,1)+' da receita',
+              mem('Margem de contribuição',{selo:'CASCATA',
+                formula:`receita líquida − custo variável\n${brl(r.receitaLiquida)} − ${brl(r.custoVar)} = ${brl(r.margemContrib)}`,
+                obs:'Responde "sobrou dinheiro nesta viagem?". É o que cada viagem entrega para pagar a estrutura. Margem de contribuição positiva com resultado negativo significa que a rota ajuda a pagar a conta, mas não se sustenta sozinha.'}))}
+          ${L('Custo fixo rateado', '− '+brl(r.custoFixo), undefined,
+              mem('Custo fixo rateado',{selo:'SOMA',
+                fonte:'Linhas que existem com o caminhão parado: peças, documentação e seguros, pessoal, depreciações, alimentação, limpeza e tempo.',
+                formula:`${brl(cu?cu.fixo:null)}/viagem × ${num(r.viagens,0)} viagens = ${brl(r.custoFixo)}`,
+                linhas:[['Peças e serviços', brl(Math.abs(li.pecas||0))],['Documentação e seguros', brl(Math.abs(li.docSeguros||0))],
+                        ['Pessoal', brl(Math.abs(li.pessoal||0))],['Depreciação cavalo', brl(Math.abs(li.deprecCavalo||0))],
+                        ['Depreciação carreta', brl(Math.abs(li.deprecCarreta||0))],['Alimentação', brl(Math.abs(li.alimentacao||0))],
+                        ['Tempo parado', brl(Math.abs(li.tempo||0))]],
+                obs:'"Rateado" porque o custo é da frota e do mês; o que chega à rota é a fatia proporcional às viagens que ela consumiu.'}))}
+          ${L('Comissão ('+pct(r.comisPct,1)+')', '− '+brl(r.comissao), undefined,
+              mem('Comissão',{selo:'PREMISSAS',
+                fonte:'Percentual sobre a receita LÍQUIDA. Fica fora do CPK de propósito: comissão é função da tarifa, não do quilômetro.',
+                formula:`receita líquida × comissão\n${brl(r.receitaLiquida)} × ${pct(r.comisPct,2)} = ${brl(r.comissao)}`,
+                linhas:[['Regime', P.regimeComissao==='nao'?'sem comissão':'por viagem'],
+                        ['Percentual', pct(r.comisPct,2)]]}))}
+          ${L('Estrutura', '− '+brl(r.overhead), undefined,
+              mem('Estrutura (overhead)',{selo:'PREMISSAS',
+                fonte:'Rateio da estrutura administrativa que a rota tem de sustentar.',
+                formula: P.overheadModo==='pct' ? `receita × ${pct(P.overheadPct,1)}`
+                       : P.overheadModo==='km'  ? `km × ${brl(P.overheadKm)}` : 'desligado nas premissas',
+                linhas:[['Modo', P.overheadModo==='nao'?'desligado':(P.overheadModo==='pct'?'% da receita':'R$/km')]],
+                obs:'Nasce desligado. Ligar aqui e também somar a estrutura via pessoal do CPK contaria a mesma conta duas vezes — vale conferir antes de acionar.'}))}
+          ${L('<b>Resultado</b>', `<b style="color:${r.resultado>=0?'var(--gn)':'var(--rd)'}">${brl(r.resultado)}</b>`, pct(r.margemPct,1),
+              mem('Resultado da rota',{selo:'CASCATA',
+                formula:`receita líquida − custo total − comissão − estrutura\n${brl(r.receitaLiquida)} − ${brl(r.custoOp)} − ${brl(r.comissao)} − ${brl(r.overhead)} = ${brl(r.resultado)}`,
+                linhas:[['Margem sobre a receita bruta', pct(r.margemPct,2)],
+                        ['Resultado por viagem', brl(r.viagens>0?r.resultado/r.viagens:null)],
+                        ['Resultado por tonelada', brl(r.ton>0?r.resultado/r.ton:null)]],
+                obs:'Responde "esta rota dá lucro?" — depois de tudo, inclusive do que ela consome de estrutura.'}))}
+          ${r.cfcQtd?L('Carta-frete complementar', brl(r.cfcValor), r.cfcQtd+' lançamento(s) '+(P.cfcSeparado?'fora do cálculo':'no cálculo'),
+              mem('Carta-frete complementar',{selo:'SZB',
+                fonte:'CT-e com placa-marcador FSC/FSP/FPR-0000 — mesma regra do PD Diário.',
+                obs:'Não é viagem física: é pagamento suplementar sobre uma viagem que já existe. Fica em linha própria para não inflar viagens nem custo.'})):''}
         </table>
+
         <h3 style="font-size:12px;margin-top:14px">Indicadores</h3>
         <table class="tb">
-          ${L('Tarifa realizada', brl(r.tarifaTon)+' /t')}
-          ${L('Custo por tonelada', brl(r.custoTon)+' /t')}
-          ${L('CPK — custo por km', brl(r.cpk))}
-          ${L('VPK — receita por km', brl(r.vpk))}
-          ${L('Custo por viagem', brl(r.custoViagem))}
-          ${L('Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l', 'carregado / vazio')}
-          ${L('Calibração pelo realizado', r.fator===1?'não aplicada':pct(r.fator-1,1))}
+          ${L('Tarifa realizada', brl(r.tarifaTon)+' /t', undefined,
+              mem('Tarifa realizada',{selo:'SZB',formula:`receita bruta ÷ toneladas\n${brl(r.receitaBruta)} ÷ ${num(r.ton,1)} t = ${brl(r.tarifaTon)}`}))}
+          ${L('Custo por tonelada', brl(r.custoTon)+' /t', undefined,
+              mem('Custo por tonelada',{selo:'DERIVADO',formula:`custo total ÷ toneladas\n${brl(r.custoOp)} ÷ ${num(r.ton,1)} = ${brl(r.custoTon)}`,
+                linhas:[['Tarifa − custo', brl((r.tarifaTon||0)-(r.custoTon||0))+'/t']]}))}
+          ${L('<b>CPK — custo por km</b>', '<b>'+brl(r.cpk)+'</b>', 'o número que tudo persegue', memCPK)}
+          ${L('VPK — receita por km', brl(r.vpk), undefined,
+              mem('VPK — valor por quilômetro',{selo:'DERIVADO',
+                formula:`receita bruta ÷ km atribuído\n${brl(r.receitaBruta)} ÷ ${num(r.kmTot,0)} km = ${brl(r.vpk)}`,
+                linhas:[['CPK', brl(r.cpk)],['VPK − CPK', brl((r.vpk||0)-(r.cpk||0))+'/km'],
+                        ['Sobre a receita', pct(r.vpk>0?((r.vpk-(r.cpk||0))/r.vpk):null,1)]],
+                obs:'O espelho do CPK pelo lado da receita. É o par CPK × VPK que define a margem da rota — e é contra ele que o CPK precisa ser validado.'}))}
+          ${L('Custo por viagem', brl(r.custoViagem), undefined,
+              mem('Custo por viagem',{selo:'SOMA',
+                formula:`custo variável + custo fixo, por viagem\n${brl(Math.abs(cu?cu.variavel:0))} + ${brl(Math.abs(cu?cu.fixo:0))} = ${brl(r.custoViagem)}`,
+                linhas:[['Se fosse tudo modelado', brl(cu?cu.custoModelado:null)],
+                        ['Diferença do realizado vs. modelo', cu&&cu.desvioModelo!=null?pct(cu.desvioModelo,1):'—']],
+                obs:'A comparação com o modelado é a prova de que a troca de fontes está fazendo o que se espera: diferença muito grande costuma indicar fechamento do Mapinha incompleto no período, não custo real diferente.'}))}
+          ${L('Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l', 'carregado / vazio', memConsumo)}
+          ${L('Calibração pelo realizado', r.fator===1?'não aplicada':pct(r.fator-1,1), 'aderência desta operação', memCalib)}
           ${L('Retorno aproveitado', cu&&cu.temPlaca?pct(r.aprov,0):'sem placa no CT-e',
-               cu&&cu.temPlaca?'volta cobrada: '+pct(1-r.aprov,0):'volta cobrada inteira')}
-          ${L('Distância adotada', num(cu?cu.kmIda:0,1)+' + '+num(cu?cu.kmVolta:0,1)+' km', (cu?cu.fonteDist:'').toUpperCase())}
+               cu&&cu.temPlaca?'volta cobrada: '+pct(1-r.aprov,0):'volta cobrada inteira', memRetorno)}
+          ${L('Distância adotada', num(cu?cu.kmIda:0,1)+' + '+num(cu?cu.kmVolta:0,1)+' km',
+               `<span class="src-tag ${cu&&cu.fonteDist==='szy'?'szy':'here'}">${(cu?cu.fonteDist:'').toUpperCase()}</span>`
+               + (dm&&dm.alerta?` <span class="src-tag alerta">Δ ${pct(dm.delta,0)}</span>`:''), memDist)}
         </table>
       </div>
+
       <div>
         <h3 style="font-size:12px">Custo por viagem, linha a linha</h3>
         <table class="tb">
           <thead><tr><th>Linha</th><th class="num">R$/viagem</th><th class="num">%</th></tr></thead>
           <tbody>
-          ${cst.map(x=>`<tr><td class="muted">${x[0]}${x[2]?` <i style="font-style:normal;opacity:.7">${x[2]}</i>`:''}</td>
-             <td class="num">${brl(x[1])}</td><td class="num">${pct(totCusto>0?x[1]/totCusto:null,1)}</td></tr>`).join('')}
-          <tr><td><b>Total</b></td><td class="num"><b>${brl(totCusto)}</b></td><td class="num">100,0%</td></tr>
+          ${cst.map(x=>`<tr><td class="muted"${x[3]}>${x[0]}${tag(x[4])}${x[2]?`<i style="font-style:normal;opacity:.7;display:block;font-size:10px">${x[2]}</i>`:''}</td>
+             <td class="num"${x[3]}>${brl(x[1])}</td><td class="num">${pct(totCusto>0?x[1]/totCusto:null,1)}</td></tr>`).join('')}
+          <tr><td><b>Total</b></td><td class="num"${mem('Total do custo por viagem',{selo:'SOMA',
+                formula:`Σ de todas as linhas acima = ${brl(totCusto)}\n÷ ${num(kmV,1)} km = ${brl(cu?cu.cpk:null)}/km`,
+                linhas:[['Custo variável', brl(Math.abs(cu?cu.variavel:0))],['Custo fixo', brl(Math.abs(cu?cu.fixo:0))],
+                        ['CPK da viagem', brl(cu?cu.cpk:null)],['Custo por tonelada', brl(cu?cu.custoTon:null)]],
+                obs:'Custos aparecem aqui em valor absoluto; internamente o motor trabalha com sinal negativo.'})}><b>${brl(totCusto)}</b></td><td class="num">100,0%</td></tr>
           </tbody>
         </table>
+
+        <div class="muted" style="font-size:10px;margin-top:7px;line-height:1.6">
+          <b>Legenda das fontes:</b>
+          <span class="src-tag map">MAPINHA</span> realizado do fechamento ·
+          <span class="src-tag cpk">CPK</span> premissa e base de depreciação ·
+          <span class="src-tag sim">SIMULADOR</span> premissas da planilha ·
+          <span class="src-tag here">HERE</span> percurso medido ·
+          <span class="src-tag prem">MODELO</span> fórmula do núcleo de custo
+        </div>
+
         ${r.completude.falta.length?`<div class="alerta am" style="margin-top:10px"><div><b>O que ainda não é dado medido:</b> ${esc(r.completude.falta.join(' · '))}.</div></div>`:''}
+        ${dm&&dm.alerta?`<div class="alerta rd" style="margin-top:10px"><div><b>Divergência de distância.</b>
+           A SZY tem <b>${num((dm.szyIda||0)+(dm.szyVolta||dm.szyIda||0),1)} km</b> (ida + volta) e a HERE mediu
+           <b>${num((dm.hereIda||0)+(dm.hereVolta||dm.hereIda||0),1)} km</b> — ${pct(Math.abs(dm.delta),1)} de diferença,
+           acima do limite de ${pct(dm.limite,0)}. O cálculo seguiu com a <b>SZY</b>, que é o percurso contratado.
+           Vale conferir se a rota está cadastrada com o km de outro trecho.</div></div>`:''}
+        ${!T?`<div class="alerta am" style="margin-top:10px"><div><b>Sem realizado no período.</b>
+           O fechamento do Mapinha e a base do CPK não foram encontrados para esta janela — todas as linhas caíram
+           no modelo, que é o comportamento anterior do módulo.</div></div>`:''}
       </div>
+    </div>
+
+    <h3 style="font-size:12px;margin-top:16px">Como chegamos ao CPK desta rota</h3>
+    <div class="muted" style="font-size:11px;line-height:1.7;margin-bottom:10px">
+      O CPK não é lido de lugar nenhum — ele é o <b>fechamento</b> de sete etapas encadeadas. Esta é a cadeia inteira,
+      na ordem em que roda, para conferir elo por elo antes de comparar com o VPK:
+    </div>
+    <table class="tb">
+      <tr><td class="muted" style="width:26px">1</td>
+          <td class="muted"${mem('Etapa 1 — quais viagens',{selo:'SZB × SZY',fonte:'rtResolverCTE()',formula:'CT-e do SZB → rota da SZY por operação + código + origem + destino',obs:'CT-e que casa com mais de uma rota é marcado ambíguo e fica FORA do resultado — nunca é chutado para uma delas.'})}>Quais viagens são desta rota</td>
+          <td class="num">${num(r.viagens,0)} viagens · ${num(r.ton,1)} t</td></tr>
+      <tr><td class="muted">2</td>
+          <td class="muted"${memDist}>Quanto ela roda</td>
+          <td class="num">${num(kmV,1)} km/viagem <span class="src-tag ${cu&&cu.fonteDist==='szy'?'szy':'here'}">${(cu?cu.fonteDist:'').toUpperCase()}</span></td></tr>
+      <tr><td class="muted">3</td>
+          <td class="muted"${memConsumo}>Quanto de diesel ela queima</td>
+          <td class="num">${num(cu?cu.litrosViagem:0,1)} l · ${num(r.kmlC,2)}/${num(r.kmlV,2)} km/l</td></tr>
+      <tr><td class="muted">4</td>
+          <td class="muted"${mem('Etapa 4 — nível do realizado',{selo:'MAPINHA',
+            fonte:'O fechamento do mês define o NÍVEL de cada linha; o modelo apenas REPARTE entre as rotas.',
+            formula:'R$ do Mapinha ÷ km (ou viagens) medidos = taxa × o que esta rota consumiu',
+            linhas:[T?['km medido no período', num(T.km,0)+' km']:null, T?['viagens medidas', num(T.viagens,0)]:null,
+                    RB?['Diesel', brl(RB.dieselRS)]:null, RB?['Pedágio', brl(RB.pedagioRS)]:null,
+                    RB?['Pneus', brl(RB.pneusRS)]:null, RB?['Lubrificante', brl(RB.lubRS)]:null,
+                    RB?['Peças', brl(RB.pecasRS)]:null, RB?['Doc. e seguros', brl(RB.docRS)]:null],
+            obs:'Nivelamento "medido": a soma do custo de todas as rotas fecha com o Mapinha por construção.',
+            alerta:'O Mapinha cobre TODO o rodado da frota — transferência, ida para manutenção, reposicionamento. O módulo só mede o km faturado. A taxa carrega, portanto, o rodado improdutivo. É deliberado (custo tem de aparecer em algum lugar), mas é a ressalva mais importante desta tela.'})}>Quanto cada insumo custou de verdade</td>
+          <td class="num">${T?brl(T.pneusKm+T.lubKm+T.pedagioKm)+'/km':'—'}</td></tr>
+      <tr><td class="muted">5</td>
+          <td class="muted"${mem('Etapa 5 — custo fixo por viagem',{selo:'CPK + SIMULADOR',
+            fonte:'Pessoal e depreciação da Premissa (CPK) e da base de depreciação por placa; alimentação e tempo do Simulador.',
+            formula:'R$ do período ÷ viagens medidas',
+            linhas:[['Pessoal', brl(Math.abs(li.pessoal||0))],['Depreciações', brl(Math.abs(li.deprecCavalo||0)+Math.abs(li.deprecCarreta||0))],
+                    ['Peças', brl(Math.abs(li.pecas||0))],['Doc. e seguros', brl(Math.abs(li.docSeguros||0))],
+                    ['Alimentação', brl(Math.abs(li.alimentacao||0))],['Tempo', brl(Math.abs(li.tempo||0))]]})}>O que a rota sustenta de estrutura</td>
+          <td class="num">${brl(Math.abs(cu?cu.fixo:0))}/viagem</td></tr>
+      <tr><td class="muted">6</td>
+          <td class="muted"${memRetorno}>Quanto da volta é mesmo desta rota</td>
+          <td class="num">${cu&&cu.temPlaca?pct(1-(cu.aprov||0),0)+' da volta cobrada':'volta inteira'}</td></tr>
+      <tr style="background:var(--sf)"><td class="muted"><b>7</b></td>
+          <td${memCPK}><b>Custo total ÷ km atribuído = CPK</b></td>
+          <td class="num"${memCPK}><b>${brl(r.custoOp)} ÷ ${num(r.kmTot,0)} km = ${brl(r.cpk)}</b></td></tr>
+    </table>
+    <div class="muted" style="font-size:10.5px;margin-top:8px;line-height:1.7">
+      <b>Como validar contra o VPK.</b> O VPK desta rota é <b>${brl(r.vpk)}</b> e o CPK é <b>${brl(r.cpk)}</b>,
+      o que deixa <b>${brl((r.vpk||0)-(r.cpk||0))}</b> por quilômetro antes de comissão e estrutura.
+      Os dois vêm de bases independentes — o VPK do faturamento do SZB, o CPK do fechamento do Mapinha —
+      e é exatamente por isso que a comparação vale: se o CPK daqui bater com o CPK do módulo por placa
+      para as mesmas placas e o mesmo período, as premissas estão validadas e esta camada de memória de
+      cálculo pode ser removida.
     </div>
 
     <h3 style="font-size:12px;margin-top:16px">Consumo — de onde sai o número</h3>
@@ -11377,14 +12572,28 @@ function rclRenderDiag(){
             :'<span class="pill rd">fora da banda</span>'}</td>
     </tr>`;
   const ops=d.ops.map(o=>d.ader[o]).filter(Boolean);
+  const rlT=d.realBk?d.realBk._geral:null, txT=d.taxas?d.taxas._geral:null;
   el.innerHTML=`
-    <div class="muted" style="margin-bottom:9px">
-      O modelo diz quantos litros <i>deveriam</i> ter sido queimados nas rotas faturadas. A SZC diz quantos litros
-      foram <i>comprados</i>. A razão entre os dois é o fator de aderência — e ele é aplicado ao consumo de todas as
-      rotas da operação, para que a soma do custo de diesel do módulo feche com a nota fiscal.
-      Parte da diferença é consumo real acima do modelo; parte é quilômetro que não está em rota faturada
-      (transferência, deslocamento para manutenção, retorno sem carga já contabilizado). Por isso a banda
-      ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)}: fora dela o número deixa de ser consumo e vira sintoma de base incompleta.
+    <div class="muted" style="margin-bottom:9px;line-height:1.7">
+      <b>O que é a aderência, em uma frase:</b> é a régua do modelo de consumo sendo ajustada pelo que a empresa
+      efetivamente pagou de diesel.<br><br>
+      O modelo físico diz quantos litros <i>deveriam</i> ter sido queimados nas rotas faturadas — ele calcula isso
+      pela energia de subir, descer e refazer curva com a massa real de cada trecho. A SZC diz quantos litros foram
+      <i>comprados</i> de verdade. A razão entre os dois é o <b>fator de aderência</b>, e ele multiplica o consumo de
+      todas as rotas da operação de uma vez.<br><br>
+      <b>Como ler o número:</b> fator <b>acima de 1</b> significa que a frota comprou mais diesel do que o modelo
+      previu — o km/l de todas as rotas cai e o custo sobe. Fator <b>abaixo de 1</b> é o contrário. Fator igual a 1
+      quer dizer que a calibração não foi aplicada: ou não havia SZC no período, ou o fator saiu fora da banda sã.<br><br>
+      <b>Por que a diferença existe, e não é erro:</b> parte dela é consumo real acima do modelo (motorista, trânsito,
+      carga real diferente da faturada). Parte é quilômetro que simplesmente <b>não está em rota faturada</b> —
+      transferência entre filiais, deslocamento para manutenção, reposicionamento sem carga. Esse diesel foi comprado
+      e precisa aparecer em algum lugar; a aderência o distribui sobre as rotas que geraram receita.<br><br>
+      <b>Por que existe uma banda:</b> ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)}. Fora dela o número
+      deixa de ser consumo e vira sintoma de base incompleta — SZC de um mês faltando, SZB carregado pela metade.
+      Nesse caso o módulo <b>não aplica</b> o fator e avisa na tela, em vez de contaminar o custo em silêncio.<br><br>
+      <b>Onde a aderência para:</b> ela mexe apenas nos LITROS. O preço do litro vem de outro lugar — do fechamento
+      do Mapinha — e as demais linhas de custo têm o seu próprio nivelamento. Aderência não é fator de correção
+      universal: é especificamente a ponte entre o modelo de consumo e a nota fiscal do combustível.
     </div>
     <table class="tb">
       <thead><tr><th>Operação</th><th class="num">Modelado</th><th class="num">Comprado (SZC)</th>
@@ -11406,7 +12615,45 @@ function rclRenderDiag(){
       e o total da frota é preservado por construção — é isso que impede a serra de ser contada duas vezes.
       O teto de variação e a diferença de massa entre ida e volta deixariam um viés residual; a normalização acima o devolve,
       para que o único fator autorizado a mexer no TOTAL de diesel seja a nota fiscal.
-    </div>`;
+    </div>
+
+    <h3 style="font-size:12px;margin-top:16px">Realizado do Mapinha e do CPK — o nível de cada linha</h3>
+    ${rlT ? `
+    <div class="muted" style="font-size:10.5px;margin-bottom:8px;line-height:1.7">
+      O princípio é o mesmo do diesel: <b>o modelo REPARTE entre rotas, o realizado define o NÍVEL</b>. O Mapinha diz
+      quanto a frota gastou de pneu no mês; o modelo diz qual rota rodou mais quilômetro. A multiplicação dos dois é o
+      custo de pneu daquela rota — e a soma de todas fecha, por construção, com o Mapinha.
+    </div>
+    <table class="tb">
+      <thead><tr><th>Linha</th><th>Fonte</th><th class="num">R$ no período</th><th>Chave</th><th class="num">Taxa aplicada</th></tr></thead>
+      <tbody>
+        <tr><td>Diesel</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.dieselRS)}</td><td>preço efetivo × litros do modelo</td><td class="num">${brl(txT?txT.precoDieselEfetivo:null)}/l</td></tr>
+        <tr><td>Arla</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.arlaRS)}</td><td>${pct(P.arlaPct||0.05,1)} dos litros × preço</td><td class="num">${brl(txT?txT.precoArlaEfetivo:null)}/l</td></tr>
+        <tr><td>Pedágio</td><td><span class="src-tag map">MAPINHA</span> × <span class="src-tag here">HERE</span></td><td class="num">${brl(rlT.pedagioRS)}</td><td>praças da HERE niveladas pelo realizado</td><td class="num">${txT&&txT.pedagioFator>0?'fator '+num(txT.pedagioFator,3):brl(txT?txT.pedagioKm:null)+'/km'}</td></tr>
+        <tr><td>Pneus</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.pneusRS)}</td><td>por km</td><td class="num">${brl(txT?txT.pneusKm:null)}/km</td></tr>
+        <tr><td>Lubrificante</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.lubRS)}</td><td>por km</td><td class="num">${brl(txT?txT.lubKm:null)}/km</td></tr>
+        <tr><td>Peças e serviços</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.pecasRS)}</td><td>por viagem</td><td class="num">${brl(txT?txT.pecasVg:null)}</td></tr>
+        <tr><td>Documentação e seguros</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.docRS)}</td><td>por viagem</td><td class="num">${brl(txT?txT.docVg:null)}</td></tr>
+        <tr><td>Pessoal</td><td><span class="src-tag cpk">CPK</span></td><td class="num">${brl(txT?txT.pessoalRS:null)}</td><td>${P.pessoalCpkBase==='ambos'?'Frota 35% + Agregado 65%':'só Frota 35%'}, por viagem</td><td class="num">${brl(txT?txT.pessoalVg:null)}</td></tr>
+        <tr><td>Depreciação do cavalo</td><td><span class="src-tag cpk">CPK</span></td><td class="num">${brl(rlT.deprecCavaloRS)}</td><td>por viagem</td><td class="num">${brl(txT?txT.depCavVg:null)}</td></tr>
+        <tr><td>Depreciação da carreta</td><td><span class="src-tag cpk">CPK</span></td><td class="num">${brl(rlT.deprecCarretaRS)}</td><td>por viagem</td><td class="num">${brl(txT?txT.depCarVg:null)}</td></tr>
+        <tr><td>Alimentação</td><td><span class="src-tag sim">SIMULADOR</span></td><td class="num">—</td><td>E32 ÷ viagens do mês</td><td class="num">—</td></tr>
+        <tr><td>Tempo parado</td><td><span class="src-tag sim">SIMULADOR</span></td><td class="num">—</td><td>(carga + espera) × R$/hora</td><td class="num">—</td></tr>
+        <tr style="background:var(--sf)"><td colspan="2"><b>Base do rateio</b></td>
+          <td class="num"><b>${num(txT?txT.km:0,0)} km</b></td>
+          <td><b>km e viagens medidos por este módulo</b></td>
+          <td class="num"><b>${num(txT?txT.viagens:0,0)} viagens</b></td></tr>
+      </tbody>
+    </table>
+    <div class="alerta am" style="margin-top:10px"><div style="font-size:10.5px">
+      <b>A ressalva que mais importa nesta tela.</b> O Mapinha cobre <b>todo</b> o rodado da frota — transferência,
+      ida para manutenção, reposicionamento. Este módulo mede apenas o km <b>faturado</b>. A taxa acima carrega,
+      portanto, o rodado improdutivo diluído nas rotas que geraram receita. É deliberado (o custo existiu e precisa
+      aparecer em algum lugar), mas significa que o R$/km daqui é maior que o R$/km "puro" de cada insumo.
+      Lançamentos com placa de agregado (C.O 10/11/12.01 e diesel .02) ficam fora — a mesma guarda do CPK.
+    </div></div>
+    ${d.real&&d.real.falta.length?`<div class="alerta rd" style="margin-top:8px"><div style="font-size:10.5px"><b>Não carregou:</b> ${esc(d.real.falta.join(' · '))}. As linhas sem fonte caíram no modelo.</div></div>`:''}
+    ` : `<div class="alerta am"><div>Realizado do Mapinha e do CPK não carregado para esta janela — todas as linhas de custo estão no modelo, que é o comportamento anterior do módulo.</div></div>`}`;
   const p=$('rclDiagPill');
   if(p){ const a=d.ader._geral;
     p.textContent = a.fator==null?'sem SZC no período':`consolidado ${num(a.fator,3)} · ${pct(a.fator-1,1)}`;
@@ -11455,6 +12702,59 @@ function rclPremModal(){
     <div class="rt-fields grid3">
       ${c('aproveitarRetorno','Descontar a volta aproveitada', P.aproveitarRetorno, 'quando a mesma placa emite outro CT-e saindo do destino')}
       ${n('janelaRetornoDias','Janela do retorno (dias)', P.janelaRetornoDias, '1')}
+    </div>
+
+    <h3 style="font-size:12px;margin-top:12px">Distância</h3>
+    <div class="muted" style="font-size:10.5px;margin-bottom:6px">
+      Cidade a cidade a <b>SZY</b> manda — é o percurso contratado, o mesmo que a tarifa cobra. A HERE entra
+      quando a rota não tem cadastro na SZY e sempre que o cálculo for <b>porta a porta</b> (rua a rua, CEP a CEP),
+      resolução que o cadastro não alcança. A HERE nunca é descartada: vira o <b>controle</b> da SZY.
+    </div>
+    <div class="rt-fields grid3">
+      ${s('distPreferida','Distância cidade a cidade', P.distPreferida, [['szy','SZY cadastrada (padrão)'],['here','HERE medida']])}
+      ${n('distAlertaPct','Alerta de divergência', P.distAlertaPct, '0.01', 'fração — 0,10 = 10%')}
+    </div>
+
+    <h3 style="font-size:12px;margin-top:12px">Fonte de cada linha de custo</h3>
+    <div class="muted" style="font-size:10.5px;margin-bottom:6px">
+      Trocar qualquer linha para <b>Modelo</b> devolve exatamente o comportamento anterior daquela linha —
+      nada aqui é irreversível. Sem a fonte carregada, a linha cai sozinha no modelo em vez de virar zero.
+    </div>
+    <div class="rt-fields grid3">
+      ${s('fonteDiesel','Diesel', P.fonteDiesel, [['realizado','Mapinha (preço efetivo)'],['modelo','Modelo / SZC']])}
+      ${s('fonteArla','Arla', P.fonteArla, [['realizado','Mapinha (preço)'],['modelo','Modelo / SZC']])}
+      ${n('arlaPct','Arla — % dos litros', P.arlaPct, '0.005', 'regra dos 5% — fração')}
+      ${s('fontePedagio','Pedágio', P.fontePedagio, [['realizado','Mapinha nivelando a HERE'],['here','HERE pura'],['modelo','Modelo']])}
+      ${s('fontePneus','Pneus', P.fontePneus, [['realizado','Mapinha (R$/km)'],['modelo','Modelo']])}
+      ${s('fonteLubrificante','Lubrificante', P.fonteLubrificante, [['realizado','Mapinha (R$/km)'],['modelo','Modelo']])}
+      ${s('fontePecas','Peças e serviços', P.fontePecas, [['realizado','Mapinha (R$/viagem)'],['modelo','Modelo']])}
+      ${s('fonteDocSeguros','Documentação e seguros', P.fonteDocSeguros, [['realizado','Mapinha (R$/viagem)'],['modelo','Modelo']])}
+      ${s('fontePessoal','Pessoal', P.fontePessoal, [['cpk','Premissa (CPK) do Mapinha'],['modelo','Modelo']])}
+      ${s('pessoalCpkBase','Pessoal — base do CPK', P.pessoalCpkBase, [['ambos','Frota 35% + Agregado 65%'],['frota','Só Custo Frota 35%']], 'ambos carrega a folha inteira da unidade')}
+      ${s('fonteDeprec','Depreciações', P.fonteDeprec, [['cpk','Base do CPK, por placa'],['modelo','Modelo']])}
+      ${s('fonteAlimentacao','Alimentação', P.fonteAlimentacao, [['simulador','Simulador (E32)'],['modelo','Dentro do pessoal']])}
+      ${s('fonteTempo','Tempo parado', P.fonteTempo, [['simulador','Simulador'],['modelo','Premissa da rota']])}
+      ${s('nivelamento','Nivelamento do realizado', P.nivelamento, [['medido','Fechar com o Mapinha'],['taxa','Taxa sem fechamento']])}
+    </div>
+
+    <h3 style="font-size:12px;margin-top:12px">Sobrescritas manuais das taxas</h3>
+    <div class="muted" style="font-size:10.5px;margin-bottom:6px">
+      Campo em branco = calcula do realizado. Preenchido, o valor manda e a memória de cálculo marca a linha
+      como <b>manual</b>. Serve para testar cenário sem mexer no fechamento.
+    </div>
+    <div class="rt-fields grid3">
+      ${n('ovDieselRS','Diesel (R$/l)', P.ovDieselRS, '0.001')}
+      ${n('ovArlaRS','Arla (R$/l)', P.ovArlaRS, '0.001')}
+      ${n('ovPedagioKm','Pedágio (R$/km)', P.ovPedagioKm, '0.001')}
+      ${n('ovPneusKm','Pneus (R$/km)', P.ovPneusKm, '0.001')}
+      ${n('ovLubKm','Lubrificante (R$/km)', P.ovLubKm, '0.001')}
+      ${n('ovPecasViagem','Peças (R$/viagem)', P.ovPecasViagem, '0.01')}
+      ${n('ovDocViagem','Doc. e seguros (R$/viagem)', P.ovDocViagem, '0.01')}
+      ${n('ovPessoalViagem','Pessoal (R$/viagem)', P.ovPessoalViagem, '0.01')}
+      ${n('ovDeprecCavaloViagem','Depr. cavalo (R$/viagem)', P.ovDeprecCavaloViagem, '0.01')}
+      ${n('ovDeprecCarretaViagem','Depr. carreta (R$/viagem)', P.ovDeprecCarretaViagem, '0.01')}
+      ${n('ovAlimentacaoViagem','Alimentação (R$/viagem)', P.ovAlimentacaoViagem, '0.01')}
+      ${n('ovTempoHora','Custo da hora parada (R$/h)', P.ovTempoHora, '0.5')}
     </div>`,
    ed ? `<button class="btn" onclick="mdFechar()">Cancelar</button>
          <button class="btn" id="rclPremPadrao">Voltar ao padrão</button>
@@ -11474,7 +12774,20 @@ function rclPremModal(){
       overheadModo:gS('overheadModo'), overheadPct:gN('overheadPct')||0, overheadKm:gN('overheadKm')||0,
       consumoModelo:gB('consumoModelo'), consumoCarregado:gN('consumoCarregado'), consumoVazio:gN('consumoVazio'),
       aderencia:gB('aderencia'), aderenciaFonte:gS('aderenciaFonte'),
-      aproveitarRetorno:gB('aproveitarRetorno'), janelaRetornoDias:gN('janelaRetornoDias')||2
+      aproveitarRetorno:gB('aproveitarRetorno'), janelaRetornoDias:gN('janelaRetornoDias')||2,
+      distPreferida:gS('distPreferida'), distAlertaPct:gN('distAlertaPct')||0.10,
+      fonteDiesel:gS('fonteDiesel'), fonteArla:gS('fonteArla'), arlaPct:gN('arlaPct')||0.05,
+      fontePedagio:gS('fontePedagio'), fontePneus:gS('fontePneus'),
+      fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
+      fonteDocSeguros:gS('fonteDocSeguros'), fontePessoal:gS('fontePessoal'),
+      pessoalCpkBase:gS('pessoalCpkBase'), fonteDeprec:gS('fonteDeprec'),
+      fonteAlimentacao:gS('fonteAlimentacao'), fonteTempo:gS('fonteTempo'),
+      nivelamento:gS('nivelamento'),
+      ovDieselRS:gN('ovDieselRS'), ovArlaRS:gN('ovArlaRS'), ovPedagioKm:gN('ovPedagioKm'),
+      ovPneusKm:gN('ovPneusKm'), ovLubKm:gN('ovLubKm'), ovPecasViagem:gN('ovPecasViagem'),
+      ovDocViagem:gN('ovDocViagem'), ovPessoalViagem:gN('ovPessoalViagem'),
+      ovDeprecCavaloViagem:gN('ovDeprecCavaloViagem'), ovDeprecCarretaViagem:gN('ovDeprecCarretaViagem'),
+      ovAlimentacaoViagem:gN('ovAlimentacaoViagem'), ovTempoHora:gN('ovTempoHora')
     };
     const ok=await rclGravarPrem(novo);
     mdFechar(); rclCalcular(); rclRender(); rclRenderDiag();
@@ -11528,7 +12841,8 @@ async function rclExportar(){
       Object.keys(cu.linhas).forEach(k=>{
         if(typeof cu.linhas[k]!=='number') return;
         li.push({Cliente:c.nome, Rota:`${r.op} ${r.codigo}`, Trecho:`${r.origem} → ${r.destino}`,
-                 Linha:k, 'R$/viagem':+cu.linhas[k].toFixed(2), Viagens:r.viagens,
+                 Linha:k, Fonte:(cu.fontes&&cu.fontes[k])||'modelo',
+                 'R$/viagem':+cu.linhas[k].toFixed(2), Viagens:r.viagens,
                  'R$ no período':+(cu.linhas[k]*r.viagens).toFixed(2)});
       });
     }));
@@ -11542,6 +12856,32 @@ async function rclExportar(){
         Situação:a.fator==null?'sem SZC':a.dentro?'dentro da banda':'fora da banda'
       })));
       add('Premissas', Object.entries(rclPrem()).map(([k,v])=>({Premissa:k, Valor:v==null?'':String(v)})));
+      if(d.real){
+        const rows=[];
+        ['SC','PR','SP'].forEach(f=>{ const b=d.real.porOp[f]; if(!b) return;
+          const tx=d.taxas?d.taxas[f]:null;
+          rows.push({ Unidade:f, Meses:(b.mesesLidos||[]).join(' '), Lançamentos:b.nLanc,
+            'Diesel R$':+b.dieselRS.toFixed(2), 'Arla R$':+b.arlaRS.toFixed(2),
+            'Pedágio R$':+b.pedagioRS.toFixed(2), 'Pneus R$':+b.pneusRS.toFixed(2),
+            'Lubrificante R$':+b.lubRS.toFixed(2), 'Peças R$':+b.pecasRS.toFixed(2),
+            'Doc/Seguros R$':+b.docRS.toFixed(2),
+            'Pessoal Frota 35%':+b.pessoalFrota35.toFixed(2), 'Pessoal Agregado 65%':+b.pessoalAgregado65.toFixed(2),
+            'Depr. cavalo R$':+b.deprecCavaloRS.toFixed(2), 'Depr. carreta R$':+b.deprecCarretaRS.toFixed(2),
+            'Km medido':tx?+tx.km.toFixed(0):'', 'Viagens medidas':tx?tx.viagens:'',
+            'Diesel R$/l':tx&&tx.precoDieselEfetivo?+tx.precoDieselEfetivo.toFixed(4):'',
+            'Pedágio R$/km':tx?+tx.pedagioKm.toFixed(4):'', 'Pneus R$/km':tx?+tx.pneusKm.toFixed(4):'',
+            'Lubrificante R$/km':tx?+tx.lubKm.toFixed(4):'', 'Peças R$/viagem':tx?+tx.pecasVg.toFixed(2):'',
+            'Doc R$/viagem':tx?+tx.docVg.toFixed(2):'', 'Pessoal R$/viagem':tx?+tx.pessoalVg.toFixed(2):'' });
+        });
+        add('Realizado Mapinha e CPK', rows);
+      }
+      add('Distância por rota', RCL.rotas.map(r=>{ const m=r.bucket.custo?r.bucket.custo.distMeta:null; return {
+        Rota:`${r.op} ${r.codigo}`, Trecho:`${r.origem} → ${r.destino}`,
+        'SZY ida':m&&m.szyIda?+m.szyIda.toFixed(1):'', 'SZY volta':m&&m.szyVolta?+m.szyVolta.toFixed(1):'',
+        'HERE ida':m&&m.hereIda?+m.hereIda.toFixed(1):'', 'HERE volta':m&&m.hereVolta?+m.hereVolta.toFixed(1):'',
+        'Divergência %':m&&m.delta!=null?+(m.delta*100).toFixed(2):'',
+        Alerta:m&&m.alerta?'SIM':'', 'Porta a porta':m&&m.portaAPorta?'SIM':'',
+        'Fonte adotada':(r.bucket.custo?r.bucket.custo.fonteDist:'').toUpperCase() }; }));
     }
     XLSX.writeFile(wb, `Rota clientes ${rclRotuloJanela().replace(/\//g,'-')}.xlsx`);
     toast('Excel gerado.','gn');
@@ -11559,6 +12899,11 @@ async function rclAoAbrir(){
       await rtInit(false);                     /* SZY, SZB, SZC, perfil, caches */
       if(!ST.sa1Carregada){ try{ await carregarSA1(); }catch(_){} }
       rclPeriodosSelects();
+      /* Realizado do Mapinha/CPK da janela corrente. Sem ele o módulo ainda
+         calcula — só cai inteiro no modelo, com aviso na tela. */
+      if(meta) meta.innerHTML='<span>Carregando o realizado do Mapinha e do CPK…</span>';
+      try{ await rclRealCarregar(rclMesesDaTela()); }
+      catch(e){ console.warn('[Rota clientes] realizado:',e&&e.message); }
       rclRecalcular();
     }catch(e){
       console.warn('[Rota clientes]',e);
@@ -11566,6 +12911,26 @@ async function rclAoAbrir(){
     }finally{ RCL._prom=null; }
   })();
   return RCL._prom;
+}
+/* Meses que os seletores da tela pedem — usado antes de rclCalcular() rodar,
+   para saber qual janela do Mapinha carregar. */
+function rclMesesDaTela(){
+  const janela=($('rclJanela')&&$('rclJanela').value)||'mes';
+  const mes=Number(($('rclMes')&&$('rclMes').value)||RT.periodo.m)||RT.periodo.m;
+  const ano=Number(($('rclAno')&&$('rclAno').value)||RT.periodo.a)||RT.periodo.a;
+  return rclMeses(janela,mes,ano);
+}
+/* Recalcula garantindo que o realizado da janela pedida já esteja em mãos.
+   Trocar mês, abrangência ou filial passa por aqui. */
+async function rclRecalcularAsync(){
+  const meses=rclMesesDaTela();
+  if(!RCL.real || RCL.real.chave!==meses.join(',')){
+    const meta=$('rclMeta');
+    if(meta) meta.innerHTML='<span>Carregando o realizado do Mapinha e do CPK…</span>';
+    try{ await rclRealCarregar(meses); }
+    catch(e){ console.warn('[Rota clientes] realizado:',e&&e.message); }
+  }
+  rclRecalcular();
 }
 function rclRecalcular(){
   const meta=$('rclMeta');
@@ -11595,10 +12960,10 @@ try{ window.__ATLAS_ROTA_CLIENTES__ = RCL; window.__ATLAS_RCL_CFG__ = RCL_CFG; }
   if(tab) tab.addEventListener('click',()=>{ setTimeout(()=>{
     const sv=$('sv-rcl'); if(sv && sv.classList.contains('on')) rclAoAbrir();
   },40); });
-  ['rclJanela','rclMes','rclAno','rclBase'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>rclRecalcular(); });
+  ['rclJanela','rclMes','rclAno','rclBase'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>rclRecalcularAsync(); });
   ['rclFilial','rclOrd','rclSoNeg','rclExpTudo'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>rclRender(); });
   const bs=$('rclBusca'); if(bs){ let t=null; bs.oninput=()=>{ clearTimeout(t); t=setTimeout(rclRender,200); }; }
-  const br=$('rclBtnRecalc'); if(br) br.onclick=()=>rclRecalcular();
+  const br=$('rclBtnRecalc'); if(br) br.onclick=()=>{ RCL.real=null; rclRecalcularAsync(); };
   const bp=$('rclBtnPrem');   if(bp) bp.onclick=rclPremModal;
   const bx=$('rclBtnExport'); if(bx) bx.onclick=rclExportar;
   const bd=$('rclBtnDiag');   if(bd) bd.onclick=()=>{ const c=$('rclCardDiag');
