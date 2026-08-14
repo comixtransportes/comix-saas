@@ -10603,6 +10603,25 @@ const RCL_PADRAO = {
      este módulo mediu no período — a soma das rotas fecha com o Mapinha por
      construção. 'taxa' usa a taxa do Mapinha sem forçar o fechamento.     */
   nivelamento:      'medido',      /* medido · taxa                         */
+  /* ══ MÊS-BASE DO REALIZADO ═════════════════════════════════════════════
+     O mês corrente tem o Mapinha em rascunho: nota que ainda não chegou,
+     OS que ainda não fechou, pedágio que ainda não foi importado. Tirar
+     média de consumo e taxa de custo de um mês assim subestima tudo — e o
+     erro não aparece, porque o número existe e parece plausível.
+
+     Por isso o realizado NÃO vem da janela analisada: vem do mês FECHADO
+     mais recente, com todos os custos já aplicados. As viagens, a receita e
+     o quilômetro continuam vindo da janela — o SZB é tempo real e está
+     completo. O que se importa do mês fechado são as TAXAS: R$/l do diesel,
+     R$/km de pneu e pedágio, R$/viagem de peças e pessoal, e o fator de
+     aderência do consumo.
+
+       'fechado'  → mês fechado mais recente até o fim da janela (padrão)
+       'anterior' → sempre o mês fechado ANTERIOR ao início da janela,
+                    mesmo que a própria janela já esteja fechada
+       'janela'   → a própria janela, fechada ou não (comportamento antigo) */
+  baseRealizado:    'fechado',     /* fechado · anterior · janela           */
+  baseMaxMeses:     12,            /* até quantos meses andar para trás     */
   /* Sobrescritas manuais das taxas do realizado (vazio = calcula do Mapinha) */
   ovDieselRS: null, ovArlaRS: null, ovPedagioKm: null, ovPneusKm: null,
   ovLubKm: null, ovPecasViagem: null, ovDocViagem: null, ovPessoalViagem: null,
@@ -10617,6 +10636,7 @@ const RCL = {
   abertos: new Set(), sel: null,
   calculado: false, aviso: [],
   real: null, realCarregado: false,   /* realizado do Mapinha / CPK          */
+  base: null, fech: null,             /* mês-base fechado e status lidos     */
   _prom: null
 };
 
@@ -10816,11 +10836,120 @@ function rclrSomar(a,b){
    Uma leitura por mês em mapinha_lancamentos e em mapinha_pedagios, uma da
    coleção de premissas e uma do documento de depreciação. Tudo cacheado por
    janela — trocar a ordenação ou o filtro da tela não relê nada. */
-async function rclRealCarregar(meses){
-  const chave = meses.join(',');
+/* ══ MÊS-BASE DO REALIZADO ════════════════════════════════════════════════
+   Um mês do Mapinha só serve de referência quando está FECHADO: enquanto o
+   status é rascunho ou reaberto, faltam notas, OS e o import de pedágio, e
+   qualquer média tirada dali sai por baixo sem que nada acuse.
+
+   O status mora no cabeçalho mapinha_mensal/MAP_{filial}_{mês}. Cada filial
+   fecha o seu próprio mês, então a referência é resolvida POR UNIDADE — SC
+   pode estar fechada em junho enquanto PR ainda está em maio, e forçar as
+   duas ao mesmo mês seria inventar dado para uma delas.
+   ══════════════════════════════════════════════════════════════════════════ */
+function rclMesAnterior(m){
+  const [a,b]=String(m).split('-').map(Number);
+  const t=a*12+(b-1)-1;
+  return String(Math.floor(t/12)).padStart(4,'0')+'-'+String((t%12)+1).padStart(2,'0');
+}
+/* Lê o status de fechamento de uma lista de competências, por filial.
+   Cacheado: trocar a ordenação da tela não relê nada. */
+async function rclCarregarFechamentos(mesesCand){
+  if(!RCL.fech) RCL.fech=new Map();
+  const SIGLAS=['SC','PR','SP'];
+  const pend=[];
+  SIGLAS.forEach(f=>mesesCand.forEach(m=>{ const k=f+'|'+m; if(!RCL.fech.has(k)) pend.push([f,m,k]); }));
+  /* Em lotes: são leituras independentes por documento e o limitador é a
+     latência de ida e volta, não a banda. */
+  for(let i=0;i<pend.length;i+=24){
+    const lote=pend.slice(i,i+24);
+    const res=await Promise.all(lote.map(([f,m])=>
+      fsGetDoc('mapinha_mensal','MAP_'+f+'_'+m).catch(()=>null)));
+    lote.forEach(([f,m,k],j)=>{
+      const d=res[j];
+      RCL.fech.set(k, d&&d.data ? String(d.data.status||'rascunho') : 'inexistente');
+    });
+  }
+  return RCL.fech;
+}
+function rclEstaFechado(fil, mes){
+  return (RCL.fech && RCL.fech.get(fil+'|'+mes))==='fechado';
+}
+
+/* Resolve, por unidade, quais competências servem de base para o realizado.
+   Devolve também o MOTIVO, que vai inteiro para a tela — se o número mudou
+   porque o mês de referência recuou, isso não pode ficar implícito. */
+function rclResolverBase(mesesJanela, P){
+  const SIGLAS=['SC','PR','SP'];
+  const ini=mesesJanela[0], fim=mesesJanela[mesesJanela.length-1];
+  const maxT=Math.max(1, P.baseMaxMeses||12);
+  const out={ porOp:{}, modo:P.baseRealizado||'fechado', janela:mesesJanela.slice(), aviso:[] };
+
+  SIGLAS.forEach(f=>{
+    if(out.modo==='janela'){
+      out.porOp[f]={ meses:mesesJanela.slice(), motivo:'janela analisada, fechada ou não (escolha nas premissas)',
+                     tipo:'janela', abertos:mesesJanela.filter(m=>!rclEstaFechado(f,m)) };
+      return;
+    }
+    /* 'anterior' começa a busca um mês antes da janela, de propósito: serve
+       para comparar a janela contra o mês fechado que a antecede. */
+    const fechadosNaJanela = out.modo==='fechado' ? mesesJanela.filter(m=>rclEstaFechado(f,m)) : [];
+    if(fechadosNaJanela.length===mesesJanela.length){
+      out.porOp[f]={ meses:fechadosNaJanela, motivo:'a própria janela já está fechada no Mapinha',
+                     tipo:'janela', abertos:[] };
+      return;
+    }
+    if(fechadosNaJanela.length){
+      out.porOp[f]={ meses:fechadosNaJanela,
+                     motivo:`${fechadosNaJanela.length} de ${mesesJanela.length} meses da janela estão fechados; os abertos ficaram fora da base`,
+                     tipo:'parcial', abertos:mesesJanela.filter(m=>!rclEstaFechado(f,m)) };
+      return;
+    }
+    /* Nenhum mês da janela fechado — anda para trás até achar o último. */
+    let m = out.modo==='anterior' ? rclMesAnterior(ini) : rclMesAnterior(fim);
+    for(let i=0;i<maxT;i++){
+      if(rclEstaFechado(f,m)){
+        out.porOp[f]={ meses:[m], tipo:'anterior', abertos:mesesJanela.slice(),
+          motivo:`a janela não tem mês fechado no Mapinha; a referência é ${dtSimplesBR(m+'-01').slice(3)}, o fechamento mais recente com todos os custos aplicados` };
+        return;
+      }
+      m=rclMesAnterior(m);
+    }
+    out.porOp[f]={ meses:[], tipo:'nenhum', abertos:mesesJanela.slice(),
+      motivo:`nenhum fechamento encontrado nos últimos ${maxT} meses` };
+  });
+
+  /* Chaves distintas de conjuntos de meses — cada uma exige uma medição de
+     km e viagens própria. Na prática as três filiais fecham juntas e isto é
+     uma chave só. */
+  out.conjuntos=[...new Set(SIGLAS.map(f=>(out.porOp[f].meses||[]).join(',')).filter(Boolean))];
+  out.uniao=[...new Set(SIGLAS.flatMap(f=>out.porOp[f].meses||[]))].sort();
+  return out;
+}
+/* Rótulo curto do mês-base de uma unidade, para a tela. */
+function rclRotuloBase(f){
+  const b=RCL.base&&RCL.base.porOp?RCL.base.porOp[f]:null;
+  if(!b || !b.meses.length) return 'sem fechamento';
+  if(b.meses.length===1) return dtSimplesBR(b.meses[0]+'-01').slice(3);
+  return dtSimplesBR(b.meses[0]+'-01').slice(3)+' a '+dtSimplesBR(b.meses[b.meses.length-1]+'-01').slice(3);
+}
+
+/* Carrega o realizado usando, para CADA unidade, as competências que a base
+   resolveu — normalmente o mês fechado mais recente, que pode não ser o mês
+   da janela analisada. Ler a união e filtrar por unidade evita reler o mesmo
+   documento três vezes quando as filiais fecham juntas, que é o caso comum. */
+async function rclRealCarregar(base){
+  const SIGLAS=['SC','PR','SP'];
+  /* compatibilidade: aceita uma lista simples de meses */
+  if(Array.isArray(base)){
+    const l=base.slice();
+    base={ porOp:Object.fromEntries(SIGLAS.map(f=>[f,{meses:l,tipo:'janela',motivo:'lista direta',abertos:[]}])),
+           uniao:l, janela:l, modo:'janela', conjuntos:[l.join(',')], aviso:[] };
+  }
+  const meses = (base.uniao||[]).slice();
+  const daUnidade = (f,m)=> (base.porOp[f]&&base.porOp[f].meses||[]).indexOf(m)>-1;
+  const chave = SIGLAS.map(f=>f+':'+((base.porOp[f]&&base.porOp[f].meses)||[]).join('|')).join(';');
   if(RCL.real && RCL.real.chave===chave) return RCL.real;
 
-  const SIGLAS=['SC','PR','SP'];
   const falta=[], nota=[];
 
   /* ── cadastro de veículos: placa → unidade, tipo e vínculo ── */
@@ -10841,13 +10970,14 @@ async function rclRealCarregar(meses){
     let linhas=[];
     try{ linhas = await fsGetCollection('mapinha_lancamentos',{where:[['mesRef','==',m]]}); }
     catch(e){ falta.push('lançamentos de '+m); continue; }
-    if(!linhas.length){ SIGLAS.forEach(s=>buckets[s].mesesSem.push(m)); continue; }
-    SIGLAS.forEach(s=>buckets[s].mesesLidos.push(m));
+    if(!linhas.length){ SIGLAS.forEach(s=>{ if(daUnidade(s,m)) buckets[s].mesesSem.push(m); }); continue; }
+    SIGLAS.forEach(s=>{ if(daUnidade(s,m)) buckets[s].mesesLidos.push(m); });
     linhas.forEach(d=>{
       const l=d.data||{};
       if(String(l.status||'').toLowerCase()==='estornado') return;
       const fil=String(l.filial||'').toUpperCase().slice(0,2);
       const bk=buckets[fil]; if(!bk) return;
+      if(!daUnidade(fil,m)) return;          /* competência fora da base desta unidade */
       const cod=String(l.centroCusto||'').trim();
       const nome=l.centroCustoNome||'';
       const v=+l.valor||0;
@@ -10886,6 +11016,7 @@ async function rclRealCarregar(meses){
       placas.forEach(p=>{
         const fil = String(p.filial||filialDaPlaca(p.placa)||'').toUpperCase().slice(0,2);
         const bk=buckets[fil]; if(!bk) return;
+        if(!daUnidade(fil,m)) return;
         const val=+p.comix||0;
         bk.pedagioRS+=val;
         if(p.semCadastro) bk.pedagioSemCadastro+=val;
@@ -10893,7 +11024,7 @@ async function rclRealCarregar(meses){
       });
     } else {
       const pf=doc.data.porFilial||{};
-      Object.keys(pf).forEach(s=>{ if(buckets[s]) buckets[s].pedagioRS += (+pf[s].comix||0); });
+      Object.keys(pf).forEach(s=>{ if(buckets[s] && daUnidade(s,m)) buckets[s].pedagioRS += (+pf[s].comix||0); });
     }
   }
 
@@ -10924,7 +11055,7 @@ async function rclRealCarregar(meses){
   };
   SIGLAS.forEach(s=>{
     const b=buckets[s];
-    meses.forEach(m=>{
+    ((base.porOp[s]&&base.porOp[s].meses)||[]).forEach(m=>{
       const o=cpkDaFilial(s,m);
       if(!Object.keys(o).length) return;
       b.temPremissaCpk=true;
@@ -10951,7 +11082,7 @@ async function rclRealCarregar(meses){
     const bk=buckets[fil]; if(!bk) return;
     const tipo = rclrTipoVeic({...(cad||{}), tipo:rec.tipo||(cad&&cad.tipo)});
     let soma=0;
-    meses.forEach(m=>{ soma += rclrDepMes(rec, m); });
+    ((base.porOp[fil]&&base.porOp[fil].meses)||[]).forEach(m=>{ soma += rclrDepMes(rec, m); });
     if(!(soma>0)) return;
     bk.nPlacasDep++;
     if(tipo==='carreta')      bk.deprecCarretaRS+=soma;
@@ -10960,7 +11091,7 @@ async function rclRealCarregar(meses){
   });
 
   const total=SIGLAS.map(s=>buckets[s]).reduce((a,b)=>rclrSomar(a,b), rclrBucket('consolidado'));
-  RCL.real={ chave, meses:meses.slice(), porOp:buckets, total, falta:[...new Set(falta)], nota,
+  RCL.real={ chave, meses:meses.slice(), base, porOp:buckets, total, falta:[...new Set(falta)], nota,
              lidoEm:agoraISO() };
   RCL.realCarregado=true;
   return RCL.real;
@@ -11548,27 +11679,99 @@ function rclCalcular(){
   const perfil=rtPerfilAtivo();
 
   const ops=[...new Set(buckets.map(b=>b.rota.op).filter(Boolean))];
-  const precos={_geral:rclSZCJanela(RCL.meses,'')};
-  ops.forEach(op=>{ precos[op]=rclSZCJanela(RCL.meses,op); });
 
   /* PRÉ-PASSE — consumo de todas as rotas e a normalização que garante que
      ligar o modelo não muda o total de litros da frota, só a repartição. */
   const nrm=rclPreConsumo(buckets, ref, perfil, P);
 
-  /* PASSO 1 — sem calibração, só para medir quantos litros o modelo pede. */
-  const ctx1={P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:()=>1};
+  /* PASSO 1 — sem calibração, só para medir quantos litros e quantos km o
+     modelo pede para a JANELA analisada. */
+  const precosJan={_geral:rclSZCJanela(RCL.meses,'')};
+  ops.forEach(op=>{ precosJan[op]=rclSZCJanela(RCL.meses,op); });
+  const ctx1={P, ref, perfil, precos:precosJan, aprovIdx, norm:nrm.norm, fator:()=>1};
   buckets.forEach(bk=>rclLitrosBucket(bk, ctx1));
 
-  /* PASSO 2 — aderência: litros comprados ÷ litros modelados.
-     O modelo reparte entre rotas; a nota fiscal define o nível. */
+  /* PASSO 2 — MEDIÇÃO DO MÊS-BASE ══════════════════════════════════════════
+     Aqui está a diferença que o mês corrente impunha. A média de consumo e as
+     taxas de custo NÃO podem sair de um mês cujo Mapinha ainda está em
+     rascunho: falta nota, falta OS, falta o import do pedágio. Média tirada
+     dali sai por baixo e nada na tela acusa, porque o número existe.
+
+     Então o realizado vem do mês FECHADO — o mais recente até o fim da
+     janela, ou o anterior a ela quando a janela inteira está aberta. Para
+     virar taxa, o R$ daquele mês precisa do km e das viagens DAQUELE mês:
+     dividir o custo de maio pelo quilômetro de junho seria trocar o erro de
+     lugar. Por isso a medição do mês-base é uma varredura própria do SZB.
+
+     Quando a base coincide com a janela — analisar um mês já fechado — nada
+     disso roda: os números do passo 1 servem, e a aba não fica mais lenta. */
+  const baseR = RCL.base || { porOp:{}, uniao:RCL.meses.slice(), conjuntos:[RCL.meses.join(',')], modo:'janela' };
+  const mesesDaOp = (op)=>{
+    const b = baseR.porOp && baseR.porOp[op];
+    return (b && b.meses && b.meses.length) ? b.meses : RCL.meses;
+  };
+  const janKey = RCL.meses.join(',');
+  const medicoes = new Map();           /* 'meses' → {porOp:{op:{km,viagens,litros}}} */
+  const medirConjunto = (mesesSet)=>{
+    const k=mesesSet.join(',');
+    if(medicoes.has(k)) return medicoes.get(k);
+    if(k===janKey){                     /* a base é a própria janela */
+      const m={ meses:mesesSet, mesma:true, porOp:{} };
+      const acc=(op)=>{
+        const alvo = op ? buckets.filter(b=>b.rota.op===op) : buckets;
+        return { km:alvo.reduce((a,b)=>a+(b.kmAtrib||0),0),
+                 viagens:alvo.reduce((a,b)=>a+(b.viagens||0),0),
+                 litros:alvo.reduce((a,b)=>a+(b.litrosAtrib||0),0) };
+      };
+      ops.forEach(op=>{ m.porOp[op]=acc(op); }); m.porOp._geral=acc('');
+      medicoes.set(k,m); return m;
+    }
+    /* varredura própria do mês-base */
+    let m={ meses:mesesSet, mesma:false, porOp:{}, erro:null };
+    try{
+      const Vb=rclVarrer(mesesSet, modo);
+      const bkb=[...Vb.porRota.values()].filter(b=>b.viagens>0);
+      if(!bkb.length){ m.erro='sem CT-e resolvido no mês-base'; medicoes.set(k,m); return m; }
+      const refb=rclRefTopo(bkb);
+      const apb = P.aproveitarRetorno ? rclAproveitamento(Vb.ledger, P.janelaRetornoDias||2) : new Map();
+      const nrmb=rclPreConsumo(bkb, refb, perfil, P);
+      const ctxb={P, ref:refb, perfil, precos:precosJan, aprovIdx:apb, norm:nrmb.norm, fator:()=>1};
+      bkb.forEach(b=>rclLitrosBucket(b, ctxb));
+      const acc=(op)=>{
+        const alvo = op ? bkb.filter(b=>b.rota.op===op) : bkb;
+        return { km:alvo.reduce((a,b)=>a+(b.kmAtrib||0),0),
+                 viagens:alvo.reduce((a,b)=>a+(b.viagens||0),0),
+                 litros:alvo.reduce((a,b)=>a+(b.litrosAtrib||0),0) };
+      };
+      ops.forEach(op=>{ m.porOp[op]=acc(op); }); m.porOp._geral=acc('');
+      m.rotas=bkb.length;
+    }catch(e){ m.erro=String(e&&e.message||e); }
+    medicoes.set(k,m); return m;
+  };
+  /* SZC e medição do mês-base, por operação */
+  const precos={}, medOp={};
+  ops.forEach(op=>{
+    const mm=mesesDaOp(op);
+    precos[op]=rclSZCJanela(mm,op);
+    medOp[op]=medirConjunto(mm).porOp[op] || {km:0,viagens:0,litros:0};
+  });
+  const mesesGeral = baseR.uniao && baseR.uniao.length ? baseR.uniao : RCL.meses;
+  precos._geral = rclSZCJanela(mesesGeral,'');
+  medOp._geral  = medirConjunto(mesesGeral).porOp._geral || {km:0,viagens:0,litros:0};
+
+  /* PASSO 3 — aderência: litros comprados ÷ litros modelados, AMBOS do
+     mês-base. O modelo reparte entre rotas; a nota fiscal define o nível. */
   const ader={};
   const calc=(op)=>{
-    const alvo = op ? buckets.filter(b=>b.rota.op===op) : buckets;
-    const mod  = alvo.reduce((a,b)=>a+(b.litrosAtrib||0),0);
+    const med = op ? (medOp[op]||{}) : (medOp._geral||{});
+    const mod  = med.litros||0;
     const real = ((op?precos[op]:precos._geral)||{}).litrosDiesel||0;
     const f = (mod>0 && real>0) ? real/mod : null;
     const dentro = f!=null && f>=RCL_CFG.aderenciaMin && f<=RCL_CFG.aderenciaMax;
+    const b = op ? (baseR.porOp&&baseR.porOp[op]) : null;
     return { op:op||'consolidado', modelado:mod, realizado:real, fator:f, dentro,
+             base:(op?mesesDaOp(op):mesesGeral).join(', '),
+             baseTipo:b?b.tipo:'janela',
              aplicado: (P.aderencia && dentro) ? f : 1 };
   };
   ops.forEach(op=>{ ader[op]=calc(op); });
@@ -11583,16 +11786,27 @@ function rclCalcular(){
      Agora que o km e as viagens de cada rota estão medidos, o R$ do Mapinha
      vira R$/km e R$/viagem. Uma taxa por operação (cada filial fecha o seu
      mês) e uma consolidada para as rotas cuja operação não tem fechamento.  */
-  const real = RCL.real && RCL.real.chave===RCL.meses.join(',') ? RCL.real : null;
+  const real = RCL.real || null;
   const taxas={}, realBk={};
   if(real){
     const monta=(op)=>{
       const alvo = op ? buckets.filter(b=>b.rota.op===op) : buckets;
       const bkR  = op ? real.porOp[op] : real.total;
       if(!bkR) return null;
-      const km = alvo.reduce((a,b)=>a+(b.kmAtrib||0),0);
-      const vg = alvo.reduce((a,b)=>a+(b.viagens||0),0);
+      /* Denominador do MÊS-BASE, não da janela: o R$ de maio dividido pelo
+         quilômetro de junho não seria taxa nenhuma. */
+      const med = op ? (medOp[op]||{}) : (medOp._geral||{});
+      const km = med.km||0;
+      const vg = med.viagens||0;
       const t  = rclrTaxas(bkR, km, vg, P);
+      t.base = (op?mesesDaOp(op):mesesGeral).slice();
+      t.baseTipo = op && baseR.porOp && baseR.porOp[op] ? baseR.porOp[op].tipo : 'janela';
+      t.baseMotivo = op && baseR.porOp && baseR.porOp[op] ? baseR.porOp[op].motivo : '';
+      t.baseMesma = t.base.join(',')===janKey;
+      /* O que a janela analisada consumiu, para a tela poder comparar o
+         tamanho da base com o tamanho do que está sendo custeado. */
+      t.kmJanela = alvo.reduce((a,b)=>a+(b.kmAtrib||0),0);
+      t.viagensJanela = alvo.reduce((a,b)=>a+(b.viagens||0),0);
       /* Preço efetivo do diesel: R$ do fechamento ÷ litros abastecidos na
          SZC. É o que amarra o custo de diesel do módulo ao DRE. */
       const szc = (op?precos[op]:precos._geral)||{};
@@ -11609,7 +11823,7 @@ function rclCalcular(){
       t.precoDieselFonte = (P.ovDieselRS!=null && P.ovDieselRS>0) ? 'manual'
         : (dieselOk!=null ? 'mapinha÷szc'
           : (dieselCalc!=null ? 'szc — preço do Mapinha fora da banda R$ 2–15/l' : 'szc'));
-      const litrosArlaMod = alvo.reduce((a,b)=>a+(b.litrosAtrib||0),0)*(P.arlaPct>0?P.arlaPct:0.05);
+      const litrosArlaMod = (med.litros||0)*(P.arlaPct>0?P.arlaPct:0.05);
       const arlaSzc  = (bkR.arlaRS>0 && szc.litrosArla>0) ? bkR.arlaRS/szc.litrosArla : null;
       const arlaMod  = (bkR.arlaRS>0 && litrosArlaMod>0)  ? bkR.arlaRS/litrosArlaMod  : null;
       const arlaOk   = saoPreco(arlaSzc, 0.5, 20) || saoPreco(arlaMod, 0.5, 20);
@@ -11623,14 +11837,19 @@ function rclCalcular(){
       /* Pedágio: fator que faz a soma do pedágio HERE das rotas fechar com o
          Mapinha. Fora da banda 0,5–2,0 o fator não é aplicado (a base de
          praças ou o import de pedágio está incompleto) e cai no R$/km. */
-      const pedMod = alvo.reduce((a,b)=>{
+      /* Nivelamento do pedágio pela HERE só faz sentido quando o pedágio
+         modelado e o realizado são do MESMO período. Com a base recuada para
+         um mês fechado, o pedágio HERE daquele mês não foi medido aqui — a
+         linha cai no R$/km, que é honesto, em vez de casar períodos
+         diferentes e chamar isso de fator. */
+      const pedMod = t.baseMesma ? alvo.reduce((a,b)=>{
         const q=b._pedMod; return a + (q>0?q:0);
-      },0);
+      },0) : 0;
       t.pedagioKm = (P.ovPedagioKm!=null && P.ovPedagioKm>=0) ? P.ovPedagioKm : bkR.pedagioRS/Math.max(km,1);
       t.pedagioFator = (pedMod>0 && bkR.pedagioRS>0) ? bkR.pedagioRS/pedMod : 0;
       if(!(t.pedagioFator>=0.5 && t.pedagioFator<=2.0)) t.pedagioFator=0;
       t.pedagioModelado=pedMod; t.pedagioRealizado=bkR.pedagioRS;
-      t.cobertura = { km, viagens:vg, meses:real.meses.length };
+      t.cobertura = { km, viagens:vg, meses:t.base.length };
       return t;
     };
     /* pedágio modelado por bucket, para o fator acima */
@@ -11700,6 +11919,7 @@ function rclCalcular(){
   RCL.ref=ref; RCL.precos=precos; RCL.calculado=true; RCL.norm=nrm;
   RCL.diag={ ader, ref, precos, ops, norm:nrm, meses:RCL.meses.slice(),
              real, taxas:real?taxas:null, realBk:real?realBk:null,
+             base:baseR, medOp, medicoes:[...medicoes.values()],
              orfaos:V.orfaos, ambiguos:V.ambiguos, usados:V.usados,
              cfc:V.cfc, cfcValor:V.cfcValor,
              rotasComViagem:buckets.length,
@@ -11718,6 +11938,19 @@ function rclCalcular(){
     RCL.aviso.push('Realizado do Mapinha/CPK não carregou — todas as linhas de custo caíram no modelo (comportamento anterior). Confira o fechamento do período no Mapinha.');
   else if(real.falta.length)
     RCL.aviso.push('Faltou no realizado: '+real.falta.join(' · ')+'. As linhas sem fonte caíram no modelo.');
+  /* Mês-base: o que mudou de referência tem de ser dito, não deduzido. */
+  ops.forEach(op=>{
+    const b=baseR.porOp&&baseR.porOp[op]; if(!b) return;
+    if(b.tipo==='anterior')
+      RCL.aviso.push(`${op}: a janela não tem mês fechado no Mapinha. As médias de consumo e as taxas de custo vieram de ${dtSimplesBR(b.meses[0]+'-01').slice(3)}, o último fechamento com todos os custos aplicados. Viagens, receita e quilômetro continuam da janela analisada.`);
+    else if(b.tipo==='parcial')
+      RCL.aviso.push(`${op}: ${b.abertos.length} mês(es) da janela ainda em rascunho no Mapinha (${b.abertos.join(', ')}) ficaram FORA da base do realizado — entrariam com custo incompleto e puxariam a média para baixo.`);
+    else if(b.tipo==='nenhum')
+      RCL.aviso.push(`${op}: nenhum mês fechado encontrado no Mapinha nos últimos ${P.baseMaxMeses||12} meses. As linhas de custo desta operação caíram no modelo.`);
+  });
+  if(baseR.modo==='janela')
+    RCL.aviso.push('Premissa "mês-base" está em JANELA: o realizado vem da própria janela, fechada ou não. Em mês corrente isso subestima consumo e custo.');
+  medicoes.forEach(m=>{ if(m.erro) RCL.aviso.push(`Medição do mês-base (${m.meses.join(', ')}) falhou: ${m.erro}. As taxas dessa competência não puderam ser apuradas.`); });
   if(RCL.diag.distDivergente)
     RCL.aviso.push(`${num(RCL.diag.distDivergente,0)} rota(s) com divergência acima de ${pct(P.distAlertaPct||0.10,0)} entre a distância da SZY e a medida pela HERE. O cálculo seguiu com a SZY; a memória de cálculo de cada uma mostra as duas medições.`);
 }
@@ -11985,11 +12218,16 @@ function rclRodape(){
        obs:'A HERE nunca é descartada: vira o controle da SZY. Divergência grande quase nunca é erro da HERE — é rota cadastrada com o km de outro trecho.'})}>${num(d.comSZY,0)} pela SZY · ${num(d.comHere,0)} medida(s) na HERE${d.distDivergente?` · <b class="pill rd">${num(d.distDivergente,0)} divergente(s)</b>`:''}</span>`,
     `${num(d.comPedagio,0)} com pedágio`,
     `${num(d.comPlaca,0)} com placa`,
+    d.base?`<span${mem('Mês-base do realizado',{selo:'MAPINHA',
+       fonte:'De onde saem as médias de consumo e as taxas de custo — sempre um mês FECHADO.',
+       linhas:['SC','PR','SP'].map(f=>{ const b=d.base.porOp[f]; return b?[f, b.meses.length?b.meses.join(', '):'sem fechamento']:null; })
+              .concat([['Modo', d.base.modo]]),
+       obs:(d.base.porOp.SC&&d.base.porOp.SC.motivo)||''})}>base do realizado: <b>${esc(rclRotuloBase('SC'))}</b></span>`:'',
     d.real?`<span${mem('Realizado carregado',{selo:'MAPINHA + CPK',
-       fonte:'Fechamento do Mapinha e base do CPK lidos para esta janela.',
+       fonte:'Fechamento do Mapinha e base do CPK lidos para o mês-base.',
        linhas:[['Lançamentos lidos', num(d.real.total.nLanc,0)],
                ['Placas com depreciação', num(d.real.total.nPlacasDep,0)],
-               ['Meses', num(d.real.meses.length,0)],
+               ['Competências lidas', (d.real.meses||[]).join(', ')||'—'],
                d.real.falta.length?['Faltou', d.real.falta.join(' · ')]:null],
        obs:'Coleções: mapinha_lancamentos, mapinha_pedagios, mapinha_premissas, cpk_lancamentos/DEPRECIACAO e veiculos. Nenhuma coleção nova.'})}>realizado do Mapinha e do CPK carregado</span>`
       :`<b class="pill am">realizado não carregado — custo modelado</b>`,
@@ -12014,6 +12252,11 @@ function rclPainel(chaveCli, k3){
   const T = cu&&cu.taxas ? cu.taxas : null;
   const RB= cu&&cu.realBk ? cu.realBk : null;
   const dm= cu&&cu.distMeta ? cu.distMeta : null;
+  /* Competência de onde saem as médias e as taxas — pode não ser a janela. */
+  const baseMeses = T&&T.base ? T.base : (RCL.base&&RCL.base.porOp&&RCL.base.porOp[r.op] ? RCL.base.porOp[r.op].meses : RCL.meses);
+  const baseTxt = (baseMeses&&baseMeses.length) ? baseMeses.join(', ') : '—';
+  const baseMesma = !!(T ? T.baseMesma : true);
+  const baseMotivo = T&&T.baseMotivo ? T.baseMotivo : ((RCL.base&&RCL.base.porOp&&RCL.base.porOp[r.op]&&RCL.base.porOp[r.op].motivo)||'');
   const jan=rclRotuloJanela(), nMes=Math.max(RCL.meses.length,1);
   const fon=(k)=>(cu&&cu.fontes?cu.fontes[k]:'modelo')||'modelo';
   const selo=(k)=>({mapinha:'MAPINHA','mapinha+here':'MAPINHA × HERE',cpk:'CPK',simulador:'SIMULADOR',
@@ -12283,9 +12526,11 @@ function rclPainel(chaveCli, k3){
       ['2. MODELO — depois da física da rota', num(cu&&cu.cons?cu.cons.carregado:0,2)+' / '+num(cu&&cu.cons?cu.cons.vazio:0,2)],
       ['   normalização (tira o viés do modelo)', num(cu?cu.norm:1,4)],
       ['3. CALIBRAÇÃO — fator do realizado', num(cu?cu.fator:1,4)],
+      ['   apurado sobre a competência', baseTxt],
       ['= Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l']
     ],
-    obs:'DEFINIDO na premissa: 2,0 km/l carregado e 3,0 vazio, que é a média da frota rodando as rotas que ela roda — pode ser sobrescrito por rota ou pelo Simulador. CALCULADO pelo modelo físico: a rota com serra recebe menos km/l e a rota plana recebe mais, contra a rota média da amostra. CALIBRADO pela nota fiscal: o fator de aderência move o nível para que a soma dos litros feche com o que foi comprado. Sem simulação da HERE com elevação, a camada 2 não roda e o número é a premissa pura — e a tela avisa.'});
+    obs:'DEFINIDO na premissa: 2,0 km/l carregado e 3,0 vazio, que é a média da frota rodando as rotas que ela roda — pode ser sobrescrito por rota ou pelo Simulador. CALCULADO pelo modelo físico: a rota com serra recebe menos km/l e a rota plana recebe mais, contra a rota média da amostra. CALIBRADO pela nota fiscal do MÊS FECHADO: o fator de aderência move o nível para que a soma dos litros feche com o que foi comprado. Mês corrente nunca calibra — em rascunho faltam abastecimentos lançados e a média sairia por baixo. Sem simulação da HERE com elevação, a camada 2 não roda e o número é a premissa pura, e a tela avisa.',
+    alerta: baseMesma?null:('Média apurada sobre '+baseTxt+', não sobre a janela analisada. '+baseMotivo)});
 
   const memCalib=mem('Calibração pelo realizado — o que isso significa',{selo:'ADERÊNCIA',
     fonte:'É o fator de aderência aplicado a ESTA rota. Mesmo número, dito de outra forma.',
@@ -12294,7 +12539,9 @@ function rclPainel(chaveCli, k3){
       ['Fator aplicado', cu?num(cu.fator,4):'—'],
       ['Leitura', cu&&cu.fator>1?'a frota gastou MAIS do que o modelo previu → km/l cai':(cu&&cu.fator<1?'a frota gastou MENOS do que o modelo previu → km/l sobe':'não aplicada')],
       ['Banda sã', num(RCL_CFG.aderenciaMin,2)+' – '+num(RCL_CFG.aderenciaMax,2)],
-      ['Origem do fator', P.aderenciaFonte==='geral'?'consolidado das três filiais':'da operação desta rota']
+      ['Origem do fator', P.aderenciaFonte==='geral'?'consolidado das três filiais':'da operação desta rota'],
+      ['Competência-base', baseTxt],
+      ['Base é a janela?', baseMesma?'sim — janela já fechada':'NÃO — a média veio do mês fechado']
     ],
     obs:'Em uma frase: o modelo diz quanto de diesel DEVERIA ter sido queimado; a nota fiscal diz quanto foi COMPRADO; a razão entre os dois vira um multiplicador que corrige o km/l de todas as rotas da operação de uma vez. "Não aplicada" quer dizer que o fator ficou fora da banda sã e o módulo preferiu não mexer — ou que não houve SZC no período. Não é o modelo estar certo ou errado: é a régua sendo ajustada pelo que a empresa efetivamente pagou.'});
 
@@ -12340,6 +12587,12 @@ function rclPainel(chaveCli, k3){
       para abrir a memória de cálculo: de onde o número vem, qual módulo o produziu, a fórmula com os
       insumos reais e as ressalvas. Esta camada sai do ar quando as premissas estiverem validadas.
     </div></div>
+    ${baseMesma?'':`<div class="alerta am" style="margin-bottom:12px"><div style="font-size:10.5px">
+      <b>Médias e taxas vieram de ${esc(baseTxt)}</b>, não da janela analisada. ${esc(baseMotivo)}
+      Viagens, receita e quilômetro continuam sendo os da janela — o que se importou do mês fechado
+      foram as taxas: R$/l do diesel, R$/km de pneu, lubrificante e pedágio, R$/viagem de peças,
+      documentação, pessoal e depreciação, e o fator de aderência do consumo.
+    </div></div>`}
 
     <div class="rcl-bar">
       ${bar(r.impostos,'var(--mu)')}${bar(r.custoVar,'var(--rd)')}${bar(r.custoFixo,'var(--am)')}
@@ -12519,11 +12772,16 @@ function rclPainel(chaveCli, k3){
           <td class="muted"${mem('Etapa 4 — nível do realizado',{selo:'MAPINHA',
             fonte:'O fechamento do mês define o NÍVEL de cada linha; o modelo apenas REPARTE entre as rotas.',
             formula:'R$ do Mapinha ÷ km (ou viagens) medidos = taxa × o que esta rota consumiu',
-            linhas:[T?['km medido no período', num(T.km,0)+' km']:null, T?['viagens medidas', num(T.viagens,0)]:null,
+            linhas:[T?['Competência-base', (T.base||[]).join(', ')]:null,
+                    T?['km medido no mês-base', num(T.km,0)+' km']:null, T?['viagens no mês-base', num(T.viagens,0)]:null,
+                    T&&!T.baseMesma?['km da janela analisada', num(T.kmJanela,0)+' km']:null,
+                    T&&!T.baseMesma?['viagens da janela', num(T.viagensJanela,0)]:null,
                     RB?['Diesel', brl(RB.dieselRS)]:null, RB?['Pedágio', brl(RB.pedagioRS)]:null,
                     RB?['Pneus', brl(RB.pneusRS)]:null, RB?['Lubrificante', brl(RB.lubRS)]:null,
                     RB?['Peças', brl(RB.pecasRS)]:null, RB?['Doc. e seguros', brl(RB.docRS)]:null],
-            obs:'Nivelamento "medido": a soma do custo de todas as rotas fecha com o Mapinha por construção.',
+            obs: baseMesma
+              ? 'Nivelamento "medido" com base na própria janela: a soma do custo de todas as rotas fecha com o Mapinha por construção.'
+              : 'A janela ainda não fechou no Mapinha, então a taxa foi apurada no mês fechado e CARREGADA para cá. A soma das rotas não fecha com nenhum mês isolado — e é assim que tem de ser: fecharia com o mês fechado se o quilômetro fosse o mesmo.',
             alerta:'O Mapinha cobre TODO o rodado da frota — transferência, ida para manutenção, reposicionamento. O módulo só mede o km faturado. A taxa carrega, portanto, o rodado improdutivo. É deliberado (custo tem de aparecer em algum lugar), mas é a ressalva mais importante desta tela.'})}>Quanto cada insumo custou de verdade</td>
           <td class="num">${T?brl(T.pneusKm+T.lubKm+T.pedagioKm)+'/km':'—'}</td></tr>
       <tr><td class="muted">5</td>
@@ -12563,6 +12821,7 @@ function rclRenderDiag(){
   const d=RCL.diag, P=rclPrem();
   const linha=(a)=>`<tr>
       <td>${esc(a.op)}</td>
+      <td>${esc(a.base||'—')}${a.baseTipo==='anterior'?' <span class="src-tag alerta">RECUOU</span>':(a.baseTipo==='parcial'?' <span class="src-tag alerta">PARCIAL</span>':'')}</td>
       <td class="num">${num(a.modelado,0)} l</td>
       <td class="num">${num(a.realizado,0)} l</td>
       <td class="num">${a.fator==null?'—':num(a.fator,3)}</td>
@@ -12595,8 +12854,35 @@ function rclRenderDiag(){
       do Mapinha — e as demais linhas de custo têm o seu próprio nivelamento. Aderência não é fator de correção
       universal: é especificamente a ponte entre o modelo de consumo e a nota fiscal do combustível.
     </div>
+
+    <h3 style="font-size:12px;margin-top:14px">Mês-base — de qual competência sai a média</h3>
+    <div class="muted" style="margin-bottom:9px;line-height:1.7">
+      Média de consumo e taxa de custo <b>não podem sair do mês corrente</b>. Enquanto o Mapinha está em rascunho,
+      falta nota que ainda não chegou, OS que ainda não fechou e o import de pedágio que ainda não foi feito.
+      Qualquer média tirada dali sai por baixo — e o erro não aparece, porque o número existe e parece plausível.<br><br>
+      Por isso o realizado vem do <b>mês fechado</b> mais recente, com todos os custos já aplicados. A separação é
+      esta: <b>viagens, receita e quilômetro</b> continuam vindo da janela analisada, porque o SZB é tempo real e está
+      completo; o que se importa do mês fechado são as <b>taxas</b> — R$/l do diesel, R$/km de pneu, lubrificante e
+      pedágio, R$/viagem de peças, documentação, pessoal e depreciação, e o fator de aderência do consumo.<br><br>
+      Para o R$ do mês fechado virar taxa, ele precisa do <b>km e das viagens daquele mesmo mês</b>: dividir o custo de
+      maio pelo quilômetro de junho só trocaria o erro de lugar. Por isso o módulo faz uma varredura própria do SZB
+      sobre a competência-base. Quando a janela analisada já está fechada, base e janela coincidem, nada disso roda e
+      a soma das rotas volta a fechar exatamente com o Mapinha.
+    </div>
+    ${d.base?`<table class="tb">
+      <thead><tr><th>Unidade</th><th>Competência-base</th><th>Situação</th><th class="num">Km medido</th><th class="num">Viagens</th><th>Motivo</th></tr></thead>
+      <tbody>${['SC','PR','SP'].map(f=>{ const b=d.base.porOp[f]; if(!b) return '';
+        const md=(d.medOp&&d.medOp[f])||{};
+        const pil = b.tipo==='janela'?'<span class="pill gn">janela fechada</span>'
+                  : b.tipo==='parcial'?'<span class="pill am">parcial</span>'
+                  : b.tipo==='anterior'?'<span class="pill ac">recuou para o fechado</span>'
+                  : '<span class="pill rd">sem fechamento</span>';
+        return `<tr><td>${f}</td><td>${esc(b.meses.join(', ')||'—')}</td><td>${pil}</td>
+          <td class="num">${num(md.km||0,0)} km</td><td class="num">${num(md.viagens||0,0)}</td>
+          <td class="muted" style="font-size:10.5px">${esc(b.motivo||'')}</td></tr>`; }).join('')}</tbody>
+    </table>`:''}
     <table class="tb">
-      <thead><tr><th>Operação</th><th class="num">Modelado</th><th class="num">Comprado (SZC)</th>
+      <thead><tr><th>Operação</th><th>Mês-base</th><th class="num">Modelado</th><th class="num">Comprado (SZC)</th>
         <th class="num">Fator</th><th class="num">Desvio</th><th>Situação</th></tr></thead>
       <tbody>${ops.map(linha).join('')}${linha(d.ader._geral)}</tbody>
     </table>
@@ -12629,7 +12915,13 @@ function rclRenderDiag(){
       <tbody>
         <tr><td>Diesel</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.dieselRS)}</td><td>preço efetivo × litros do modelo</td><td class="num">${brl(txT?txT.precoDieselEfetivo:null)}/l</td></tr>
         <tr><td>Arla</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.arlaRS)}</td><td>${pct(P.arlaPct||0.05,1)} dos litros × preço</td><td class="num">${brl(txT?txT.precoArlaEfetivo:null)}/l</td></tr>
-        <tr><td>Pedágio</td><td><span class="src-tag map">MAPINHA</span> × <span class="src-tag here">HERE</span></td><td class="num">${brl(rlT.pedagioRS)}</td><td>praças da HERE niveladas pelo realizado</td><td class="num">${txT&&txT.pedagioFator>0?'fator '+num(txT.pedagioFator,3):brl(txT?txT.pedagioKm:null)+'/km'}</td></tr>
+        <tr><td>Pedágio</td>
+          <td>${txT&&txT.pedagioFator>0?'<span class="src-tag map">MAPINHA</span> × <span class="src-tag here">HERE</span>':'<span class="src-tag map">MAPINHA</span>'}</td>
+          <td class="num">${brl(rlT.pedagioRS)}</td>
+          <td>${txT&&txT.pedagioFator>0?'praças da HERE niveladas pelo realizado'
+               :(txT&&!txT.baseMesma?'por km — nivelamento por praça não se aplica com a base em outra competência'
+               :'por km — sem base de praças no período')}</td>
+          <td class="num">${txT&&txT.pedagioFator>0?'fator '+num(txT.pedagioFator,3):brl(txT?txT.pedagioKm:null)+'/km'}</td></tr>
         <tr><td>Pneus</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.pneusRS)}</td><td>por km</td><td class="num">${brl(txT?txT.pneusKm:null)}/km</td></tr>
         <tr><td>Lubrificante</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.lubRS)}</td><td>por km</td><td class="num">${brl(txT?txT.lubKm:null)}/km</td></tr>
         <tr><td>Peças e serviços</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.pecasRS)}</td><td>por viagem</td><td class="num">${brl(txT?txT.pecasVg:null)}</td></tr>
@@ -12641,7 +12933,7 @@ function rclRenderDiag(){
         <tr><td>Tempo parado</td><td><span class="src-tag sim">SIMULADOR</span></td><td class="num">—</td><td>(carga + espera) × R$/hora</td><td class="num">—</td></tr>
         <tr style="background:var(--sf)"><td colspan="2"><b>Base do rateio</b></td>
           <td class="num"><b>${num(txT?txT.km:0,0)} km</b></td>
-          <td><b>km e viagens medidos por este módulo</b></td>
+          <td><b>km e viagens medidos em ${esc(txT&&txT.base?txT.base.join(', '):'—')}</b>${txT&&!txT.baseMesma?` <span class="pill am">a janela analisada tem ${num(txT.kmJanela,0)} km em ${num(txT.viagensJanela,0)} viagens</span>`:''}</td>
           <td class="num"><b>${num(txT?txT.viagens:0,0)} viagens</b></td></tr>
       </tbody>
     </table>
@@ -12715,6 +13007,18 @@ function rclPremModal(){
       ${n('distAlertaPct','Alerta de divergência', P.distAlertaPct, '0.01', 'fração — 0,10 = 10%')}
     </div>
 
+    <h3 style="font-size:12px;margin-top:12px">Mês-base do realizado</h3>
+    <div class="muted" style="font-size:10.5px;margin-bottom:6px">
+      Média de consumo e taxa de custo não podem sair do mês corrente: com o Mapinha em rascunho falta nota,
+      falta OS e falta o import de pedágio, e a média sai por baixo sem que nada acuse. O padrão é usar o
+      <b>mês fechado</b> mais recente. Viagens, receita e quilômetro continuam vindo da janela analisada —
+      o SZB é tempo real. O que se importa do mês fechado são as taxas e o fator de aderência.
+    </div>
+    <div class="rt-fields grid3">
+      ${s('baseRealizado','Competência do realizado', P.baseRealizado, [['fechado','Mês fechado mais recente (padrão)'],['anterior','Sempre o fechado anterior à janela'],['janela','A própria janela, fechada ou não']])}
+      ${n('baseMaxMeses','Andar para trás no máximo', P.baseMaxMeses, '1', 'meses')}
+    </div>
+
     <h3 style="font-size:12px;margin-top:12px">Fonte de cada linha de custo</h3>
     <div class="muted" style="font-size:10.5px;margin-bottom:6px">
       Trocar qualquer linha para <b>Modelo</b> devolve exatamente o comportamento anterior daquela linha —
@@ -12762,7 +13066,8 @@ function rclPremModal(){
       : `<button class="btn" onclick="mdFechar()">Fechar</button>`);
 
   const bp=$('rclPremPadrao');
-  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO}); mdFechar(); rclCalcular(); rclRender(); rclRenderDiag(); toast('Premissas do resultado no padrão.','ac'); };
+  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO}); mdFechar();
+    RCL.real=null; RCL.base=null; await rclRecalcularAsync(); toast('Premissas do resultado no padrão.','ac'); };
   const bs=$('rclPremSalvar');
   if(bs) bs.onclick=async()=>{
     const gN=id=>{ const e=$('rcl_'+id); if(!e||e.value==='') return null; const v=Number(e.value); return isNaN(v)?null:v; };
@@ -12776,6 +13081,7 @@ function rclPremModal(){
       aderencia:gB('aderencia'), aderenciaFonte:gS('aderenciaFonte'),
       aproveitarRetorno:gB('aproveitarRetorno'), janelaRetornoDias:gN('janelaRetornoDias')||2,
       distPreferida:gS('distPreferida'), distAlertaPct:gN('distAlertaPct')||0.10,
+      baseRealizado:gS('baseRealizado'), baseMaxMeses:gN('baseMaxMeses')||12,
       fonteDiesel:gS('fonteDiesel'), fonteArla:gS('fonteArla'), arlaPct:gN('arlaPct')||0.05,
       fontePedagio:gS('fontePedagio'), fontePneus:gS('fontePneus'),
       fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
@@ -12790,7 +13096,10 @@ function rclPremModal(){
       ovAlimentacaoViagem:gN('ovAlimentacaoViagem'), ovTempoHora:gN('ovTempoHora')
     };
     const ok=await rclGravarPrem(novo);
-    mdFechar(); rclCalcular(); rclRender(); rclRenderDiag();
+    mdFechar();
+    /* Trocar o modo do mês-base muda a competência do realizado: recarrega. */
+    RCL.real=null; RCL.base=null;
+    await rclRecalcularAsync();
     toast(ok?'Premissas do resultado salvas.':'Premissas aplicadas nesta sessão — a gravação falhou.', ok?'gn':'am');
   };
 }
@@ -12901,8 +13210,8 @@ async function rclAoAbrir(){
       rclPeriodosSelects();
       /* Realizado do Mapinha/CPK da janela corrente. Sem ele o módulo ainda
          calcula — só cai inteiro no modelo, com aviso na tela. */
-      if(meta) meta.innerHTML='<span>Carregando o realizado do Mapinha e do CPK…</span>';
-      try{ await rclRealCarregar(rclMesesDaTela()); }
+      if(meta) meta.innerHTML='<span>Buscando o último mês fechado no Mapinha…</span>';
+      try{ await rclPrepararRealizado(rclMesesDaTela()); }
       catch(e){ console.warn('[Rota clientes] realizado:',e&&e.message); }
       rclRecalcular();
     }catch(e){
@@ -12920,14 +13229,29 @@ function rclMesesDaTela(){
   const ano=Number(($('rclAno')&&$('rclAno').value)||RT.periodo.a)||RT.periodo.a;
   return rclMeses(janela,mes,ano);
 }
+/* Prepara o realizado da janela pedida: lê os status de fechamento, resolve
+   qual competência serve de base para cada unidade e carrega o Mapinha e o
+   CPK daquela competência. É aqui que o mês corrente deixa de contaminar as
+   médias — o que entra é o último mês FECHADO. */
+async function rclPrepararRealizado(meses){
+  const P=rclPrem();
+  /* Candidatos: a janela mais os meses para trás em que a busca pode cair. */
+  const cand=[...meses];
+  let m=rclMesAnterior(meses[0]);
+  for(let i=0;i<Math.max(1,P.baseMaxMeses||12);i++){ cand.push(m); m=rclMesAnterior(m); }
+  await rclCarregarFechamentos([...new Set(cand)].sort());
+  RCL.base = rclResolverBase(meses, P);
+  await rclRealCarregar(RCL.base);
+}
 /* Recalcula garantindo que o realizado da janela pedida já esteja em mãos.
    Trocar mês, abrangência ou filial passa por aqui. */
 async function rclRecalcularAsync(){
   const meses=rclMesesDaTela();
-  if(!RCL.real || RCL.real.chave!==meses.join(',')){
+  const precisa = !RCL.base || RCL.base.janela.join(',')!==meses.join(',') || !RCL.real;
+  if(precisa){
     const meta=$('rclMeta');
-    if(meta) meta.innerHTML='<span>Carregando o realizado do Mapinha e do CPK…</span>';
-    try{ await rclRealCarregar(meses); }
+    if(meta) meta.innerHTML='<span>Buscando o último mês fechado no Mapinha…</span>';
+    try{ await rclPrepararRealizado(meses); }
     catch(e){ console.warn('[Rota clientes] realizado:',e&&e.message); }
   }
   rclRecalcular();
@@ -12938,7 +13262,17 @@ function rclRecalcular(){
     rclCalcular(); rclRender(); rclRenderDiag();
     if(meta){
       const d=RCL.diag;
+      const bs=d&&d.base?d.base:null;
+      const tipos=bs?['SC','PR','SP'].map(f=>bs.porOp[f]).filter(Boolean):[];
+      const recuou=tipos.some(x=>x.tipo==='anterior'||x.tipo==='parcial');
       meta.innerHTML = `<span class="pill ac">${esc(rclRotuloJanela())}</span>`
+        + (bs?`<span class="pill ${recuou?'am':'gn'}"${mem('Mês-base do realizado',{selo:'MAPINHA',
+             fonte:'Competência de onde saem as médias de consumo e as taxas de custo. Só mês FECHADO no Mapinha entra — em rascunho falta nota, OS e o import de pedágio, e a média sairia por baixo.',
+             formula:'viagens, receita e km ← janela analisada (SZB, tempo real)\nR$/l, R$/km, R$/viagem e aderência ← mês-base fechado',
+             linhas:['SC','PR','SP'].map(f=>{ const b=bs.porOp[f]; return b?[f, (b.meses.length?b.meses.join(', '):'sem fechamento')+' · '+b.tipo]:null; }),
+             obs: recuou
+               ? 'A base recuou porque a janela analisada ainda não fechou. As taxas do mês fechado são aplicadas ao quilômetro e às viagens da janela.'
+               : 'A janela analisada já está fechada no Mapinha — base e janela coincidem, e a soma das rotas fecha com o fechamento.'})}>base: ${esc(rclRotuloBase('SC'))}${recuou?' ⟲':''}</span>`:'')
         + `<span>${num(RCL.clientes.length,0)} cliente(s) · ${num(RCL.rotas.length,0)} par(es) cliente–rota · ${num(d?d.usados:0,0)} CT-e(s)</span>`
         + (RT.szbMeta?`<span>SZB de ${esc(dtBR(RT.szbMeta.ts))}</span>`:'')
         + (RT.szyMeta?`<span>SZY de ${esc(dtBR(RT.szyMeta.ts))}</span>`:'')
@@ -12963,7 +13297,7 @@ try{ window.__ATLAS_ROTA_CLIENTES__ = RCL; window.__ATLAS_RCL_CFG__ = RCL_CFG; }
   ['rclJanela','rclMes','rclAno','rclBase'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>rclRecalcularAsync(); });
   ['rclFilial','rclOrd','rclSoNeg','rclExpTudo'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>rclRender(); });
   const bs=$('rclBusca'); if(bs){ let t=null; bs.oninput=()=>{ clearTimeout(t); t=setTimeout(rclRender,200); }; }
-  const br=$('rclBtnRecalc'); if(br) br.onclick=()=>{ RCL.real=null; rclRecalcularAsync(); };
+  const br=$('rclBtnRecalc'); if(br) br.onclick=()=>{ RCL.real=null; RCL.base=null; RCL.fech=null; rclRecalcularAsync(); };
   const bp=$('rclBtnPrem');   if(bp) bp.onclick=rclPremModal;
   const bx=$('rclBtnExport'); if(bx) bx.onclick=rclExportar;
   const bd=$('rclBtnDiag');   if(bd) bd.onclick=()=>{ const c=$('rclCardDiag');
