@@ -86,6 +86,36 @@ input[type=number]{font-family:var(--m)}
   .tabs-r{margin-left:8px;gap:6px}
 }
 
+/* Sub-abas (2º nível, dentro de uma aba). Visual deliberadamente diferente da
+   barra principal — pílula sobre fundo, não sublinhado — para que nunca haja
+   dúvida sobre qual nível está selecionado. */
+.subtabs{display:flex;align-items:center;gap:4px;background:var(--sf);border:1px solid var(--bd2);
+  border-radius:10px;padding:4px;margin-bottom:14px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.subtab{font-family:var(--f);font-size:11.5px;font-weight:600;padding:7px 14px;border-radius:7px;
+  cursor:pointer;color:var(--mu);border:1px solid transparent;background:none;white-space:nowrap;flex-shrink:0;transition:.12s}
+.subtab:hover{color:var(--tx);background:var(--ht)}
+.subtab.on{color:var(--ac);background:var(--wh);border-color:var(--bd2);box-shadow:var(--shd)}
+.subtabs .tabs-r{margin-left:auto;padding-right:4px}
+.subview{display:none}.subview.on{display:block}
+@media(max-width:820px){ .subtab{padding:8px 12px} }
+
+/* Tabela hierárquica cliente → rota da sub-aba Rota clientes */
+.rcl-tb tr.cli-row{background:var(--sf);cursor:pointer}
+.rcl-tb tr.cli-row:hover{background:var(--ht)}
+.rcl-tb tr.cli-row td{font-weight:600;border-top:1px solid var(--bd)}
+.rcl-tb tr.rot-row{cursor:pointer}
+.rcl-tb tr.rot-row:hover{background:var(--ht)}
+.rcl-tb tr.rot-row td:first-child{padding-left:26px;color:var(--mu)}
+.rcl-tb .cx{display:inline-block;width:11px;font-family:var(--m);color:var(--mu)}
+.rcl-tb td.pos{color:var(--gn)} .rcl-tb td.neg{color:var(--rd)}
+.rcl-kpis{grid-template-columns:repeat(5,1fr)}
+.rcl-bar{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--sf);margin:6px 0}
+.rcl-bar i{display:block;height:100%}
+.rcl-leg{display:flex;flex-wrap:wrap;gap:10px;font-size:10.5px;color:var(--mu)}
+.rcl-leg b{font-family:var(--m);color:var(--tx);font-weight:600}
+.rcl-leg span::before{content:'';display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;background:currentColor}
+@media(max-width:1100px){ .rcl-kpis{grid-template-columns:repeat(2,1fr)} }
+
 /* Buttons */
 .btn{font-family:var(--f);font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:var(--r);border:1px solid var(--bd);background:var(--wh);color:var(--tx);cursor:pointer;transition:.12s}
 .btn:hover{background:var(--ht)}
@@ -1053,6 +1083,95 @@ details.cfg-det>.card{margin-top:10px}
 <!-- ═══════════ 7b) ROTAS — Análise de Rotas ═══════════ -->
 <div class="view" id="v-rot">
 
+<!-- ═══ Sub-abas da aba Rotas ═══ -->
+<div class="subtabs" id="rotSubtabs">
+  <button class="subtab on" data-sv="rcl" title="Resultado real por cliente e por rota do Protheus">Rota clientes</button>
+  <button class="subtab" data-sv="ana" title="Inventário da SZY, simulação HERE, complexidade e CPK por rota">Análise de Rotas</button>
+  <span class="tabs-r"><span class="pill mu" id="rotSubPill">Resultado por cliente · custo híbrido</span></span>
+</div>
+
+<!-- ═══════════ 7.1) ROTA CLIENTES ═══════════ -->
+<div class="subview on" id="sv-rcl">
+
+  <div class="card">
+    <h3>Resultado por cliente e rota
+      <span class="tabs-r">
+        <button class="btn sm" id="rclBtnPrem" title="Premissas do resultado: impostos, comissão, overhead e o modelo de consumo">⚙ Premissas do resultado</button>
+        <button class="btn sm" id="rclBtnDiag" title="Aderência do modelo de consumo ao diesel realizado da SZC">🔎 Aderência</button>
+        <button class="btn sm" id="rclBtnRecalc" title="Refaz o cálculo com as premissas atuais">↻ Recalcular</button>
+        <button class="btn sm" id="rclBtnExport" title="Exportação executiva (.xlsx)">⬇ Excel</button>
+      </span>
+    </h3>
+    <div class="rt-filtros">
+      <label class="fld">Abrangência
+        <select id="rclJanela">
+          <option value="mes">Mês selecionado</option>
+          <option value="3">Últimos 3 meses</option>
+          <option value="6">Últimos 6 meses</option>
+          <option value="12">Últimos 12 meses</option>
+          <option value="ano">Ano acumulado</option>
+        </select></label>
+      <label class="fld">Mês<select id="rclMes"></select></label>
+      <label class="fld">Ano<select id="rclAno"></select></label>
+      <label class="fld">Filial
+        <select id="rclFilial"><option value="">Todas</option><option value="SC">SC (17)</option><option value="PR">PR (18)</option><option value="SP">SP (03)</option></select>
+      </label>
+      <label class="fld">Cliente é
+        <select id="rclBase">
+          <option value="rem">Remetente (coleta)</option>
+          <option value="dest">Destinatário (entrega)</option>
+          <option value="par">Par coleta → entrega</option>
+        </select></label>
+      <label class="fld">Ordenar por
+        <select id="rclOrd">
+          <option value="resultado">Resultado (R$)</option>
+          <option value="margem">Margem (%)</option>
+          <option value="receita">Receita bruta</option>
+          <option value="custo">Custo total</option>
+          <option value="ton">Toneladas</option>
+          <option value="viagens">Viagens</option>
+          <option value="nome">Nome do cliente</option>
+        </select></label>
+      <label class="fld wide">Busca
+        <input type="text" id="rclBusca" placeholder="cliente, CNPJ, rota, cidade de coleta ou entrega…">
+      </label>
+    </div>
+    <div class="rt-meta" id="rclMeta"><span>Abra a aba para carregar as bases.</span></div>
+  </div>
+
+  <div class="rt-kpis rcl-kpis" id="rclKpis"></div>
+
+  <!-- Diagnóstico do modelo de consumo (colapsável) -->
+  <div class="card" id="rclCardDiag" style="display:none">
+    <h3>Aderência do modelo de consumo
+      <span class="tabs-r"><span class="pill mu" id="rclDiagPill">—</span></span>
+    </h3>
+    <div id="rclDiag"></div>
+  </div>
+
+  <div class="card">
+    <h3>Clientes
+      <span class="pill mu" id="rclCnt">0</span>
+      <span class="tabs-r">
+        <label class="rt-chk"><input type="checkbox" id="rclExpTudo"> Abrir todas as rotas</label>
+        <label class="rt-chk"><input type="checkbox" id="rclSoNeg"> Só resultado negativo</label>
+      </span>
+    </h3>
+    <div class="rt-wrap">
+      <table class="tb rt-tb rcl-tb" id="rclTb">
+        <thead><tr id="rclTh"></tr></thead>
+        <tbody id="rclTbody"><tr><td colspan="12" class="rt-empty">Carregando…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="muted" style="font-size:10.5px;margin-top:8px" id="rclRodape"></div>
+  </div>
+
+  <div id="rclPainel"></div>
+</div>
+
+<!-- ═══════════ 7.2) ANÁLISE DE ROTAS ═══════════ -->
+<div class="subview" id="sv-ana">
+
   <!-- ── Cabeçalho: período, filtros, busca e ações ── -->
   <div class="card">
     <h3>Análise de Rotas
@@ -1151,7 +1270,8 @@ details.cfg-det>.card{margin-top:10px}
       <tbody><tr><td colspan="4" class="empty">Sem rotas cadastradas.</td></tr></tbody>
     </table>
   </div>
-</div>
+</div><!-- /sv-ana -->
+</div><!-- /v-rot -->
 
 <!-- ═══════════ 8) AUDITORIA ═══════════ -->
 <div class="view" id="v-aud">
@@ -1559,6 +1679,25 @@ function bindTabs(){
       b.classList.add('on'); $('v-'+b.dataset.v).classList.add('on');
       if(b.dataset.v==='sim' && window._simMap) setTimeout(()=>{ simAjustarMapa(true); if(typeof _tileVigiar==='function') _tileVigiar(); },60);
     };
+  });
+  bindSubTabs();
+}
+
+/* Sub-abas (2º nível). Genérico: qualquer barra .subtabs cujos botões tenham
+   data-sv liga/desliga as .subview de id "sv-<valor>" que estejam no MESMO
+   contêiner — assim outra aba pode ganhar sub-abas sem tocar nesta função. */
+function bindSubTabs(){
+  document.querySelectorAll('.subtabs').forEach(bar=>{
+    const escopo=bar.parentElement||document;
+    bar.querySelectorAll('.subtab').forEach(b=>{
+      b.onclick=()=>{
+        bar.querySelectorAll('.subtab').forEach(x=>x.classList.remove('on'));
+        escopo.querySelectorAll(':scope > .subview').forEach(x=>x.classList.remove('on'));
+        b.classList.add('on');
+        const v=$('sv-'+b.dataset.sv); if(v) v.classList.add('on');
+        try{ if(b.dataset.sv==='rcl' && typeof rclAoAbrir==='function') rclAoAbrir(); }catch(e){ console.warn('[Rota clientes]',e&&e.message); }
+      };
+    });
   });
 }
 
@@ -7610,7 +7749,14 @@ const RT_ALIAS_SZB = {
   destinatario:{req:0, lbl:'Destinatário',        a:['NOMEDESTINA','DESTINATARIO']},
   cte:         {req:0, lbl:'Chave CT-e',          a:['CHAVECTE','CHAVECTE','CHAVECT']},
   ctrc:        {req:0, lbl:'Número CTRC',         a:['NUMEROCTRC','CTRC']},
-  placa:       {req:0, lbl:'Placa',               a:['PLACAVEICUL','PLACA']}
+  placa:       {req:0, lbl:'Placa',               a:['PLACAVEICUL','PLACA']},
+  /* Opcionais usados pela sub-aba Rota clientes. Ausentes na base, o módulo
+     cai para o nome do remetente/destinatário — nenhum deles é obrigatório. */
+  cnpjRemet:   {req:0, lbl:'CNPJ do remetente',   a:['CNPJREMETEN','CNPJREMETENTE','CGCREMETENTE','CNPJCPFREMETENTE','CNPJREM']},
+  cnpjDest:    {req:0, lbl:'CNPJ do destinatário',a:['CNPJDESTINA','CNPJDESTINATARIO','CGCDESTINATARIO','CNPJCPFDESTINATARIO','CNPJDEST']},
+  codRemet:    {req:0, lbl:'Código do remetente', a:['CODREMETENT','CODREMETENTE','CLIREMETENTE','CODCLIENTE']},
+  frete:       {req:0, lbl:'Valor do frete',      a:['VALORFRETE','VLRFRETE','FRETE']},
+  fatura:      {req:0, lbl:'Valor da fatura',     a:['VALORFATURA','VLRFATURA','FATURA']}
 };
 
 /* ══ Helpers locais ══ */
@@ -7878,6 +8024,28 @@ function rtInventarioSZY(){
   return {rotas, iK1, iK2, iK3};
 }
 
+/* ══ Resolução de um CT-e do SZB para a rota da SZY ═══════════════════════
+   Extraída de rtMontar() para ser a ÚNICA implementação do casamento — a
+   sub-aba Rota clientes faz a sua própria varredura (janela de meses
+   diferente) e precisa chegar exatamente na mesma rota, com as mesmas
+   regras de ambiguidade. Devolve {op, rota, o, d, k, alvo, cand}:
+     · alvo  = rota única encontrada (k3 → k2 → k1, sempre exigindo 1 só)
+     · cand  = lista de candidatas quando há mais de uma (ambíguo)
+     · ambos null = órfão (nenhuma rota da SZY corresponde)                */
+function rtResolverCTE(b, mB, idx){
+  const op=rtSigla(rtGet(b,mB,'operacao')||rtGet(b,mB,'filial'));
+  const rota=rtGet(b,mB,'rota');
+  if(!rota) return {op, rota:'', o:'', d:'', k:null, alvo:null, cand:null};
+  const o=rtChaveOD(rtGet(b,mB,'codRegOrig'), rtGet(b,mB,'localColeta'), rtGet(b,mB,'ufOrigem'));
+  const d=rtChaveOD(rtGet(b,mB,'codRegDest'), rtGet(b,mB,'localEntrega'),rtGet(b,mB,'ufDestino'));
+  const k=rtChaves(op,rota,o,d,0);
+  let alvo=null, cand=null;
+  const c3=idx.iK3.get(k.k3); if(c3&&c3.length===1) alvo=c3[0];
+  if(!alvo){ const c2=idx.iK2.get(k.k2); if(c2&&c2.length===1) alvo=c2[0]; else if(c2&&c2.length>1) cand=c2; }
+  if(!alvo&&!cand){ const c1=idx.iK1.get(k.k1); if(c1&&c1.length===1) alvo=c1[0]; else if(c1&&c1.length>1) cand=c1; }
+  return {op, rota, o, d, k, alvo, cand};
+}
+
 function rtMontar(){
   const mB=RT.mapaSZB;
   const per=String(RT.periodo.a).padStart(4,'0')+'-'+String(RT.periodo.m).padStart(2,'0');
@@ -7898,17 +8066,9 @@ function rtMontar(){
        de fato utilizadas no ano — é o escopo padrão da simulação na HERE. */
     if(!noPeriodo && !em2026) continue;
     if(rtDataISO(rtGet(b,mB,'cancel'))) continue;            /* CT-e cancelado não conta */
-    const op=rtSigla(rtGet(b,mB,'operacao')||rtGet(b,mB,'filial'));
-    const rota=rtGet(b,mB,'rota');
+    const res=rtResolverCTE(b, mB, {iK1,iK2,iK3});
+    const {rota, k, alvo, cand} = res;
     if(!rota){ if(noPeriodo) orfaos++; continue; }
-    const o=rtChaveOD(rtGet(b,mB,'codRegOrig'), rtGet(b,mB,'localColeta'), rtGet(b,mB,'ufOrigem'));
-    const d=rtChaveOD(rtGet(b,mB,'codRegDest'), rtGet(b,mB,'localEntrega'),rtGet(b,mB,'ufDestino'));
-    const k=rtChaves(op,rota,o,d,0);
-
-    let alvo=null, cand=null;
-    const c3=iK3.get(k.k3); if(c3&&c3.length===1) alvo=c3[0];
-    if(!alvo){ const c2=iK2.get(k.k2); if(c2&&c2.length===1) alvo=c2[0]; else if(c2&&c2.length>1) cand=c2; }
-    if(!alvo&&!cand){ const c1=iK1.get(k.k1); if(c1&&c1.length===1) alvo=c1[0]; else if(c1&&c1.length>1) cand=c1; }
 
     if(em2026){
       if(alvo) alvo.usada2026=true;
@@ -10101,6 +10261,1270 @@ try{ window.__ATLAS_ROTAS__ = RT; window.__ATLAS_ROTAS_CFG__ = RT_CFG; window.__
 })();
 
 </script>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════════
+   ROTA CLIENTES  —  sub-aba de resultado real por cliente e por rota
+   ──────────────────────────────────────────────────────────────────────────
+   A pergunta que esta tela responde é uma só, em três partes:
+
+       quanto ENTROU nessa rota · quanto SAIU nessa rota · o que SOBROU
+
+   Receita é realizada: sai do SZB, CT-e por CT-e, do jeito que foi faturado.
+   Custo é HÍBRIDO, e essa é a decisão central do módulo:
+
+     · a parte variável (diesel, Arla) é modelada viagem a viagem e depois
+       CALIBRADA contra os litros que a SZC diz que foram efetivamente
+       comprados no período — o modelo dá a repartição entre rotas, a nota
+       fiscal dá o nível;
+     · o pedágio sai da base de praças por eixo, trecho a trecho;
+     · a parte fixa (pneus, peças, lubrificante, pessoal, documentação,
+       depreciação) vem das premissas cadastradas, rateada por km e por
+       viagem — é custo de estrutura, não tem nota por viagem.
+
+   O que diferencia uma rota da outra não entra como "fator de ajuste"
+   chutado. Entra como FÍSICA: subir 1.000 m com 47 t custa uma quantidade
+   de diesel que se calcula, não que se opina (ver rclConsumoRota). A mesma
+   régua vale para a descida, que devolve parte da energia, e para as curvas,
+   que cobram uma frenagem e uma retomada cada uma.
+
+   Nada aqui reimplementa fórmula de custo. Todo custo por viagem continua
+   saindo de rtCustoRota() → custosViagem(), a mesma função que o Simulador
+   usa. Este módulo só decide QUAIS premissas entrega àquele motor e o que
+   faz com o número que volta.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const RCL_CFG = {
+  /* ── Física do consumo ──────────────────────────────────────────────────
+     LHV volumétrico do diesel S-10 ≈ 35,8 MJ/l. Rendimento global (motor +
+     transmissão + acessórios) em regime de estrada: 0,34 é o meio da faixa
+     publicada para motores Euro 5/6 pesados (0,32–0,38 no ponto de melhor
+     consumo específico). Os dois juntos dizem que cada litro entrega cerca
+     de 12,2 MJ de trabalho útil na roda. */
+  lhvDiesel: 35.8e6,
+  rendimento: 0.34,
+  /* Na descida o motor corta a injeção em parte do trecho, mas freio motor,
+     retarder e as retomadas comem o resto: só uma fração da energia
+     potencial vira economia de fato. */
+  recupDescida: 0.30,
+  capRecup: 0.30,        /* teto da economia, em fração dos litros base     */
+  capExtra: 0.80,        /* teto do acréscimo, em fração dos litros base    */
+  /* Cada curva relevante é uma desaceleração seguida de retomada. A energia
+     cinética perdida na freada é o que a retomada tem de repor. */
+  vCurvaDe: 80, vCurvaPara: 60,          /* km/h                            */
+  fracCurvasRelevantes: 0.35,            /* das curvas não-fechadas         */
+  /* Banda sã do fator de aderência. Fora dela o número deixa de ser
+     "consumo real" e passa a ser sintoma de base incompleta — o módulo
+     avisa e não aplica. */
+  aderenciaMin: 0.70, aderenciaMax: 1.60,
+  /* Placas-marcador de carta-frete complementar (mesma regra do pd.html) */
+  reCFC: /^F(SC|SP|PR)[0O]+$/,
+  maxLedger: 60000
+};
+
+/* Premissas do resultado. Tudo que muda o número mora aqui e é editável na
+   tela — nada de constante escondida no meio do cálculo. */
+const RCL_PADRAO = {
+  /* ── Receita ── */
+  usarImpostos: true,
+  aliqManual: null,              /* vazio = PIS/COFINS + ICMS das premissas */
+  /* ── Comissão ── */
+  regimeComissao: 'viagem',      /* nao · viagem                            */
+  comissaoPct: null,             /* vazio = premissa comissao_pct (5%)      */
+  /* ── Estrutura ── */
+  overheadModo: 'nao',           /* nao · pct · km                          */
+  overheadPct: 0.05, overheadKm: 0.10,
+  /* ── Modelo de consumo ── */
+  consumoModelo: true,
+  consumoCarregado: null,        /* vazio = premissa da aba Rotas           */
+  consumoVazio: null,
+  aderencia: true,
+  aderenciaFonte: 'op',          /* op · geral                              */
+  /* ── Retorno ── */
+  aproveitarRetorno: true,
+  janelaRetornoDias: 2,
+  /* ── Faturamento ── */
+  cfcSeparado: true
+};
+
+const RCL = {
+  prem: null, premCarregada: false,
+  clientes: [], rotas: [], porRota: new Map(),
+  diag: null, ref: null, precos: null, meses: [],
+  abertos: new Set(), sel: null,
+  calculado: false, aviso: [],
+  _prom: null
+};
+
+/* ══ Persistência das premissas — comercial_config/rotas_cliente ══
+   Documento único dentro de uma coleção que já existe: a regra dos três
+   pontos do módulo segue intacta (nenhuma coleção nova, nenhuma mudança em
+   index.html nem em firestore.rules). */
+function rclPrem(){ return {...RCL_PADRAO, ...(RCL.prem||{})}; }
+async function rclCarregarPrem(){
+  if(RCL.premCarregada) return;
+  RCL.premCarregada = true;
+  try{ const d=await fsGetDoc(COL.config,'rotas_cliente'); if(d&&d.data) RCL.prem=d.data; }catch(_){}
+}
+async function rclGravarPrem(p){
+  RCL.prem = p;
+  try{
+    await fsSetDoc(COL.config,'rotas_cliente',
+      {...p, salvo_em:agoraISO(), salvo_por:(ATLAS_CURRENT_USER&&ATLAS_CURRENT_USER.email)||'—'}, true);
+    return true;
+  }catch(e){ console.warn('[Rota clientes] gravação:',e&&e.message); return false; }
+}
+
+/* ══ Janela de meses ══════════════════════════════════════════════════════
+   'mes' respeita o mês escolhido; 'ano' vai de janeiro ao mês escolhido;
+   3/6/12 contam para trás a partir dele, inclusive. Um mês só é ruído: uma
+   rota com 4 viagens no mês tem margem que oscila com um pedágio a mais. */
+function rclMeses(janela, mes, ano){
+  const fim = ano*12 + (mes-1);
+  let n = 1;
+  if(janela==='3') n=3; else if(janela==='6') n=6; else if(janela==='12') n=12;
+  else if(janela==='ano') n=mes;
+  const out=[];
+  for(let i=n-1;i>=0;i--){
+    const t=fim-i;
+    out.push(String(Math.floor(t/12)).padStart(4,'0')+'-'+String((t%12)+1).padStart(2,'0'));
+  }
+  return out;
+}
+function rclRotuloJanela(){
+  const m=RCL.meses;
+  if(!m.length) return '—';
+  if(m.length===1) return dtSimplesBR(m[0]+'-01').slice(3);
+  return dtSimplesBR(m[0]+'-01').slice(3)+' a '+dtSimplesBR(m[m.length-1]+'-01').slice(3);
+}
+
+/* ══ Placa e carta-frete complementar ══
+   Placa-marcador FSC-0000/FSP-0000/FPR-0000 não é viagem física: é pagamento
+   suplementar sobre uma viagem que já existe. Contar como viagem infla o
+   custo (uma viagem inteira a mais) e afunda o R$/t. Fica em linha própria. */
+function rclPlaca(v){ return String(v==null?'':v).toUpperCase().replace(/[^A-Z0-9]/g,''); }
+function rclEhCFC(placa){ return RCL_CFG.reCFC.test(rclPlaca(placa)); }
+
+/* ══ Identificação do cliente ═════════════════════════════════════════════
+   CNPJ manda; sem CNPJ, o nome normalizado. Mesma chave do _cliKey() da aba
+   Clientes — é o que faz o cliente da SZB casar com a linha da SA1. */
+function rclClienteDeCTE(b, mB, modo){
+  const rem  = rtGet(b,mB,'remetente'),  cnjR = rtGet(b,mB,'cnpjRemet');
+  const dest = rtGet(b,mB,'destinatario'), cnjD = rtGet(b,mB,'cnpjDest');
+  if(modo==='dest') return {chave:_cliKey(cnjD,dest), nome:dest||'(sem destinatário)', cnpj:cnjD};
+  if(modo==='par'){
+    const n=(rem||'—')+'  →  '+(dest||'—');
+    return {chave:'p:'+_cliKey(cnjR,rem)+'|'+_cliKey(cnjD,dest), nome:n, cnpj:cnjR};
+  }
+  return {chave:_cliKey(cnjR,rem), nome:rem||'(sem remetente)', cnpj:cnjR};
+}
+/* Nome oficial: a SA1 tem prioridade sobre o que veio digitado no CT-e —
+   mesma regra da aba Clientes. */
+function rclNomeSA1(chave, fallback){
+  if(!RCL._sa1idx){
+    const ix=new Map();
+    (ST.sa1||[]).forEach(r=>{
+      const k=_cliKey(r.cnpj, r.razao||r.fantasia);
+      const at=ix.get(k);
+      if(!at || _sa1Peso(r)>_sa1Peso(at)) ix.set(k,r);
+    });
+    RCL._sa1idx=ix;
+  }
+  const r=RCL._sa1idx.get(chave);
+  if(!r) return {nome:fallback, sa1:false, municipio:'', uf:''};
+  return {nome:(r.razao||r.fantasia||fallback), sa1:true, municipio:r.municipio||'', uf:r.uf||''};
+}
+
+/* ══ Preço realizado do combustível na janela ═════════════════════════════
+   Média ponderada por litros dos meses da janela, com a mesma apuração do
+   pd.html (rtPrecoMedio: janela de litragem e descarte de preço fora da
+   curva). Devolve também os LITROS, que são a base da calibração. */
+function rclSZCJanela(meses, op){
+  let lD=0, vD=0, qD=0, dD=0, lA=0, vA=0, qA=0;
+  meses.forEach(m=>{
+    const d=rtPrecoMedio('diesel',m,op);
+    if(d){ qD+=d.qtdMedia||0; dD+=d.descartados||0;
+           if(d.preco>0){ lD+=d.litros||0; vD+=(d.preco*(d.litros||0)); } }
+    const a=rtPrecoMedio('arla',m,op);
+    if(a){ qA+=a.qtdMedia||0;
+           if(a.preco>0){ lA+=a.litros||0; vA+=(a.preco*(a.litros||0)); } }
+  });
+  return {
+    precoDiesel: lD>0 ? vD/lD : null, litrosDiesel: lD, qtdDiesel: qD, descartados: dD,
+    precoArla:   lA>0 ? vA/lA : null, litrosArla:   lA, qtdArla:   qA,
+    op: op||'todas', meses: meses.length
+  };
+}
+
+/* ══ Varredura do SZB na janela ═══════════════════════════════════════════
+   Uma passada só, usando o MESMO resolvedor da Análise de Rotas
+   (rtResolverCTE) — se as duas telas discordarem sobre a qual rota um CT-e
+   pertence, o módulo inteiro perde o sentido. */
+function rclVarrer(meses, modoCliente){
+  const mB=RT.mapaSZB;
+  const idx=rtInventarioSZY();
+  /* O inventário nasce cru: sem isto as rotas desta varredura não enxergam a
+     simulação da HERE já em cache e o módulo inteiro cairia para a distância
+     da SZY, sem relevo, sem pedágio e sem tempo de ciclo. */
+  rtAplicarHere(idx.rotas);
+  const mesesSet=new Set(meses);
+  const porRota=new Map();      /* k3 → bucket da rota                      */
+  const ledger=[];              /* viagens físicas, para o retorno          */
+  let orfaos=0, ambiguos=0, usados=0, cfc=0, cfcValor=0;
+
+  for(let i=0;i<RT.szb.length;i++){
+    const b=RT.szb[i];
+    const iso=rtDataISO(rtGet(b,mB,'emissao'));
+    if(!iso || !mesesSet.has(iso.slice(0,7))) continue;
+    if(rtDataISO(rtGet(b,mB,'cancel'))) continue;
+
+    const res=rtResolverCTE(b, mB, idx);
+    if(!res.rota){ orfaos++; continue; }
+    if(!res.alvo){ if(res.cand) ambiguos++; else orfaos++; continue; }
+
+    const r=res.alvo;
+    const valor=rtGetN(b,mB,'valor'), ton=rtGetN(b,mB,'peso')/1000;
+    const placa=rtGet(b,mB,'placa');
+    const ehCFC=rclEhCFC(placa);
+
+    let bk=porRota.get(r.k3);
+    if(!bk){
+      bk={ rota:r, viagens:0, ton:0, receita:0, cfcQtd:0, cfcValor:0,
+           clientes:new Map(), placas:new Map(), retornoOk:0, ctes:[] };
+      porRota.set(r.k3, bk);
+    }
+
+    const cli=rclClienteDeCTE(b, mB, modoCliente);
+    let cb=bk.clientes.get(cli.chave);
+    if(!cb){ cb={chave:cli.chave, nome:cli.nome, cnpj:cli.cnpj, viagens:0, ton:0, receita:0, cfcValor:0, cfcQtd:0}; bk.clientes.set(cli.chave, cb); }
+
+    if(ehCFC){
+      bk.cfcQtd++; bk.cfcValor+=valor; cb.cfcQtd++; cb.cfcValor+=valor;
+      cfc++; cfcValor+=valor;
+    }else{
+      bk.viagens++; bk.ton+=ton; bk.receita+=valor;
+      cb.viagens++; cb.ton+=ton; cb.receita+=valor;
+      const p=rclPlaca(placa);
+      if(p){ const pv=bk.placas.get(p)||0; bk.placas.set(p,pv+1); }
+      if(ledger.length<RCL_CFG.maxLedger)
+        ledger.push({placa:p, iso, o:res.o, d:res.d, k3:r.k3, idx:ledger.length});
+    }
+    usados++;
+    if(bk.ctes.length<400) bk.ctes.push({
+      cte:rtGet(b,mB,'cte'), ctrc:rtGet(b,mB,'ctrc'), data:iso, placa:placa,
+      ton, valor, cfc:ehCFC, cliente:cli.nome
+    });
+  }
+  return {porRota, ledger, orfaos, ambiguos, usados, cfc, cfcValor};
+}
+
+/* ══ Aproveitamento do retorno ════════════════════════════════════════════
+   A rota é cobrada como ida carregada + volta vazia. Só que a volta nem
+   sempre é vazia: quando a MESMA placa emite outro CT-e saindo da região
+   onde acabou de entregar, dentro da janela, aquela volta foi paga por
+   outro frete — e cobrar 100% dela nesta rota é contar o mesmo quilômetro
+   duas vezes.
+
+   A regra é simétrica de propósito: se A→B aproveita a volta e B→A também,
+   cada uma cobra só a sua ida e a soma fecha exatamente com o rodado real.
+   Sem placa na base, o índice não é calculado (fica null) e a volta é
+   cobrada inteira — na dúvida, o custo maior. */
+function rclAproveitamento(ledger, janelaDias){
+  const porPlaca=new Map();
+  ledger.forEach(e=>{ if(!e.placa) return; let a=porPlaca.get(e.placa); if(!a){a=[];porPlaca.set(e.placa,a);} a.push(e); });
+  const dias=v=>{ const d=new Date(v+'T00:00:00Z'); return isNaN(d)?null:Math.round(d.getTime()/86400000); };
+  const marc=new Set();
+  porPlaca.forEach(arr=>{
+    arr.sort((a,b)=>a.iso.localeCompare(b.iso));
+    /* Um mesmo frete de volta só absorve UMA ida. Sem esta trava, dez viagens
+       seguidas se dariam por aproveitadas em cima do mesmo CT-e de retorno e o
+       índice subiria sozinho — que é justamente o erro que ele evita. */
+    const consumido=new Set();
+    for(let i=0;i<arr.length;i++){
+      const di=dias(arr[i].iso); if(di==null) continue;
+      for(let j=i+1;j<arr.length;j++){
+        if(consumido.has(j)) continue;
+        const dj=dias(arr[j].iso); if(dj==null) continue;
+        if(dj-di>janelaDias) break;
+        /* o próximo frete parte de onde este entregou → a volta foi paga */
+        if(arr[j].o && arr[j].o===arr[i].d){ marc.add(arr[i].idx); consumido.add(j); break; }
+      }
+    }
+  });
+  const porRota=new Map();
+  ledger.forEach(e=>{
+    let a=porRota.get(e.k3); if(!a){ a={tot:0, ok:0, comPlaca:0}; porRota.set(e.k3,a); }
+    a.tot++; if(e.placa) a.comPlaca++;
+    if(marc.has(e.idx)) a.ok++;
+  });
+  return porRota;
+}
+
+/* ══ Topografia de referência ═════════════════════════════════════════════
+   O km/l base das premissas (2,0 carregado) não é de laboratório: é a média
+   da frota rodando as rotas que ela roda — que já têm serra, curva e vento.
+   Aplicar a física do relevo sobre ele em valor ABSOLUTO contaria a serra
+   duas vezes.
+
+   Por isso o modelo trabalha na DIFERENÇA contra a rota média da amostra:
+   ganho, perda e curvas por quilômetro, ponderados por km rodado. Rota na
+   média fica exatamente no km/l da premissa; a serra sobe, a reta desce, e
+   a média ponderada do conjunto continua batendo com a premissa. */
+function rclRefTopo(buckets){
+  let km=0, ganho=0, perda=0, curvas=0, comTopo=0, semTopo=0;
+  buckets.forEach(bk=>{
+    const c=bk.rota.here; const v=bk.viagens;
+    if(!v) return;
+    if(!c || c.erro || !c.ida || !c.ida.topo){ semTopo++; return; }
+    comTopo++;
+    [c.ida, c.volta].forEach(s=>{
+      if(!s || !s.topo) return;
+      km    += s.km*v;
+      ganho += (s.topo.ganho||0)*v;
+      perda += (s.topo.perda||0)*v;
+      if(s.sinu) curvas += rclEventosCurva(s)*v;
+    });
+  });
+  if(!(km>0)) return {ok:false, ganhoKm:0, perdaKm:0, curvasKm:0, km:0, comTopo, semTopo};
+  return {ok:true, ganhoKm:ganho/km, perdaKm:perda/km, curvasKm:curvas/km, km, comTopo, semTopo};
+}
+function rclEventosCurva(s){
+  if(!s || !s.sinu) return 0;
+  const rel=(s.sinu.curvasPorKm||0)*(s.km||0);
+  const fec=s.sinu.fechadas||0;
+  return fec + Math.max(rel-fec,0)*RCL_CFG.fracCurvasRelevantes;
+}
+
+/* ══ Consumo modelado da rota ═════════════════════════════════════════════
+   Energia, não opinião. Para cada trecho:
+
+     subir      →  m · g · Δh          joules a mais
+     descer     →  κ · m · g · Δh      joules economizados
+     cada curva →  ½ · m · (v1² − v2²) joules a repor na retomada
+
+   dividido pelo trabalho útil de um litro (η × LHV ≈ 12,2 MJ/l). A massa é
+   a real do trecho: tara + carga na ida, só tara na volta — é por isso que
+   a mesma serra pesa muito mais no sentido carregado, e é exatamente essa
+   assimetria que a média de km/l da frota esconde.
+
+   Tudo medido contra a rota média (ref), com teto de variação para o caso
+   de um perfil de elevação ruidoso passar batido pela suavização. */
+function rclConsumoRota(bk, base, ref, perfil, tonViagem, P){
+  const c=bk.rota.here;
+  const out={ carregado:base.carregado, vazio:base.vazio, modelo:false, det:null };
+  if(!P.consumoModelo || !ref.ok || !c || c.erro || !c.ida) return out;
+
+  const E = RCL_CFG.rendimento*RCL_CFG.lhvDiesel;      /* J úteis por litro */
+  const g = 9.81;
+  const v1=RCL_CFG.vCurvaDe/3.6, v2=RCL_CFG.vCurvaPara/3.6;
+  const tara=Number(perfil.taraT)||15;
+  const ton = tonViagem>0 ? tonViagem : (Number(perfil.cargaT)||32);
+
+  const trecho=(s, carregado, kmlBase)=>{
+    if(!s || !(s.km>0)) return null;
+    const massa=(tara + (carregado?ton:0))*1000;
+    const litrosBase=s.km/Math.max(kmlBase,0.1);
+    const t=s.topo;
+    const dGanho = t ? (t.ganho||0) - ref.ganhoKm*s.km : 0;
+    const dPerda = t ? (t.perda||0) - ref.perdaKm*s.km : 0;
+    const dCurva = s.sinu ? rclEventosCurva(s) - ref.curvasKm*s.km : 0;
+    const lSub =  massa*g*dGanho/E;
+    const lDes = -RCL_CFG.recupDescida*massa*g*dPerda/E;
+    const lCur =  dCurva*0.5*massa*(v1*v1-v2*v2)/E;
+    let delta = lSub+lDes+lCur;
+    const teto = litrosBase*RCL_CFG.capExtra, piso = -litrosBase*RCL_CFG.capRecup;
+    const limitado = delta>teto || delta<piso;
+    delta = Math.min(Math.max(delta,piso),teto);
+    const litros=Math.max(litrosBase+delta, litrosBase*0.4);
+    return { km:s.km, massaT:massa/1000, litrosBase, lSub, lDes, lCur, delta, litros,
+             kml:s.km/litros, dGanho, dPerda, dCurva, limitado,
+             ganho:t?t.ganho:null, perda:t?t.perda:null, serrano:t?!!t.serrano:false };
+  };
+
+  const ida  = trecho(c.ida,  true,  base.carregado);
+  const volta= trecho(c.volta, false, base.vazio);
+  if(!ida) return out;
+  out.modelo=true;
+  out.carregado = ida.kml;
+  out.vazio = volta ? volta.kml : base.vazio;
+  out.det={ ida, volta, base, ref,
+            fatorIda: ida.kml/Math.max(base.carregado,0.01),
+            fatorVolta: volta? volta.kml/Math.max(base.vazio,0.01) : 1 };
+  return out;
+}
+
+/* ══ Normalização: o modelo REPARTE, não INFLA ════════════════════════════
+   Duas coisas quebram a conservação que a rota-média deveria garantir: o
+   teto/piso de variação (que corta a economia de quem está muito abaixo da
+   média sem cortar a penalidade de quem está acima) e o fato de a massa da
+   ida ser maior que a da volta, o que dá peso diferente ao mesmo desnível.
+
+   O resultado seria um viés silencioso: a frota inteira passaria a consumir
+   mais no papel só porque o modelo foi ligado. A correção é explícita —
+   depois de calcular todas as rotas, os litros modelados são escalados para
+   somar exatamente o que a premissa somaria. Quem move o TOTAL é a nota
+   fiscal (fator de aderência), nunca o modelo; o modelo só decide a fatia
+   de cada rota. */
+function rclPreConsumo(buckets, ref, perfil, P){
+  const cg=(RT.custoGeral||RT_CUSTO_PADRAO);
+  let somaBase=0, somaMod=0, comModelo=0;
+  buckets.forEach(bk=>{
+    const Pb=rtPremissasCusto(bk.rota);
+    bk._base={ carregado: P.consumoCarregado>0?P.consumoCarregado:(Pb.consumoCarregado||cg.consumoCarregado||2.0),
+               vazio:     P.consumoVazio>0    ?P.consumoVazio    :(Pb.consumoVazio||cg.consumoVazio||3.0) };
+    const ton = bk.viagens>0 && bk.ton>0 ? bk.ton/bk.viagens : null;
+    bk._cons = rclConsumoRota(bk, bk._base, ref, perfil, ton, P);
+    const d=bk._cons.det;
+    if(!d) return;
+    comModelo++;
+    [d.ida,d.volta].forEach(s=>{ if(!s) return;
+      somaBase += s.litrosBase*bk.viagens; somaMod += s.litros*bk.viagens; });
+  });
+  const norm = somaMod>0 ? somaBase/somaMod : 1;
+  return { norm, somaBase, somaMod, comModelo,
+           desvioBruto: somaBase>0 ? somaMod/somaBase-1 : 0 };
+}
+
+
+/* ══ Custo de uma rota, em duas chamadas do MESMO motor ═══════════════════
+   Para separar o que a volta custa sem reescrever uma linha de fórmula, o
+   truque é pedir ao rtCustoRota() a mesma rota duas vezes: uma com ida e
+   volta, outra só com a ida. A diferença É o custo do retorno — inclusive
+   nas linhas que não escalam com o quilômetro, que se cancelam sozinhas na
+   subtração. Nenhum custo é recalculado aqui; nenhum é somado duas vezes. */
+/* Distância, pedágio e aproveitamento — os três insumos que tanto a medição
+   de litros quanto o custo precisam, calculados uma vez só. */
+function rclPreparo(bk, ctx){
+  const r=bk.rota, P=ctx.P;
+  const Pb=rtPremissasCusto(r);
+  /* distância: a HERE mede o percurso de caminhão; a SZY é o cadastro. */
+  let kmIda=null, kmVolta=null, fonteDist='szy';
+  const here = (r.here && !r.here.erro && r.here.ida) ? r.here : null;
+  if(here){ kmIda=here.ida.km; kmVolta=here.volta?here.volta.km:null; fonteDist='here'; }
+  if(!(kmIda>0)){ kmIda=r.kmIda||null; kmVolta=r.kmVolta||null; fonteDist='szy'; }
+  if(!(kmIda>0)) return null;
+  if(!(kmVolta>0)) kmVolta=kmIda;
+  /* pedágio por trecho: a base de praças por eixo quando a HERE devolveu,
+     senão o que estiver cadastrado como premissa da rota. */
+  let pIda = here&&here.ida ? here.ida.pedagio : null;
+  let pVolta = here&&here.volta ? here.volta.pedagio : null;
+  const pedOk = pIda!=null;
+  if(!pedOk && Pb.pedagioFonte==='manual' && Pb.pedagioManual>0){ pIda=Pb.pedagioManual/2; pVolta=Pb.pedagioManual/2; }
+  /* consumo modelado (normalizado no pré-passe) + calibração pela SZC.
+     norm devolve o viés do modelo (litros ×norm ⇒ km/l ÷norm) e fator aplica
+     o realizado da SZC (mais litros comprados ⇒ km/l menor). */
+  const tonViagem = bk.viagens>0 && bk.ton>0 ? bk.ton/bk.viagens : null;
+  const cons=bk._cons || rclConsumoRota(bk, bk._base||{carregado:2,vazio:3}, ctx.ref, ctx.perfil, tonViagem, P);
+  const norm=ctx.norm||1, fator=ctx.fator(r.op);
+  const kmlC = cons.carregado/(norm*fator), kmlV = cons.vazio/(norm*fator);
+  /* aproveitamento do retorno */
+  const ap=ctx.aprovIdx.get(r.k3);
+  const temPlaca = !!(ap && ap.comPlaca>0);
+  const aprov = (P.aproveitarRetorno && temPlaca && ap.tot>0) ? ap.ok/ap.tot : 0;
+  return {Pb, kmIda, kmVolta, fonteDist, pIda, pVolta, pedOk, tonViagem, cons, norm, fator, kmlC, kmlV, temPlaca, aprov};
+}
+
+/* Passo 1 da calibração: só os LITROS. Não chama o motor de custo — as
+   fórmulas de litro do rtCustoRota são exatamente estas duas divisões, e
+   rodar o motor inteiro duas vezes só para somar litros dobrava o tempo da
+   aba sem mudar um centavo do resultado. */
+function rclLitrosBucket(bk, ctx){
+  const q=rclPreparo(bk, ctx);
+  if(!q){ bk.litrosAtrib=0; return; }
+  const lIda=q.kmIda/Math.max(q.kmlC,0.1), lVolta=q.kmVolta/Math.max(q.kmlV,0.1);
+  bk.litrosAtrib=(lIda + (1-q.aprov)*lVolta)*bk.viagens;
+}
+
+function rclCustoBucket(bk, ctx){
+  const r=bk.rota, P=ctx.P;
+  const nMeses=Math.max(RCL.meses.length,1);
+  const q=rclPreparo(bk, ctx);
+  if(!q){ bk.erro='sem distância na SZY nem na HERE'; bk.custo=null; bk.litrosAtrib=0; return; }
+  const {Pb, kmIda, kmVolta, fonteDist, pIda, pVolta, pedOk, tonViagem, cons, norm, fator, kmlC, kmlV, temPlaca, aprov}=q;
+
+  const pr = ctx.precos[r.op] || ctx.precos._geral || {};
+  const prG = ctx.precos._geral || {};
+  const precoDiesel = (pr.precoDiesel>0?pr.precoDiesel:(prG.precoDiesel>0?prG.precoDiesel:null));
+  const precoArla   = (pr.precoArla>0?pr.precoArla:(prG.precoArla>0?prG.precoArla:null));
+
+  const viagensMes = Math.max(bk.viagens/nMeses, 0.01);
+  const comum={ ...Pb, distFonte:'manual', distManualIda:kmIda,
+                consumoCarregado:kmlC, consumoVazio:kmlV, idaCarregada:true,
+                precoDiesel: precoDiesel!=null?precoDiesel:Pb.precoDiesel,
+                precoArla:   precoArla!=null  ?precoArla  :Pb.precoArla,
+                viagensMes, pesoLiquidoT: tonViagem||Pb.pesoLiquidoT,
+                pedagioFonte:'manual' };
+  const cFull=rtCustoRota(r,{...comum, distManualVolta:kmVolta, pedagioManual:(pIda||0)+(pVolta||0)});
+  if(cFull.erro){ bk.erro=cFull.erro; bk.custo=null; bk.litrosAtrib=0; return; }
+  /* A segunda chamada só existe para separar o que a volta custa. Sem
+     aproveitamento não há o que separar — e essa é a maioria das rotas. */
+  const cIda = aprov>0 ? rtCustoRota(r,{...comum, distManualVolta:0.001, pedagioManual:(pIda||0)}) : cFull;
+
+  /* linhas ajustadas — full menos a fração da volta que outro frete pagou */
+  const linhas={};
+  Object.keys(cFull.linhas).forEach(k=>{
+    const a=cFull.linhas[k], b=cIda.erro?a:cIda.linhas[k];
+    if(typeof a!=='number'){ linhas[k]=a; return; }
+    linhas[k]= a - aprov*(a-(typeof b==='number'?b:a));
+  });
+  const custoViagem = cFull.total - aprov*(cFull.total-(cIda.erro?cFull.total:cIda.total));
+  const litrosViagem= cFull.litros - aprov*(cFull.litros-(cIda.erro?cFull.litros:cIda.litros));
+  const kmViagem    = kmIda + (1-aprov)*kmVolta;
+
+  const varia = ['diesel','arla','pedagio','pneus','lubrificante','compressor']
+                  .reduce((a,k)=>a+(typeof linhas[k]==='number'?linhas[k]:0),0);
+  const fixo  = ['pecas','docSeguros','pessoal','deprecCavalo','deprecCarreta','alimentacao','limpeza','tempo']
+                  .reduce((a,k)=>a+(typeof linhas[k]==='number'?linhas[k]:0),0);
+
+  bk.custo={
+    fonteDist, kmIda, kmVolta, kmViagem, aprov, temPlaca, pedOk,
+    pIda, pVolta, cons, fator, norm, precoDiesel:cFull.dieselRS, precoArla:linhas.precoArla,
+    litrosViagem, kmlC, kmlV, tonViagem, viagensMes,
+    linhas, variavel:varia, fixo, custoViagem,
+    cpk: kmViagem>0 ? custoViagem/kmViagem : null,
+    custoTon: tonViagem>0 ? custoViagem/tonViagem : null,
+    cheio:cFull, so_ida:cIda,
+    memoria:cFull.memoria
+  };
+  bk.litrosAtrib = litrosViagem*bk.viagens;
+  bk.kmAtrib     = kmViagem*bk.viagens;
+  bk.erro=null;
+}
+
+/* ══ Receita, impostos, comissão, estrutura e resultado ═══════════════════
+   Aqui está a diferença entre "sobrou dinheiro na viagem" e "a rota dá
+   lucro". Margem de contribuição responde a primeira: receita líquida menos
+   o custo que só existe porque o caminhão saiu. Resultado responde a
+   segunda: depois de comissão e da estrutura que a rota tem de sustentar. */
+function rclResultado(receita, cfcValor, custoOp, custoVar, custoFixo, kmTot, op, P){
+  const prem = premissasEfetivas(null, op, null) || {};
+  const aliq = P.aliqManual!=null && P.aliqManual>=0
+      ? P.aliqManual
+      : (P.usarImpostos ? (Number(prem.pis_cofins)||0.0965)+(Number(prem.icms)||0.12) : 0);
+  const receitaTotal = receita + (P.cfcSeparado?0:cfcValor);
+  const impostos = receitaTotal*aliq;
+  const rl = receitaTotal - impostos;
+  const comisPct = P.regimeComissao==='nao' ? 0
+                 : (P.comissaoPct!=null && P.comissaoPct>=0 ? P.comissaoPct : (Number(prem.comissao_pct)||0.05));
+  const comissao = rl*comisPct;
+  const overhead = P.overheadModo==='pct' ? receitaTotal*(P.overheadPct||0)
+                 : P.overheadModo==='km'  ? kmTot*(P.overheadKm||0) : 0;
+  const margemContrib = rl - custoVar;
+  const resultado = rl - custoOp - comissao - overhead;
+  return { aliq, impostos, receitaBruta:receitaTotal, receitaLiquida:rl,
+           comisPct, comissao, overhead, custoOp, custoVar, custoFixo,
+           margemContrib, resultado,
+           margemPct: receitaTotal>0 ? resultado/receitaTotal : null,
+           mcPct: receitaTotal>0 ? margemContrib/receitaTotal : null };
+}
+
+/* ══ Cálculo completo ═════════════════════════════════════════════════════ */
+function rclCalcular(){
+  const P=rclPrem();
+  const modo=($('rclBase')&&$('rclBase').value)||'rem';
+  const janela=($('rclJanela')&&$('rclJanela').value)||'mes';
+  const mes=Number(($('rclMes')&&$('rclMes').value)||RT.periodo.m)||RT.periodo.m;
+  const ano=Number(($('rclAno')&&$('rclAno').value)||RT.periodo.a)||RT.periodo.a;
+  RCL.meses=rclMeses(janela,mes,ano);
+  RCL._sa1idx=null; RCL.aviso=[];
+
+  const V=rclVarrer(RCL.meses, modo);
+  const buckets=[...V.porRota.values()].filter(b=>b.viagens>0);
+  const ref=rclRefTopo(buckets);
+  const aprovIdx = P.aproveitarRetorno ? rclAproveitamento(V.ledger, P.janelaRetornoDias||2) : new Map();
+  const perfil=rtPerfilAtivo();
+
+  const ops=[...new Set(buckets.map(b=>b.rota.op).filter(Boolean))];
+  const precos={_geral:rclSZCJanela(RCL.meses,'')};
+  ops.forEach(op=>{ precos[op]=rclSZCJanela(RCL.meses,op); });
+
+  /* PRÉ-PASSE — consumo de todas as rotas e a normalização que garante que
+     ligar o modelo não muda o total de litros da frota, só a repartição. */
+  const nrm=rclPreConsumo(buckets, ref, perfil, P);
+
+  /* PASSO 1 — sem calibração, só para medir quantos litros o modelo pede. */
+  const ctx1={P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:()=>1};
+  buckets.forEach(bk=>rclLitrosBucket(bk, ctx1));
+
+  /* PASSO 2 — aderência: litros comprados ÷ litros modelados.
+     O modelo reparte entre rotas; a nota fiscal define o nível. */
+  const ader={};
+  const calc=(op)=>{
+    const alvo = op ? buckets.filter(b=>b.rota.op===op) : buckets;
+    const mod  = alvo.reduce((a,b)=>a+(b.litrosAtrib||0),0);
+    const real = ((op?precos[op]:precos._geral)||{}).litrosDiesel||0;
+    const f = (mod>0 && real>0) ? real/mod : null;
+    const dentro = f!=null && f>=RCL_CFG.aderenciaMin && f<=RCL_CFG.aderenciaMax;
+    return { op:op||'consolidado', modelado:mod, realizado:real, fator:f, dentro,
+             aplicado: (P.aderencia && dentro) ? f : 1 };
+  };
+  ops.forEach(op=>{ ader[op]=calc(op); });
+  ader._geral=calc('');
+  const fatorDe=(op)=>{
+    if(!P.aderencia) return 1;
+    if(P.aderenciaFonte==='geral') return ader._geral.aplicado;
+    const a=ader[op];
+    return (a && a.fator!=null) ? a.aplicado : ader._geral.aplicado;
+  };
+  const ctx2={P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:fatorDe};
+  buckets.forEach(bk=>rclCustoBucket(bk, ctx2));
+
+  /* ── Agregação: rota → cliente ── */
+  const clientes=new Map();
+  const rotas=[];
+  buckets.forEach(bk=>{
+    if(!bk.custo) return;
+    const r=bk.rota, cu=bk.custo;
+    bk.clientes.forEach(cb=>{
+      if(!cb.viagens) return;
+      const custoOp  = cu.custoViagem*cb.viagens;
+      const custoVar = cu.variavel*cb.viagens;
+      const custoFix = cu.fixo*cb.viagens;
+      const kmTot    = cu.kmViagem*cb.viagens;
+      const res=rclResultado(cb.receita, cb.cfcValor, custoOp, custoVar, custoFix, kmTot, r.op, P);
+      const inf=rclNomeSA1(cb.chave, cb.nome);
+      const linha={
+        chaveCli:cb.chave, cliente:inf.nome, sa1:inf.sa1, cnpj:cb.cnpj,
+        op:r.op, codigo:r.codigoRaw||r.codigo, origem:r.origem, destino:r.destino,
+        ufO:r.ufO, ufD:r.ufD, k3:r.k3, rotaObj:r, bucket:bk,
+        viagens:cb.viagens, ton:cb.ton, kmTot,
+        cfcValor:cb.cfcValor, cfcQtd:cb.cfcQtd,
+        custoViagem:cu.custoViagem, cpk:cu.cpk, custoTon:cu.custoTon,
+        kmlC:cu.kmlC, kmlV:cu.kmlV, aprov:cu.aprov, fator:cu.fator,
+        tarifaTon: cb.ton>0 ? cb.receita/cb.ton : null,
+        vpk: kmTot>0 ? cb.receita/kmTot : null,
+        completude: rclCompletude(bk, P),
+        ...res
+      };
+      rotas.push(linha);
+      let cl=clientes.get(cb.chave);
+      if(!cl){ cl={chave:cb.chave, nome:inf.nome, sa1:inf.sa1, cnpj:cb.cnpj,
+                   municipio:inf.municipio, uf:inf.uf, rotas:[],
+                   viagens:0, ton:0, kmTot:0, receitaBruta:0, receitaLiquida:0,
+                   impostos:0, custoOp:0, custoVar:0, custoFixo:0, comissao:0,
+                   overhead:0, margemContrib:0, resultado:0, cfcValor:0, cfcQtd:0};
+             clientes.set(cb.chave, cl); }
+      cl.rotas.push(linha);
+      ['viagens','ton','kmTot','receitaBruta','receitaLiquida','impostos','custoOp',
+       'custoVar','custoFixo','comissao','overhead','margemContrib','resultado',
+       'cfcValor','cfcQtd'].forEach(k=>{ cl[k]+= (Number(linha[k])||0); });
+    });
+  });
+  clientes.forEach(cl=>{
+    cl.margemPct = cl.receitaBruta>0 ? cl.resultado/cl.receitaBruta : null;
+    cl.mcPct     = cl.receitaBruta>0 ? cl.margemContrib/cl.receitaBruta : null;
+    cl.tarifaTon = cl.ton>0 ? cl.receitaBruta/cl.ton : null;
+    cl.custoTon  = cl.ton>0 ? cl.custoOp/cl.ton : null;
+    cl.cpk       = cl.kmTot>0 ? cl.custoOp/cl.kmTot : null;
+    cl.vpk       = cl.kmTot>0 ? cl.receitaBruta/cl.kmTot : null;
+    cl.completude= cl.rotas.length ? cl.rotas.reduce((a,x)=>a+x.completude.pct,0)/cl.rotas.length : 0;
+  });
+
+  RCL.porRota=V.porRota; RCL.rotas=rotas; RCL.clientes=[...clientes.values()];
+  RCL.ref=ref; RCL.precos=precos; RCL.calculado=true; RCL.norm=nrm;
+  RCL.diag={ ader, ref, precos, ops, norm:nrm, meses:RCL.meses.slice(),
+             orfaos:V.orfaos, ambiguos:V.ambiguos, usados:V.usados,
+             cfc:V.cfc, cfcValor:V.cfcValor,
+             rotasComViagem:buckets.length,
+             comHere:buckets.filter(b=>b.rota.here&&!b.rota.here.erro).length,
+             comPedagio:buckets.filter(b=>b.custo&&b.custo.pedOk).length,
+             comPlaca:buckets.filter(b=>b.custo&&b.custo.temPlaca).length,
+             semDist:buckets.filter(b=>!b.custo).length };
+  if(!ref.ok) RCL.aviso.push('Nenhuma rota simulada na HERE com perfil de elevação — o modelo de consumo por relevo está desligado e todas as rotas usam o km/l da premissa.');
+  if(P.aderencia && ader._geral.fator!=null && !ader._geral.dentro)
+    RCL.aviso.push(`Fator de aderência consolidado de ${num(ader._geral.fator,2)} está fora da banda ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)} e NÃO foi aplicado. Costuma indicar SZC ou SZB incompletos no período.`);
+  if(!RCL.diag.comPlaca && P.aproveitarRetorno)
+    RCL.aviso.push('Nenhum CT-e do período trouxe placa — o aproveitamento de retorno não pôde ser medido e toda volta está sendo cobrada como vazia.');
+}
+
+/* Completude: quanto do número desta rota veio de dado e quanto de premissa.
+   Não é enfeite — é o que separa "a rota dá 12%" de "a rota parece dar 12%". */
+function rclCompletude(bk, P){
+  const it=[
+    {k:'here',  l:'Percurso medido na HERE', ok:!!(bk.rota.here&&!bk.rota.here.erro&&bk.rota.here.ida), p:0.25},
+    {k:'topo',  l:'Perfil de elevação',      ok:!!(bk.rota.here&&bk.rota.here.ida&&bk.rota.here.ida.topo), p:0.20},
+    {k:'ped',   l:'Pedágio da rota',         ok:!!(bk.custo&&bk.custo.pedOk), p:0.20},
+    {k:'placa', l:'Placa no CT-e (retorno)', ok:!!(bk.custo&&bk.custo.temPlaca), p:0.15},
+    {k:'ader',  l:'Diesel realizado na SZC', ok:!!(bk.custo&&bk.custo.fator!==1), p:0.10},
+    {k:'ton',   l:'Peso faturado',           ok:!!(bk.ton>0), p:0.10}
+  ];
+  const pct=it.reduce((a,x)=>a+(x.ok?x.p:0),0);
+  return {pct, itens:it, falta:it.filter(x=>!x.ok).map(x=>x.l)};
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   TELA
+   ══════════════════════════════════════════════════════════════════════════ */
+
+function rclPeriodosSelects(){
+  const selA=$('rclAno'), selM=$('rclMes');
+  if(!selA||!selM) return;
+  const anos=[...new Set((RT.periodosDisp||[]).map(p=>p.slice(0,4)))].sort().reverse();
+  const a = RT.periodo.a || new Date().getFullYear();
+  const m = RT.periodo.m || (new Date().getMonth()+1);
+  if(!selA.options.length || selA.dataset.k!==anos.join(',')){
+    selA.innerHTML=(anos.length?anos:[String(a)]).map(x=>`<option value="${x}">${x}</option>`).join('');
+    selA.dataset.k=anos.join(',');
+    selA.value=String(a);
+  }
+  if(!selM.options.length){
+    selM.innerHTML=RT_MESES.map((n,i)=>`<option value="${i+1}">${n}</option>`).join('');
+    selM.value=String(m);
+  }
+}
+
+function rclFiltradas(){
+  const f=($('rclFilial')&&$('rclFilial').value)||'';
+  const q=(($('rclBusca')&&$('rclBusca').value)||'').trim().toLowerCase();
+  const soNeg=!!($('rclSoNeg')&&$('rclSoNeg').checked);
+  const ord=($('rclOrd')&&$('rclOrd').value)||'resultado';
+  const bate=(t)=>!q || String(t||'').toLowerCase().includes(q);
+
+  const out=[];
+  RCL.clientes.forEach(cl=>{
+    const rotas=cl.rotas.filter(r=>{
+      if(f && r.op!==f) return false;
+      if(!q) return true;
+      return bate(cl.nome)||bate(cl.cnpj)||bate(r.codigo)||bate(r.origem)||bate(r.destino);
+    });
+    if(!rotas.length) return;
+    const c={...cl, rotas};
+    if(rotas.length!==cl.rotas.length){
+      ['viagens','ton','kmTot','receitaBruta','receitaLiquida','impostos','custoOp',
+       'custoVar','custoFixo','comissao','overhead','margemContrib','resultado',
+       'cfcValor','cfcQtd'].forEach(k=>{ c[k]=rotas.reduce((a,x)=>a+(Number(x[k])||0),0); });
+      c.margemPct = c.receitaBruta>0 ? c.resultado/c.receitaBruta : null;
+      c.mcPct     = c.receitaBruta>0 ? c.margemContrib/c.receitaBruta : null;
+      c.tarifaTon = c.ton>0 ? c.receitaBruta/c.ton : null;
+      c.custoTon  = c.ton>0 ? c.custoOp/c.ton : null;
+      c.cpk       = c.kmTot>0 ? c.custoOp/c.kmTot : null;
+      c.completude= rotas.reduce((a,x)=>a+x.completude.pct,0)/rotas.length;
+    }
+    if(soNeg && !(c.resultado<0) && !c.rotas.some(r=>r.resultado<0)) return;
+    out.push(c);
+  });
+
+  const cmp={
+    resultado:(a,b)=>b.resultado-a.resultado,
+    margem:(a,b)=>(b.margemPct==null?-9:b.margemPct)-(a.margemPct==null?-9:a.margemPct),
+    receita:(a,b)=>b.receitaBruta-a.receitaBruta,
+    custo:(a,b)=>b.custoOp-a.custoOp,
+    ton:(a,b)=>b.ton-a.ton,
+    viagens:(a,b)=>b.viagens-a.viagens,
+    nome:(a,b)=>String(a.nome).localeCompare(String(b.nome),'pt-BR')
+  }[ord]||((a,b)=>b.resultado-a.resultado);
+  out.sort(cmp);
+  out.forEach(c=>c.rotas.sort((a,b)=>b.receitaBruta-a.receitaBruta));
+  return out;
+}
+
+const RCL_COLS=[
+  {l:'Cliente · rota', cls:'wrp'},
+  {l:'Viagens', cls:'num'}, {l:'Ton', cls:'num'},
+  {l:'Receita bruta', cls:'num'}, {l:'R$/t', cls:'num'},
+  {l:'Custo total', cls:'num'}, {l:'Custo/t', cls:'num'},
+  {l:'Margem contrib.', cls:'num'}, {l:'Resultado', cls:'num'},
+  {l:'Margem', cls:'num'}, {l:'CPK', cls:'num'}, {l:'Compl.', cls:'num'}
+];
+
+function rclRender(){
+  rclPeriodosSelects();
+  const th=$('rclTh'); if(th) th.innerHTML=RCL_COLS.map(c=>`<th class="${c.cls||''}">${c.l}</th>`).join('');
+  const tb=$('rclTbody'); if(!tb) return;
+
+  if(!RCL.calculado){ tb.innerHTML=`<tr><td colspan="12" class="rt-empty">Carregando…</td></tr>`; return; }
+  const lista=rclFiltradas();
+  const cnt=$('rclCnt'); if(cnt) cnt.textContent=num(lista.length,0);
+
+  if(!lista.length){
+    tb.innerHTML=`<tr><td colspan="12" class="rt-empty">Nenhum cliente com faturamento em ${esc(rclRotuloJanela())} nos filtros atuais.</td></tr>`;
+    rclRenderKpis([]); rclRodape(); return;
+  }
+  const tudo=!!($('rclExpTudo')&&$('rclExpTudo').checked);
+  const sg=v=>v==null?'':(v<0?'neg':'pos');
+  const linhas=[];
+  /* Teto de linhas desenhadas de uma vez. Nunca corta em silêncio: quando
+     bate, o rodapé diz exatamente quantas rotas ficaram fora. */
+  const TETO=2500; let desenhadas=0, cortadas=0;
+  lista.forEach((cl,ci)=>{
+    const ab = (tudo || RCL.abertos.has(cl.chave));
+    linhas.push(`<tr class="cli-row" data-cli="${esc(cl.chave)}">
+      <td class="wrp"><span class="cx">${ab?'▾':'▸'}</span> ${esc(cl.nome)}
+        ${cl.sa1?'<span class="src szy" title="Nome oficial vindo da SA1">SA1</span>':''}
+        ${cl.cfcQtd?`<span class="pv-tag rev" title="${cl.cfcQtd} carta(s)-frete complementar(es): ${brl(cl.cfcValor)}">CFC</span>`:''}
+        <span class="muted" style="font-weight:400"> · ${cl.rotas.length} rota${cl.rotas.length===1?'':'s'}</span></td>
+      <td class="num">${num(cl.viagens,0)}</td>
+      <td class="num">${num(cl.ton,1)}</td>
+      <td class="num">${brl(cl.receitaBruta)}</td>
+      <td class="num">${brl(cl.tarifaTon)}</td>
+      <td class="num">${brl(cl.custoOp)}</td>
+      <td class="num">${brl(cl.custoTon)}</td>
+      <td class="num ${sg(cl.margemContrib)}">${brl(cl.margemContrib)}</td>
+      <td class="num ${sg(cl.resultado)}">${brl(cl.resultado)}</td>
+      <td class="num ${sg(cl.margemPct)}">${pct(cl.margemPct,1)}</td>
+      <td class="num">${brl(cl.cpk)}</td>
+      <td class="num">${rclPillCompl(cl.completude)}</td>
+    </tr>`);
+    if(!ab) return;
+    cl.rotas.forEach((r,ri)=>{
+      if(desenhadas>=TETO){ cortadas++; return; }
+      desenhadas++;
+      linhas.push(`<tr class="rot-row" data-cli="${esc(cl.chave)}" data-k3="${esc(r.k3)}">
+        <td class="wrp"><span class="pill mu">${esc(r.op||'—')}</span> ${esc(r.codigo||'—')} ·
+          ${esc(r.origem)} → ${esc(r.destino)}
+          ${r.aprov>0?`<span class="pill gn" title="Retorno aproveitado em ${pct(r.aprov,0)} das viagens">↩ ${pct(r.aprov,0)}</span>`:''}</td>
+        <td class="num">${num(r.viagens,0)}</td>
+        <td class="num">${num(r.ton,1)}</td>
+        <td class="num">${brl(r.receitaBruta)}</td>
+        <td class="num">${brl(r.tarifaTon)}</td>
+        <td class="num">${brl(r.custoOp)}</td>
+        <td class="num">${brl(r.custoTon)}</td>
+        <td class="num ${sg(r.margemContrib)}">${brl(r.margemContrib)}</td>
+        <td class="num ${sg(r.resultado)}">${brl(r.resultado)}</td>
+        <td class="num ${sg(r.margemPct)}">${pct(r.margemPct,1)}</td>
+        <td class="num">${brl(r.cpk)}</td>
+        <td class="num">${rclPillCompl(r.completude.pct)}</td>
+      </tr>`);
+    });
+  });
+  tb.innerHTML=linhas.join('');
+  tb.querySelectorAll('tr.cli-row').forEach(tr=>{
+    tr.onclick=()=>{ const k=tr.dataset.cli;
+      if(RCL.abertos.has(k)) RCL.abertos.delete(k); else RCL.abertos.add(k);
+      rclRender(); };
+  });
+  tb.querySelectorAll('tr.rot-row').forEach(tr=>{
+    tr.onclick=()=>{ rclPainel(tr.dataset.cli, tr.dataset.k3); };
+  });
+  RCL._cortadas=cortadas;
+  rclRenderKpis(lista);
+  rclRodape();
+}
+
+function rclPillCompl(p){
+  if(p==null) return '—';
+  const c = p>=0.85?'gn' : p>=0.6?'ac' : p>=0.4?'am':'rd';
+  return `<span class="pill ${c}" title="Fração do cálculo sustentada por dado medido">${pct(p,0)}</span>`;
+}
+
+function rclRenderKpis(lista){
+  const el=$('rclKpis'); if(!el) return;
+  const T=lista.reduce((a,c)=>({
+    receita:a.receita+c.receitaBruta, rl:a.rl+c.receitaLiquida, custo:a.custo+c.custoOp,
+    mc:a.mc+c.margemContrib, res:a.res+c.resultado, ton:a.ton+c.ton,
+    km:a.km+c.kmTot, viagens:a.viagens+c.viagens, cfc:a.cfc+c.cfcValor
+  }),{receita:0,rl:0,custo:0,mc:0,res:0,ton:0,km:0,viagens:0,cfc:0});
+  const marg = T.receita>0 ? T.res/T.receita : null;
+  const ad = RCL.diag ? RCL.diag.ader._geral : null;
+  const adTxt = !ad || ad.fator==null ? '—' : pct(ad.fator-1,1);
+  const adCls = !ad||ad.fator==null ? 'mu' : (!ad.dentro?'rd' : Math.abs(ad.fator-1)<=0.08?'gn':'am');
+  const k=(cls,l,v,s)=>`<div class="rt-kpi ${cls}"><div class="k-l">${l}</div><div class="k-v">${v}</div><div class="k-s">${s||''}</div></div>`;
+  el.innerHTML=
+    k('ac','Receita bruta', brl(T.receita),
+       `${num(T.viagens,0)} viagens · ${num(T.ton,0)} t · ${esc(rclRotuloJanela())}`)
+   +k('mu','Custo total', brl(T.custo),
+       `${brl(T.km>0?T.custo/T.km:null)}/km · ${brl(T.ton>0?T.custo/T.ton:null)}/t`)
+   +k(T.mc>=0?'gn':'rd','Margem de contribuição', brl(T.mc),
+       `${pct(T.receita>0?T.mc/T.receita:null,1)} da receita · receita líquida menos custo variável`)
+   +k(T.res>=0?'gn':'rd','Resultado', brl(T.res),
+       `depois de impostos, comissão e estrutura`)
+   +k(adCls,'Desvio do consumo real', adTxt,
+       ad&&ad.fator!=null
+         ? `${num(ad.realizado,0)} l comprados × ${num(ad.modelado,0)} l modelados${ad.dentro?'':' — fora da banda, não aplicado'}`
+         : 'sem SZC no período');
+}
+
+function rclRodape(){
+  const el=$('rclRodape'); if(!el) return;
+  const d=RCL.diag; if(!d){ el.textContent=''; return; }
+  const P=rclPrem();
+  const partes=[
+    `Janela: <b>${esc(rclRotuloJanela())}</b> (${d.meses.length} mês${d.meses.length===1?'':'es'})`,
+    `${num(d.rotasComViagem,0)} rota(s) com faturamento`,
+    `${num(d.comHere,0)} com percurso medido`,
+    `${num(d.comPedagio,0)} com pedágio`,
+    `${num(d.comPlaca,0)} com placa`,
+    d.cfc?`${num(d.cfc,0)} carta(s)-frete complementar(es) ${P.cfcSeparado?'fora':'dentro'} do cálculo (${brl(d.cfcValor)})`:'',
+    d.ambiguos?`${num(d.ambiguos,0)} CT-e(s) em rota ambígua, fora do resultado`:'',
+    d.orfaos?`${num(d.orfaos,0)} CT-e(s) sem rota correspondente na SZY`:'',
+    d.semDist?`${num(d.semDist,0)} rota(s) sem distância — sem custo`:''
+  ].filter(Boolean);
+  el.innerHTML = partes.join(' · ')
+    + (RCL._cortadas?`<div class="alerta ac" style="margin-top:8px"><div>${num(RCL._cortadas,0)} linha(s) de rota não foram desenhadas para a tela não travar — feche alguns clientes, use os filtros ou exporte para o Excel, que sai completo.</div></div>`:'')
+    + (RCL.aviso.length?`<div class="alerta am" style="margin-top:8px"><div>${RCL.aviso.map(esc).join('<br>')}</div></div>`:'');
+}
+
+/* ══ Painel de uma rota ═══════════════════════════════════════════════════ */
+function rclPainel(chaveCli, k3){
+  const el=$('rclPainel'); if(!el) return;
+  const cl=RCL.clientes.find(c=>c.chave===chaveCli);
+  const r = cl && cl.rotas.find(x=>x.k3===k3);
+  if(!r){ el.innerHTML=''; return; }
+  const bk=r.bucket, cu=bk.custo;
+  const L=(a,b,c)=>`<tr><td class="muted">${a}</td><td class="num">${b}</td>${c!==undefined?`<td class="muted" style="font-size:10.5px">${c}</td>`:''}</tr>`;
+  const P=rclPrem();
+
+  const li=cu?cu.linhas:{};
+  const cst=[
+    ['Diesel', li.diesel, `${num(cu?cu.litrosViagem:0,1)} l × ${brl(cu?cu.precoDiesel:null)}`],
+    ['Arla', li.arla, ''],
+    ['Pedágio', li.pedagio, cu&&cu.pedOk?`ida ${brl(cu.pIda)} + volta ${brl(cu.pVolta)}`:'sem base de praças'],
+    ['Pneus', li.pneus, ''], ['Lubrificante', li.lubrificante, ''],
+    ['Descarga pressurizada', li.compressor, ''],
+    ['Peças e serviços', li.pecas, ''], ['Documentação e seguros', li.docSeguros, ''],
+    ['Pessoal (sem comissão)', li.pessoal, ''],
+    ['Depreciação do cavalo', li.deprecCavalo, ''], ['Depreciação da carreta', li.deprecCarreta, ''],
+    ['Tempo parado no cliente', li.tempo, ''],
+    ['Alimentação', li.alimentacao, ''], ['Limpeza', li.limpeza, '']
+  ].filter(x=>typeof x[1]==='number' && Math.abs(x[1])>0.005);
+
+  const d=cu&&cu.cons&&cu.cons.det;
+  const bloco = d ? `
+    <table class="tb">
+      <thead><tr><th>Modelo de consumo</th><th class="num">Ida carregada</th><th class="num">Volta vazia</th></tr></thead>
+      <tbody>
+        <tr><td class="muted">Distância</td><td class="num">${num(d.ida.km,1)} km</td><td class="num">${d.volta?num(d.volta.km,1)+' km':'—'}</td></tr>
+        <tr><td class="muted">Massa da composição</td><td class="num">${num(d.ida.massaT,1)} t</td><td class="num">${d.volta?num(d.volta.massaT,1)+' t':'—'}</td></tr>
+        <tr><td class="muted">Ganho de altitude</td><td class="num">${num(d.ida.ganho,0)} m</td><td class="num">${d.volta?num(d.volta.ganho,0)+' m':'—'}</td></tr>
+        <tr><td class="muted">Perda de altitude</td><td class="num">${num(d.ida.perda,0)} m</td><td class="num">${d.volta?num(d.volta.perda,0)+' m':'—'}</td></tr>
+        <tr><td class="muted">Litros — base da premissa</td><td class="num">${num(d.ida.litrosBase,1)}</td><td class="num">${d.volta?num(d.volta.litrosBase,1):'—'}</td></tr>
+        <tr><td class="muted">+ subida além da rota média</td><td class="num">${num(d.ida.lSub,2)}</td><td class="num">${d.volta?num(d.volta.lSub,2):'—'}</td></tr>
+        <tr><td class="muted">− descida além da rota média</td><td class="num">${num(d.ida.lDes,2)}</td><td class="num">${d.volta?num(d.volta.lDes,2):'—'}</td></tr>
+        <tr><td class="muted">+ curvas além da rota média</td><td class="num">${num(d.ida.lCur,2)}</td><td class="num">${d.volta?num(d.volta.lCur,2):'—'}</td></tr>
+        <tr><td class="muted"><b>Litros do trecho</b></td><td class="num"><b>${num(d.ida.litros,1)}</b></td><td class="num"><b>${d.volta?num(d.volta.litros,1):'—'}</b></td></tr>
+        <tr><td class="muted">km/l do trecho</td><td class="num">${num(d.ida.kml,2)}</td><td class="num">${d.volta?num(d.volta.kml,2):'—'}</td></tr>
+        <tr><td class="muted">contra a premissa</td><td class="num">${pct(d.fatorIda-1,1)}</td><td class="num">${d.volta?pct(d.fatorVolta-1,1):'—'}</td></tr>
+      </tbody>
+    </table>
+    <div class="muted" style="font-size:10.5px;margin-top:5px">
+      Rota média da amostra: ${num(d.ref.ganhoKm,1)} m de subida e ${num(d.ref.perdaKm,1)} m de descida por km, ${num(d.ref.curvasKm,2)} curva(s)/km.
+      Trabalho útil considerado: ${num(RCL_CFG.rendimento*RCL_CFG.lhvDiesel/1e6,1)} MJ por litro.
+      ${d.ida.limitado||(d.volta&&d.volta.limitado)?'<b>Um dos trechos bateu no teto de variação</b> — perfil de elevação provavelmente ruidoso.':''}
+    </div>`
+   : `<div class="muted" style="padding:10px 0">Rota sem perfil de elevação — o consumo está na premissa (${num(cu?cu.kmlC:0,2)} / ${num(cu?cu.kmlV:0,2)} km/l). Simule a rota na HERE pela sub-aba Análise de Rotas.</div>`;
+
+  const totCusto=cst.reduce((a,x)=>a+x[1],0);
+  const bar=(v,cor)=>`<i style="width:${Math.max(0,Math.min(100,(v/Math.max(r.receitaBruta,1))*100))}%;background:${cor}"></i>`;
+
+  el.innerHTML=`<div class="card">
+    <h3>${esc(cl.nome)} · ${esc(r.op||'—')} ${esc(r.codigo||'')} · ${esc(r.origem)} → ${esc(r.destino)}
+      <span class="tabs-r">
+        <span class="pill mu">${esc(rclRotuloJanela())}</span>
+        ${rclPillCompl(r.completude.pct)}
+        <button class="btn sm" id="rclFechaPainel">Fechar</button>
+      </span>
+    </h3>
+
+    <div class="rcl-bar">
+      ${bar(r.impostos,'var(--mu)')}${bar(r.custoVar,'var(--rd)')}${bar(r.custoFixo,'var(--am)')}
+      ${bar(r.comissao+r.overhead,'var(--pu)')}${bar(Math.max(r.resultado,0),'var(--gn)')}
+    </div>
+    <div class="rcl-leg">
+      <span style="color:var(--mu)">Impostos <b>${brl(r.impostos)}</b></span>
+      <span style="color:var(--rd)">Custo variável <b>${brl(r.custoVar)}</b></span>
+      <span style="color:var(--am)">Custo fixo <b>${brl(r.custoFixo)}</b></span>
+      <span style="color:var(--pu)">Comissão e estrutura <b>${brl(r.comissao+r.overhead)}</b></span>
+      <span style="color:${r.resultado>=0?'var(--gn)':'var(--rd)'}">Resultado <b>${brl(r.resultado)}</b></span>
+    </div>
+
+    <div class="grid2" style="margin-top:14px">
+      <div>
+        <h3 style="font-size:12px">Resultado da rota no período</h3>
+        <table class="tb">
+          ${L('Viagens faturadas', num(r.viagens,0))}
+          ${L('Toneladas', num(r.ton,1))}
+          ${L('Quilômetros atribuídos', num(r.kmTot,0)+' km')}
+          ${L('Receita bruta', brl(r.receitaBruta))}
+          ${L('Impostos ('+pct(r.aliq,2)+')', '− '+brl(r.impostos))}
+          ${L('<b>Receita líquida</b>', '<b>'+brl(r.receitaLiquida)+'</b>')}
+          ${L('Custo variável', '− '+brl(r.custoVar))}
+          ${L('<b>Margem de contribuição</b>', '<b>'+brl(r.margemContrib)+'</b>', pct(r.mcPct,1)+' da receita')}
+          ${L('Custo fixo rateado', '− '+brl(r.custoFixo))}
+          ${L('Comissão ('+pct(r.comisPct,1)+')', '− '+brl(r.comissao))}
+          ${L('Estrutura', '− '+brl(r.overhead))}
+          ${L('<b>Resultado</b>', `<b class="${r.resultado>=0?'':''}" style="color:${r.resultado>=0?'var(--gn)':'var(--rd)'}">${brl(r.resultado)}</b>`, pct(r.margemPct,1))}
+          ${r.cfcQtd?L('Carta-frete complementar', brl(r.cfcValor), r.cfcQtd+' lançamento(s) '+(P.cfcSeparado?'fora do cálculo':'no cálculo')):''}
+        </table>
+        <h3 style="font-size:12px;margin-top:14px">Indicadores</h3>
+        <table class="tb">
+          ${L('Tarifa realizada', brl(r.tarifaTon)+' /t')}
+          ${L('Custo por tonelada', brl(r.custoTon)+' /t')}
+          ${L('CPK — custo por km', brl(r.cpk))}
+          ${L('VPK — receita por km', brl(r.vpk))}
+          ${L('Custo por viagem', brl(r.custoViagem))}
+          ${L('Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l', 'carregado / vazio')}
+          ${L('Calibração pelo realizado', r.fator===1?'não aplicada':pct(r.fator-1,1))}
+          ${L('Retorno aproveitado', cu&&cu.temPlaca?pct(r.aprov,0):'sem placa no CT-e',
+               cu&&cu.temPlaca?'volta cobrada: '+pct(1-r.aprov,0):'volta cobrada inteira')}
+          ${L('Distância adotada', num(cu?cu.kmIda:0,1)+' + '+num(cu?cu.kmVolta:0,1)+' km', (cu?cu.fonteDist:'').toUpperCase())}
+        </table>
+      </div>
+      <div>
+        <h3 style="font-size:12px">Custo por viagem, linha a linha</h3>
+        <table class="tb">
+          <thead><tr><th>Linha</th><th class="num">R$/viagem</th><th class="num">%</th></tr></thead>
+          <tbody>
+          ${cst.map(x=>`<tr><td class="muted">${x[0]}${x[2]?` <i style="font-style:normal;opacity:.7">${x[2]}</i>`:''}</td>
+             <td class="num">${brl(x[1])}</td><td class="num">${pct(totCusto>0?x[1]/totCusto:null,1)}</td></tr>`).join('')}
+          <tr><td><b>Total</b></td><td class="num"><b>${brl(totCusto)}</b></td><td class="num">100,0%</td></tr>
+          </tbody>
+        </table>
+        ${r.completude.falta.length?`<div class="alerta am" style="margin-top:10px"><div><b>O que ainda não é dado medido:</b> ${esc(r.completude.falta.join(' · '))}.</div></div>`:''}
+      </div>
+    </div>
+
+    <h3 style="font-size:12px;margin-top:16px">Consumo — de onde sai o número</h3>
+    ${bloco}
+  </div>`;
+  const fc=$('rclFechaPainel'); if(fc) fc.onclick=()=>{ el.innerHTML=''; };
+  el.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+/* ══ Diagnóstico da aderência ═════════════════════════════════════════════ */
+function rclRenderDiag(){
+  const el=$('rclDiag'); if(!el||!RCL.diag) return;
+  const d=RCL.diag, P=rclPrem();
+  const linha=(a)=>`<tr>
+      <td>${esc(a.op)}</td>
+      <td class="num">${num(a.modelado,0)} l</td>
+      <td class="num">${num(a.realizado,0)} l</td>
+      <td class="num">${a.fator==null?'—':num(a.fator,3)}</td>
+      <td class="num">${a.fator==null?'—':pct(a.fator-1,1)}</td>
+      <td>${a.fator==null?'<span class="pill mu">sem SZC</span>'
+            :a.dentro?(P.aderencia?'<span class="pill gn">aplicado</span>':'<span class="pill mu">desligado</span>')
+            :'<span class="pill rd">fora da banda</span>'}</td>
+    </tr>`;
+  const ops=d.ops.map(o=>d.ader[o]).filter(Boolean);
+  el.innerHTML=`
+    <div class="muted" style="margin-bottom:9px">
+      O modelo diz quantos litros <i>deveriam</i> ter sido queimados nas rotas faturadas. A SZC diz quantos litros
+      foram <i>comprados</i>. A razão entre os dois é o fator de aderência — e ele é aplicado ao consumo de todas as
+      rotas da operação, para que a soma do custo de diesel do módulo feche com a nota fiscal.
+      Parte da diferença é consumo real acima do modelo; parte é quilômetro que não está em rota faturada
+      (transferência, deslocamento para manutenção, retorno sem carga já contabilizado). Por isso a banda
+      ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)}: fora dela o número deixa de ser consumo e vira sintoma de base incompleta.
+    </div>
+    <table class="tb">
+      <thead><tr><th>Operação</th><th class="num">Modelado</th><th class="num">Comprado (SZC)</th>
+        <th class="num">Fator</th><th class="num">Desvio</th><th>Situação</th></tr></thead>
+      <tbody>${ops.map(linha).join('')}${linha(d.ader._geral)}</tbody>
+    </table>
+    <h3 style="font-size:12px;margin-top:14px">Rota média da amostra — a referência do modelo</h3>
+    <table class="tb">
+      <tr><td class="muted">Subida acumulada por km</td><td class="num">${num(d.ref.ganhoKm,2)} m/km</td></tr>
+      <tr><td class="muted">Descida acumulada por km</td><td class="num">${num(d.ref.perdaKm,2)} m/km</td></tr>
+      <tr><td class="muted">Curvas relevantes por km</td><td class="num">${num(d.ref.curvasKm,2)}</td></tr>
+      <tr><td class="muted">Base do cálculo</td><td class="num">${num(d.ref.km,0)} km de percurso medido</td></tr>
+      <tr><td class="muted">Rotas com e sem perfil de elevação</td><td class="num">${num(d.ref.comTopo,0)} / ${num(d.ref.semTopo,0)}</td></tr>
+      ${d.norm?`<tr><td class="muted">Litros pela premissa · pelo modelo</td><td class="num">${num(d.norm.somaBase,0)} · ${num(d.norm.somaMod,0)} l</td></tr>
+      <tr><td class="muted">Normalização aplicada</td><td class="num">${num(d.norm.norm,4)} <span class="muted">(${pct(d.norm.desvioBruto,2)} de viés bruto devolvido)</span></td></tr>`:''}
+    </table>
+    <div class="muted" style="font-size:10.5px;margin-top:6px">
+      Uma rota exatamente na média fica no km/l da premissa. Quem sobe mais que a média gasta mais, quem sobe menos gasta menos,
+      e o total da frota é preservado por construção — é isso que impede a serra de ser contada duas vezes.
+      O teto de variação e a diferença de massa entre ida e volta deixariam um viés residual; a normalização acima o devolve,
+      para que o único fator autorizado a mexer no TOTAL de diesel seja a nota fiscal.
+    </div>`;
+  const p=$('rclDiagPill');
+  if(p){ const a=d.ader._geral;
+    p.textContent = a.fator==null?'sem SZC no período':`consolidado ${num(a.fator,3)} · ${pct(a.fator-1,1)}`;
+    p.className='pill '+(a.fator==null?'mu':a.dentro?'gn':'rd'); }
+}
+
+/* ══ Premissas do resultado ═══════════════════════════════════════════════ */
+function rclPremModal(){
+  const P=rclPrem();
+  const ed=isGestorOuAdmin();
+  const n=(id,l,v,step,dica)=>`<label class="fld"><span class="fl">${l}${dica?`<i>${dica}</i>`:''}</span>
+      <input type="number" id="rcl_${id}" value="${v==null?'':v}" step="${step||'0.01'}" ${ed?'':'disabled'}></label>`;
+  const s=(id,l,v,ops,dica)=>`<label class="fld"><span class="fl">${l}${dica?`<i>${dica}</i>`:''}</span>
+      <select id="rcl_${id}" ${ed?'':'disabled'}>${ops.map(o=>`<option value="${o[0]}" ${String(v)===String(o[0])?'selected':''}>${o[1]}</option>`).join('')}</select></label>`;
+  const c=(id,l,v,dica)=>`<label class="fld"><span class="fl">${l}${dica?`<i>${dica}</i>`:''}</span>
+      <select id="rcl_${id}" ${ed?'':'disabled'}><option value="1" ${v?'selected':''}>Sim</option><option value="0" ${v?'':'selected'}>Não</option></select></label>`;
+
+  mdAbrir('Premissas do resultado por cliente',
+   `<div class="muted" style="margin-bottom:10px">
+      Valem para toda a sub-aba. As premissas de custo por viagem (consumo base, pneus, pessoal, compressor…)
+      continuam na <b>Análise de Rotas → 💰 Custos</b> — este painel só decide o que é feito com o número que sai de lá.
+    </div>
+    <h3 style="font-size:12px">Receita</h3>
+    <div class="rt-fields grid3">
+      ${c('usarImpostos','Descontar impostos da receita', P.usarImpostos, 'PIS/COFINS + ICMS das premissas do Simulador')}
+      ${n('aliqManual','Alíquota manual (0–1)', P.aliqManual, '0.001', 'vazio = usa as premissas')}
+      ${c('cfcSeparado','Separar cartas-frete complementares', P.cfcSeparado, 'placas FSC/FSP/FPR-0000 não são viagem física')}
+    </div>
+    <h3 style="font-size:12px;margin-top:12px">Comissão e estrutura</h3>
+    <div class="rt-fields grid3">
+      ${s('regimeComissao','Comissão', P.regimeComissao, [['viagem','Por viagem, sobre a receita líquida'],['nao','Fora do resultado']])}
+      ${n('comissaoPct','Percentual da comissão', P.comissaoPct, '0.001', 'vazio = premissa (5%)')}
+      ${s('overheadModo','Rateio de estrutura', P.overheadModo, [['nao','Não ratear'],['pct','% da receita'],['km','R$ por km']])}
+      ${n('overheadPct','Estrutura — % da receita', P.overheadPct, '0.001')}
+      ${n('overheadKm','Estrutura — R$/km', P.overheadKm, '0.01')}
+    </div>
+    <h3 style="font-size:12px;margin-top:12px">Modelo de consumo</h3>
+    <div class="rt-fields grid3">
+      ${c('consumoModelo','Ajustar km/l pelo relevo da rota', P.consumoModelo, 'física: massa × ganho de altitude, curvas e descida')}
+      ${n('consumoCarregado','km/l base carregado', P.consumoCarregado, '0.01', 'vazio = premissa de custo da rota')}
+      ${n('consumoVazio','km/l base vazio', P.consumoVazio, '0.01', 'vazio = premissa de custo da rota')}
+      ${c('aderencia','Calibrar pelo diesel comprado (SZC)', P.aderencia, 'faz o custo de diesel fechar com a nota fiscal')}
+      ${s('aderenciaFonte','Base da calibração', P.aderenciaFonte, [['op','Por operação'],['geral','Consolidada']])}
+    </div>
+    <h3 style="font-size:12px;margin-top:12px">Retorno</h3>
+    <div class="rt-fields grid3">
+      ${c('aproveitarRetorno','Descontar a volta aproveitada', P.aproveitarRetorno, 'quando a mesma placa emite outro CT-e saindo do destino')}
+      ${n('janelaRetornoDias','Janela do retorno (dias)', P.janelaRetornoDias, '1')}
+    </div>`,
+   ed ? `<button class="btn" onclick="mdFechar()">Cancelar</button>
+         <button class="btn" id="rclPremPadrao">Voltar ao padrão</button>
+         <button class="btn pri" id="rclPremSalvar">Salvar premissas</button>`
+      : `<button class="btn" onclick="mdFechar()">Fechar</button>`);
+
+  const bp=$('rclPremPadrao');
+  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO}); mdFechar(); rclCalcular(); rclRender(); rclRenderDiag(); toast('Premissas do resultado no padrão.','ac'); };
+  const bs=$('rclPremSalvar');
+  if(bs) bs.onclick=async()=>{
+    const gN=id=>{ const e=$('rcl_'+id); if(!e||e.value==='') return null; const v=Number(e.value); return isNaN(v)?null:v; };
+    const gS=id=>{ const e=$('rcl_'+id); return e?e.value:null; };
+    const gB=id=>{ const e=$('rcl_'+id); return e? e.value==='1' : false; };
+    const novo={
+      usarImpostos:gB('usarImpostos'), aliqManual:gN('aliqManual'), cfcSeparado:gB('cfcSeparado'),
+      regimeComissao:gS('regimeComissao'), comissaoPct:gN('comissaoPct'),
+      overheadModo:gS('overheadModo'), overheadPct:gN('overheadPct')||0, overheadKm:gN('overheadKm')||0,
+      consumoModelo:gB('consumoModelo'), consumoCarregado:gN('consumoCarregado'), consumoVazio:gN('consumoVazio'),
+      aderencia:gB('aderencia'), aderenciaFonte:gS('aderenciaFonte'),
+      aproveitarRetorno:gB('aproveitarRetorno'), janelaRetornoDias:gN('janelaRetornoDias')||2
+    };
+    const ok=await rclGravarPrem(novo);
+    mdFechar(); rclCalcular(); rclRender(); rclRenderDiag();
+    toast(ok?'Premissas do resultado salvas.':'Premissas aplicadas nesta sessão — a gravação falhou.', ok?'gn':'am');
+  };
+}
+
+/* ══ Exportação ═══════════════════════════════════════════════════════════ */
+async function rclExportar(){
+  const b=$('rclBtnExport'); const t=b?b.textContent:'';
+  if(b){ b.disabled=true; b.textContent='Gerando…'; }
+  try{
+    const XLSX=await rtCarregarXLSX();
+    const wb=XLSX.utils.book_new();
+    const lista=rclFiltradas();
+    const add=(nome,rows)=>XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), nome.slice(0,31));
+
+    add('Clientes', lista.map(c=>({
+      Cliente:c.nome, CNPJ:_docFmt(c.cnpj), Rotas:c.rotas.length, Viagens:c.viagens,
+      Toneladas:+c.ton.toFixed(2), Km:+c.kmTot.toFixed(0),
+      'Receita bruta':+c.receitaBruta.toFixed(2), Impostos:+c.impostos.toFixed(2),
+      'Receita líquida':+c.receitaLiquida.toFixed(2),
+      'Custo variável':+c.custoVar.toFixed(2), 'Custo fixo':+c.custoFixo.toFixed(2),
+      'Custo total':+c.custoOp.toFixed(2), Comissão:+c.comissao.toFixed(2), Estrutura:+c.overhead.toFixed(2),
+      'Margem de contribuição':+c.margemContrib.toFixed(2), Resultado:+c.resultado.toFixed(2),
+      'Margem %':c.margemPct==null?'':+(c.margemPct*100).toFixed(2),
+      'R$/t':c.tarifaTon==null?'':+c.tarifaTon.toFixed(2), 'Custo/t':c.custoTon==null?'':+c.custoTon.toFixed(2),
+      CPK:c.cpk==null?'':+c.cpk.toFixed(3), VPK:c.vpk==null?'':+c.vpk.toFixed(3),
+      'Completude %':+(c.completude*100).toFixed(0)
+    })));
+
+    const rot=[]; lista.forEach(c=>c.rotas.forEach(r=>rot.push({
+      Cliente:c.nome, Operação:r.op, Rota:r.codigo, Origem:r.origem, Destino:r.destino,
+      Viagens:r.viagens, Toneladas:+r.ton.toFixed(2), Km:+r.kmTot.toFixed(0),
+      'Receita bruta':+r.receitaBruta.toFixed(2), 'Receita líquida':+r.receitaLiquida.toFixed(2),
+      'Custo/viagem':+r.custoViagem.toFixed(2), 'Custo total':+r.custoOp.toFixed(2),
+      'Margem de contribuição':+r.margemContrib.toFixed(2), Resultado:+r.resultado.toFixed(2),
+      'Margem %':r.margemPct==null?'':+(r.margemPct*100).toFixed(2),
+      'R$/t':r.tarifaTon==null?'':+r.tarifaTon.toFixed(2), 'Custo/t':r.custoTon==null?'':+r.custoTon.toFixed(2),
+      CPK:r.cpk==null?'':+r.cpk.toFixed(3), VPK:r.vpk==null?'':+r.vpk.toFixed(3),
+      'km/l carregado':+r.kmlC.toFixed(2), 'km/l vazio':+r.kmlV.toFixed(2),
+      'Retorno aproveitado %':+(r.aprov*100).toFixed(0),
+      'Calibração':r.fator===1?'':+(r.fator).toFixed(3),
+      'Completude %':+(r.completude.pct*100).toFixed(0),
+      'Falta medir':r.completude.falta.join('; ')
+    })));
+    add('Rotas por cliente', rot);
+
+    const li=[]; lista.forEach(c=>c.rotas.forEach(r=>{
+      const cu=r.bucket.custo; if(!cu) return;
+      Object.keys(cu.linhas).forEach(k=>{
+        if(typeof cu.linhas[k]!=='number') return;
+        li.push({Cliente:c.nome, Rota:`${r.op} ${r.codigo}`, Trecho:`${r.origem} → ${r.destino}`,
+                 Linha:k, 'R$/viagem':+cu.linhas[k].toFixed(2), Viagens:r.viagens,
+                 'R$ no período':+(cu.linhas[k]*r.viagens).toFixed(2)});
+      });
+    }));
+    add('Custo linha a linha', li);
+
+    if(RCL.diag){
+      const d=RCL.diag;
+      add('Aderência', [...d.ops.map(o=>d.ader[o]), d.ader._geral].filter(Boolean).map(a=>({
+        Operação:a.op, 'Litros modelados':+a.modelado.toFixed(0), 'Litros comprados':+a.realizado.toFixed(0),
+        Fator:a.fator==null?'':+a.fator.toFixed(4), 'Desvio %':a.fator==null?'':+((a.fator-1)*100).toFixed(2),
+        Situação:a.fator==null?'sem SZC':a.dentro?'dentro da banda':'fora da banda'
+      })));
+      add('Premissas', Object.entries(rclPrem()).map(([k,v])=>({Premissa:k, Valor:v==null?'':String(v)})));
+    }
+    XLSX.writeFile(wb, `Rota clientes ${rclRotuloJanela().replace(/\//g,'-')}.xlsx`);
+    toast('Excel gerado.','gn');
+  }catch(e){ console.warn('[Rota clientes] export:',e); toast('Falha ao gerar o Excel: '+(e&&e.message||e),'rd'); }
+  finally{ if(b){ b.disabled=false; b.textContent=t; } }
+}
+
+/* ══ Abertura e binds ═════════════════════════════════════════════════════ */
+async function rclAoAbrir(){
+  if(RCL._prom) return RCL._prom;
+  RCL._prom=(async()=>{
+    const meta=$('rclMeta'); if(meta) meta.innerHTML='<span>Carregando bases…</span>';
+    try{
+      await rclCarregarPrem();
+      await rtInit(false);                     /* SZY, SZB, SZC, perfil, caches */
+      if(!ST.sa1Carregada){ try{ await carregarSA1(); }catch(_){} }
+      rclPeriodosSelects();
+      rclRecalcular();
+    }catch(e){
+      console.warn('[Rota clientes]',e);
+      if(meta) meta.innerHTML='<span class="pill rd">Falha ao carregar: '+esc(e&&e.message||e)+'</span>';
+    }finally{ RCL._prom=null; }
+  })();
+  return RCL._prom;
+}
+function rclRecalcular(){
+  const meta=$('rclMeta');
+  try{
+    rclCalcular(); rclRender(); rclRenderDiag();
+    if(meta){
+      const d=RCL.diag;
+      meta.innerHTML = `<span class="pill ac">${esc(rclRotuloJanela())}</span>`
+        + `<span>${num(RCL.clientes.length,0)} cliente(s) · ${num(RCL.rotas.length,0)} par(es) cliente–rota · ${num(d?d.usados:0,0)} CT-e(s)</span>`
+        + (RT.szbMeta?`<span>SZB de ${esc(dtBR(RT.szbMeta.ts))}</span>`:'')
+        + (RT.szyMeta?`<span>SZY de ${esc(dtBR(RT.szyMeta.ts))}</span>`:'')
+        + (RT.szc&&RT.szc.length?`<span>SZC com ${num(RT.szc.length,0)} abastecimento(s)</span>`:'<span class="pill am">SZC não carregada</span>');
+    }
+  }catch(e){
+    console.warn('[Rota clientes] cálculo:',e);
+    if(meta) meta.innerHTML='<span class="pill rd">Erro no cálculo: '+esc(e&&e.message||e)+'</span>';
+  }
+}
+
+try{ window.__ATLAS_ROTA_CLIENTES__ = RCL; window.__ATLAS_RCL_CFG__ = RCL_CFG; }catch(_){}
+
+(function rclBind(){
+  /* A sub-aba Rota clientes é a que nasce aberta: clicar em "Rotas" na barra
+     principal tem de carregá-la, sem depender de o usuário clicar de novo na
+     sub-aba que já está selecionada. */
+  const tab=document.querySelector('#tabsBar .tab[data-v="rot"]');
+  if(tab) tab.addEventListener('click',()=>{ setTimeout(()=>{
+    const sv=$('sv-rcl'); if(sv && sv.classList.contains('on')) rclAoAbrir();
+  },40); });
+  ['rclJanela','rclMes','rclAno','rclBase'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>rclRecalcular(); });
+  ['rclFilial','rclOrd','rclSoNeg','rclExpTudo'].forEach(id=>{ const e=$(id); if(e) e.onchange=()=>rclRender(); });
+  const bs=$('rclBusca'); if(bs){ let t=null; bs.oninput=()=>{ clearTimeout(t); t=setTimeout(rclRender,200); }; }
+  const br=$('rclBtnRecalc'); if(br) br.onclick=()=>rclRecalcular();
+  const bp=$('rclBtnPrem');   if(bp) bp.onclick=rclPremModal;
+  const bx=$('rclBtnExport'); if(bx) bx.onclick=rclExportar;
+  const bd=$('rclBtnDiag');   if(bd) bd.onclick=()=>{ const c=$('rclCardDiag');
+    c.style.display = c.style.display==='none'?'':'none'; if(c.style.display==='') rclRenderDiag(); };
+})();
+</script>
+
 
 <script>
 /* ══════════════════════════════════════════════════════════════════════════
