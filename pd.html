@@ -2410,27 +2410,135 @@ function enrichSZC(recs){
   }).filter(Boolean);
 }
 
+/* ══ Banda de ±20% no R$/L ═════════════════════════════════════════════════
+   Mesma regra do comercial.html (rtPrecoMedio / sbMediaUnidade) e da carga da
+   SZC no index.html — os quatro leem a MESMA base e precisam do MESMO recorte,
+   senão volta o problema que a apuração automática veio resolver: dois números
+   para o mesmo mês, na mesma empresa, e a reunião discutindo qual planilha
+   está certa em vez de discutir o custo.
+
+   O corte antigo (precoUnit >= mediaOutros*0.5) só olhava para BAIXO. Sem
+   teto, a SZC de 02/08/2026 — 100 l por R$ 64.400, ou R$ 644,00/l — atravessou
+   a janela de litragem e o corte de curva e levou o diesel de SC de R$ 5,78
+   para R$ 8,15.
+
+   Duas escolhas que decidem o resultado:
+
+   1) A referência é a MEDIANA ponderada por litros, não a média. A média é
+      contaminada pelo próprio outlier que se quer pegar: em ago/26 SC ela já
+      estava 19% acima do patamar real, enquanto a mediana (5,790) não se
+      moveu. Calcular a banda sobre a média deixaria a linha de R$ 644 passar.
+
+   2) A mediana sai da amostra DENTRO da janela de 50–1.200 l. Como ela é
+      ponderada por litros, uma linha de 65.127 l (existe na base: SP,
+      21/10/2024) carrega sozinha 82% do peso do mês e arrastaria a mediana
+      para R$ 0,056/l — a banda inverteria de lado e passaria a acusar
+      justamente os abastecimentos corretos. */
+const PD_DIESEL_DESVIO_MAX = 0.20;
+const PD_DIESEL_L_MIN = 50, PD_DIESEL_L_MAX = 1200;
+const PD_DIESEL_MIN_AMOSTRA = 3;
+/* Gate SEPARADO, e muito mais largo, para o custo — ver a nota no cálculo do
+   Peso Diesel. Acima do dobro da mediana do mês não existe compra: existe
+   digitação com vírgula fora de lugar. */
+const PD_DIESEL_CUSTO_FATOR = 2;
+
+function pdMedianaPonderada(arr){
+  const a = arr.filter(x=>x.precoUnit>0 && x.litros>0).sort((x,y)=>x.precoUnit-y.precoUnit);
+  if(!a.length) return 0;
+  const meta = a.reduce((s,x)=>s+x.litros,0)/2;
+  let ac=0;
+  for(const x of a){ ac+=x.litros; if(ac>=meta) return x.precoUnit; }
+  return a[a.length-1].precoUnit;
+}
+
 function calcDieselKPI(uid, mes, fatRealizado){
   if(!SZC_DATA.length && RAW_SZC.length) SZC_DATA = enrichSZC(RAW_SZC);
   const base = SZC_DATA.filter(r=>r.mes===mes && (uid==='all' || r.op===uid));
 
-  // Peso Diesel usa o custo total do diesel no período.
-  // As regras abaixo filtram apenas a composição do preço médio.
-  const litros = base.reduce((a,r)=>a+r.litros,0);
-  const valor  = base.reduce((a,r)=>a+r.valor,0);
-  const baseMediaQtd = base.filter(r=>r.litros>=50 && r.litros<=1200);
-  const baseMedia = baseMediaQtd.filter(function(r, _, arr){
+  const baseMediaQtd = base.filter(r=>r.litros>=PD_DIESEL_L_MIN && r.litros<=PD_DIESEL_L_MAX);
+  const semCurva = baseMediaQtd.filter(function(r, _, arr){
     if(arr.length<=1) return true;
     const outrosLitros = arr.reduce((a,x)=>a+(x===r?0:x.litros),0);
     const outrosValor  = arr.reduce((a,x)=>a+(x===r?0:(x.precoUnit*x.litros)),0);
     const mediaOutros = outrosLitros>0 ? outrosValor/outrosLitros : 0;
     return mediaOutros<=0 || r.precoUnit >= (mediaOutros*0.5);
   });
+
+  /* banda de ±20% sobre a mediana ponderada — o teto que faltava */
+  const bandaOn = semCurva.length >= PD_DIESEL_MIN_AMOSTRA;
+  const refMed  = bandaOn ? pdMedianaPonderada(semCurva) : 0;
+  const bMin = refMed>0 ? refMed*(1-PD_DIESEL_DESVIO_MAX) : 0;
+  const bMax = refMed>0 ? refMed*(1+PD_DIESEL_DESVIO_MAX) : Infinity;
+  const naBanda = r => !(refMed>0) || (r.precoUnit>=bMin && r.precoUnit<=bMax);
+  const baseMedia = semCurva.filter(naBanda);
+
   const litrosMedia = baseMedia.reduce((a,r)=>a+r.litros,0);
   const valorMedia  = baseMedia.reduce((a,r)=>a+(r.precoUnit*r.litros),0);
   const precoMedio = litrosMedia>0 ? valorMedia/litrosMedia : 0;
+
+  /* ── Peso Diesel ──
+     Continua sendo o CUSTO TOTAL do diesel no período (a janela de litragem
+     e o corte de curva seguem sem valer aqui: arremate e transferência de
+     tanque são custo real, só não são preço de bomba). O que sai agora é
+     outra coisa — a linha que a banda reprovou não é "custo fora do padrão",
+     é lançamento inválido: R$ 64.400 por 100 litros não é despesa que
+     existiu, e somá-la inflava o Peso Diesel em 3,7 p.p. sozinha.
+     O que foi retirado fica exposto no tooltip do KPI: a conta precisa
+     continuar reconciliável com a SZC, linha a linha. */
+  /* Duas restrições, e nenhuma delas é conservadorismo gratuito — cada uma
+     nasceu de um falso-positivo encontrado na base:
+
+     a) Só alcança o que está DENTRO da janela de litragem, população sobre a
+        qual a banda foi calibrada. Fora dela o preço legitimamente diverge:
+        abastecimento de 10 l a R$ 3,19 e transferência de tanque não seguem
+        preço de bomba, e reprová-los por uma mediana que não os descreve
+        apagaria custo real da conta.
+
+     b) Só alcança o lado de CIMA da banda. Aqui a assimetria é deliberada, e
+        é o espelho exato do bug original (que cortava só para baixo):
+
+        · acima da banda o dado é impossível — nada abastece 20% acima da
+          mediana do próprio mês. São as 124 linhas de digitação com fator
+          10/100, R$ 37 a R$ 644 o litro;
+        · abaixo da banda o dado é AMBÍGUO. Em 01–02/03/2026 há compras reais
+          a R$ 5,26 enquanto a mediana de março fechou em R$ 6,62 — não é erro,
+          é o preço antigo antes do salto de patamar do dia 09 (a série diária
+          do mês sobe de R$ 5,29 para R$ 6,49). Tirar essas linhas do custo
+          SUBESTIMARIA a despesa, que é exatamente o erro que estamos
+          combatendo, só que com o sinal trocado.
+
+     No preço médio a banda continua simétrica: lá o objetivo é o patamar do
+     mês, e diluir a ponta barata é aceitável (o desvio máximo medido em mês
+     fechado foi de 1,5%). No custo, o objetivo é a despesa que existiu — e
+     despesa a menos não se inventa.
+
+     c) O corte do custo NÃO é a banda de ±20%: é o dobro da mediana. A banda
+        de 20% é o recorte certo para compor um PREÇO — mas custo é outra
+        pergunta. Das 124 linhas acima da banda na base, 108 estão em torno de
+        120% da mediana e são compra real em posto mais caro: R$ 6,28/l
+        repetido em dezenas de datas e filiais em ago/2025, contra mediana de
+        R$ 5,23. Preço repetido em muitas notas é assinatura de dado real;
+        digitação não se repete idêntica. Excluí-las do custo apagaria despesa
+        legítima. Acima do dobro sobram 16 linhas em toda a base — as mesmas
+        de R$ 12 a R$ 644 o litro — e aí não há o que discutir. */
+  const tetoCusto = refMed>0 ? refMed*PD_DIESEL_CUSTO_FATOR : Infinity;
+  const julgavel = r => r.litros>=PD_DIESEL_L_MIN && r.litros<=PD_DIESEL_L_MAX;
+  const ehInvalida = r => refMed>0 && julgavel(r) && r.precoUnit>tetoCusto;
+  const invalidas = base.filter(ehInvalida);
+  const validas   = base.filter(r=>!ehInvalida(r));
+  const litros = validas.reduce((a,r)=>a+r.litros,0);
+  const valor  = validas.reduce((a,r)=>a+r.valor,0);
+  const valorBruto = base.reduce((a,r)=>a+r.valor,0);
+  const valorExcluido = valorBruto - valor;
+
   const pesoDiesel = fatRealizado>0 && valor>0 ? (valor/fatRealizado)*100 : 0;
-  return {precoMedio, pesoDiesel, litros, valor, qtd:base.length};
+  return {precoMedio, pesoDiesel, litros, valor, qtd:base.length,
+          qtdMedia:baseMedia.length,
+          foraDaJanela:base.length-baseMediaQtd.length,
+          foraDaCurva:baseMediaQtd.length-semCurva.length,
+          foraDaBanda:semCurva.length-baseMedia.length,
+          invalidas:invalidas.length, valorExcluido, valorBruto,
+          bandaAtiva:refMed>0, bandaRef:refMed, bandaMin:bMin, bandaMax:bMax};
 }
 
 // Cache de filterByOp por uid — resetado a cada recalc para evitar dados stale
@@ -3631,8 +3739,26 @@ function buildVG(uid, mes){
     if(dieselKPI.precoMedio>0){
       elDieselPm.textContent='R$ '+D2(dieselKPI.precoMedio)+'/L';
       elDieselPm.style.color='var(--gn)';
-      elDieselPeso.textContent='Peso Diesel: '+Pct(dieselKPI.pesoDiesel);
-      elDieselPeso.title=`SZC: ${R(dieselKPI.valor)} de custo diesel no período`;
+      /* o descartado não pode ficar invisível: se a banda cortou alguma coisa,
+         existe lançamento errado na SZC esperando correção — e é essa linha
+         que alguém vai questionar na reunião de resultado */
+      const _d=dieselKPI;
+      elDieselPm.title = _d.bandaAtiva
+        ? `Média ponderada por litros de ${_d.qtdMedia} de ${_d.qtd} abastecimento(s).`
+          + ` Janela ${PD_DIESEL_L_MIN}–${PD_DIESEL_L_MAX} l: ${_d.foraDaJanela} fora.`
+          + ` Abaixo de 50% da média dos demais: ${_d.foraDaCurva}.`
+          + ` Fora de ±${PD_DIESEL_DESVIO_MAX*100}% da mediana (R$ ${D2(_d.bandaRef)}/L — faixa R$ ${D2(_d.bandaMin)} a R$ ${D2(_d.bandaMax)}): ${_d.foraDaBanda}.`
+        : `Média ponderada por litros de ${_d.qtdMedia} de ${_d.qtd} abastecimento(s). Amostra curta: banda de ±${PD_DIESEL_DESVIO_MAX*100}% não aplicada.`;
+      elDieselPeso.textContent='Peso Diesel: '+Pct(dieselKPI.pesoDiesel)
+        + (dieselKPI.invalidas>0 ? ' ⚠' : '');
+      elDieselPeso.title = `SZC: ${R(dieselKPI.valor)} de custo diesel no período`
+        + (dieselKPI.invalidas>0
+            ? `.\n⚠ ${dieselKPI.invalidas} lançamento(s) inválido(s) excluído(s) — ${R(dieselKPI.valorExcluido)}`
+              + ` com R$/L acima de ${PD_DIESEL_CUSTO_FATOR}× a mediana do período (R$ ${D2(dieselKPI.bandaRef)}/L).`
+              + `\nCusto bruto na SZC, sem essa exclusão: ${R(dieselKPI.valorBruto)}.`
+              + `\nCorrija a nota na origem para o valor voltar à conta.`
+            : '');
+      elDieselPeso.style.color = dieselKPI.invalidas>0 ? 'var(--am)' : '';
     }else{
       elDieselPm.textContent='—';
       elDieselPm.style.color='';
