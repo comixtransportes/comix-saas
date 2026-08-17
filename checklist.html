@@ -347,9 +347,13 @@ tbody tr:last-child{border-bottom:none}
 .status-btn.reprovado.on{background:var(--rd);border-color:var(--rd);color:#fff}
 .reprova-inline{display:none;flex-basis:100%;margin-top:7px;padding:8px;background:var(--rd-bg);border:1px solid var(--rd-bd);border-radius:10px}
 .cl-item.reprovado .reprova-inline{display:block}
-.inline-photo-zone{height:68px;border:1.5px dashed var(--rd-bd);border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:3px;color:var(--rd);font-size:10px;font-weight:700;cursor:pointer;margin-bottom:7px}
+.inline-photo-zone{min-height:68px;padding:7px 6px;border:1.5px dashed var(--rd-bd);border-radius:10px;background:#fff;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:3px;color:var(--rd);font-size:10px;font-weight:700;cursor:pointer;margin-bottom:7px}
 .inline-photo-zone.filled{border-style:solid;background:#fff5f5}
 .inline-photo-zone input{display:none}
+.ipz-cam{width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;font-size:18px;line-height:1.1}
+.ipz-cam span{font-size:10px;font-weight:700;color:var(--rd);text-align:center}
+.ipz-gal{margin-top:5px;display:inline-flex;align-items:center;gap:4px;font-size:9.5px;font-weight:600;color:var(--mu);background:var(--bg);border:1px solid var(--bd);border-radius:20px;padding:3px 9px;cursor:pointer;transition:border-color .15s,color .15s}
+.ipz-gal:hover{border-color:var(--ac);color:var(--ac)}
 .inline-obs{width:100%;border:1px solid var(--rd-bd);border-radius:8px;padding:7px 8px;font-size:11.5px;font-family:var(--f);resize:none;height:38px;outline:none}
 .photo-preview-large{height:96px;border-radius:10px;border:1px solid var(--bd2);background:linear-gradient(135deg,#edf2f7,#fff);display:flex;align-items:center;justify-content:center;flex-direction:column;font-size:24px;color:var(--mu);box-shadow:var(--shd)}
 
@@ -4508,13 +4512,22 @@ function setStatus(btn, tipo) {
     if (hint) hint.style.display = 'none';
   }
 }
+/* Conteúdo padrão da zona de foto da reprovação:
+   - toque principal → abre direto a CÂMERA (capture="environment"), igual "Fotos do veículo"
+   - botão secundário → escolher da GALERIA (input sem capture) */
+function inlinePhotoZoneInner(uid) {
+  return `<label class="ipz-cam" title="Tirar foto agora">📸<span>Toque para foto da reprovação</span>`
+       + `<input type="file" accept="image/*" capture="environment" onchange="onInlinePhotoChange(this,'${uid}')"></label>`
+       + `<label class="ipz-gal" title="Escolher foto existente">🖼️ Escolher da galeria`
+       + `<input type="file" accept="image/*" onchange="onInlinePhotoChange(this,'${uid}')"></label>`;
+}
 function ensureReprovaInline(row) {
   if (!row.querySelector('.reprova-inline')) {
     const div = document.createElement('div');
     div.className = 'reprova-inline';
     // Gera ID único para o photo-zone
     const uid = 'ipz-' + Date.now() + '-' + Math.random().toString(36).slice(2,7);
-    div.innerHTML = `<div class="inline-photo-zone" id="${uid}"><label style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer">📸<span>Toque para foto da reprovação</span><input type="file" accept="image/*" style="display:none" onchange="onInlinePhotoChange(this,'${uid}')"></label></div><textarea class="inline-obs" placeholder="Observação obrigatória..."></textarea>`;
+    div.innerHTML = `<div class="inline-photo-zone" id="${uid}">${inlinePhotoZoneInner(uid)}</div><textarea class="inline-obs" placeholder="Observação obrigatória..."></textarea>`;
     row.appendChild(div);
   }
 }
@@ -4860,7 +4873,8 @@ function resetarInspecaoEmBranco() {
   });
   document.querySelectorAll('.inline-photo-zone').forEach(zone => {
     zone.classList.remove('filled');
-    zone.innerHTML = '📷<span>Adicionar foto</span><input type="file" accept="image/*" capture="environment" style="display:none" onchange="onInlinePhotoChange(this,this.parentElement.id)">';
+    if (!zone.id) zone.id = 'ipz-' + Date.now() + '-' + Math.random().toString(36).slice(2,7);
+    zone.innerHTML = inlinePhotoZoneInner(zone.id);
   });
   ['insp-plate-num','insp-frota-pill','insp-titulo-cavalo','insp-titulo-compressor','insp-titulo-carreta1','insp-titulo-carreta2'].forEach(id => {
     const el = document.getElementById(id);
