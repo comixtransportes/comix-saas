@@ -2104,6 +2104,8 @@ async function loadDataFromCloud() {
       const fs = await loadSZBFromFirestore();
       if (fs && Array.isArray(fs.rows) && fs.rows.length > 0) {
         ldSet(78, 'Enriquecendo registros…');
+        // [VIRADA GLOBAL] base completa (todas as filiais) antes do recorte
+        pdResetMaxEmissao(); pdCaptureMaxEmissao(fs.rows);
         RAW = atlasFilterRowsForScope(fs.rows, 'szb');
         const dzH = document.getElementById('dz-h');
         if (dzH) dzH.textContent = '✓ Nuvem (Firestore) — ' + RAW.length + ' registros';
@@ -2136,6 +2138,8 @@ async function loadDataFromCloud() {
     const data = await resp.json();
     if (data && Array.isArray(data) && data.length > 0) {
       ldSet(85, 'Montando dashboard…');
+      // [VIRADA GLOBAL] base completa (todas as filiais) antes do recorte
+      pdResetMaxEmissao(); pdCaptureMaxEmissao(data);
       RAW = atlasFilterRowsForScope(data, 'szb');
       const dzH = document.getElementById('dz-h');
       if (dzH) dzH.textContent = '✓ Nuvem (legacy) — ' + RAW.length + ' registros';
@@ -2566,11 +2570,61 @@ function pdHojeISO(){const h=new Date();return `${h.getFullYear()}-${String(h.ge
 // inteiro na base no dia seguinte e derrubava a média sem dado novo.
 // Teto = hoje: registro com data futura (erro de digitação) não fecha o dia corrente.
 // Cache invalidado a cada recalc (window._PD_CUTOFF=null).
+//
+// ═══ [VIRADA GLOBAL] O corte é da EMPRESA, não da filial ═══════════════════
+// A base é UMA só: no momento em que qualquer unidade emite o primeiro CTE do
+// dia, o sistema trava a emissão retroativa para TODAS — as outras filiais já
+// estão, obrigatoriamente, no dia novo. Logo o sinal de "virou o dia" é global.
+// Antes o `max` era varrido sobre DATA, que já vem RECORTADO pelo perfil
+// (atlasFilterRowsForScope descarta as linhas das filiais que o usuário não
+// enxerga). Consequência: em 18/08/2026, um usuário PR-only (base termina em
+// 17/08) mostrava 13 dias trabalhados / R$ 959.657,44, enquanto um admin — cuja
+// base já tinha a emissão de 18/08 de outra filial — mostrava 14 dias /
+// R$ 1.048.612,03, na MESMA tela PR e no MESMO snapshot SZB. Mesmo relógio,
+// bases globais diferentes, cortes diferentes.
+// Agora o corte lê _PD_MAXEMISSAO: a última data de emissão da base COMPLETA,
+// capturada ANTES do recorte de perfil. Todos os perfis viram o dia juntos.
+var _PD_MAXEMISSAO = '';
+// Resolve o nome real da coluna (a carga do parent normaliza espaços nas chaves,
+// a do Firestore não — 'Dt.  Emissao' e 'Dt. Emissao' têm que casar igual).
+function pdColKey(row, alvo){
+  if(!row) return null;
+  if(row[alvo] !== undefined) return alvo;
+  for(var k in row){ if(String(k).replace(/\s+/g,' ').trim() === alvo) return k; }
+  return null;
+}
+// Zera a última emissão conhecida — chamado quando chega uma base SZB NOVA e
+// completa, para que uma correção que remova um lançamento com data errada
+// possa puxar o corte de volta.
+function pdResetMaxEmissao(){ _PD_MAXEMISSAO=''; window._PD_CUTOFF=null; }
+// Captura a última data de emissão sobre as linhas BRUTAS (todas as filiais).
+// Precisa ser chamado ANTES de atlasFilterRowsForScope(). CTE cancelado não
+// vira o dia. Mantém o máximo já visto: chamadas com base já recortada (ex.:
+// fullRebuild após uma carga da nuvem) não conseguem baixar o corte.
+function pdCaptureMaxEmissao(rows){
+  if(!Array.isArray(rows) || !rows.length) return _PD_MAXEMISSAO;
+  // Data futura (erro de digitação) NÃO vira o dia: com a virada global, uma
+  // única linha datada de 25/08 fecharia o dia anterior para as três filiais.
+  var hj=pdHojeISO(), ISO=/^\d{4}-\d{2}-\d{2}$/;
+  var kEmi=null, kCan=null, achouKey=false, mx=_PD_MAXEMISSAO||'';
+  for(var i=0;i<rows.length;i++){
+    var r=rows[i]; if(!r) continue;
+    if(!achouKey){ kEmi=pdColKey(r,'Dt. Emissao'); kCan=pdColKey(r,'Dt Cancel'); if(kEmi) achouKey=true; else continue; }
+    if(kCan && r[kCan]) continue;
+    var d=r[kEmi]; if(!d) continue;
+    d=String(d).slice(0,10);
+    if(ISO.test(d) && d<=hj && d>mx) mx=d;
+  }
+  if(mx!==_PD_MAXEMISSAO){ _PD_MAXEMISSAO=mx; window._PD_CUTOFF=null; }
+  return _PD_MAXEMISSAO;
+}
 function pdCutoffISO(){
   if(window._PD_CUTOFF) return window._PD_CUTOFF;
   const hj=pdHojeISO(), mesAtual=hj.slice(0,7);
-  let max='';
-  (DATA||[]).forEach(r=>{ if(r.data && r.data.slice(0,7)===mesAtual && r.data>max) max=r.data; });
+  // [VIRADA GLOBAL] última emissão da base INTEIRA (sem recorte de perfil).
+  let max=(_PD_MAXEMISSAO && _PD_MAXEMISSAO.slice(0,7)===mesAtual)?_PD_MAXEMISSAO:'';
+  // Fallback: base sem captura (arquivo local antigo, demo) — regra anterior.
+  if(!max) (DATA||[]).forEach(r=>{ if(r.data && r.data.slice(0,7)===mesAtual && r.data>max) max=r.data; });
   const cut=(max && max<hj)?max:hj;
   window._PD_CUTOFF=cut;
   return cut;
@@ -3143,6 +3197,10 @@ async function buildDash(){
 function fullRebuild(){
   var __t0 = performance.now();
   configureUnitSelectForScope();
+  // [VIRADA GLOBAL] Captura a última emissão ANTES do recorte de perfil. Cobre
+  // as cargas por arquivo local / demo, onde RAW ainda está íntegro. Nas cargas
+  // da nuvem a captura já ocorreu no loader e aqui vira no-op.
+  pdCaptureMaxEmissao(RAW);
   DATA=enrich(atlasFilterRowsForScope(RAW, 'szb'));
   _clearFopCache();
   const meses=[...new Set(DATA.map(r=>r.mes))].filter(Boolean).sort();
@@ -3719,7 +3777,17 @@ function buildVG(uid, mes){
   // Cards — [REGRA SZB] base fechada (sem hoje); "Necessário/Dia" divide o gap pelo
   // calendário útil restante a partir de HOJE (inclusive).
   const fatN=diasR>0?(paFat-fatFech)/diasR:0;
-  document.getElementById('pv-dias').textContent=`${diasTrabFech} / ${diasOp}`;
+  const _elDias=document.getElementById('pv-dias');
+  _elDias.textContent=`${diasTrabFech} / ${diasOp}`;
+  // [VIRADA GLOBAL] Transparência do corte no próprio card: qual dia está em
+  // aberto e qual emissão virou o dia. Duas telas divergindo passam a ser
+  // diagnosticáveis na hora, sem abrir o console.
+  const _br=s=>s?`${s.slice(8,10)}/${s.slice(5,7)}`:'—';
+  const _cardDias=(_elDias.closest && _elDias.closest('.pc'))||_elDias;
+  _cardDias.title=`Base fechada: dias com registro ANTES de ${_br(cutISO)}.`
+    +` Dia em aberto: ${_br(cutISO)} (pode estar parcial).`
+    +(_PD_MAXEMISSAO?` Última emissão da base (todas as filiais): ${_br(_PD_MAXEMISSAO)}.`:'')
+    +` ${diasOp} dias operacionais no mês.`;
   document.getElementById('pv-proj').style.color=proj>=paFat?'var(--gn)':'var(--am)';
   document.getElementById('pv-proj').textContent=R(proj);
   document.getElementById('ps-proj').textContent=(proj>=paFat?'✓ Supera':'⚠ Abaixo')+' PA | '+Pct(ppj);
@@ -5872,6 +5940,9 @@ function applyAtlasSZB(parentData, origem) {
     return true;
   }
   var rows = normalizeAtlasSZBRows(parentData.__atlasSharedRef ? parentData.rows.slice() : parentData.rows);
+  // [VIRADA GLOBAL] A última emissão tem que sair da base COMPLETA — depois da
+  // linha de baixo as filiais fora do perfil já foram descartadas.
+  pdResetMaxEmissao(); pdCaptureMaxEmissao(rows);
   rows = atlasFilterRowsForScope(rows, 'szb');
   if (!rows.length) return false;
 
