@@ -949,7 +949,7 @@ html{ -webkit-text-size-adjust:100%; }
       <div class="pane-scroll">
         <div class="charts-row">
           <div class="cc"><div class="ct">Top 10 — Faturamento (Consolidado)</div><div style="height:180px"><canvas id="c-ccf"></canvas></div></div>
-          <div class="cc"><div class="ct" id="ct-hist-cc">Faturamento (R$) Proj. Atual Vs Faturamento Real. Mês Anterior</div><div style="height:180px"><canvas id="c-ccb"></canvas></div></div>
+          <div class="cc"><div class="ct" id="ct-hist-cc">Histórico de Faturamento — selecione um cliente</div><div style="height:180px"><canvas id="c-ccb"></canvas></div></div>
         </div>
         <div class="tw">
           <div class="th3"><div><span class="tt">Clientes</span><span class="tc" id="cnt-cc"></span></div><input class="ts" type="text" placeholder="Buscar remetente…" oninput="filt('tbl-cc',this.value)"></div>
@@ -1586,6 +1586,23 @@ function calcVpkRota(r){
 // Aplica CPK/VPK/Markup em uma lista de linhas agregadas (aba Tarifa e Rotas).
 function aplicaCpkVpk(rows){
   (rows || []).forEach(r => {
+    // [UNIFICA FILIAIS] Linha que juntou filiais: km é a SOMA dos km de cada
+    // filial; o CPK (que é por filial) vira a média ponderada pelo km de cada
+    // uma — nunca o CPK de uma filial aplicado ao km das outras.
+    if(r && r._mergeParts && r._mergeParts.length){
+      let km=0, cpkNum=0, cpkKm=0;
+      r._mergeParts.forEach(p=>{
+        const cp=calcVpkRota(p);
+        km += cp.km;
+        if(cp.cpk>0 && cp.km>0){ cpkNum += cp.cpk*cp.km; cpkKm += cp.km; }
+      });
+      const fat=+r.f||0;
+      r.kmRod   = km;
+      r.vpkRota = (km>0 && fat>0) ? fat/km : null;
+      r.cpkFil  = (cpkKm>0) ? cpkNum/cpkKm : null;
+      r.mkpRota = (r.vpkRota!=null && r.cpkFil>0) ? (r.vpkRota/r.cpkFil-1)*100 : null;
+      return;
+    }
     const c = calcVpkRota(r);
     r.kmRod  = c.km;
     r.vpkRota = c.vpk;
@@ -1674,6 +1691,66 @@ function pdClientKeyFromBase(b){
   return [normOpKey(b.op),normRouteText(b.rem),normRouteText(b.dst),normRouteText(b.frt)].join('§');
 }
 
+// ═══════════════════════════════════════════════════════
+// [UNIFICA FILIAIS] Visão "Todas" da aba Rotas
+// ═══════════════════════════════════════════════════════
+// Na visão consolidada ("Todas") a mesma rota operada por mais de uma filial
+// aparecia como N linhas idênticas (só a coluna Filial mudava). Aqui essas
+// linhas viram UMA só quando coincidem nº da rota + remetente + destinatário +
+// local de coleta + local de entrega. A linha unificada exibe "III" na coluna
+// Filial. Nada muda quando uma filial específica está selecionada, nem nas
+// demais abas (Tarifa continua separada por filial).
+function pdPhysicalRouteGroupKeyNoOp(r){
+  return [
+    normRouteText(r&&r.r_nome),
+    normRouteText(r&&r.d_nome),
+    normRouteText(r&&r.frete),
+    pdPhysicalRouteKey(r)
+  ].join('§');
+}
+function pdClientGroupKeyNoOp(r){
+  return [normRouteText(r&&r.r_nome),normRouteText(r&&r.d_nome),normRouteText(r&&r.frete)].join('§');
+}
+// Chave de unificação pedida: nº rota + remetente + destinatário + coleta + entrega.
+function pdRouteMergeKey(row){
+  return [
+    normRotaKey(row&&row.rota),
+    normRouteText(row&&row.rem),
+    normRouteText(row&&row.dst),
+    normRouteText(row&&row.orig), normUfKey(row&&row.ufo),
+    normRouteText(row&&row.dest), normUfKey(row&&row.ufd)
+  ].join('§');
+}
+// Junta as linhas de filiais diferentes que compartilham a chave acima.
+// Os agregados (viagens/prod/fat/tarifa/projeção) são recalculados a partir dos
+// registros originais somados — não é média de médias.
+function pdMergeRouteRowsAcrossOps(rows, mes, uid){
+  const groups=new Map();
+  (rows||[]).forEach(r=>{
+    const k=pdRouteMergeKey(r);
+    if(!groups.has(k)) groups.set(k,[]);
+    groups.get(k).push(r);
+  });
+  const out=[];
+  groups.forEach(list=>{
+    if(list.length===1){ out.push(list[0]); return; }
+    const recs=[].concat.apply([], list.map(r=>r._recs||[]));
+    const merged=pdRealRouteRow(recs, pdRouteBase(recs), mes, uid);
+    // Identidade exibida: preserva o que já era mostrado nas linhas de origem.
+    merged.rota = list.map(r=>r.rota).find(v=>String(v||'').trim()) || '';
+    const fretes=[...new Set(list.map(r=>String(r.frt||'').trim()).filter(Boolean))];
+    if(fretes.length) merged.frt=fretes.join('/');
+    merged._recs       = recs;
+    merged._mergeParts = list;                                    // p/ CPK/VPK ponderados
+    merged._multiOp    = true;                                    // coluna Filial = "III"
+    merged._ops        = [...new Set(list.map(r=>normOpKey(r.op)).filter(Boolean))];
+    merged._fretes     = fretes;
+    merged._placas     = pdPlacasDoGrupo(recs);
+    out.push(merged);
+  });
+  return out.sort((a,b)=>b.f-a.f);
+}
+
 // Monta as linhas das abas Rotas/Tarifa a partir dos registros do mês:
 //   • viagens reais → agrupadas pela rota física (compõem o VPK);
 //   • cartas complementares (FSC/FSP/FPR-0000) → penduradas como linha CC embaixo da
@@ -1686,14 +1763,31 @@ function pdBuildRouteView(d, mes, uid, opts){
   const realRecs=[], complRecs=[];
   (d||[]).forEach(r => (isCartaFreteComplementar(r) ? complRecs : realRecs).push(r));
 
-  const realRows=Object.values(grp(realRecs,pdPhysicalRouteGroupKey)).map(arr=>{
+  // [UNIFICA FILIAIS] só na visão "Todas" e quando o chamador pede (aba Rotas).
+  const mergeOps = !!opts.mergeOps && uid==='all';
+  const physKeyOf   = mergeOps ? pdPhysicalRouteGroupKeyNoOp : pdPhysicalRouteGroupKey;
+  const clientKeyOf = mergeOps ? pdClientGroupKeyNoOp        : pdClientGroupKey;
+
+  let realRows=Object.values(grp(realRecs,pdPhysicalRouteGroupKey)).map(arr=>{
     const base=pdRouteBase(arr);
     const row=pdRealRouteRow(arr,base,mes,uid);
     if(opts.freteAtual) row.freteAtual=taFreteAtual(arr);
+    row._recs=arr;
     row._clientKey=pdClientKeyFromBase(base);
     row._physKey=pdPhysicalRouteGroupKey(arr[0]);
     return row;
   }).sort((a,b)=>b.f-a.f);
+
+  if(mergeOps){
+    realRows=pdMergeRouteRowsAcrossOps(realRows,mes,uid);
+    // Rechaveia sem a filial para que as cartas complementares de QUALQUER filial
+    // ainda encontrem a linha anfitriã unificada.
+    realRows.forEach(r=>{
+      const rec=(r._recs&&r._recs[0])||null;
+      if(rec){ r._physKey=physKeyOf(rec); r._clientKey=clientKeyOf(rec); }
+      if(opts.freteAtual && r._mergeParts) r.freteAtual=taFreteAtual(r._recs||[]);
+    });
+  }
 
   // Índices p/ achar a rota anfitriã de cada carta complementar.
   const realByPhys={};    // rota física → linha real
@@ -1706,7 +1800,7 @@ function pdBuildRouteView(d, mes, uid, opts){
   // Cada carta complementar sob sua anfitriã (física primeiro, cliente como fallback).
   const complByHost=new Map(); const orphanRecs=[];
   complRecs.forEach(rec=>{
-    const host = realByPhys[pdPhysicalRouteGroupKey(rec)] || hostByClient[pdClientGroupKey(rec)];
+    const host = realByPhys[physKeyOf(rec)] || hostByClient[clientKeyOf(rec)];
     if(host){ if(!complByHost.has(host)) complByHost.set(host,[]); complByHost.get(host).push(rec); }
     else orphanRecs.push(rec);
   });
@@ -1716,11 +1810,12 @@ function pdBuildRouteView(d, mes, uid, opts){
   complByHost.forEach((recs,host)=>{
     const cc=pdCcRouteRow(recs,pdRouteBase(recs),host,mes,uid);
     Object.assign(cc,{op:host.op,rem:host.rem,dst:host.dst,frt:host.frt,orig:host.orig,ufo:host.ufo,dest:host.dest,ufd:host.ufd,codRegOrig:host.codRegOrig,codRegDest:host.codRegDest,rota:host.rota});
+    cc._multiOp=!!host._multiOp; cc._ops=host._ops; cc._fretes=host._fretes;
     ccByHost.set(host,cc);
   });
 
   // Cartas órfãs (sem rota real do cliente) → linha CC solta por cliente.
-  const orphanRows=Object.values(grp(orphanRecs,pdClientGroupKey)).map(arr=>pdCcRouteRow(arr,pdRouteBase(arr),null,mes,uid)).sort((a,b)=>b.f-a.f);
+  const orphanRows=Object.values(grp(orphanRecs,clientKeyOf)).map(arr=>pdCcRouteRow(arr,pdRouteBase(arr),null,mes,uid)).sort((a,b)=>b.f-a.f);
 
   const rows=realRows;   // gráfico, contagem, %Fat
   const view=[];
@@ -3958,7 +4053,8 @@ function buildCl(uid,mes){
   // Operações permanecem separadas. Dentro da mesma filial, a linha é consolidada
   // pela identidade física do trajeto, mesmo que o código da SZB tenha mudado,
   // esteja vazio ou possua zeros/formatação diferentes.
-  const {rows, view}=pdBuildRouteView(d, mes, uid, {});   // rows = reais; view = reais + CC por cliente
+  // [UNIFICA FILIAIS] mergeOps só tem efeito quando uid==='all' (visão "Todas").
+  const {rows, view}=pdBuildRouteView(d, mes, uid, {mergeOps:true});   // rows = reais; view = reais + CC por cliente
   aplicaCpkVpk(rows);   // VPK só nas linhas reais (CC já vem sem VPK)
   document.getElementById('cnt-cl').textContent=' — '+rows.length+' rotas';
   const t10=rows.slice(0,10);
@@ -3966,7 +4062,9 @@ function buildCl(uid,mes){
   mkC('c-cm','bar',[],[{data:[],backgroundColor:'rgba(26,86,219,.5)',borderRadius:2}]);
   const ft=rows.reduce((a,r)=>a+r.f,0);
   bldT('tbl-cl',view,[
-    {h:'Filial',          fn:r=>escHtml(pdBranchLabel(r.op)||'—')},
+    {h:'Filial',          fn:r=>r._multiOp
+        ? `<span title="Rota unificada — filiais: ${escHtml((r._ops||[]).map(pdBranchLabel).join(', ')||'—')}">III</span>`
+        : escHtml(pdBranchLabel(r.op)||'—')},
     {h:'Rota',            fn:r=>escHtml(r.rota||'—')},
     {h:'Remetente',       fn:r=>`<span class="nm">${r.rem}</span>`},
     {h:'Destinatário',    fn:r=>`<span class="nm">${r.dst}</span>`},
@@ -3999,22 +4097,29 @@ function addClRowClick(){
       const idx=Number(tr.dataset.ri);
       const row=(tbl&&tbl._view&&tbl._view[idx])?tbl._view[idx]:null;
       if(row){
-        showCliHist(row.op||'',row.rota||'',row.rem||'',row.dst||'',row.frt||'',row.orig||'',row.ufo||'',row.dest||'',row.ufd||'',row.codRegOrig||'',row.codRegDest||'');
+        // [UNIFICA FILIAIS] Linha unificada → histórico sem filtro de filial e
+        // aceitando qualquer um dos fretes que a compõem.
+        showCliHist(row._multiOp?'':(row.op||''),row.rota||'',row.rem||'',row.dst||'',row.frt||'',row.orig||'',row.ufo||'',row.dest||'',row.ufd||'',row.codRegOrig||'',row.codRegDest||'',row._multiOp?(row._fretes||[]):null);
       }
     });
   });
 }
 
-function showCliHist(op, rota, remNome, dstNome, frt, orig, ufo, dest, ufd, codRegOrig, codRegDest){
+function showCliHist(op, rota, remNome, dstNome, frt, orig, ufo, dest, ufd, codRegOrig, codRegDest, fretesAceitos){
   // O histórico acompanha a rota física dentro da filial, não o código bruto.
   // Assim mudanças 000011 → 000090 ou código vazio não quebram a série.
   const alvo={orig,ufo,dest,ufd,codRegOrig,codRegDest};
+  // Linha unificada ("III"): o frete exibido pode ser "CIF/FOB"; nesse caso o
+  // filtro aceita qualquer um dos fretes que compõem a linha.
+  const _fretesOk=(Array.isArray(fretesAceitos)&&fretesAceitos.length)
+    ? fretesAceitos.map(normRouteText)
+    : [normRouteText(frt)];
   const allRota = filterByOp(_clUID).filter(r=>
     !isCartaFreteComplementar(r) &&
     (!op || normOpKey(r.op)===normOpKey(op)) &&
     normRouteText(r.d_nome)===normRouteText(dstNome) &&
     normRouteText(r.r_nome)===normRouteText(remNome) &&
-    normRouteText(r.frete)===normRouteText(frt) &&
+    _fretesOk.indexOf(normRouteText(r.frete))>=0 &&
     pdSamePhysicalRoute(r,alvo)
   );
   const mesesHist = [...new Set(allRota.map(r=>r.mes))].filter(Boolean).sort();
@@ -4488,53 +4593,12 @@ function _buildCcTable(uid, mes, diaSel) {
     [{data:t10cc.map(r=>r.f),backgroundColor:t10cc.map(r=>r.frt==='CIF'?'rgba(26,86,219,.65)':'rgba(234,88,12,.65)'),borderRadius:2}],
     {ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0}});
 
-  // ── Linha Dupla: Faturamento Projetado Atual vs Faturamento Real Mês Anterior ──
-  const gRemAtual=grp(d,r=>r.cli_dev||r.r_nome);
-  const _hjISO2 = pdCutoffISO();
-  const top10Atual=Object.entries(gRemAtual).map(([rem,arr])=>{
-    const fatReal=arr.reduce((a,r)=>a+r.fat,0);
-    const prodReal=arr.reduce((a,r)=>a+(r.prod||0),0);
-    const fatRealF=arr.filter(r=>r.data && r.data<_hjISO2).reduce((a,r)=>a+r.fat,0);
-    const prodRealF=arr.filter(r=>r.data && r.data<_hjISO2).reduce((a,r)=>a+(r.prod||0),0);
-    const {fatProj}=calcProj(mes,fatReal,prodReal,fatRealF,prodRealF,uid,arr);
-    return {rem,f:fatReal,fatProj};
-  }).sort((a,b)=>b.f-a.f).slice(0,10);
-  // Mês anterior
-  const [_mesAno,_mesN]=mes.split('-').map(Number);
-  const _mesAntN=_mesN===1?12:_mesN-1;
-  const _mesAntAno=_mesN===1?_mesAno-1:_mesAno;
-  const _mesAntStr=`${_mesAntAno}-${String(_mesAntN).padStart(2,'0')}`;
-  const dAnt=filterByOp(uid).filter(r=>r.mes===_mesAntStr);
-  const gRemAnt=grp(dAnt,r=>r.cli_dev||r.r_nome);
-  const dupLabels=top10Atual.map(r=>r.rem.length>16?r.rem.slice(0,15)+'…':r.rem);
-  const dupAtual=top10Atual.map(r=>r.fatProj); // Faturamento PROJETADO mês atual
-  const dupAnt=top10Atual.map(r=>{ const arr=gRemAnt[r.rem]||[]; return arr.reduce((a,x)=>a+x.fat,0); }); // Real mês anterior
-
-  if(CHS['c-ccb']) CHS['c-ccb'].destroy();
-  const elP=document.getElementById('c-ccb'); if(elP){
-    CHS['c-ccb']=new Chart(elP,{
-      type:'line',
-      data:{
-        labels:dupLabels,
-        datasets:[
-          {label:'Fat. Proj. Atual',data:dupAtual,borderColor:'#1a56db',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#1a56db',tension:.3},
-          {label:'Fat. Real Mês Ant.',data:dupAnt,borderColor:'#9ca3af',backgroundColor:'transparent',borderWidth:2,pointRadius:3,pointBackgroundColor:'#9ca3af',tension:.3,borderDash:[4,3]},
-        ]
-      },
-      options:{
-        responsive:true,maintainAspectRatio:false,
-        plugins:{
-          legend:{display:true,labels:{color:CT,font:{size:10,family:'IBM Plex Sans,sans-serif'}}},
-          datalabels:{display:false},
-          tooltip:{...TTP,callbacks:{label:ctx=>`${ctx.dataset.label}: R$\u00a0${Math.round(ctx.parsed.y||0).toLocaleString('pt-BR')}`}}
-        },
-        scales:{
-          x:{ticks:{color:CT,font:{size:9},maxRotation:45},grid:{color:CG,lineWidth:.5}},
-          y:{ticks:{color:CT,font:{size:9},callback:v=>'R$'+N(v)},grid:{color:CG,lineWidth:.5},beginAtZero:true}
-        }
-      }
-    });
-  }
+  // ── Histórico de Faturamento do cliente (mesmo gráfico da aba Rotas) ──
+  // Começa vazio; ao clicar numa linha da tabela, showCcHist() desenha os
+  // últimos 12 meses do cliente selecionado.
+  mkC('c-ccb','bar',[],[{data:[],backgroundColor:'rgba(26,86,219,.5)',borderRadius:2}]);
+  const _ctCc=document.getElementById('ct-hist-cc');
+  if(_ctCc) _ctCc.textContent='Histórico de Faturamento — selecione um cliente';
 
   // Label do dia selecionado para o cabeçalho
   const diaLbl = diaSel ? (() => {
@@ -4573,7 +4637,7 @@ function bldTcc(id, data, diaSel, diaLbl, ft) {
   ];
 
   // Guardar para sort
-  t._d = data; t._c = cols; t._diaSel = diaSel; t._diaLbl = diaLbl; t._ft = ft;
+  t._d = data; t._c = cols; t._diaSel = diaSel; t._diaLbl = diaLbl; t._ft = ft; t._view = data;
 
   const thHtml = cols.map((c,i) => {
     if(c.dia){
@@ -4585,11 +4649,12 @@ function bldTcc(id, data, diaSel, diaLbl, ft) {
     return `<th onclick="srtCc(${i})">${c.h}</th>`;
   }).join('');
 
-  const tbodyHtml = data.map(r =>
-    `<tr>${cols.map(c=>`<td class="${c.n?'n':'nm'}${c.dia?' dia-cell':''}">${c.fn(r)}</td>`).join('')}</tr>`
+  const tbodyHtml = data.map((r,idx) =>
+    `<tr data-ri="${idx}">${cols.map(c=>`<td class="${c.n?'n':'nm'}${c.dia?' dia-cell':''}">${c.fn(r)}</td>`).join('')}</tr>`
   ).join('');
 
   t.innerHTML = `<thead><tr>${thHtml}</tr></thead><tbody>${tbodyHtml}</tbody>`;
+  addCcRowClick();
 }
 
 // Sort para a tabela CC (usa bldTcc em vez de bldT)
@@ -4606,7 +4671,75 @@ function srtCc(ci) {
     return asc?va.localeCompare(vb,'pt'):vb.localeCompare(va,'pt');
   });
   t.querySelectorAll('th').forEach((th,i)=>{ th.className = i===ci?(asc?'asc col-dia':'desc col-dia'):(t._c[i].dia?'col-dia':''); });
-  t.querySelector('tbody').outerHTML = `<tbody>${sd.map(r=>`<tr>${t._c.map(c=>`<td class="${c.n?'n':'nm'}${c.dia?' dia-cell':''}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  t._view = sd;
+  t.querySelector('tbody').outerHTML = `<tbody>${sd.map((r,idx)=>`<tr data-ri="${idx}">${t._c.map(c=>`<td class="${c.n?'n':'nm'}${c.dia?' dia-cell':''}">${c.fn(r)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  addCcRowClick();
+}
+
+// ═══════════════════════════════════════════════════════
+// HISTÓRICO DE FATURAMENTO DO CLIENTE (aba Clientes)
+// ═══════════════════════════════════════════════════════
+// Espelho exato do gráfico "Histórico" da aba Rotas: clique na linha da tabela
+// → últimos 12 meses de faturamento do cliente. O mês corrente é exibido pelo
+// PROJETADO (mesma calcProj das demais abas) e destacado em azul; os meses
+// anteriores são o realizado fechado, em laranja.
+function addCcRowClick(){
+  const tbl=document.getElementById('tbl-cc');
+  const tbody=document.querySelector('#tbl-cc tbody');
+  if(!tbody) return;
+  tbody.querySelectorAll('tr').forEach(tr=>{
+    tr.style.cursor='pointer';
+    tr.addEventListener('click',()=>{
+      tbody.querySelectorAll('tr').forEach(r=>r.style.background='');
+      tr.style.background='#dbeafe';
+      const idx=Number(tr.dataset.ri);
+      const row=(tbl&&tbl._view&&tbl._view[idx])?tbl._view[idx]:null;
+      if(row) showCcHist(row.rem||'',row.frt||'');
+    });
+  });
+}
+
+function showCcHist(remNome, frt){
+  // Mesmo agrupamento da tabela: Cliente Dev (fallback remetente) + Frete.
+  const alvoRem=normRouteText(remNome), alvoFrt=normRouteText(frt);
+  const allCli = filterByOp(_ccUID).filter(r=>
+    normRouteText(r.cli_dev||r.r_nome)===alvoRem &&
+    normRouteText(r.frete)===alvoFrt
+  );
+  const mesesHist = [...new Set(allCli.map(r=>r.mes))].filter(Boolean).sort();
+  const ult12 = mesesHist.slice(-12);
+
+  const _hoje = new Date();
+  const mesAtual = `${_hoje.getFullYear()}-${String(_hoje.getMonth()+1).padStart(2,'0')}`;
+  const _hjISO = pdCutoffISO();
+
+  const fats = ult12.map(m=>{
+    const rowsM   = allCli.filter(r=>r.mes===m);
+    const fatReal = rowsM.reduce((a,r)=>a+r.fat,0);
+    if(m === mesAtual){
+      const prodReal  = rowsM.reduce((a,r)=>a+(r.peso_t||0),0);
+      const fechados  = rowsM.filter(r=>r.data && r.data<_hjISO);
+      const fatRealF  = fechados.reduce((a,r)=>a+r.fat,0);
+      const prodRealF = fechados.reduce((a,r)=>a+(r.peso_t||0),0);
+      const {fatProj} = calcProj(m, fatReal, prodReal, fatRealF, prodRealF, _ccUID, rowsM);
+      return fatProj;
+    }
+    return fatReal;
+  });
+
+  const bgColors = ult12.map(m=> m===mesAtual ? 'rgba(26,86,219,.75)' : 'rgba(234,88,12,.6)');
+  const bdColors = ult12.map(m=> m===mesAtual ? 'rgba(26,86,219,1)'   : 'rgba(234,88,12,.9)');
+  const lb = ult12.map(m=>{ const[ano,mo]=m.split('-'); return `${mo}/${ano.slice(2)}`; });
+
+  const ct = document.getElementById('ct-hist-cc');
+  if(ct) ct.textContent = `Histórico — ${String(remNome).slice(0,30)} (${frt})`;
+  mkC('c-ccb','bar',lb,[{
+    data:fats,
+    backgroundColor:bgColors,
+    borderColor:bdColors,
+    borderWidth:1,
+    borderRadius:2
+  }],{ytk:{callback:v=>'R$'+N(v)},y:{beginAtZero:true,min:0}});
 }
 
 // ── CALENDÁRIO DROPDOWN ──
