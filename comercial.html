@@ -1287,6 +1287,7 @@ details.cfg-det>.card{margin-top:10px}
   <span class="tabs-r">
     <button class="btn sm" id="rclBtnPrem" title="Premissas do resultado: impostos, comissão, distância, fonte de cada linha de custo e modelo de consumo">⚙ Premissas do resultado</button>
     <button class="btn sm" id="rclBtnDiag" title="Aderência do modelo de consumo e conciliação com o realizado do Mapinha e do CPK">🔎 Aderência e realizado</button>
+    <button class="btn sm" id="rclBtnHere" title="Calcula na HERE as rotas da janela que ainda não têm percurso medido, com o pedágio real praça a praça e os postos do trecho">🗺 Atualizar rotas na HERE</button>
     <button class="btn sm" id="rclBtnRecalc" title="Refaz o cálculo com as premissas atuais">↻ Recalcular</button>
     <button class="btn sm" id="rclBtnExport" title="Exportação executiva (.xlsx)">⬇ Excel</button>
   </span>
@@ -9118,6 +9119,11 @@ async function rtHereRota(o,d,perfil,carregado){
   if(!rt||!rt.sections||!rt.sections.length) throw new Error('sem rota para este par O/D');
 
   let distM=0, durS=0, baseS=0, tipS=0, temTip=false, pontos=[], temElev=false, notices=[], pedagio=0, nPracas=0;
+  /* Seções cruas (pontos + spans) do jeito que os matchers locais consomem.
+     O cache continua guardando SÓ números derivados — a geometria vive o
+     tempo desta chamada, apenas para o matcher de praças e o de postos
+     ShellBox rodarem antes de a rota ser gravada. */
+  const secoes=[];
   rt.sections.forEach(sec=>{
     const s=sec.summary||{};
     distM+=s.length||0; durS+=s.duration||0; baseS+=(s.baseDuration!=null?s.baseDuration:s.duration)||0;
@@ -9126,6 +9132,7 @@ async function rtHereRota(o,d,perfil,carregado){
       try{ const pts=decodeFlexPolyline(sec.polyline);
         if(pts.length && pts[0].length>2) temElev=true;
         pontos=pontos.concat(pts);
+        secoes.push({pontos:pts, spans:Array.isArray(sec.spans)?sec.spans:[]});
       }catch(e){ console.warn('[Rotas] geometria:',e.message); }
     }
     (sec.notices||[]).forEach(n=>notices.push({code:n.code||n.title||'aviso', severity:n.severity||''}));
@@ -9137,8 +9144,8 @@ async function rtHereRota(o,d,perfil,carregado){
 
   return {
     km:distM/1000, min:durS/60, minBase:baseS/60, minTipico:temTip?tipS/60:null,
-    pontos, temElev, notices,
-    pedagio: nPracas?pedagio:null, nPracas
+    pontos, secoes, temElev, notices,
+    pedagio: nPracas?pedagio:null, nPracas, pedagioFonte: nPracas?'here':null
   };
 }
 
@@ -9286,26 +9293,97 @@ function rtRestricoes(notices){
 }
 
 /* ══ Simulação de UMA rota (ida carregada + volta vazia) ══ */
+/* ══ PEDÁGIO REAL DA ROTA CALCULADA ═══════════════════════════════════════
+   Regra do módulo (ago/2026): o pedágio de uma rota é MEDIDO sobre o
+   percurso que a HERE calculou — nunca uma média de frota, nunca uma
+   premissa digitada.
+
+   A HERE devolve `tolls` quando a conta tem o entitlement; a nossa não tem,
+   e por isso o campo vinha vazio e a linha caía no R$/km do Mapinha. O
+   Simulador já resolvia isso desde a v4 com o matcher local: praça da base
+   ANTT dentro do raio da geometria, tarifa POR EIXO × eixos do conjunto.
+   Aqui é exatamente o mesmo motor (matchPracas + calcularPedagioLocal), só
+   que rodando dentro da simulação em lote — assim o número medido nasce
+   junto com a rota e fica salvo, do mesmo jeito que fazemos no Simulador. */
+function rtPedagioDoTrecho(trecho, eixos){
+  if(!trecho) return null;
+  if(trecho.pedagio!=null)
+    return { valor:+Number(trecho.pedagio).toFixed(2), fonte:'here',
+             nPracas:trecho.nPracas||0, pracas:null, eixos };
+  try{
+    if(!Array.isArray(trecho.secoes) || !trecho.secoes.length) return null;
+    if(typeof matchPracas!=='function' || !Array.isArray(ST.pracas) || !ST.pracas.length) return null;
+    const hits=matchPracas(trecho.secoes, ST.pracas, PRACAS_RAIO_M);
+    if(!hits.length) return null;
+    const total=calcularPedagioLocal(hits, eixos);
+    if(!(total>0)) return null;
+    return { valor:+total.toFixed(2), fonte:'pracas', nPracas:hits.length, eixos,
+             /* só o resumo entra no cache: nome, rodovia e tarifa por eixo.
+                Geometria continua fora — o cache é de números derivados. */
+             pracas:hits.slice(0,40).map(h=>({ nome:String(h.nome||'Praça').slice(0,48),
+                                               rod:String(h.rodovia||'').slice(0,16),
+                                               te:+(Number(h.tarifaEixo)||0).toFixed(2),
+                                               v:+(Number(h._valor)||0).toFixed(2) })) };
+  }catch(e){ console.warn('[Rotas] pedágio local:',e&&e.message); return null; }
+}
+
+/* ══ POSTOS SHELLBOX NO TRECHO ════════════════════════════════════════════
+   Mesma ideia: a geometria só existe durante a chamada, então o casamento
+   com os postos da base ShellBox roda AQUI e o que fica gravado é a lista
+   de chaves de posto. Depois, com a rota já salva, o custo por viagem
+   consegue dizer o R$/l do posto daquela rota sem gastar HERE de novo. */
+function rtPostosDoTrecho(trecho){
+  try{
+    if(!trecho || !Array.isArray(trecho.secoes) || !trecho.secoes.length) return null;
+    if(typeof sbMatchPostos!=='function') return null;
+    if(typeof SB==='undefined' || !Array.isArray(SB.postos) || !SB.postos.length) return null;
+    const hits=sbMatchPostos(trecho.secoes, SB_RAIO_M);
+    return hits.slice(0,60).map(p=>p.chave).filter(Boolean);
+  }catch(e){ console.warn('[Rotas] postos na rota:',e&&e.message); return null; }
+}
+
+/* Versão do registro de cache. Subiu para 3 quando o pedágio medido e os
+   postos da rota passaram a ser gravados junto: entrada v<3 tem distância e
+   relevo válidos, mas não tem esses dois — e é por isso que ela volta para a
+   fila em vez de ser considerada pronta. */
+const RT_HERE_VER = 3;
+function rtHereIncompleta(c){
+  if(!c || c.erro || c.obsoleto) return true;
+  if(c.perfil!==RT.perfilHash) return true;
+  return !(Number(c.v)>=RT_HERE_VER);
+}
+
 async function rtSimularRota(r){
   const perfil=rtPerfilAtivo();
+  const eixos=Math.max(2, Math.round(Number(perfil.eixos)||5));
   const {o,d}=await rtCoordRota(r);
   const ida=await rtHereRota(o,d,perfil,true);
   const volta=await rtHereRota(d,o,perfil,false);
+  const pedI=rtPedagioDoTrecho(ida, eixos), pedV=rtPedagioDoTrecho(volta, eixos);
+  /* Postos: a ida manda (é o trecho carregado, onde o caminhão abastece);
+     a volta só entra quando a ida não achou nenhum. */
+  let postos=rtPostosDoTrecho(ida);
+  if(postos && !postos.length){ const pv=rtPostosDoTrecho(volta); if(pv&&pv.length) postos=pv; }
   const reg={
-    v:2, k:r.k3, op:r.op, cod:r.codigoRaw, perfil:RT.perfilHash, ts:agoraISO(),
+    v:RT_HERE_VER, k:r.k3, op:r.op, cod:r.codigoRaw, perfil:RT.perfilHash, ts:agoraISO(),
     por:ATLAS_CURRENT_USER.email||'—',
-    departure:rtDepartureISO(perfil.departureHora),
+    departure:rtDepartureISO(perfil.departureHora), eixos,
+    postos: postos||null, postosTs: postos?agoraISO():null,
     geo:{oLat:+o.lat.toFixed(5),oLng:+o.lng.toFixed(5),oFonte:o.fonte||'here',
          dLat:+d.lat.toFixed(5),dLng:+d.lng.toFixed(5),dFonte:d.fonte||'here'},
     ida:{ km:+ida.km.toFixed(2), min:Math.round(ida.min), minBase:Math.round(ida.minBase),
           minTipico: ida.minTipico!=null?Math.round(ida.minTipico):null,
-          pedagio: ida.pedagio, temElev: ida.temElev,
+          pedagio: pedI?pedI.valor:null, pedagioFonte: pedI?pedI.fonte:null,
+          nPracas: pedI?pedI.nPracas:0, pracas: pedI?pedI.pracas:null,
+          temElev: ida.temElev,
           topo: ida.temElev?rtTopografia(ida.pontos):null,
           sinu: rtSinuosidade(ida.pontos, ida.km),
           restr: rtRestricoes(ida.notices) },
     volta:{ km:+volta.km.toFixed(2), min:Math.round(volta.min), minBase:Math.round(volta.minBase),
           minTipico: volta.minTipico!=null?Math.round(volta.minTipico):null,
-          pedagio: volta.pedagio, temElev: volta.temElev,
+          pedagio: pedV?pedV.valor:null, pedagioFonte: pedV?pedV.fonte:null,
+          nPracas: pedV?pedV.nPracas:0, pracas: pedV?pedV.pracas:null,
+          temElev: volta.temElev,
           topo: volta.temElev?rtTopografia(volta.pontos):null,
           sinu: rtSinuosidade(volta.pontos, volta.km),
           restr: rtRestricoes(volta.notices) }
@@ -9327,11 +9405,20 @@ async function rtSimularLote(escopo,resimular){
   if(RT.fila.rodando) return;
   const alvo=rtEscopoRotas(escopo).filter(r=>{
     if(resimular) return true;
-    const c=RT.hereCache.get(r.k3);
-    /* Falha anterior volta para a fila: só o sucesso conta como resolvido. */
-    return !c || c.erro || c.obsoleto || c.perfil!==RT.perfilHash;
+    /* Falha anterior volta para a fila: só o sucesso conta como resolvido.
+       Entrada antiga (sem pedágio medido e sem postos da rota) também. */
+    return rtHereIncompleta(RT.hereCache.get(r.k3));
   });
   if(!alvo.length){ toast('Nada a simular: todas as rotas do escopo já estão em cache.','ac'); return; }
+  return rtSimularHereLista(alvo);
+}
+
+/* O motor da fila, separado do escopo. A sub-aba Rota clientes chama com a
+   sua própria lista (só as rotas que faturaram na janela), sem passar pelos
+   escopos da Análise de Rotas. */
+async function rtSimularHereLista(alvo){
+  if(RT.fila.rodando) return;
+  if(!alvo || !alvo.length) return;
   RT.fila={rodando:true,cancelar:false,feitos:0,total:alvo.length,erros:0,atual:''};
   rtRenderFila();
   let i=0, desdeGravacao=0;
@@ -9356,6 +9443,7 @@ async function rtSimularLote(escopo,resimular){
   RT.fila.rodando=false; rtRenderFila();
   rtAtualizar();
   toast(`${feitos-erros} rotas simuladas${erros?`, ${erros} com falha`:''}${cancelar?' (cancelado)':''}.`, erros?'am':'gn');
+  return {feitos, erros, cancelar};
 }
 function rtRenderFila(){
   const f=RT.fila, el=$('rtFila');
@@ -9373,7 +9461,7 @@ function rtRenderFila(){
 function rtSimularModal(){
   const R=RT.rotas;
   const cont=e=>rtEscopoRotas(e).length;
-  const pend=e=>rtEscopoRotas(e).filter(r=>{ const c=RT.hereCache.get(r.k3); return !c||c.erro||c.obsoleto||c.perfil!==RT.perfilHash; }).length;
+  const pend=e=>rtEscopoRotas(e).filter(r=>rtHereIncompleta(RT.hereCache.get(r.k3))).length;
   const op=(v,l,d)=>`<label class="rt-chk" style="display:flex;gap:8px;padding:7px 0;align-items:flex-start">
       <input type="radio" name="rtEsc" value="${v}" ${v==='usadas'?'checked':''}>
       <span><b>${l}</b><br><span class="muted" style="font-weight:400">${cont(v)} rotas · ${pend(v)} sem simulação atualizada · ~${pend(v)*2} chamadas</span></span></label>`;
@@ -9395,6 +9483,8 @@ function rtAplicarHere(rotas){
     const c=RT.hereCache.get(r.k3);
     if(!c || c.erro){ r.here=null; r.hereErro=c?c.erro:null; return; }
     r.here=c;
+    r.herePedagioFonte = c.ida?(c.ida.pedagioFonte||null):null;
+    r.herePostos = Array.isArray(c.postos)?c.postos:null;
     r.hereKm  = c.ida?c.ida.km:null;
     r.hereMin = c.ida?c.ida.min:null;
     r.hereTs  = c.ts;
@@ -11157,7 +11247,15 @@ const RCL_PADRAO = {
        'modelo'     → a fórmula antiga de custosViagem(), como estava
      Trocar qualquer uma para 'modelo' devolve exatamente o comportamento
      anterior daquela linha — nada aqui é irreversível.                    */
-  fonteDiesel:      'realizado',   /* realizado · modelo                    */
+  /* Diesel: o preço passa a sair do POSTO da rota (base ShellBox), com a
+     mesma cascata do Simulador — último abastecimento em um posto
+     identificado no percurso calculado pela HERE; sem posto na rota, a
+     média ponderada por litros da unidade que está cotando. Só depois disso
+     entra o preço efetivo do Mapinha, que era o padrão anterior.
+       'posto'     → ShellBox: posto na rota → média da unidade → Mapinha
+       'realizado' → Mapinha (preço efetivo), comportamento anterior
+       'modelo'    → fórmula do núcleo com o preço da premissa/SZC          */
+  fonteDiesel:      'posto',       /* posto · realizado · modelo            */
   fonteArla:        'realizado',   /* realizado · modelo — regra dos 5% fica */
   /* Pedágio: HERE por padrão. O pedágio é o único custo da rota que a HERE
      MEDE praça a praça e por eixo para o percurso exato — trocar um número
@@ -11170,7 +11268,20 @@ const RCL_PADRAO = {
   fontePecas:       'realizado',   /* realizado · modelo                    */
   fonteDocSeguros:  'realizado',   /* realizado · modelo                    */
   fontePessoal:     'cpk',         /* cpk · modelo                          */
-  fonteDeprec:      'cpk',         /* cpk · modelo                          */
+  /* Depreciação: a referência deixa de ser o rateio da frota inteira e passa
+     a ser UM equipamento — o cavalo mais novo e a carreta mais nova da base
+     de depreciação do CPK. É a leitura de reposição: quanto custa hoje pôr
+     um conjunto novo nesta rota, e não quanto custa a média de uma frota
+     com ativos já quase depreciados.
+       'cpk_novo'  → equipamento de referência (padrão)
+       'cpk'       → Σ depreciação da frota ÷ viagens (comportamento anterior)
+       'modelo'    → valor do ativo na premissa do Simulador ÷ vida útil     */
+  fonteDeprec:      'cpk_novo',    /* cpk_novo · cpk · modelo               */
+  /* Qual registro é "o mais novo". 'compra' usa a data de compra — é o que
+     não se move quando alguém corrige um cadastro antigo. 'inserido' usa o
+     carimbo de gravação do CPK (_editadoEm), que é literalmente o último
+     registro mexido na base.                                              */
+  deprecRefCriterio:'compra',      /* compra · inserido                     */
   fonteAlimentacao: 'simulador',   /* simulador · modelo                    */
   fonteTempo:       'simulador',   /* simulador · modelo                    */
   /* Pessoal do CPK: quais valores da Premissa (CPK) entram.
@@ -11211,7 +11322,12 @@ const RCL_PADRAO = {
   ovDieselRS: null, ovArlaRS: null, ovPedagioKm: null, ovPneusKm: null,
   ovLubKm: null, ovPecasViagem: null, ovDocViagem: null, ovPessoalViagem: null,
   ovDeprecCavaloViagem: null, ovDeprecCarretaViagem: null,
-  ovAlimentacaoViagem: null, ovTempoHora: null
+  ovAlimentacaoViagem: null, ovTempoHora: null,
+  /* Roda a HERE sozinha nas rotas da janela que ainda não têm percurso
+     medido (ou que estão em cache antigo, sem pedágio medido e sem os
+     postos do trecho). Desligar volta ao comportamento manual, pelo botão. */
+  hereAuto:         true,
+  hereAutoTeto:     400            /* teto de rotas por rodada automática    */
 };
 
 /* ══ ALÍQUOTA POR ROTA ════════════════════════════════════════════════════
@@ -11706,6 +11822,11 @@ async function rclRealCarregar(base){
   try{ depDoc = await fsGetDoc('cpk_lancamentos','DEPRECIACAO'); }catch(_){}
   if(!depDoc || !depDoc.data || !depDoc.data.veiculos) falta.push('base de depreciação do CPK');
   const veicsDep=(depDoc&&depDoc.data&&depDoc.data.veiculos)||{};
+  /* Candidatos a ATIVO DE REFERÊNCIA, por unidade e consolidado. A lista é
+     montada na mesma passada que soma a frota inteira — o rateio antigo
+     continua existindo e pode ser retomado pelas premissas. */
+  const candDep={ _geral:{cavalo:[], carreta:[]} };
+  SIGLAS.forEach(f=>{ candDep[f]={cavalo:[], carreta:[]}; });
   Object.keys(veicsDep).forEach(pl=>{
     const rec=veicsDep[pl]||{};
     const placa=rclPlaca(rec.placa||pl); if(!placa) return;
@@ -11714,6 +11835,11 @@ async function rclRealCarregar(base){
     const fil=String(rec.unidade||(cad&&(cad.unidade||cad.filial))||'').toUpperCase().slice(0,2);
     const bk=buckets[fil]; if(!bk) return;
     const tipo = rclrTipoVeic({...(cad||{}), tipo:rec.tipo||(cad&&cad.tipo)});
+    if(tipo==='cavalo' || tipo==='carreta'){
+      const item={placa, rec, fil, tipo};
+      candDep[fil][tipo].push(item);
+      candDep._geral[tipo].push(item);
+    }
     let soma=0;
     ((base.porOp[fil]&&base.porOp[fil].meses)||[]).forEach(m=>{ soma += rclrDepMes(rec, m); });
     if(!(soma>0)) return;
@@ -11722,9 +11848,37 @@ async function rclRealCarregar(base){
     else if(tipo==='apoio')   bk.deprecApoioRS+=soma;
     else                      bk.deprecCavaloRS+=soma;
   });
+  /* Referência resolvida na ÚLTIMA competência da base de cada unidade: é a
+     parcela mensal vigente daquele ativo, não uma média de meses. */
+  const criterio=(rclPrem().deprecRefCriterio==='inserido')?'inserido':'compra';
+  const ultimoMes=(l)=>(l&&l.length)?l[l.length-1]:(meses.length?meses[meses.length-1]:'');
+  const refDep={};
+  SIGLAS.forEach(f=>{
+    const m=ultimoMes((base.porOp[f]&&base.porOp[f].meses)||[]);
+    refDep[f]={ mes:m, criterio,
+                cavalo: rclDepEscolherRef(candDep[f].cavalo, m, criterio),
+                carreta:rclDepEscolherRef(candDep[f].carreta, m, criterio) };
+  });
+  {
+    const m=ultimoMes(meses);
+    refDep._geral={ mes:m, criterio,
+                    cavalo: rclDepEscolherRef(candDep._geral.cavalo, m, criterio),
+                    carreta:rclDepEscolherRef(candDep._geral.carreta, m, criterio) };
+  }
+  /* Unidade sem cavalo (ou sem carreta) própria cadastrada herda a
+     referência consolidada em vez de perder a linha. */
+  SIGLAS.forEach(f=>{
+    ['cavalo','carreta'].forEach(t=>{
+      if(!refDep[f][t] || !(refDep[f][t].mensal>0)){
+        const g=refDep._geral[t];
+        if(g && g.mensal>0) refDep[f][t]={...g, herdado:true};
+      }
+    });
+  });
 
   const total=SIGLAS.map(s=>buckets[s]).reduce((a,b)=>rclrSomar(a,b), rclrBucket('consolidado'));
-  RCL.real={ chave, meses:meses.slice(), base, porOp:buckets, total, falta:[...new Set(falta)], nota,
+  RCL.real={ chave, meses:meses.slice(), base, porOp:buckets, total, refDep,
+             falta:[...new Set(falta)], nota,
              lidoEm:agoraISO() };
   RCL.realCarregado=true;
   return RCL.real;
@@ -11764,6 +11918,71 @@ function rclrDepMes(rec, mes){
     return Math.max(0, Math.min(base, restanteAntes));
   }
   return base;
+}
+
+/* ══ ATIVO DE REFERÊNCIA DA DEPRECIAÇÃO ═══════════════════════════════════
+   Pedido do comercial (ago/2026): a depreciação do cavalo e a da carreta
+   passam a sair da aba Depreciação do CPK usando SEMPRE o equipamento mais
+   novo cadastrado como referência.
+
+   O que muda na prática: antes a linha era Σ depreciação de TODA a frota da
+   unidade ÷ viagens medidas — uma média que carrega ativos já no fim da
+   vida e, por isso, subestima o capital de um conjunto que hoje sairia da
+   concessionária. Com o ativo de referência, a linha responde "quanto custa
+   o capital de um conjunto novo nesta rota", que é a pergunta de quem está
+   precificando frete.
+
+   Duas leituras possíveis de "mais novo", e a diferença importa:
+     · data de compra  — o equipamento mais recente da frota. É estável:
+       corrigir o cadastro de um caminhão de 2019 não muda a referência.
+     · último inserido — o último registro gravado no CPK (_editadoEm). É
+       literalmente o que o pedido diz, mas se move a cada edição, inclusive
+       a de um ativo antigo.
+   O padrão é a data de compra; a chave está nas Premissas do resultado.   */
+function rclDepDataISO(v){
+  const t=String(v==null?'':v).trim();
+  let m=t.match(/^(\d{4})-(\d{2})-(\d{2})/);      if(m) return m[1]+'-'+m[2]+'-'+m[3];
+  m=t.match(/^(\d{2})\/(\d{2})\/(\d{4})/);        if(m) return m[3]+'-'+m[2]+'-'+m[1];
+  m=t.match(/^(\d{4})-(\d{2})$/);                 if(m) return m[1]+'-'+m[2]+'-01';
+  return '';
+}
+function rclDepOrdemChave(rec, criterio){
+  const compra=rclDepDataISO(rec.dataCompra);
+  const inser =String(rec._editadoEm||'');
+  const ano   =String(rec.anoMod||rec.anoFab||'');
+  return criterio==='inserido' ? [inser, compra, ano, String(rec.placa||'')].join('¦')
+                               : [compra, inser, ano, String(rec.placa||'')].join('¦');
+}
+/* Devolve o ativo de referência de um tipo ('cavalo' | 'carreta') dentro de
+   uma lista de candidatos, na competência pedida. O "mais novo" que não
+   depreciou naquele mês (comprado depois, já encerrado, baixado) não vira
+   zero silencioso: ele é PULADO e o motivo fica registrado, para a memória
+   de cálculo poder dizer por que a referência não é o primeiro da lista. */
+function rclDepEscolherRef(lista, mes, criterio){
+  const cand=(lista||[]).filter(x=>String(x.rec.status||'ativo').toLowerCase()==='ativo');
+  if(!cand.length) return null;
+  const ord=new Map(cand.map(x=>[x, rclDepOrdemChave(x.rec, criterio)]));
+  const fila=cand.slice().sort((a,b)=>{ const A=ord.get(a), B=ord.get(b); return A<B?1:(A>B?-1:0); });
+  const pulados=[];
+  for(const x of fila){
+    const mensal=rclrDepMes(x.rec, mes);
+    if(mensal>0){
+      return { placa:x.placa, tipo:x.tipo, unidade:x.fil, rec:x.rec, mensal, mes, criterio,
+               candidatos:cand.length, pulados,
+               rotulo:[x.rec.marca, x.rec.modelo].filter(Boolean).join(' ').trim(),
+               ano:String(x.rec.anoMod||x.rec.anoFab||''),
+               compra:rclDepDataISO(x.rec.dataCompra),
+               inserido:String(x.rec._editadoEm||''),
+               metodo:String(x.rec.metodo||'linear'),
+               valorCompra:Number(String(x.rec.valorCompra||0).toString().replace(/\./g,'').replace(',','.'))||0 };
+    }
+    if(pulados.length<6)
+      pulados.push({ placa:x.placa, compra:rclDepDataISO(x.rec.dataCompra),
+                     motivo: rclDepDataISO(x.rec.dataCompra)>mes+'-31'
+                       ? 'comprado depois da competência-base'
+                       : 'sem parcela nesta competência (prazo encerrado, residual atingido ou valor zerado)' });
+  }
+  return { placa:null, mensal:0, mes, criterio, candidatos:cand.length, pulados };
 }
 
 /* ══ Taxas do realizado ═══════════════════════════════════════════════════
@@ -12177,6 +12396,38 @@ function rclLitrosBucket(bk, ctx){
   bk.kmAtrib=(q.kmIda + (1-q.aprov)*q.kmVolta)*bk.viagens;
 }
 
+/* ══ PREÇO DO DIESEL DA ROTA — cascata do Simulador ═══════════════════════
+   Mesma ordem de preferência do E16 da aba Simulador, e pelo mesmo motor:
+
+     1º  último abastecimento em um POSTO IDENTIFICADO NO PERCURSO. Os
+         postos do trecho ficaram gravados quando a rota foi simulada na
+         HERE (r.here.postos), então aqui não se gasta chamada nenhuma.
+     2º  média ponderada por litros da UNIDADE que opera a rota (janela de
+         3 meses, com a janela de litragem e o corte de preço fora da curva).
+     3º  consolidado, quando a unidade não tem abastecimento no período.
+
+   Sem base ShellBox carregada, devolve null e o custo segue no preço
+   efetivo do Mapinha, que era o comportamento anterior. */
+function rclDieselDaRota(r, ctx){
+  try{
+    if(typeof SB==='undefined' || !SB.carregado || !Array.isArray(SB.rows) || !SB.rows.length) return null;
+    const chaves=(r && r.here && Array.isArray(r.here.postos)) ? r.here.postos : null;
+    if(chaves && chaves.length){
+      const postos=sbPostosPorChaves(chaves);
+      if(postos.length){
+        const d=sbDieselDePostos(postos);
+        if(d && d.valor>0) return {preco:d.valor, fonte:'posto', det:d, nPostos:postos.length};
+      }
+    }
+    const med = sbMediaUnidadeCache(r.op) || sbMediaUnidadeCache('');
+    if(med && med.valor>0)
+      return {preco:med.valor, fonte:'unidade', det:med,
+              semPostos: !(chaves && chaves.length),
+              semSimulacao: !(r && r.here && !r.here.erro)};
+    return null;
+  }catch(e){ console.warn('[Rota clientes] diesel do posto:',e&&e.message); return null; }
+}
+
 function rclCustoBucket(bk, ctx){
   const r=bk.rota, P=ctx.P;
   const nMeses=Math.max(RCL.meses.length,1);
@@ -12302,8 +12553,18 @@ function rclCustoBucket(bk, ctx){
      registrou — inclui frete do combustível, ajustes e o reembolso que
      abate — coisa que a média simples da nota de bomba não enxerga.     */
   const precoEfetDiesel = (T && T.precoDieselEfetivo>0) ? T.precoDieselEfetivo : null;
-  troca('diesel', P.fonteDiesel, precoEfetDiesel!=null ? litrosViagem*precoEfetDiesel : null, 'mapinha',
-        {taxa:'diesel', motivoSemTaxa:'sem preço efetivo de diesel apurável no mês-base'});
+  /* ShellBox primeiro, quando a premissa é 'posto': o R$/l do posto da rota
+     é preço PAGO, com o desconto de rede daquele corredor dentro dele —
+     que é justamente a diferença que o preço médio da unidade esconde. */
+  const dz = (P.fonteDiesel==='posto') ? rclDieselDaRota(r, ctx) : null;
+  const precoDieselFinal = dz ? dz.preco : precoEfetDiesel;
+  const dieselSelo = dz ? (dz.fonte==='posto' ? 'shellbox' : 'shellbox·unidade') : 'mapinha';
+  troca('diesel', P.fonteDiesel==='modelo'?'modelo':'realizado',
+        precoDieselFinal!=null ? litrosViagem*precoDieselFinal : null, dieselSelo,
+        {taxa:'diesel', motivoSemTaxa: P.fonteDiesel==='posto'
+          ? 'nenhum posto da base ShellBox no percurso, nenhuma média de unidade e nenhum preço efetivo do Mapinha apurável'
+          : 'sem preço efetivo de diesel apurável no mês-base'});
+  const dieselAceito = fontes.diesel!=='modelo';
 
   /* ── Arla: regra dos 5% mantida; só o preço vem do Mapinha ── */
   const precoEfetArla = (T && T.precoArlaEfetivo>0) ? T.precoArlaEfetivo : null;
@@ -12347,8 +12608,31 @@ function rclCustoBucket(bk, ctx){
   troca('pecas',        P.fontePecas,        (T&&T.pecasVg!=null)? T.pecasVg          : null, 'mapinha', {taxa:'pecasVg'});
   troca('docSeguros',   P.fonteDocSeguros,   (T&&T.docVg!=null)  ? T.docVg            : null, 'mapinha', {taxa:'docVg'});
   troca('pessoal',      P.fontePessoal==='cpk'?'cpk':'modelo', (T&&T.pessoalVg!=null)? T.pessoalVg : null, 'cpk', {taxa:'pessoalVg'});
-  troca('deprecCavalo', P.fonteDeprec==='cpk'?'cpk':'modelo',  (T&&T.depCavVg!=null) ? T.depCavVg  : null, 'cpk', {taxa:'depCavVg'});
-  troca('deprecCarreta',P.fonteDeprec==='cpk'?'cpk':'modelo',  (T&&T.depCarVg!=null) ? T.depCarVg  : null, 'cpk', {taxa:'depCarVg'});
+  /* ── Depreciação ──────────────────────────────────────────────────────
+     'cpk_novo' (padrão): parcela mensal do cavalo mais novo e da carreta
+     mais nova da base do CPK ÷ viagens que ESTA rota faz no mês. A carreta
+     é multiplicada pela quantidade de carretas do conjunto (bitrem e
+     rodotrem = 2), como a planilha faz em J28.
+     'cpk': o rateio anterior (Σ da frota ÷ viagens medidas).
+     Sobrescrita manual continua vencendo as duas — ela é decisão, não erro.  */
+  const refDep = ctx.refDep ? (ctx.refDep[r.op] || ctx.refDep._geral) : null;
+  const nCarretas = Math.max(1, Math.round(Number(ctx.perfil && ctx.perfil.carretas)||1));
+  const refCav = refDep && refDep.cavalo;
+  const refCar = refDep && refDep.carreta;
+  const manualDep=(k)=>!!(T && T.manual && T.manual[k]);
+  if(P.fonteDeprec==='cpk_novo'){
+    const vCav = manualDep('depCavVg') ? T.depCavVg
+               : ((refCav && refCav.mensal>0) ? refCav.mensal/viagensMes : null);
+    const vCar = manualDep('depCarVg') ? T.depCarVg
+               : ((refCar && refCar.mensal>0) ? refCar.mensal*nCarretas/viagensMes : null);
+    troca('deprecCavalo','cpk_novo', vCav, manualDep('depCavVg')?'cpk':'cpk·novo',
+          {taxa:'depCavVg', motivoSemTaxa:'nenhum cavalo próprio com parcela de depreciação vigente na base do CPK na competência-base'});
+    troca('deprecCarreta','cpk_novo', vCar, manualDep('depCarVg')?'cpk':'cpk·novo',
+          {taxa:'depCarVg', motivoSemTaxa:'nenhuma carreta própria com parcela de depreciação vigente na base do CPK na competência-base'});
+  }else{
+    troca('deprecCavalo', P.fonteDeprec==='cpk'?'cpk':'modelo',  (T&&T.depCavVg!=null) ? T.depCavVg  : null, 'cpk', {taxa:'depCavVg'});
+    troca('deprecCarreta',P.fonteDeprec==='cpk'?'cpk':'modelo',  (T&&T.depCarVg!=null) ? T.depCarVg  : null, 'cpk', {taxa:'depCarVg'});
+  }
 
   /* ── Alimentação e tempo: premissas do Simulador ──────────────────────
      Alimentação estava ENTERRADA dentro da linha de pessoal do núcleo
@@ -12387,7 +12671,14 @@ function rclCustoBucket(bk, ctx){
   bk.custo={
     fonteDist, distMeta, kmIda, kmVolta, kmViagem, aprov, temPlaca, pedOk,
     pIda, pVolta, cons, fator, norm,
-    precoDiesel: precoEfetDiesel!=null?precoEfetDiesel:cFull.dieselRS,
+    /* O preço exibido tem de ser o que ENTROU na linha: quando o realizado é
+       recusado pela banda, a linha volta ao modelo e o preço também. */
+    precoDiesel: (dieselAceito && precoDieselFinal!=null) ? precoDieselFinal : cFull.dieselRS,
+    dieselShellbox: dz||null, dieselFonte: fontes.diesel,
+    precoDieselMapinha: precoEfetDiesel,
+    depRef: (P.fonteDeprec==='cpk_novo') ? {cavalo:refCav||null, carreta:refCar||null,
+                                            carretas:nCarretas, mes:refDep?refDep.mes:null,
+                                            criterio:refDep?refDep.criterio:null} : null,
     precoArla:   precoEfetArla!=null  ?precoEfetArla  :linhas.precoArla,
     precoDieselModelo: cFull.dieselRS, arlaPct: arlaPctUsado,
     litrosViagem, kmlC, kmlV, kmlTravado, kmlBanda, baseKml, tonViagem, viagensMes,
@@ -12715,7 +13006,9 @@ function rclCalcular(){
     taxas._geral=monta(''); realBk._geral=real.total;
   }
 
-  const ctx2={P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:fatorDe, taxas:real?taxas:null, realBk:real?realBk:null};
+  const ctx2={P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:fatorDe,
+              taxas:real?taxas:null, realBk:real?realBk:null,
+              refDep: real?real.refDep:null};
   buckets.forEach(bk=>rclCustoBucket(bk, ctx2));
 
   /* ── Agregação: rota → cliente ── */
@@ -13212,9 +13505,11 @@ function rclPainel(chaveCli, k3, semScroll){
   const jan=rclRotuloJanela(), nMes=Math.max(RCL.meses.length,1);
   const fon=(k)=>(cu&&cu.fontes?cu.fontes[k]:'modelo')||'modelo';
   const selo=(k)=>({mapinha:'MAPINHA','mapinha+here':'MAPINHA × HERE',cpk:'CPK',simulador:'SIMULADOR',
-                    modelo:'MODELO',here:'HERE'}[fon(k)]||'MODELO');
+                    modelo:'MODELO',here:'HERE',shellbox:'POSTO NA ROTA',
+                    'shellbox·unidade':'SHELLBOX · UNIDADE','cpk·novo':'CPK · ATIVO NOVO'}[fon(k)]||'MODELO');
   const tag=(k)=>{const f=fon(k);
-    const c={mapinha:'map','mapinha+here':'map',cpk:'cpk',simulador:'sim',modelo:'prem',here:'here'}[f]||'prem';
+    const c={mapinha:'map','mapinha+here':'map',cpk:'cpk','cpk·novo':'cpk',simulador:'sim',
+             modelo:'prem',here:'here',shellbox:'here','shellbox·unidade':'map'}[f]||'prem';
     return `<span class="src-tag ${c}">${selo(k)}</span>`;};
 
   /* L(rótulo, valor, nota, memória) — a memória viaja no rótulo E no valor,
@@ -13303,6 +13598,9 @@ function rclPainel(chaveCli, k3, semScroll){
     mapinha:        'Vem do REALIZADO: o R$ do fechamento do Mapinha da competência-base, convertido em taxa (R$/km ou R$/viagem) sobre o que o módulo mediu naquele mês, e aplicado a esta rota.',
     'mapinha+here': 'Vem de DUAS bases: a HERE diz o formato (quais praças, qual percurso) e o Mapinha diz o nível (quanto a frota pagou no mês). O fator de nivelamento reconcilia os dois.',
     here:           'Vem da HERE: medição do percurso exato, praça a praça e por eixo. É valor medido, não média de frota.',
+    shellbox:       'Vem do POSTO DA ROTA: último abastecimento registrado no ShellBox em um posto que a base identificou dentro do percurso calculado pela HERE. É preço pago, com o desconto de rede daquele corredor já dentro dele.',
+    'shellbox·unidade': 'Vem do SHELLBOX, mas não do posto da rota: nenhum posto da base foi identificado no percurso, então entrou a média ponderada por litros da unidade que opera a rota — a mesma segunda opção do Simulador.',
+    'cpk·novo':     'Vem do CPK, do EQUIPAMENTO DE REFERÊNCIA: parcela mensal do ativo mais novo cadastrado na aba Depreciação, dividida pelas viagens que esta rota faz no mês.',
     cpk:            'Vem do módulo CPK: Premissa (CPK) da competência-base e base de depreciação por placa, com a mesma fórmula que o CPK por placa usa.',
     simulador:      'Vem da aba Simulador: premissa digitada na planilha para esta filial, rateada pelas viagens que a rota faz no mês.',
     modelo:         'Vem do MODELO: a fórmula do núcleo de custo com as premissas da filial. O realizado não entrou nesta linha — ou não havia taxa apurável, ou a taxa ficou fora da banda de sanidade e foi recusada.'
@@ -13319,26 +13617,73 @@ function rclPainel(chaveCli, k3, semScroll){
   const insLinha=(rot, k)=>[rot, brl(Math.abs(li[k]||0)),
     origemLinha(k, 'Linha do custo por viagem, ao lado.') ];
 
+  /* ══ DIESEL — o R$/l do POSTO DA ROTA, linha a linha ═══════════════════
+     Pedido do comercial (ago/2026): a linha tem de dizer qual posto do
+     percurso deu o preço. A cascata é a mesma do E16 do Simulador — posto
+     na rota, depois média ponderada da unidade — e o rótulo ao lado do
+     valor diz qual das duas entrou, sem precisar abrir a memória.        */
+  const sbz  = cu&&cu.dieselShellbox ? cu.dieselShellbox : null;
+  const sbP  = sbz && sbz.fonte==='posto' ? sbz.det : null;
+  const sbPo = sbP ? sbP.posto : null;
+  const sbOnde = sbPo ? ((sbPo.rodovia? (typeof sbRodoviaLabel==='function'? sbRodoviaLabel(sbPo.rodovia, sbPo.rodoviaNome) : sbPo.rodovia) : 'via urbana')
+                        + (sbPo.km!=null?' · km '+num(sbPo.km, sbPo.km%1?1:0):'')) : '';
+  const sbNota = sbP
+      ? `${esc(sbPo.nome||'posto')} · ${esc(sbOnde)}`
+      : (sbz ? `média ponderada da unidade ${esc(String(sbz.det&&sbz.det.unidade||r.op||'consolidado'))}` : '');
   add('Diesel','diesel',li.diesel,
-      `${num(cu?cu.litrosViagem:0,1)} l × ${brl(cu?cu.precoDiesel:null)}`,
+      `${num(cu?cu.litrosViagem:0,1)} l × ${brl(cu?cu.precoDiesel:null)}`
+        + (fon('diesel')==='shellbox'||fon('diesel')==='shellbox·unidade' ? `<br><span class="muted">${sbNota}</span>` : ''),
       mem('Diesel da viagem',{selo:selo('diesel'),
-        fonte: fon('diesel')==='mapinha'
+        fonte: fon('diesel')==='shellbox'
+          ? 'Litros do modelo físico de consumo (calibrado pela SZC) × R$/l do ÚLTIMO ABASTECIMENTO em um posto identificado dentro do percurso desta rota, na base ShellBox. Os postos do trecho foram casados com a geometria quando a rota foi simulada na HERE e ficaram gravados com ela — a leitura aqui não gasta chamada de API.'
+          : (fon('diesel')==='shellbox·unidade'
+          ? 'Nenhum posto da base ShellBox caiu dentro do percurso desta rota, então entrou a SEGUNDA opção — a mesma do Simulador: média ponderada por litros dos abastecimentos da unidade que opera a rota, nos últimos três meses.'
+          : (fon('diesel')==='mapinha'
           ? 'Litros do modelo físico de consumo (calibrado pela SZC) × preço EFETIVO do Mapinha. O preço efetivo é o R$ de diesel do fechamento dividido pelos litros abastecidos na SZC — reconcilia com o DRE, coisa que a média de bomba não faz.'
-          : 'Motor rtCustoRota() → custosViagem(): litros do modelo × preço da premissa/SZC.',
+          : 'Motor rtCustoRota() → custosViagem(): litros do modelo × preço da premissa/SZC.')),
         formula:`litros da viagem × R$/l\n${num(cu?cu.litrosViagem:0,2)} l × ${num(cu?cu.precoDiesel:0,4)} = ${brl(li.diesel)}`,
+        insumos: sbP ? [
+          ['Posto que deu o preço', String(sbPo.nome||'—'),
+           'Último abastecimento de S-10 registrado no ShellBox em um posto que a base identificou dentro do percurso calculado pela HERE para esta rota.'],
+          ['Onde ele está', sbOnde+(sbPo.cidade?' · '+sbPo.cidade+'/'+(sbPo.uf||''):''),
+           'Rodovia e km saem do próprio endereço do posto no arquivo do ShellBox; a coordenada foi geocodificada uma vez e é ela que permite dizer que o posto está no trecho.'],
+          ['Data do abastecimento', sbP.linha&&sbP.linha.data ? (typeof sbDataBR==='function'?sbDataBR(sbP.linha.data):sbP.linha.data) : '—',
+           'É o mais recente entre os postos da rota. Preço de bomba muda toda semana — o módulo prefere o último a uma média que envelhece.'],
+          ['R$/l pago', brl(sbz.preco)+'/l',
+           'Preço PAGO, com o desconto de rede daquele corredor já dentro dele. É essa a diferença que a média da unidade esconde: dentro de SC a rede entrega 24–27% de desconto, fora dela cai para 2–5%.'],
+          ['Postos da base no trecho', num(sbz.nPostos||0,0),
+           'Quantos postos da base ShellBox caíram dentro do raio do percurso desta rota.'],
+          ['Litros da viagem', num(cu?cu.litrosViagem:0,2)+' l',
+           'Do modelo físico de consumo, já calibrado pela SZC. É o multiplicador do preço.']
+        ] : (sbz ? [
+          ['Por que não veio de um posto', sbz.semSimulacao?'rota ainda sem percurso medido na HERE':(sbz.semPostos?'rota simulada, mas nenhum posto da base no trecho':'nenhum abastecimento utilizável nos postos do trecho'),
+           'Sem posto identificado no percurso, o módulo desce para a segunda opção em vez de deixar a linha sem preço.'],
+          ['Média da unidade', brl(sbz.preco)+'/l',
+           'Média ponderada por litros dos abastecimentos ShellBox da unidade, com a janela de litragem (50–1.200 l) e o corte de preço fora da curva.'],
+          ['Abastecimentos usados', num(sbz.det&&sbz.det.qtd||0,0)+' de '+num(sbz.det&&sbz.det.qtdBruta||0,0),
+           'Quantos entraram na média depois dos cortes de litragem e de preço fora da curva.'],
+          ['Período', String((sbz.det&&sbz.det.de)||'—')+' a '+String((sbz.det&&sbz.det.ate)||'—'),
+           'Janela de três meses terminando no último abastecimento da base.']
+        ] : null),
         linhas:[
           ['Litros da viagem', num(cu?cu.litrosViagem:0,2)+' l'],
           ['km/l carregado · vazio', num(cu?cu.kmlC:0,2)+' · '+num(cu?cu.kmlV:0,2)],
           ['Preço adotado', brl(cu?cu.precoDiesel:null)+'/l'],
-          T?['Como o preço saiu', T.precoDieselFonte]:null,
+          sbP?['Posto na rota', String(sbPo.nome||'—')+' · '+sbOnde]:null,
+          sbz?['Fonte do preço', sbz.fonte==='posto'?'último abastecimento no posto da rota':'média ponderada da unidade']:null,
+          T?['Preço efetivo do Mapinha (reserva)', brl(cu?cu.precoDieselMapinha:null)+'/l']:null,
+          T?['Como o preço do Mapinha sairia', T.precoDieselFonte]:null,
           RB?['Diesel do Mapinha no período', brl(RB.dieselRS)]:null,
           RB?['  interno · externo · reembolso', brl(RB.dieselInterno)+' · '+brl(RB.dieselExterno)+' · −'+brl(RB.dieselReembolso)]:null,
           ['Litros comprados na SZC', num((RCL.precos&&(RCL.precos[r.op]||RCL.precos._geral)||{}).litrosDiesel,0)+' l'],
           ['Preço se fosse só a SZC', brl((RCL.precos&&(RCL.precos[r.op]||RCL.precos._geral)||{}).precoDiesel)+'/l'],
           ['Preço do modelo (rtCustoRota)', brl(cu?cu.precoDieselModelo:null)+'/l']
         ],
-        obs:'Centros de custo somados: 01.01 diesel interno da frota, 02.01 externo da frota, menos 22.01 (reembolso). Diesel de agregado (01.02/02.02) fica fora.',
-        alerta: (cu&&cu.precoDiesel==null)?'Sem preço apurável — a linha caiu no modelo.':null}));
+        obs: sbP
+          ? 'O preço do posto é de UMA linha, não de uma média: por isso ele passa antes por uma banda de ±20% em torno da mediana dos abastecimentos dos postos deste trecho — lançamento errado não vira o diesel da rota inteira.'
+          : 'Centros de custo somados no Mapinha: 01.01 diesel interno da frota, 02.01 externo da frota, menos 22.01 (reembolso). Diesel de agregado (01.02/02.02) fica fora.',
+        alerta: (cu&&cu.precoDiesel==null)?'Sem preço apurável — a linha caiu no modelo.'
+              : (sbP&&sbP.foraDaBanda?`${sbP.foraDaBanda} lançamento(s) dos postos deste trecho foram ignorados por R$/l fora da banda em torno da mediana (R$ ${num(sbP.bandaRef,3)}/l).`:null)}));
 
   add('Arla','arla',li.arla,
       `${pct(cu?cu.arlaPct:0.05,1)} dos litros × ${brl(cu?cu.precoArla:null)}`,
@@ -13534,10 +13879,54 @@ function rclPainel(chaveCli, k3, semScroll){
       {fonte:'Núcleo de custo (custosViagem): salário × fator de encargos da premissa do Simulador ÷ viagens do mês desta rota. A Premissa (CPK) do fechamento não entrou nesta rota.',
        obs:'Comissão não está aqui: ela é função da tarifa e aparece depois, na cascata do resultado.'}));
 
+  /* ══ DEPRECIAÇÃO PELO EQUIPAMENTO DE REFERÊNCIA ═══════════════════════════
+     Pedido do comercial (ago/2026): cavalo e carreta saem da aba Depreciação
+     do CPK, usando SEMPRE o equipamento mais novo como referência. A memória
+     abaixo tem de nomear a placa escolhida — sem isso o número é indefensável
+     numa negociação, que é justamente onde ele vai ser usado. */
+  const dRef  = cu&&cu.depRef ? cu.depRef : null;
+  const dCav  = dRef?dRef.cavalo:null, dCar=dRef?dRef.carreta:null;
+  const vgMesR= cu&&cu.viagensMes>0 ? cu.viagensMes : 0;
+  const depQuem=(x)=> x&&x.placa ? (x.placa + (x.rotulo?' · '+x.rotulo:'') + (x.ano?' · '+x.ano:'')) : '—';
+  const depCrit=(x)=> x&&x.criterio==='inserido' ? 'último registro inserido ou alterado na base do CPK'
+                                                 : 'data de compra mais recente';
+  const depIns=(x, qtd)=> !x ? null : [
+    ['Equipamento de referência', depQuem(x),
+     'O ativo mais novo da base de depreciação do CPK ('+depCrit(x)+'), entre '+num(x.candidatos||0,0)+' cadastrado(s) da unidade. Não é uma média da frota: é o capital de UM equipamento, o que responde "quanto custa hoje pôr um conjunto novo nesta rota".'],
+    ['Comprado em', x.compra||'—', 'Data de compra registrada na aba Depreciação do CPK.'],
+    ['Valor de compra', brl(x.valorCompra), 'Base do cálculo, junto com residual e prazo cadastrados.'],
+    ['Método', String(x.metodo||'linear'), 'Mesma fórmula do módulo CPK: linear sobre o valor depreciável, percentual anual ou valor manual.'],
+    ['Parcela mensal na competência-base', brl(x.mensal)+(qtd>1?(' × '+num(qtd,0)+' carretas'):''),
+     'Depreciação deste ativo no mês de '+String(x.mes||'—')+'. É o numerador da linha.'],
+    ['Viagens desta rota no mês', num(vgMesR,2),
+     'Viagens da rota na janela ÷ meses da janela. É o divisor: depreciação é custo mensal fixo, e a rota carrega a fatia proporcional às viagens que faz.'],
+    ['= R$ por viagem', brl(Math.abs((qtd>1?x.mensal*qtd:x.mensal)/Math.max(vgMesR,0.01))),
+     'O quociente, que é o valor exibido nesta linha.']
+  ];
+  const depPulados=(x)=> (x&&x.pulados&&x.pulados.length)
+    ? x.pulados.map(q=>`${q.placa}${q.compra?' ('+q.compra+')':''} — ${q.motivo}`).join(' · ') : '';
+
   add('Depreciação do cavalo','deprecCavalo',li.deprecCavalo,
-      notaFonte('deprecCavalo', T?`${brl(T.depCavVg)}/viagem`:''),
+      fon('deprecCavalo')==='cpk·novo'
+        ? `${brl(dCav?dCav.mensal:null)}/mês ÷ ${num(vgMesR,2)} viagens<br><span class="muted">${esc(depQuem(dCav))}</span>`
+        : notaFonte('deprecCavalo', T?`${brl(T.depCavVg)}/viagem`:''),
       memFonte('Depreciação do cavalo','deprecCavalo',
-      mem('Depreciação do cavalo',{selo:selo('deprecCavalo'),
+      fon('deprecCavalo')==='cpk·novo'
+      ? mem('Depreciação do cavalo',{selo:selo('deprecCavalo'),
+        fonte:'Aba Depreciação do módulo CPK (cpk_lancamentos/DEPRECIACAO), usando o CAVALO MAIS NOVO cadastrado como referência — não a média da frota. A parcela mensal é calculada com a mesma fórmula do CPK (linear sobre o valor depreciável, percentual anual ou valor manual), respeitando data de compra, prazo, residual e status.',
+        formula:`parcela mensal do cavalo de referência ÷ viagens da rota no mês\n${brl(dCav?dCav.mensal:null)} ÷ ${num(vgMesR,2)} = ${brl(li.deprecCavalo)}`,
+        insumos: depIns(dCav,1),
+        linhas:[
+          dCav?['Placa de referência', depQuem(dCav)]:null,
+          dCav?['Competência da parcela', String(dCav.mes||'—')]:null,
+          dCav&&dCav.herdado?['Origem da referência','consolidado — a unidade não tem cavalo próprio cadastrado']:null,
+          dCav?['Cavalos próprios cadastrados', num(dCav.candidatos||0,0)]:null,
+          ['R$/viagem', brl(Math.abs(li.deprecCavalo||0))],
+          RB?['Rateio da frota, se fosse a fonte anterior', brl(T?T.depCavVg:null)+'/viagem']:null
+        ],
+        obs:'Custo mensal FIXO: incide mesmo no mês em que a placa não rodou. A referência é de reposição — a frota inteira, com ativos já quase depreciados, daria um número menor e uma tarifa que não paga o próximo caminhão.',
+        alerta: depPulados(dCav) ? ('Registros mais novos que ficaram de fora: '+depPulados(dCav)+'.') : null})
+      : mem('Depreciação do cavalo',{selo:selo('deprecCavalo'),
         fonte:'Base de depreciação do CPK (cpk_lancamentos/DEPRECIACAO), placa a placa, com a MESMA fórmula do módulo CPK: linear sobre o valor depreciável, percentual anual ou valor manual, respeitando data de compra, prazo, residual e status.',
         formula:`Σ depreciação mensal das placas × meses da janela ÷ viagens medidas\n${brl(RB?RB.deprecCavaloRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.deprecCavalo)}`,
         insumos:[
@@ -13563,9 +13952,28 @@ function rclPainel(chaveCli, k3, semScroll){
        obs:'Custo mensal FIXO: incide mesmo no mês em que a placa não rodou.'}));
 
   add('Depreciação da carreta','deprecCarreta',li.deprecCarreta,
-      notaFonte('deprecCarreta', T?`${brl(T.depCarVg)}/viagem`:''),
+      fon('deprecCarreta')==='cpk·novo'
+        ? `${brl(dCar?dCar.mensal:null)}/mês${dRef&&dRef.carretas>1?' × '+num(dRef.carretas,0):''} ÷ ${num(vgMesR,2)} viagens<br><span class="muted">${esc(depQuem(dCar))}</span>`
+        : notaFonte('deprecCarreta', T?`${brl(T.depCarVg)}/viagem`:''),
       memFonte('Depreciação da carreta','deprecCarreta',
-      mem('Depreciação da carreta',{selo:selo('deprecCarreta'),
+      fon('deprecCarreta')==='cpk·novo'
+      ? mem('Depreciação da carreta',{selo:selo('deprecCarreta'),
+        fonte:'Mesma base do CPK, filtrando os registros classificados como carreta (semirreboque, silo, tanque, bitrem, rodotrem, vanderleia) e usando a CARRETA MAIS NOVA cadastrada como referência.',
+        formula:`parcela mensal da carreta de referência${dRef&&dRef.carretas>1?' × nº de carretas':''} ÷ viagens da rota no mês\n${brl(dCar?dCar.mensal:null)}${dRef&&dRef.carretas>1?' × '+num(dRef.carretas,0):''} ÷ ${num(vgMesR,2)} = ${brl(li.deprecCarreta)}`,
+        insumos: depIns(dCar, dRef?dRef.carretas:1),
+        linhas:[
+          dCar?['Placa de referência', depQuem(dCar)]:null,
+          dCar?['Competência da parcela', String(dCar.mes||'—')]:null,
+          dRef?['Carretas do conjunto', num(dRef.carretas,0)+(dRef.carretas>1?' (bitrem/rodotrem: a depreciação é multiplicada, como em J28 da planilha)':'')]:null,
+          dCar&&dCar.herdado?['Origem da referência','consolidado — a unidade não tem carreta própria cadastrada']:null,
+          dCar?['Carretas próprias cadastradas', num(dCar.candidatos||0,0)]:null,
+          ['R$/viagem', brl(Math.abs(li.deprecCarreta||0))],
+          cu?['Quanto isso é do custo da viagem', pct(cu.custoViagem>0?Math.abs(li.deprecCarreta||0)/cu.custoViagem:null,1)]:null,
+          RB?['Rateio da frota, se fosse a fonte anterior', brl(T?T.depCarVg:null)+'/viagem']:null
+        ],
+        obs:'Trocar o rateio da frota pelo equipamento de referência resolve o defeito que mais distorcia esta linha: o denominador. O rateio dividia a depreciação de TODAS as carretas da unidade pelas viagens que o módulo conseguiu amarrar a uma rota, e cobertura baixa inflava tudo. Aqui numerador e denominador são da mesma rota.',
+        alerta: depPulados(dCar) ? ('Registros mais novos que ficaram de fora: '+depPulados(dCar)+'.') : null})
+      : mem('Depreciação da carreta',{selo:selo('deprecCarreta'),
         fonte:'Mesma base do CPK, filtrando os registros classificados como carreta (semirreboque, silo, tanque, bitrem, rodotrem, vanderleia).',
         formula:`Σ depreciação mensal das carretas no período ÷ viagens medidas\n${brl(RB?RB.deprecCarretaRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.deprecCarreta)}`,
         insumos:[
@@ -14481,7 +14889,7 @@ function rclPremModal(){
       nada aqui é irreversível. Sem a fonte carregada, a linha cai sozinha no modelo em vez de virar zero.
     </div>
     <div class="rt-fields grid3">
-      ${s('fonteDiesel','Diesel', P.fonteDiesel, [['realizado','Mapinha (preço efetivo)'],['modelo','Modelo / SZC']])}
+      ${s('fonteDiesel','Diesel', P.fonteDiesel, [['posto','Posto na rota (ShellBox)'],['realizado','Mapinha (preço efetivo)'],['modelo','Modelo / SZC']], 'posto da rota → média da unidade')}
       ${s('fonteArla','Arla', P.fonteArla, [['realizado','Mapinha (preço)'],['modelo','Modelo / SZC']])}
       ${n('arlaPct','Arla — % dos litros', P.arlaPct, '0.005', 'regra dos 5% — fração')}
       ${s('fontePedagio','Pedágio', P.fontePedagio, [['here','HERE exata da rota'],['realizado','Mapinha nivelando a HERE'],['modelo','Modelo']])}
@@ -14491,10 +14899,23 @@ function rclPremModal(){
       ${s('fonteDocSeguros','Documentação e seguros', P.fonteDocSeguros, [['realizado','Mapinha (R$/viagem)'],['modelo','Modelo']])}
       ${s('fontePessoal','Pessoal', P.fontePessoal, [['cpk','Premissa (CPK) do Mapinha'],['modelo','Modelo']])}
       ${s('pessoalCpkBase','Pessoal — base do CPK', P.pessoalCpkBase, [['ambos','Frota 35% + Agregado 65%'],['frota','Só Custo Frota 35%']], 'ambos carrega a folha inteira da unidade')}
-      ${s('fonteDeprec','Depreciações', P.fonteDeprec, [['cpk','Base do CPK, por placa'],['modelo','Modelo']])}
+      ${s('fonteDeprec','Depreciações', P.fonteDeprec, [['cpk_novo','CPK — equipamento mais novo'],['cpk','CPK — rateio da frota'],['modelo','Modelo']], 'referência de reposição')}
+      ${s('deprecRefCriterio','Qual é o "mais novo"', P.deprecRefCriterio, [['compra','Data de compra mais recente'],['inserido','Último registro inserido no CPK']], 'compra não se move ao corrigir cadastro antigo')}
       ${s('fonteAlimentacao','Alimentação', P.fonteAlimentacao, [['simulador','Simulador (E32)'],['modelo','Dentro do pessoal']])}
       ${s('fonteTempo','Tempo parado', P.fonteTempo, [['simulador','Simulador'],['modelo','Premissa da rota']])}
       ${s('nivelamento','Nivelamento do realizado', P.nivelamento, [['medido','Fechar com o Mapinha'],['taxa','Taxa sem fechamento']])}
+    </div>
+
+    <h3 style="font-size:12px;margin-top:12px">Percurso e pedágio (HERE)</h3>
+    <div class="muted" style="font-size:10.5px;margin-bottom:6px">
+      O pedágio desta sub-aba é sempre o <b>real do percurso calculado pela HERE</b>: praça a praça, tarifa por eixo,
+      nunca uma média de frota. Quando a rota ainda não tem percurso medido — ou está em cache antigo, sem o pedágio
+      medido e sem os postos do trecho — o módulo manda a HERE calcular sozinho ao abrir a janela. Cada rota consome
+      duas chamadas (ida carregada e volta vazia) e o resultado fica salvo.
+    </div>
+    <div class="rt-fields grid3">
+      ${c('hereAuto','Calcular na HERE automaticamente', P.hereAuto, 'rotas da janela sem percurso medido')}
+      ${n('hereAutoTeto','Teto por rodada automática', P.hereAutoTeto, '10', 'rotas')}
     </div>
 
     <h3 style="font-size:12px;margin-top:12px">Sobrescritas manuais das taxas</h3>
@@ -14543,13 +14964,15 @@ function rclPremModal(){
       fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
       fonteDocSeguros:gS('fonteDocSeguros'), fontePessoal:gS('fontePessoal'),
       pessoalCpkBase:gS('pessoalCpkBase'), fonteDeprec:gS('fonteDeprec'),
+      deprecRefCriterio:gS('deprecRefCriterio'), hereAuto:gB('hereAuto'),
       fonteAlimentacao:gS('fonteAlimentacao'), fonteTempo:gS('fonteTempo'),
       nivelamento:gS('nivelamento'),
       ovDieselRS:gN('ovDieselRS'), ovArlaRS:gN('ovArlaRS'), ovPedagioKm:gN('ovPedagioKm'),
       ovPneusKm:gN('ovPneusKm'), ovLubKm:gN('ovLubKm'), ovPecasViagem:gN('ovPecasViagem'),
       ovDocViagem:gN('ovDocViagem'), ovPessoalViagem:gN('ovPessoalViagem'),
       ovDeprecCavaloViagem:gN('ovDeprecCavaloViagem'), ovDeprecCarretaViagem:gN('ovDeprecCarretaViagem'),
-      ovAlimentacaoViagem:gN('ovAlimentacaoViagem'), ovTempoHora:gN('ovTempoHora')
+      ovAlimentacaoViagem:gN('ovAlimentacaoViagem'), ovTempoHora:gN('ovTempoHora'),
+      hereAutoTeto:gN('hereAutoTeto')||400
     };
     const ok=await rclGravarPrem(novo);
     mdFechar();
@@ -14621,8 +15044,21 @@ async function rclExportar(){
       const cu=r.bucket.custo; if(!cu) return;
       Object.keys(cu.linhas).forEach(k=>{
         if(typeof cu.linhas[k]!=='number') return;
+        const sbz=cu.dieselShellbox;
+        const detalhe = k==='diesel'
+          ? (sbz && sbz.fonte==='posto'
+              ? 'posto na rota: '+String(sbz.det&&sbz.det.posto&&sbz.det.posto.nome||'—')
+                + ' · R$ '+(sbz.preco||0).toFixed(3)+'/l'
+                + (sbz.det&&sbz.det.linha&&sbz.det.linha.data?' · '+sbz.det.linha.data:'')
+              : (sbz ? 'média da unidade '+String(sbz.det&&sbz.det.unidade||'')+' · R$ '+(sbz.preco||0).toFixed(3)+'/l' : ''))
+          : (k==='pedagio'
+              ? (cu.pedOk?'pedágio medido no percurso HERE':'sem praça medida no percurso')
+              : ((k==='deprecCavalo'||k==='deprecCarreta') && cu.depRef
+                  ? (()=>{ const x=k==='deprecCavalo'?cu.depRef.cavalo:cu.depRef.carreta;
+                           return x&&x.placa ? ('referência '+x.placa+' · '+brl(x.mensal)+'/mês') : ''; })()
+                  : ''));
         li.push({Cliente:c.nome, Rota:`${r.op} ${r.codigo}`, Trecho:`${r.origem} → ${r.destino}`,
-                 Linha:k, Fonte:(cu.fontes&&cu.fontes[k])||'modelo',
+                 Linha:k, Fonte:(cu.fontes&&cu.fontes[k])||'modelo', Detalhe:detalhe,
                  'R$/viagem':+cu.linhas[k].toFixed(2), Viagens:r.viagens,
                  'R$ no período':+(cu.linhas[k]*r.viagens).toFixed(2)});
       });
@@ -14655,6 +15091,28 @@ async function rclExportar(){
             'Doc R$/viagem':tx?+tx.docVg.toFixed(2):'', 'Pessoal R$/viagem':tx?+tx.pessoalVg.toFixed(2):'' });
         });
         add('Realizado Mapinha e CPK', rows);
+        /* Equipamento de referência da depreciação: sem esta aba, o Excel
+           mostra um R$/viagem de capital sem dizer de qual ativo ele saiu. */
+        if(d.real.refDep){
+          const dr=[];
+          ['SC','PR','SP','_geral'].forEach(f=>{
+            const o=d.real.refDep[f]; if(!o) return;
+            ['cavalo','carreta'].forEach(t=>{
+              const x=o[t]; if(!x) return;
+              dr.push({ Unidade:f==='_geral'?'consolidado':f, Tipo:t,
+                Placa:x.placa||'— nenhum ativo com parcela vigente',
+                Equipamento:[x.rec&&x.rec.marca, x.rec&&x.rec.modelo].filter(Boolean).join(' '),
+                Ano:x.ano||'', 'Data de compra':x.compra||'',
+                'Valor de compra':+(x.valorCompra||0).toFixed(2), 'Método':x.metodo||'',
+                'Competência':x.mes||'', 'Depreciação mensal':+(x.mensal||0).toFixed(2),
+                'Critério':x.criterio==='inserido'?'último inserido':'compra mais recente',
+                'Candidatos':x.candidatos||0,
+                'Herdado do consolidado':x.herdado?'sim':'',
+                'Registros pulados':(x.pulados||[]).map(q=>q.placa+' — '+q.motivo).join(' · ') });
+            });
+          });
+          if(dr.length) add('Depreciação de referência', dr);
+        }
       }
       add('Distância por rota', RCL.rotas.map(r=>{ const m=r.bucket.custo?r.bucket.custo.distMeta:null; return {
         Rota:`${r.op} ${r.codigo}`, Trecho:`${r.origem} → ${r.destino}`,
@@ -14671,6 +15129,62 @@ async function rclExportar(){
 }
 
 /* ══ Abertura e binds ═════════════════════════════════════════════════════ */
+/* ══ ATUALIZAÇÃO DAS ROTAS NA HERE ════════════════════════════════════════
+   Pedido do comercial (ago/2026): atualizar todas as rotas pela HERE e
+   salvar, como já é feito no Simulador, para que o custo por viagem tenha o
+   pedágio REAL do percurso e o posto que dá o preço do diesel.
+
+   O escopo é a janela analisada — as rotas que faturaram no período —, não a
+   SZY inteira: são as que estão na tela e as únicas cujo custo alguém vai
+   olhar. Cada uma custa duas chamadas de roteirização, então o teto por
+   rodada é premissa, e a fila mostra progresso, permite cancelar e grava a
+   cada 25 rotas. */
+function rclRotasPendentesHere(){
+  const out=[], vistas=new Set();
+  const mapa = RCL.porRota instanceof Map ? RCL.porRota : new Map();
+  mapa.forEach(bk=>{
+    const r=bk&&bk.rota; if(!r||!r.k3) return;
+    if(!(bk.viagens>0)) return;              /* rota sem viagem no período  */
+    if(vistas.has(r.k3)) return; vistas.add(r.k3);
+    if(rtHereIncompleta(RT.hereCache.get(r.k3))) out.push(r);
+  });
+  return out;
+}
+/* Dispara a medição automática UMA VEZ POR JANELA analisada: trocar o
+   período traz rotas novas, e elas também precisam do percurso medido. Roda
+   fora do fluxo de desenho para a tela não ficar presa esperando a HERE. */
+function rclHereAutoTalvez(){
+  try{
+    if(rclPrem().hereAuto===false) return;
+    const chave=(RCL.meses||[]).join(',');
+    if(!chave || RCL._hereAutoJanela===chave) return;
+    RCL._hereAutoJanela=chave;
+    setTimeout(()=>{ rclAtualizarHere(false).catch(e=>console.warn('[Rota clientes] HERE:',e&&e.message)); }, 400);
+  }catch(_){}
+}
+async function rclAtualizarHere(manual){
+  const P=rclPrem();
+  if(RT.fila.rodando){ if(manual) toast('Já existe uma simulação em andamento.','am'); return; }
+  if(!ST.hereKey){ if(manual) toast('Chave HERE não configurada — veja a Auditoria.','am'); return; }
+  /* Os postos do trecho só podem ser casados com a base ShellBox carregada;
+     sem ela a rota seria gravada sem posto e o diesel cairia na média da
+     unidade para sempre, sem ninguém entender por quê. */
+  try{ if(typeof sbGarantirBase==='function') await sbGarantirBase(); }catch(_){}
+  let alvo=rclRotasPendentesHere();
+  if(!alvo.length){
+    if(manual) toast('Todas as rotas da janela já estão medidas na HERE, com pedágio e postos do trecho.','gn');
+    return;
+  }
+  const teto=Math.max(1, Math.round(Number(P.hereAutoTeto)||400));
+  const cortou = alvo.length>teto;
+  if(cortou) alvo=alvo.slice(0,teto);
+  const res=await rtSimularHereLista(alvo);
+  try{ rtAplicarHere(RT.rotas); }catch(_){}
+  if(cortou) toast(`Teto de ${teto} rotas por rodada atingido — rode de novo para as restantes.`,'am');
+  rclRecalcular();
+  return res;
+}
+
 async function rclAoAbrir(){
   if(RCL._prom) return RCL._prom;
   RCL._prom=(async()=>{
@@ -14685,7 +15199,11 @@ async function rclAoAbrir(){
       if(meta) meta.innerHTML='<span>Buscando o último mês fechado no Mapinha…</span>';
       try{ await rclPrepararRealizado(rclMesesDaTela()); }
       catch(e){ console.warn('[Rota clientes] realizado:',e&&e.message); }
+      /* ShellBox: sem ela o preço do posto não existe e o diesel cai na
+         cascata seguinte. Carrega antes do primeiro cálculo. */
+      try{ if(typeof sbGarantirBase==='function') await sbGarantirBase(); }catch(_){}
       rclRecalcular();
+      rclHereAutoTalvez();
     }catch(e){
       console.warn('[Rota clientes]',e);
       if(meta) meta.innerHTML='<span class="pill rd">Falha ao carregar: '+esc(e&&e.message||e)+'</span>';
@@ -14729,6 +15247,7 @@ async function rclRecalcularAsync(){
     catch(e){ console.warn('[Rota clientes] realizado:',e&&e.message); }
   }
   rclRecalcular();
+  rclHereAutoTalvez();
 }
 function rclRecalcular(){
   const meta=$('rclMeta');
@@ -14781,6 +15300,7 @@ try{ window.__ATLAS_ROTA_CLIENTES__ = RCL; window.__ATLAS_RCL_CFG__ = RCL_CFG; }
   rclSemearPeriodo(); rclPeriodoVisivel();
   const bs=$('rclBusca'); if(bs){ let t=null; bs.oninput=()=>{ clearTimeout(t); t=setTimeout(rclRender,200); }; }
   const br=$('rclBtnRecalc'); if(br) br.onclick=()=>{ RCL.real=null; RCL.base=null; RCL.fech=null; rclRecalcularAsync(); };
+  const bh=$('rclBtnHere');   if(bh) bh.onclick=()=>rclAtualizarHere(true);
   const bp=$('rclBtnPrem');   if(bp) bp.onclick=rclPremModal;
   const bx=$('rclBtnExport'); if(bx) bx.onclick=rclExportar;
   const bd=$('rclBtnDiag');   if(bd) bd.onclick=()=>{ const c=$('rclCardDiag');
@@ -16093,13 +16613,23 @@ function sbChaveMemo(r){
   const k=sbChavePosto(r);
   return k;
 }
-function sbDieselDaRota(){
-  const r=(typeof SIMR!=='undefined')?SIMR.atual:null;
-  if(!r || !Array.isArray(r.rotaDetalhada) || !r.rotaDetalhada.length) return null;
-  if(!SB.rows.length || !SB.postos.length) return null;
-
-  const naRota=sbMatchPostos(r.rotaDetalhada, SB_RAIO_M);
-  if(!naRota.length) return null;
+/* ══ Preço do diesel a partir de uma LISTA DE POSTOS ═══════════════════════
+   O Simulador chega aqui com os postos que acabou de casar com a geometria
+   da rota em memória. A sub-aba Rota clientes chega com as CHAVES de posto
+   que ficaram gravadas no cache da HERE quando a rota foi simulada — a
+   geometria não é guardada, mas a lista de postos do trecho é. As duas
+   telas passam pelo mesmo motor: mesma banda, mesma regra de último
+   abastecimento, mesmo número. */
+function sbPostosPorChaves(chaves){
+  if(!Array.isArray(chaves) || !chaves.length) return [];
+  const ix=new Map(SB.postos.map(p=>[p.chave,p]));
+  const out=[];
+  chaves.forEach(k=>{ const p=ix.get(k); if(p) out.push(p); });
+  return out;
+}
+function sbDieselDePostos(naRota){
+  if(!Array.isArray(naRota) || !naRota.length) return null;
+  if(!SB.rows.length) return null;
   const idx=new Map(naRota.map(p=>[p.chave,p]));
 
   /* Este é o caso mais exposto da aba: o preço vem de UMA linha — o último
@@ -16126,6 +16656,26 @@ function sbDieselDaRota(){
   return { valor:+Number(melhor.linha.preco).toFixed(3), fonte:'posto_rota',
            linha:melhor.linha, posto:melhor.posto, postos:naRota,
            foraDaBanda:rejeitados, bandaRef:banda.ativa?+banda.ref.toFixed(3):null };
+}
+function sbDieselDaRota(){
+  const r=(typeof SIMR!=='undefined')?SIMR.atual:null;
+  if(!r || !Array.isArray(r.rotaDetalhada) || !r.rotaDetalhada.length) return null;
+  if(!SB.rows.length || !SB.postos.length) return null;
+  const naRota=sbMatchPostos(r.rotaDetalhada, SB_RAIO_M);
+  if(!naRota.length) return null;
+  return sbDieselDePostos(naRota);
+}
+/* A Rota clientes pede a média da unidade uma vez por rota; sem cache, cada
+   chamada varre a base inteira de abastecimentos. O cache é invalidado por
+   quantidade de linhas + carimbo da base, que é o que muda numa recarga. */
+function sbMediaUnidadeCache(filial){
+  const sel=String(filial||'').toUpperCase();
+  const ver=(SB.rows?SB.rows.length:0)+'¦'+((SB.meta&&SB.meta.ts)||'');
+  if(!SB._medCache || SB._medCacheVer!==ver){ SB._medCache=new Map(); SB._medCacheVer=ver; }
+  if(SB._medCache.has(sel)) return SB._medCache.get(sel);
+  const v=sbMediaUnidade(sel);
+  SB._medCache.set(sel, v);
+  return v;
 }
 function sbMediaUnidade(filial){
   const alvo=String(filial||'').toUpperCase();
@@ -16655,7 +17205,11 @@ setTimeout(()=>{ try{ sbGarantirBase(); }catch(_){} }, 2600);
 
 try{ window.SB=SB; window.sbMatchPostos=sbMatchPostos; window.sbDieselDaRota=sbDieselDaRota;
      window.sbMediaUnidade=sbMediaUnidade; window.sbRodovia=sbRodovia; window.sbKm=sbKm;
-     window.sbAplicarDieselE16=sbAplicarDieselE16; }catch(_){}
+     window.sbAplicarDieselE16=sbAplicarDieselE16;
+     /* Consumidos pela sub-aba Rota clientes, que vive em outro bloco */
+     window.sbDieselDePostos=sbDieselDePostos; window.sbPostosPorChaves=sbPostosPorChaves;
+     window.sbMediaUnidadeCache=sbMediaUnidadeCache; window.sbRodoviaLabel=sbRodoviaLabel;
+     window.sbDataBR=sbDataBR; }catch(_){}
 </script>
 
 </body>
