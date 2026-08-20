@@ -184,6 +184,18 @@ button.rcl-aliq-x{border:1px solid var(--bd);background:var(--wh);color:var(--mu
   font-size:11px;line-height:1;padding:1px 4px;cursor:pointer}
 button.rcl-aliq-x:hover{border-color:var(--ac);color:var(--ac)}
 
+/* Seletor de eixos dentro da linha do pedágio: precisa parecer parte do
+   texto, não um formulário — a linha continua sendo leitura, com um ponto
+   editável. */
+select.rcl-eixos{
+  font:inherit; font-size:11px; font-weight:600;
+  color:var(--tx); background:var(--bg2,#fff);
+  border:1px solid var(--bd,#d7dbe2); border-radius:5px;
+  padding:0 4px; margin:0 1px; cursor:pointer; vertical-align:baseline;
+}
+select.rcl-eixos:hover{ border-color:var(--pri,#2563eb); }
+select.rcl-eixos:disabled{ opacity:.6; cursor:default; }
+
 /* ╔══════════════════ RCLMEM-INICIO (CSS) ══════════════════════════════════╗
    ║ CAMADA TEMPORÁRIA DE VALIDAÇÃO — MEMÓRIA DE CÁLCULO EM HOVER DE 3 s     ║
    ║                                                                         ║
@@ -11298,6 +11310,10 @@ const RCL_CFG = {
      conjunto real e estreita o bastante para pegar dígito a mais, valor
      total no lugar da parcela ou centavo lido como real.                  */
   depMesBanda: { cavalo:[500, 60000], carreta:[100, 20000] },
+  /* Eixos pedagiáveis oferecidos na linha do pedágio. 4 a 9 cobre do
+     truck ao rodotrem — abaixo de 4 não existe conjunto nosso e acima de 9
+     não existe tarifa na ANTT. */
+  eixosOpcoes: [4,5,6,7,8,9],
   /* Placas-marcador de carta-frete complementar (mesma regra do pd.html) */
   reCFC: /^F(SC|SP|PR)[0O]+$/,
   maxLedger: 60000
@@ -11390,6 +11406,18 @@ const RCL_PADRAO = {
      carimbo de gravação do CPK (_editadoEm), que é literalmente o último
      registro mexido na base.                                              */
   deprecRefCriterio:'compra',      /* compra · inserido                     */
+  /* Qual parcela do ativo de referência entra na linha:
+       'base'    → a parcela MENSAL DO PLANO (compra − residual ÷ período, ou
+                   %anual ÷ 12, ou o valor manual). Não depende de quantos
+                   meses já correram. É o padrão, e a razão é econômica: esta
+                   tela precifica frete, e a pergunta que ela responde é
+                   "quanto custa por mês o capital de um conjunto assim".
+                   Um cavalo que terminou o plano contábil não parou de
+                   custar capital — parou de aparecer no razão.
+       'vigente' → a parcela da competência-base, igual à aba Depreciação do
+                   CPK. Fiel ao contábil, mas ZERA quando o plano acaba, e aí
+                   a linha cai no modelo sem que nada esteja errado.        */
+  deprecRefParcela: 'base',        /* base · vigente                        */
   fonteAlimentacao: 'simulador',   /* simulador · modelo                    */
   fonteTempo:       'simulador',   /* simulador · modelo                    */
   /* Pessoal do CPK: quais valores da Premissa (CPK) entram.
@@ -11495,8 +11523,43 @@ function rclEixosMin(){
   return e>0?e:5;
 }
 function rclEixosDe(P, lado){
+  const fx=RCL_CFG.eixosOpcoes, lo=fx[0], hi=fx[fx.length-1];
   const v=Number(lado==='volta' ? P.pedagioEixosVolta : P.pedagioEixosIda);
-  return v>0 ? Math.round(v) : rclEixosMin();
+  const n=v>0 ? Math.round(v) : rclEixosMin();
+  return Math.min(hi, Math.max(lo, n));
+}
+
+/* ══ SELETOR DE EIXOS NA PRÓPRIA LINHA ════════════════════════════════════
+   Pedido do comercial (ago/2026): o número de eixos de cada sentido é
+   escolhido ali, no Custo por viagem, e o pedágio muda na hora.
+
+   Muda de verdade, e sem gastar HERE: a medição guardou a tarifa POR EIXO
+   do percurso, então o valor cobrado é essa tarifa × os eixos escolhidos.
+   Trocar 5 por 6 é uma multiplicação local — o trajeto e as praças são os
+   mesmos. A escolha vale para toda a sub-aba e fica gravada nas premissas,
+   como a alíquota de imposto que já se edita na tela ao lado.             */
+let _rclEixosBusy=false;
+function rclEixosSelect(lado, valor){
+  if(!isGestorOuAdmin())
+    return `<b>${num(valor,0)} eixos</b>`;
+  const ops=RCL_CFG.eixosOpcoes.map(n=>
+    `<option value="${n}" ${n===valor?'selected':''}>${n} eixos</option>`).join('');
+  return `<select class="rcl-eixos" title="Eixos que pagam pedágio na ${lado}"
+      onchange="rclEixosDefinir('${lado}', this.value)"
+      onclick="event.stopPropagation()">${ops}</select>`;
+}
+function rclEixosDefinir(lado, valor){
+  if(_rclEixosBusy || !RCL.calculado) return;
+  const n=Math.round(Number(valor)||0); if(!(n>0)) return;
+  _rclEixosBusy=true;
+  try{
+    const chave = lado==='volta' ? 'pedagioEixosVolta' : 'pedagioEixosIda';
+    RCL.prem = {...(RCL.prem||{}), [chave]:n};
+    const aberto = RCL._painelAberto || null;
+    rclRecalcular();
+    if(aberto) rclPainel(aberto.chaveCli, aberto.k3, true);
+    rclGravarPrem(RCL.prem).catch(e=>console.warn('[Rota clientes] premissas:',e&&e.message));
+  } finally { _rclEixosBusy=false; }
 }
 /* ══ PEDÁGIO DOS DOIS TRECHOS ═════════════════════════════════════════════
    A HERE mede o trajeto uma vez; a tarifa por eixo medida ali é o que fica
@@ -12020,19 +12083,20 @@ async function rclRealCarregar(base){
   /* Referência resolvida na ÚLTIMA competência da base de cada unidade: é a
      parcela mensal vigente daquele ativo, não uma média de meses. */
   const criterio=(rclPrem().deprecRefCriterio==='inserido')?'inserido':'compra';
+  const modoParcela=(rclPrem().deprecRefParcela==='vigente')?'vigente':'base';
   const ultimoMes=(l)=>(l&&l.length)?l[l.length-1]:(meses.length?meses[meses.length-1]:'');
   const refDep={};
   SIGLAS.forEach(f=>{
     const m=ultimoMes((base.porOp[f]&&base.porOp[f].meses)||[]);
-    refDep[f]={ mes:m, criterio,
-                cavalo: rclDepEscolherRef(candDep[f].cavalo, m, criterio),
-                carreta:rclDepEscolherRef(candDep[f].carreta, m, criterio) };
+    refDep[f]={ mes:m, criterio, parcelaModo:modoParcela,
+                cavalo: rclDepEscolherRef(candDep[f].cavalo, m, criterio, modoParcela),
+                carreta:rclDepEscolherRef(candDep[f].carreta, m, criterio, modoParcela) };
   });
   {
     const m=ultimoMes(meses);
-    refDep._geral={ mes:m, criterio,
-                    cavalo: rclDepEscolherRef(candDep._geral.cavalo, m, criterio),
-                    carreta:rclDepEscolherRef(candDep._geral.carreta, m, criterio) };
+    refDep._geral={ mes:m, criterio, parcelaModo:modoParcela,
+                    cavalo: rclDepEscolherRef(candDep._geral.cavalo, m, criterio, modoParcela),
+                    carreta:rclDepEscolherRef(candDep._geral.carreta, m, criterio, modoParcela) };
   }
   /* Unidade sem cavalo (ou sem carreta) própria cadastrada herda a
      referência consolidada em vez de perder a linha. */
@@ -12045,6 +12109,10 @@ async function rclRealCarregar(base){
     });
   });
 
+  refDep._contagem={ total:Object.keys(veicsDep).length,
+                     cavalo:candDep._geral.cavalo.length,
+                     carreta:candDep._geral.carreta.length };
+
   const total=SIGLAS.map(s=>buckets[s]).reduce((a,b)=>rclrSomar(a,b), rclrBucket('consolidado'));
   RCL.real={ chave, meses:meses.slice(), base, porOp:buckets, total, refDep,
              falta:[...new Set(falta)], nota,
@@ -12056,38 +12124,108 @@ async function rclRealCarregar(base){
 /* Depreciação mensal de uma placa numa competência — transcrição fiel do
    cpkDepCalc() do módulo CPK. Se as duas contas divergirem, o CPK por rota
    deixa de bater com o CPK por placa, que é o que este módulo persegue. */
-function rclrDepMes(rec, mes){
-  const nN=v=>{ const x=Number(String(v==null?'':v).toString().replace(/\./g,'').replace(',','.')); return isNaN(x)?0:x; };
-  const vc=nN(rec.valorCompra), vrIn=nN(rec.valorResidual);
-  const per=Math.round(nN(rec.periodoMeses)), perc=nN(rec.percentualAnual), manual=nN(rec.valorManualMensal);
-  const metodo=String(rec.metodo||'linear').toLowerCase();
-  const status=String(rec.status||'ativo').toLowerCase();
-  if(status!=='ativo') return 0;
+/* ══ CÁLCULO DE DEPRECIAÇÃO — PORTE FIEL DO MÓDULO CPK ════════════════════
+   Esta função é a tradução linha a linha de cpkDepCalc()/cpkNum()/
+   cpkNormDate() do cpk.html. Antes havia uma reimplementação "equivalente"
+   aqui, e ela divergia em dois pontos que custaram caro:
+
+     · DATA — só aceitava ISO e dd/mm/aaaa com dois dígitos no dia e no mês.
+       O CPK aceita, além desses, objeto Date, serial de planilha (Excel) e
+       d/m/aa com um dígito. Um cadastro importado de planilha caía em
+       "sem data de compra", a parcela virava zero e o ativo sumia da lista
+       de candidatos — sem erro em lugar nenhum.
+     · DIAGNÓSTICO — devolvia só o número. Zero por "plano encerrado", zero
+       por "sem valor de compra" e zero por "comprado depois da competência"
+       eram indistinguíveis, e a tela não tinha como dizer o que houve.
+
+   Devolver a mesma estrutura do CPK resolve os dois: o número é idêntico ao
+   que a aba Depreciação mostra, por construção, e o motivo vem junto.      */
+function rclDepNum(v){
+  if(typeof v==='number') return isNaN(v)?0:v;
+  const n=parseFloat(String(v||'').replace(/\./g,'').replace(',','.'));
+  return isNaN(n)?0:n;
+}
+function rclDepNormDate(v){
+  if(!v||v===''||v===0) return '';
+  if(v instanceof Date && !isNaN(v)) return v.toISOString().slice(0,10);
+  /* Timestamp do Firestore chega como objeto com toDate() */
+  if(v && typeof v.toDate==='function'){ try{ const d=v.toDate(); if(d&&!isNaN(d)) return d.toISOString().slice(0,10); }catch(_){} }
+  if(typeof v==='number' && isFinite(v)){
+    const d=new Date(Date.UTC(1899,11,30)+Math.round(v)*86400000);
+    return d.toISOString().slice(0,10);
+  }
+  const t=String(v).trim();
+  const iso=t.match(/^(\d{4})-(\d{2})-(\d{2})/); if(iso) return iso[0];
+  const br=t.match(/^(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})/);
+  if(br){ const y=br[3].length===2?'20'+br[3]:br[3];
+          return y+'-'+String(br[2]).padStart(2,'0')+'-'+String(br[1]).padStart(2,'0'); }
+  return t.slice(0,10);
+}
+function rclDepMesRefDe(v){ const d=rclDepNormDate(v); return d?d.slice(0,7):''; }
+
+function rclDepCalc(rec, mes){
+  rec=rec||{};
+  const out={ problemas:[], metodo:String(rec.metodo||'linear').toLowerCase(),
+    status:String(rec.status||'ativo').toLowerCase(),
+    base:0, noMes:0, mesesDecorridos:0, mesesMax:0, encerrada:false,
+    valorCompra:0, valorResidual:0, depreciavel:0, mesCompra:'' };
+  const vc=rclDepNum(rec.valorCompra), vrIn=rclDepNum(rec.valorResidual);
+  const per=Math.round(rclDepNum(rec.periodoMeses));
+  const perc=rclDepNum(rec.percentualAnual), manual=rclDepNum(rec.valorManualMensal);
+  const metodo=out.metodo, status=out.status;
+  out.valorCompra=vc;
   const vr=Math.min(Math.max(0,vrIn), vc>0?vc:vrIn);
+  out.valorResidual=vr;
+  if(!(vc>0) && metodo!=='manual') out.problemas.push('sem-valor-compra');
+  if(metodo==='linear' && !(per>0))     out.problemas.push('sem-periodo');
+  if(metodo==='percentual' && !(perc>0))out.problemas.push('sem-percentual');
+  if(metodo==='manual' && !(manual>0))  out.problemas.push('sem-valor-mensal');
+  if(vrIn>vc && vc>0) out.problemas.push('residual-maior-compra');
+
   const depreciavel=Math.max(0, vc-vr);
+  out.depreciavel=depreciavel;
   let base=0;
   if(metodo==='manual') base=Math.max(0,manual);
   else if(metodo==='percentual') base=(vc>0&&perc>0)? vc*(perc/100)/12 : 0;
   else base=(per>0)? depreciavel/per : 0;
-  if(!(base>0)) return 0;
+  out.base=base;
+
   let mesesMax=Infinity;
   if(metodo==='linear' && per>0) mesesMax=per;
-  else if(depreciavel>0) mesesMax=Math.ceil(depreciavel/base - 1e-9);
-  /* mês de referência da compra, aceitando ISO e dd/mm/aaaa */
-  const dc=String(rec.dataCompra||'').trim();
-  let mc=null;
-  let mm=dc.match(/^(\d{4})-(\d{2})/);            if(mm) mc=mm[1]+'-'+mm[2];
-  if(!mc){ mm=dc.match(/^(\d{2})\/(\d{2})\/(\d{4})/); if(mm) mc=mm[3]+'-'+mm[2]; }
-  if(!mc || !mes || mc>mes) return 0;
-  const [ay,am]=mc.split('-').map(Number), [by,bm]=mes.split('-').map(Number);
-  const decorridos=(by-ay)*12+(bm-am)+1;
-  if(decorridos<1 || decorridos>(isFinite(mesesMax)?mesesMax:decorridos)) return 0;
-  if(depreciavel>0){
-    const restanteAntes=depreciavel-base*(decorridos-1);
-    return Math.max(0, Math.min(base, restanteAntes));
+  else if(base>0 && depreciavel>0) mesesMax=Math.ceil(depreciavel/base - 1e-9);
+  out.mesesMax=isFinite(mesesMax)?mesesMax:0;
+
+  const mc=rclDepMesRefDe(rec.dataCompra);
+  out.mesCompra=mc;
+  let meses=0;
+  if(!mc) out.problemas.push('sem-data-compra');
+  else if(mes){
+    if(mc>mes){ out.problemas.push('compra-futura'); meses=0; }
+    else { const [ay,am]=mc.split('-').map(Number),[by,bm]=mes.split('-').map(Number);
+           meses=(by-ay)*12+(bm-am)+1; }
   }
-  return base;
+  out.mesesDecorridos=meses;
+  out.encerrada=(isFinite(mesesMax)&&meses>=mesesMax) && meses>0;
+  if(status!=='ativo') out.problemas.push('status-'+status);
+
+  const incide = status==='ativo' && base>0 && meses>=1 && meses<=(isFinite(mesesMax)?mesesMax:meses);
+  let parcela=base;
+  if(incide && depreciavel>0){ const restanteAntes=depreciavel-base*(meses-1); parcela=Math.max(0,Math.min(base,restanteAntes)); }
+  out.noMes=incide?parcela:0;
+  return out;
 }
+/* Parcela CONTÁBIL da competência — é a que soma no rateio da frota e a que
+   a aba Depreciação do CPK exibe para o mês. */
+function rclrDepMes(rec, mes){ return rclDepCalc(rec, mes).noMes; }
+const RCL_DEP_MOTIVO={
+  'sem-valor-compra':'sem valor de compra no cadastro',
+  'sem-periodo':'sem período de depreciação (método linear)',
+  'sem-percentual':'sem percentual anual (método percentual)',
+  'sem-valor-mensal':'sem valor mensal (método manual)',
+  'sem-data-compra':'sem data de compra utilizável',
+  'residual-maior-compra':'valor residual maior que o de compra',
+  'compra-futura':'comprado depois da competência-base'
+};
 
 /* ══ ATIVO DE REFERÊNCIA DA DEPRECIAÇÃO ═══════════════════════════════════
    Pedido do comercial (ago/2026): a depreciação do cavalo e a da carreta
@@ -12127,31 +12265,47 @@ function rclDepOrdemChave(rec, criterio){
    depreciou naquele mês (comprado depois, já encerrado, baixado) não vira
    zero silencioso: ele é PULADO e o motivo fica registrado, para a memória
    de cálculo poder dizer por que a referência não é o primeiro da lista. */
-function rclDepEscolherRef(lista, mes, criterio){
+function rclDepEscolherRef(lista, mes, criterio, modoParcela){
+  const usarBase = modoParcela!=='vigente';
   const cand=(lista||[]).filter(x=>String(x.rec.status||'ativo').toLowerCase()==='ativo');
   if(!cand.length) return null;
   const ord=new Map(cand.map(x=>[x, rclDepOrdemChave(x.rec, criterio)]));
   const fila=cand.slice().sort((a,b)=>{ const A=ord.get(a), B=ord.get(b); return A<B?1:(A>B?-1:0); });
   const pulados=[];
   for(const x of fila){
-    const mensal=rclrDepMes(x.rec, mes);
+    const d=rclDepCalc(x.rec, mes);
+    /* No modo 'base', o único requisito é o cadastro produzir uma parcela
+       mensal de plano. Plano encerrado, compra posterior à competência ou
+       competência-base ausente NÃO desqualificam o ativo — nenhuma dessas
+       coisas diz que o conjunto deixou de custar capital. É essa a
+       diferença que fazia o cavalo mais novo, já depreciado, sumir da lista
+       enquanto a carreta 2026, ainda no plano, aparecia. */
+    const mensal = usarBase ? d.base : d.noMes;
     if(mensal>0){
       return { placa:x.placa, tipo:x.tipo, unidade:x.fil, rec:x.rec, mensal, mes, criterio,
+               parcelaModo: usarBase?'base':'vigente',
+               base:d.base, vigente:d.noMes, encerrada:d.encerrada,
+               mesesDecorridos:d.mesesDecorridos, mesesMax:d.mesesMax,
+               problemas:d.problemas.slice(), mesCompra:d.mesCompra,
                candidatos:cand.length, pulados,
                rotulo:[x.rec.marca, x.rec.modelo].filter(Boolean).join(' ').trim(),
                ano:String(x.rec.anoMod||x.rec.anoFab||''),
                compra:rclDepDataISO(x.rec.dataCompra),
                inserido:String(x.rec._editadoEm||''),
                metodo:String(x.rec.metodo||'linear'),
-               valorCompra:Number(String(x.rec.valorCompra||0).toString().replace(/\./g,'').replace(',','.'))||0 };
+               valorCompra:d.valorCompra, valorResidual:d.valorResidual,
+               periodoMeses:Math.round(rclDepNum(x.rec.periodoMeses)) };
     }
-    if(pulados.length<6)
-      pulados.push({ placa:x.placa, compra:rclDepDataISO(x.rec.dataCompra),
-                     motivo: rclDepDataISO(x.rec.dataCompra)>mes+'-31'
-                       ? 'comprado depois da competência-base'
-                       : 'sem parcela nesta competência (prazo encerrado, residual atingido ou valor zerado)' });
+    if(pulados.length<6){
+      const mot = d.problemas.length
+        ? d.problemas.map(q=>RCL_DEP_MOTIVO[q]||q).join(' · ')
+        : (usarBase ? 'cadastro não produz parcela mensal de plano'
+                    : 'sem parcela nesta competência (prazo encerrado ou residual atingido)');
+      pulados.push({ placa:x.placa, compra:rclDepDataISO(x.rec.dataCompra), motivo:mot });
+    }
   }
-  return { placa:null, mensal:0, mes, criterio, candidatos:cand.length, pulados };
+  return { placa:null, mensal:0, mes, criterio, candidatos:cand.length, pulados,
+           parcelaModo: usarBase?'base':'vigente' };
 }
 
 /* ══ Taxas do realizado ═══════════════════════════════════════════════════
@@ -13321,8 +13475,13 @@ function rclCalcular(){
       ['cavalo','carreta'].forEach(t=>{
         const x=rd[t];
         if(!x || !(x.mensal>0)){
-          RCL.aviso.push(`${op}: nenhum ${t} próprio com parcela de depreciação vigente na base do CPK em ${String(rd.mes||'—')} — a linha de depreciação do ${t} caiu no modelo. Confira a aba Depreciação do CPK: ativo sem data de compra, com prazo encerrado ou marcado como vendido/baixado não gera parcela.`
-            + ((x&&x.pulados&&x.pulados.length)?` Registros mais novos que foram pulados: ${x.pulados.map(q=>q.placa+' ('+q.motivo+')').join(' · ')}.`:''));
+          const cnt=(real.refDep._contagem)||{};
+          const quantos = t==='cavalo' ? (cnt.cavalo||0) : (cnt.carreta||0);
+          RCL.aviso.push(
+            `${op}: a linha de depreciação do ${t} caiu no modelo — nenhum dos ${num(quantos,0)} ${t}(s) próprios da base do CPK produziu parcela mensal utilizável.`
+            + ((x&&x.pulados&&x.pulados.length)
+                ? ` Motivo, registro a registro: ${x.pulados.map(q=>q.placa+' — '+q.motivo).join(' · ')}.`
+                : ' Nenhum registro classificado como '+t+' chegou até a seleção: confira tipo, status e unidade na aba Depreciação do CPK.'));
           return;
         }
         const faixa=(RCL_CFG.depMesBanda&&RCL_CFG.depMesBanda[t])||[0,Infinity];
@@ -13713,6 +13872,7 @@ function rclRodape(){
 
 /* ══ Painel de uma rota ═══════════════════════════════════════════════════ */
 function rclPainel(chaveCli, k3, semScroll){
+  RCL._painelAberto={chaveCli, k3};
   const el=$('rclPainel'); if(!el) return;
   const cl=RCL.clientes.find(c=>c.chave===chaveCli);
   const r = cl && cl.rotas.find(x=>x.k3===k3);
@@ -13971,8 +14131,8 @@ function rclPainel(chaveCli, k3, semScroll){
   const pd      = cu && cu.pedDet ? cu.pedDet : null;
   add('Pedágio','pedagio',li.pedagio,
       pedFon==='here' && cu && cu.pedOk
-        ? `ida ${brl(cu.pIda)} (${num(pd?pd.eixosIda:0,0)} eixos)`
-          + (pd&&!pd.cobrarVolta ? ` · volta não cobrada` : ` + volta ${brl(cu.pVolta)} (${num(pd?pd.eixosVolta:0,0)} eixos)`)
+        ? `ida ${brl(cu.pIda)} · ${rclEixosSelect('ida', pd?pd.eixosIda:5)}`
+          + (pd&&!pd.cobrarVolta ? ` · volta não cobrada` : ` + volta ${brl(cu.pVolta)} · ${rclEixosSelect('volta', pd?pd.eixosVolta:5)}`)
           + (cu.aprov>0?` · volta ${pct(1-cu.aprov,0)}`:'')
         : (cu&&cu.pedOk?`HERE ${brl(pedHere)} · cobrado por km`:'sem base de praças'),
       mem('Pedágio',{selo:selo('pedagio'),
@@ -14170,8 +14330,22 @@ function rclPainel(chaveCli, k3, semScroll){
     ['Comprado em', x.compra||'—', 'Data de compra registrada na aba Depreciação do CPK.'],
     ['Valor de compra', brl(x.valorCompra), 'Base do cálculo, junto com residual e prazo cadastrados.'],
     ['Método', String(x.metodo||'linear'), 'Mesma fórmula do módulo CPK: linear sobre o valor depreciável, percentual anual ou valor manual.'],
-    ['Parcela mensal na competência-base', brl(x.mensal)+(qtd>1?(' × '+num(qtd,0)+' carretas'):''),
-     'Depreciação deste ativo no mês de '+String(x.mes||'—')+'. É o numerador da linha.'],
+    [x.parcelaModo==='base'?'Parcela mensal do plano':'Parcela mensal na competência-base',
+     brl(x.mensal)+(qtd>1?(' × '+num(qtd,0)+' carretas'):''),
+     x.parcelaModo==='base'
+       ? ('Parcela do PLANO deste ativo: '+(x.metodo==='linear'
+           ? brl(x.valorCompra)+' − '+brl(x.valorResidual)+' de residual ÷ '+num(x.periodoMeses||0,0)+' meses'
+           : 'método '+String(x.metodo||'linear'))
+          +'. Não depende de quantos meses já correram — esta tela precifica frete, e a pergunta é quanto custa por mês o capital de um conjunto assim. Um ativo que terminou o plano contábil não parou de custar capital; parou de aparecer no razão.')
+       : ('Depreciação contábil deste ativo no mês de '+String(x.mes||'—')+'. É o numerador da linha.')],
+    (x.parcelaModo==='base' && x.encerrada)
+      ? ['Situação contábil', 'plano encerrado ('+num(x.mesesDecorridos||0,0)+' de '+num(x.mesesMax||0,0)+' meses)',
+         'No razão este ativo já não deprecia — a parcela da competência é '+brl(x.vigente)+'. A linha usa a parcela do plano de propósito; a chave "Parcela do ativo de referência" nas premissas volta ao contábil.']
+      : null,
+    (x.problemas&&x.problemas.length)
+      ? ['Ressalvas do cadastro', x.problemas.map(q=>RCL_DEP_MOTIVO[q]||q).join(' · '),
+         'Vêm da mesma conferência que a aba Depreciação do CPK faz no registro.']
+      : null,
     ['Viagens desta rota no mês', num(vgMesR,2),
      'Viagens da rota na janela ÷ meses da janela. É o divisor: depreciação é custo mensal fixo, e a rota carrega a fatia proporcional às viagens que faz.'],
     ['= R$ por viagem', brl(Math.abs((qtd>1?x.mensal*qtd:x.mensal)/Math.max(vgMesR,0.01))),
@@ -15190,6 +15364,7 @@ function rclPremModal(){
       ${s('pessoalCpkBase','Pessoal — base do CPK', P.pessoalCpkBase, [['ambos','Frota 35% + Agregado 65%'],['frota','Só Custo Frota 35%']], 'ambos carrega a folha inteira da unidade')}
       ${s('fonteDeprec','Depreciações', P.fonteDeprec, [['cpk_novo','CPK — equipamento mais novo'],['cpk','CPK — rateio da frota'],['modelo','Modelo']], 'referência de reposição')}
       ${s('deprecRefCriterio','Qual é o "mais novo"', P.deprecRefCriterio, [['compra','Data de compra mais recente'],['inserido','Último registro inserido no CPK']], 'compra não se move ao corrigir cadastro antigo')}
+      ${s('deprecRefParcela','Parcela do ativo de referência', P.deprecRefParcela, [['base','Parcela mensal do plano'],['vigente','Parcela da competência (contábil)']], 'a do plano não zera quando o plano acaba')}
       ${s('fonteAlimentacao','Alimentação', P.fonteAlimentacao, [['simulador','Simulador (E32)'],['modelo','Dentro do pessoal']])}
       ${s('fonteTempo','Tempo parado', P.fonteTempo, [['simulador','Simulador'],['modelo','Premissa da rota']])}
       ${s('nivelamento','Nivelamento do realizado', P.nivelamento, [['medido','Fechar com o Mapinha'],['taxa','Taxa sem fechamento']])}
@@ -15271,7 +15446,8 @@ function rclPremModal(){
       fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
       fonteDocSeguros:gS('fonteDocSeguros'), fontePessoal:gS('fontePessoal'),
       pessoalCpkBase:gS('pessoalCpkBase'), fonteDeprec:gS('fonteDeprec'),
-      deprecRefCriterio:gS('deprecRefCriterio'), hereAuto:gB('hereAuto'),
+      deprecRefCriterio:gS('deprecRefCriterio'), deprecRefParcela:gS('deprecRefParcela'),
+      hereAuto:gB('hereAuto'),
       fonteAlimentacao:gS('fonteAlimentacao'), fonteTempo:gS('fonteTempo'),
       nivelamento:gS('nivelamento'),
       ovDieselRS:gN('ovDieselRS'), ovArlaRS:gN('ovArlaRS'), ovPedagioKm:gN('ovPedagioKm'),
@@ -15412,6 +15588,10 @@ async function rclExportar(){
                 Ano:x.ano||'', 'Data de compra':x.compra||'',
                 'Valor de compra':+(x.valorCompra||0).toFixed(2), 'Método':x.metodo||'',
                 'Competência':x.mes||'', 'Depreciação mensal':+(x.mensal||0).toFixed(2),
+                'Parcela adotada':x.parcelaModo==='base'?'plano':'competência',
+                'Parcela do plano':+(x.base||0).toFixed(2),
+                'Parcela contábil no mês':+(x.vigente||0).toFixed(2),
+                'Plano encerrado':x.encerrada?'sim':'',
                 'Critério':x.criterio==='inserido'?'último inserido':'compra mais recente',
                 'Candidatos':x.candidatos||0,
                 'Herdado do consolidado':x.herdado?'sim':'',
