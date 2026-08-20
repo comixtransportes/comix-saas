@@ -9309,6 +9309,11 @@ function rtPedagioDoTrecho(trecho, eixos){
   if(!trecho) return null;
   if(trecho.pedagio!=null)
     return { valor:+Number(trecho.pedagio).toFixed(2), fonte:'here',
+             /* A HERE não abre a tarifa praça a praça; o por-eixo aqui é o
+                total dividido pelos eixos consultados — aproximação
+                explícita, sinalizada com porEixoAprox. */
+             porEixo: eixos>0 ? +(Number(trecho.pedagio)/eixos).toFixed(4) : null,
+             porEixoAprox:true,
              nPracas:trecho.nPracas||0, pracas:null, eixos };
   try{
     if(!Array.isArray(trecho.secoes) || !trecho.secoes.length) return null;
@@ -9317,7 +9322,12 @@ function rtPedagioDoTrecho(trecho, eixos){
     if(!hits.length) return null;
     const total=calcularPedagioLocal(hits, eixos);
     if(!(total>0)) return null;
+    /* A soma das tarifas POR EIXO é o número invariante do trecho: com ela,
+       trocar os eixos do conjunto vira uma multiplicação local, sem
+       recontratar a HERE. É o que permite o flag de eixos da tela. */
+    const somaEixo=hits.reduce((a,h)=>a+(Number(h.tarifaEixo)||0),0);
     return { valor:+total.toFixed(2), fonte:'pracas', nPracas:hits.length, eixos,
+             porEixo:+somaEixo.toFixed(4),
              /* só o resumo entra no cache: nome, rodovia e tarifa por eixo.
                 Geometria continua fora — o cache é de números derivados. */
              pracas:hits.slice(0,40).map(h=>({ nome:String(h.nome||'Praça').slice(0,48),
@@ -9355,8 +9365,19 @@ const RT_HERE_VER = 3;
      refazer é decisão de gente, não do sistema.
    rtHereIncompleta  — esta rota está atualizada com o perfil vigente? É a
      que a fila manual da Análise de Rotas usa, para oferecer o recálculo. */
+const RT_ERRO_BACKOFF_H = 24;
 function rtHereSemMedicao(c){
-  return !c || c.erro || !(Number(c.v)>=RT_HERE_VER);
+  if(!c) return true;
+  if(c.erro){
+    /* Uma rota que falha (endereço que não geocodifica, par sem rota
+       rodoviária) falhava DE NOVO a cada abertura da janela, queimando duas
+       chamadas por vez, todo dia, para sempre. Depois de uma falha ela só
+       volta sozinha à fila passadas 24 h — antes disso, só no botão. */
+    const t=Date.parse(c.ts||'');
+    if(Number.isFinite(t) && (Date.now()-t) < RT_ERRO_BACKOFF_H*3600e3) return false;
+    return true;
+  }
+  return !(Number(c.v)>=RT_HERE_VER);
 }
 function rtHereIncompleta(c){
   if(!c || c.erro || c.obsoleto) return true;
@@ -9364,10 +9385,34 @@ function rtHereIncompleta(c){
   return !(Number(c.v)>=RT_HERE_VER);
 }
 
+/* ══ DEDUPE POR PAR ORIGEM/DESTINO ═══════════════════════════════════════
+   As rotas da SZY são códigos comerciais, não trajetos: dezenas delas ligam
+   o mesmo par de cidades com contratos, clientes ou produtos diferentes.
+   Como a geocodificação é centro-a-centro, o percurso — e portanto o
+   pedágio, o relevo e os postos do trecho — é IDÊNTICO para todas elas.
+   Medir cada uma era pagar N vezes pela mesma resposta.
+
+   Este índice vive só enquanto o lote roda: a primeira rota de cada par
+   chama a HERE, as demais copiam o resultado dela e ficam marcadas com a
+   rota de origem, para a memória de cálculo não fingir medição própria. */
+let RT_PAR_LOTE = null;
+function rtParChave(o,d){
+  const f=(x)=>Number(x).toFixed(4);
+  return f(o.lat)+','+f(o.lng)+'|'+f(d.lat)+','+f(d.lng);
+}
 async function rtSimularRota(r){
   const perfil=rtPerfilAtivo();
   const eixos=Math.max(2, Math.round(Number(perfil.eixos)||5));
   const {o,d}=await rtCoordRota(r);
+  if(RT_PAR_LOTE){
+    const pk=rtParChave(o,d), gem=RT_PAR_LOTE.get(pk);
+    if(gem){
+      const reg={...JSON.parse(JSON.stringify(gem)), k:r.k3, op:r.op, cod:r.codigoRaw,
+                 ts:agoraISO(), parDe:gem.k, par:pk};
+      RT.hereCache.set(r.k3,reg);
+      return reg;
+    }
+  }
   const ida=await rtHereRota(o,d,perfil,true);
   const volta=await rtHereRota(d,o,perfil,false);
   const pedI=rtPedagioDoTrecho(ida, eixos), pedV=rtPedagioDoTrecho(volta, eixos);
@@ -9385,6 +9430,7 @@ async function rtSimularRota(r){
     ida:{ km:+ida.km.toFixed(2), min:Math.round(ida.min), minBase:Math.round(ida.minBase),
           minTipico: ida.minTipico!=null?Math.round(ida.minTipico):null,
           pedagio: pedI?pedI.valor:null, pedagioFonte: pedI?pedI.fonte:null,
+          pedagioEixo: pedI?pedI.porEixo:null, pedagioEixoAprox: pedI?!!pedI.porEixoAprox:false,
           nPracas: pedI?pedI.nPracas:0, pracas: pedI?pedI.pracas:null,
           temElev: ida.temElev,
           topo: ida.temElev?rtTopografia(ida.pontos):null,
@@ -9393,6 +9439,7 @@ async function rtSimularRota(r){
     volta:{ km:+volta.km.toFixed(2), min:Math.round(volta.min), minBase:Math.round(volta.minBase),
           minTipico: volta.minTipico!=null?Math.round(volta.minTipico):null,
           pedagio: pedV?pedV.valor:null, pedagioFonte: pedV?pedV.fonte:null,
+          pedagioEixo: pedV?pedV.porEixo:null, pedagioEixoAprox: pedV?!!pedV.porEixoAprox:false,
           nPracas: pedV?pedV.nPracas:0, pracas: pedV?pedV.pracas:null,
           temElev: volta.temElev,
           topo: volta.temElev?rtTopografia(volta.pontos):null,
@@ -9400,6 +9447,7 @@ async function rtSimularRota(r){
           restr: rtRestricoes(volta.notices) }
   };
   RT.hereCache.set(r.k3,reg);
+  if(RT_PAR_LOTE) RT_PAR_LOTE.set(rtParChave(o,d), reg);
   return reg;
 }
 
@@ -9430,14 +9478,25 @@ async function rtSimularLote(escopo,resimular){
 async function rtSimularHereLista(alvo){
   if(RT.fila.rodando) return;
   if(!alvo || !alvo.length) return;
-  RT.fila={rodando:true,cancelar:false,feitos:0,total:alvo.length,erros:0,atual:''};
+  /* Índice de pares vivo durante o lote inteiro, semeado com o que já está
+     medido: rota nova cujo par já foi resolvido em qualquer rodada anterior
+     copia o resultado em vez de chamar a HERE de novo. */
+  RT_PAR_LOTE=new Map();
+  RT.hereCache.forEach(c=>{
+    if(!c || c.erro || !c.geo || !(Number(c.v)>=RT_HERE_VER) || c.parDe) return;
+    if(c.perfil!==RT.perfilHash) return;
+    const pk=rtParChave({lat:c.geo.oLat,lng:c.geo.oLng},{lat:c.geo.dLat,lng:c.geo.dLng});
+    if(!RT_PAR_LOTE.has(pk)) RT_PAR_LOTE.set(pk,c);
+  });
+  RT.fila={rodando:true,cancelar:false,feitos:0,total:alvo.length,erros:0,atual:'',
+           reaproveitadas:0, chamadas0:(RT.hereChamadas||0)};
   rtRenderFila();
   let i=0, desdeGravacao=0;
   const worker=async()=>{
     while(i<alvo.length && !RT.fila.cancelar){
       const r=alvo[i++];
       RT.fila.atual=(r.codigoRaw||'')+' '+r.origem+' → '+r.destino;
-      try{ await rtSimularRota(r); }
+      try{ const reg=await rtSimularRota(r); if(reg&&reg.parDe) RT.fila.reaproveitadas++; }
       catch(e){
         RT.fila.erros++;
         RT.hereCache.set(r.k3,{v:2,k:r.k3,erro:String(e.message||e).slice(0,120),ts:agoraISO(),perfil:RT.perfilHash});
@@ -9450,11 +9509,14 @@ async function rtSimularHereLista(alvo){
   const n=Math.max(1,Math.min(RT_CFG.hereConc,alvo.length));
   await Promise.all(Array.from({length:n},worker));
   try{ await rtGravarCacheHere(); await rtGravarCacheGeo(); }catch(e){ toast('Simulações feitas, mas a gravação falhou: '+e.message,'am'); }
-  const {feitos,erros,cancelar}=RT.fila;
+  const {feitos,erros,cancelar,reaproveitadas}=RT.fila;
+  RT_PAR_LOTE=null;
   RT.fila.rodando=false; rtRenderFila();
   rtAtualizar();
-  toast(`${feitos-erros} rotas simuladas${erros?`, ${erros} com falha`:''}${cancelar?' (cancelado)':''}.`, erros?'am':'gn');
-  return {feitos, erros, cancelar};
+  toast(`${feitos-erros} rotas simuladas${erros?`, ${erros} com falha`:''}`
+      + `${reaproveitadas?`, ${reaproveitadas} aproveitadas de par já medido`:''}`
+      + `${cancelar?' (cancelado)':''}.`, erros?'am':'gn');
+  return {feitos, erros, cancelar, reaproveitadas};
 }
 function rtRenderFila(){
   const f=RT.fila, el=$('rtFila');
@@ -11221,6 +11283,21 @@ const RCL_CFG = {
      quando ela empurra o número para fora do plausível. Quando corta, a tela
      diz que cortou. */
   kmlPisoRel: 0.50, kmlTetoRel: 1.55,
+  /* ══ BANDA DA DEPRECIAÇÃO DE REFERÊNCIA ═════════════════════════════════
+     A banda relativa de ¼–4× compara o realizado com o MODELADO, e para
+     esta linha essa comparação está errada por construção: o modelo usa o
+     valor do ativo na premissa do Simulador (R$ 350.000 de cavalo, 10 anos
+     → R$ 2.917/mês), enquanto a referência é um caminhão NOVO, que hoje sai
+     por R$ 700–900 mil e muitas vezes é depreciado em 60 meses. A parcela
+     legítima de um zero-quilômetro passa de 4× a do modelo com facilidade —
+     e era exatamente por isso que a linha do cavalo caía de volta no modelo
+     enquanto a da carreta, cujo valor de tabela mudou menos, passava.
+
+     A conferência aqui é ABSOLUTA e vale sobre a parcela MENSAL do ativo,
+     não sobre a razão: uma faixa larga o bastante para aceitar qualquer
+     conjunto real e estreita o bastante para pegar dígito a mais, valor
+     total no lugar da parcela ou centavo lido como real.                  */
+  depMesBanda: { cavalo:[500, 60000], carreta:[100, 20000] },
   /* Placas-marcador de carta-frete complementar (mesma regra do pd.html) */
   reCFC: /^F(SC|SP|PR)[0O]+$/,
   maxLedger: 60000
@@ -11283,6 +11360,17 @@ const RCL_PADRAO = {
      precisão. 'realizado' continua disponível para quem quiser o total do
      módulo fechando com o import de pedágio do Mapinha.                    */
   fontePedagio:     'here',        /* here · realizado · modelo             */
+  /* ── Eixos e volta do pedágio, como no Simulador ───────────────────────
+     O pedágio é sempre calculado nos DOIS sentidos, mas o que se cobra em
+     cada um é decisão de operação: a volta vazia pode ir com eixo erguido, e
+     há contrato em que ela simplesmente não é cobrada. Os eixos entram como
+     multiplicador sobre a tarifa por eixo já medida no percurso — trocar o
+     número aqui NÃO gasta chamada de HERE nenhuma, o trajeto é o mesmo.
+     null nos dois campos = o MENOR número de eixos entre os conjuntos
+     cadastrados, que é o padrão pedido: cobrar pelo piso, nunca pelo teto. */
+  pedagioEixosIda:  null,          /* null = menor eixo cadastrado          */
+  pedagioEixosVolta:null,          /* null = menor eixo cadastrado          */
+  pedagioCobrarVolta: true,        /* a volta entra sempre, por padrão      */
   fontePneus:       'realizado',   /* realizado · modelo                    */
   fonteLubrificante:'realizado',   /* realizado · modelo                    */
   fontePecas:       'realizado',   /* realizado · modelo                    */
@@ -11347,7 +11435,12 @@ const RCL_PADRAO = {
      medido (ou que estão em cache antigo, sem pedágio medido e sem os
      postos do trecho). Desligar volta ao comportamento manual, pelo botão. */
   hereAuto:         true,
-  hereAutoTeto:     400            /* teto de rotas por rodada automática    */
+  /* Teto por rodada AUTOMÁTICA. Baixo de propósito: o automático existe para
+     as rotas que ninguém mediu ainda, não para varrer a base. Ele atende as
+     rotas de maior faturamento primeiro — que são as que alguém vai abrir —
+     e o resto fica para o botão, onde a conta de chamadas está à vista. O
+     recálculo manual não passa por este teto. */
+  hereAutoTeto:     60             /* teto de rotas por rodada automática    */
 };
 
 /* ══ ALÍQUOTA POR ROTA ════════════════════════════════════════════════════
@@ -11389,6 +11482,43 @@ const RCL = {
    pontos do módulo segue intacta (nenhuma coleção nova, nenhuma mudança em
    index.html nem em firestore.rules). */
 function rclPrem(){ return {...RCL_PADRAO, ...(RCL.prem||{})}; }
+/* Menor número de eixos entre os conjuntos cadastrados em Veículos & Eixos.
+   É o padrão dos dois campos de eixos do pedágio: começar pelo piso e subir
+   por decisão, nunca o contrário. */
+function rclEixosMin(){
+  try{
+    const l=(typeof simEixosCadastrados==='function') ? simEixosCadastrados() : [];
+    const ns=l.map(x=>Number(x.eixos)).filter(n=>n>0);
+    if(ns.length) return Math.min(...ns);
+  }catch(_){}
+  const e=Number(rtPerfilAtivo().eixos);
+  return e>0?e:5;
+}
+function rclEixosDe(P, lado){
+  const v=Number(lado==='volta' ? P.pedagioEixosVolta : P.pedagioEixosIda);
+  return v>0 ? Math.round(v) : rclEixosMin();
+}
+/* ══ PEDÁGIO DOS DOIS TRECHOS ═════════════════════════════════════════════
+   A HERE mede o trajeto uma vez; a tarifa por eixo medida ali é o que fica
+   guardado. O valor cobrado é essa tarifa × os eixos escolhidos para cada
+   sentido — por isso mudar eixos ou desligar a volta recalcula na hora, sem
+   nova chamada. Cache antigo, sem o por-eixo gravado, cai para o total
+   medido dividido pelos eixos da simulação; se nem isso houver, usa o total
+   como veio e marca que os eixos não puderam ser aplicados.              */
+function rclPedagioTrecho(tr, eixos, eixosSim){
+  if(!tr) return {valor:null, aplicouEixos:false};
+  const pe = Number(tr.pedagioEixo);
+  if(pe>0) return {valor:+(pe*eixos).toFixed(2), aplicouEixos:true, aprox:!!tr.pedagioEixoAprox, porEixo:pe};
+  if(Array.isArray(tr.pracas) && tr.pracas.length){
+    const soma=tr.pracas.reduce((a,x)=>a+(Number(x.te)||0),0);
+    if(soma>0) return {valor:+(soma*eixos).toFixed(2), aplicouEixos:true, porEixo:+soma.toFixed(4)};
+  }
+  if(tr.pedagio!=null && eixosSim>0){
+    const pe2=Number(tr.pedagio)/eixosSim;
+    return {valor:+(pe2*eixos).toFixed(2), aplicouEixos:true, aprox:true, porEixo:+pe2.toFixed(4)};
+  }
+  return {valor: tr.pedagio!=null ? Number(tr.pedagio) : null, aplicouEixos:false};
+}
 async function rclCarregarPrem(){
   if(RCL.premCarregada) return;
   RCL.premCarregada = true;
@@ -11853,7 +11983,7 @@ async function rclRealCarregar(base){
     const cad=mapaVeic.get(placa);
     if(cad && !rclrPlacaProp(placa,mapaVeic)) return;          /* só frota própria */
     const fil=String(rec.unidade||(cad&&(cad.unidade||cad.filial))||'').toUpperCase().slice(0,2);
-    const bk=buckets[fil]; if(!bk) return;
+    const bk=buckets[fil];
     const tipo = rclrTipoVeic({...(cad||{}), tipo:rec.tipo||(cad&&cad.tipo)});
     /* ── Classificação do CANDIDATO, espelhando o rateio logo abaixo ──────
        O rateio da frota manda para o balde do CAVALO tudo que não é carreta
@@ -11870,9 +12000,15 @@ async function rclRealCarregar(base){
                   : (tipo==='apoio' || ehCompressor) ? null : 'cavalo';
     if(tipoRef){
       const item={placa, rec, fil, tipo, tipoRef};
-      candDep[fil][tipoRef].push(item);
+      /* Ativo sem unidade resolvida (sem campo no CPK e sem cadastro em
+         `veiculos`) não entra no rateio da frota — não há a qual filial
+         somá-lo —, mas ENTRA na lista consolidada de candidatos. Perder um
+         cavalo por falta de cadastro de unidade era outro caminho para a
+         unidade terminar sem referência e a linha cair no modelo. */
+      if(bk) candDep[fil][tipoRef].push(item);
       candDep._geral[tipoRef].push(item);
     }
+    if(!bk) return;
     let soma=0;
     ((base.porOp[fil]&&base.porOp[fil].meses)||[]).forEach(m=>{ soma += rclrDepMes(rec, m); });
     if(!(soma>0)) return;
@@ -12372,12 +12508,23 @@ function rclPreparo(bk, ctx){
   const distMeta = { szyIda, szyVolta, hereIda, hereVolta, portaAPorta,
                      delta:distDelta, alerta:distAlerta,
                      limite:(P.distAlertaPct>0?P.distAlertaPct:0.10) };
-  /* pedágio por trecho: a base de praças por eixo quando a HERE devolveu,
-     senão o que estiver cadastrado como premissa da rota. */
-  let pIda = here&&here.ida ? here.ida.pedagio : null;
-  let pVolta = here&&here.volta ? here.volta.pedagio : null;
+  /* pedágio por trecho: tarifa por eixo medida no percurso × os eixos
+     escolhidos para cada sentido, e a volta só entra se estiver marcada. */
+  const eixosSim = Number(here&&here.eixos)>0 ? Number(here.eixos) : Number(rtPerfilAtivo().eixos)||5;
+  const eIda   = rclEixosDe(P,'ida');
+  const eVolta = rclEixosDe(P,'volta');
+  const cobrarVolta = P.pedagioCobrarVolta!==false;
+  const tIda   = rclPedagioTrecho(here&&here.ida,   eIda,   eixosSim);
+  const tVolta = rclPedagioTrecho(here&&here.volta, eVolta, eixosSim);
+  let pIda   = tIda.valor;
+  let pVolta = cobrarVolta ? tVolta.valor : 0;
   const pedOk = pIda!=null;
-  if(!pedOk && Pb.pedagioFonte==='manual' && Pb.pedagioManual>0){ pIda=Pb.pedagioManual/2; pVolta=Pb.pedagioManual/2; }
+  const pedDet = {eixosIda:eIda, eixosVolta:eVolta, cobrarVolta, eixosSim,
+                  aplicouEixos: !!(tIda.aplicouEixos||tVolta.aplicouEixos),
+                  aprox: !!(tIda.aprox||tVolta.aprox),
+                  porEixoIda:tIda.porEixo||null, porEixoVolta:tVolta.porEixo||null,
+                  brutoVolta: tVolta.valor};
+  if(!pedOk && Pb.pedagioFonte==='manual' && Pb.pedagioManual>0){ pIda=Pb.pedagioManual/2; pVolta=cobrarVolta?Pb.pedagioManual/2:0; }
   /* consumo modelado (normalizado no pré-passe) + calibração pela SZC.
      norm devolve o viés do modelo (litros ×norm ⇒ km/l ÷norm) e fator aplica
      o realizado da SZC (mais litros comprados ⇒ km/l menor). */
@@ -12411,7 +12558,7 @@ function rclPreparo(bk, ctx){
   const ap=ctx.aprovIdx.get(r.k3);
   const temPlaca = !!(ap && ap.comPlaca>0);
   const aprov = (P.aproveitarRetorno && temPlaca && ap.tot>0) ? ap.ok/ap.tot : 0;
-  return {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, tonViagem, cons,
+  return {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, pedDet, tonViagem, cons,
           norm, fator, kmlC, kmlV, kmlTravado, kmlBanda, baseKml:baseKm, temPlaca, aprov};
 }
 
@@ -12466,7 +12613,7 @@ function rclCustoBucket(bk, ctx){
   const nMeses=Math.max(RCL.meses.length,1);
   const q=rclPreparo(bk, ctx);
   if(!q){ bk.erro='sem distância na SZY nem na HERE'; bk.custo=null; bk.litrosAtrib=0; return; }
-  const {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, tonViagem, cons,
+  const {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, pedDet, tonViagem, cons,
          norm, fator, kmlC, kmlV, kmlTravado, kmlBanda, baseKml, temPlaca, aprov}=q;
 
   const pr = ctx.precos[r.op] || ctx.precos._geral || {};
@@ -12670,14 +12817,23 @@ function rclCustoBucket(bk, ctx){
   const refCar = refDep && refDep.carreta;
   const manualDep=(k)=>!!(T && T.manual && T.manual[k]);
   if(P.fonteDeprec==='cpk_novo'){
-    const vCav = manualDep('depCavVg') ? T.depCavVg
-               : ((refCav && refCav.mensal>0) ? refCav.mensal/viagensMes : null);
-    const vCar = manualDep('depCarVg') ? T.depCarVg
-               : ((refCar && refCar.mensal>0) ? refCar.mensal*nCarretas/viagensMes : null);
-    troca('deprecCavalo','cpk_novo', vCav, manualDep('depCavVg')?'cpk':'cpk·novo',
-          {taxa:'depCavVg', motivoSemTaxa:'nenhum cavalo próprio com parcela de depreciação vigente na base do CPK na competência-base'});
-    troca('deprecCarreta','cpk_novo', vCar, manualDep('depCarVg')?'cpk':'cpk·novo',
-          {taxa:'depCarVg', motivoSemTaxa:'nenhuma carreta própria com parcela de depreciação vigente na base do CPK na competência-base'});
+    /* A parcela do ativo de referência é conferida contra uma faixa
+       ABSOLUTA de R$/mês, não contra o modelado: um cavalo zero-quilômetro
+       deprecia legitimamente várias vezes o valor de tabela da premissa, e
+       a banda relativa recusava justamente o número que se quer usar. */
+    const guarda=(x, tipo, mult)=>{
+      if(!x || !(x.mensal>0)) return {v:null, motivo:`nenhum ${tipo} próprio com parcela de depreciação vigente na base do CPK na competência-base`};
+      const faixa=(RCL_CFG.depMesBanda&&RCL_CFG.depMesBanda[tipo])||[0,Infinity];
+      if(x.mensal<faixa[0] || x.mensal>faixa[1])
+        return {v:null, motivo:`a parcela mensal de ${brl(x.mensal)} do ${tipo} de referência (${x.placa||'—'}) ficou fora da faixa de sanidade ${brl(faixa[0])}–${brl(faixa[1])}/mês — confira o cadastro na aba Depreciação do CPK`};
+      return {v:x.mensal*(mult||1)/viagensMes};
+    };
+    const gCav = manualDep('depCavVg') ? {v:T.depCavVg} : guarda(refCav,'cavalo',1);
+    const gCar = manualDep('depCarVg') ? {v:T.depCarVg} : guarda(refCar,'carreta',nCarretas);
+    troca('deprecCavalo','cpk_novo', gCav.v, manualDep('depCavVg')?'cpk':'cpk·novo',
+          {taxa:'depCavVg', semBanda:true, motivoSemTaxa:gCav.motivo});
+    troca('deprecCarreta','cpk_novo', gCar.v, manualDep('depCarVg')?'cpk':'cpk·novo',
+          {taxa:'depCarVg', semBanda:true, motivoSemTaxa:gCar.motivo});
   }else{
     troca('deprecCavalo', P.fonteDeprec==='cpk'?'cpk':'modelo',  (T&&T.depCavVg!=null) ? T.depCavVg  : null, 'cpk', {taxa:'depCavVg'});
     troca('deprecCarreta',P.fonteDeprec==='cpk'?'cpk':'modelo',  (T&&T.depCarVg!=null) ? T.depCarVg  : null, 'cpk', {taxa:'depCarVg'});
@@ -12718,7 +12874,7 @@ function rclCustoBucket(bk, ctx){
   const custoModelado = cFull.total - aprov*(cFull.total-(cIda.erro?cFull.total:cIda.total));
 
   bk.custo={
-    fonteDist, distMeta, kmIda, kmVolta, kmViagem, aprov, temPlaca, pedOk,
+    fonteDist, distMeta, kmIda, kmVolta, kmViagem, aprov, temPlaca, pedOk, pedDet,
     pIda, pVolta, cons, fator, norm,
     /* O preço exibido tem de ser o que ENTROU na linha: quando o realizado é
        recusado pela banda, a linha volta ao modelo e o preço também. */
@@ -13164,8 +13320,14 @@ function rclCalcular(){
       const rd=real.refDep[op]||real.refDep._geral; if(!rd) return;
       ['cavalo','carreta'].forEach(t=>{
         const x=rd[t];
-        if(!x || !(x.mensal>0))
-          RCL.aviso.push(`${op}: nenhum ${t} próprio com parcela de depreciação vigente na base do CPK em ${String(rd.mes||'—')} — a linha de depreciação do ${t} caiu no modelo. Confira a aba Depreciação do CPK: ativo sem data de compra, com prazo encerrado ou marcado como vendido/baixado não gera parcela.`);
+        if(!x || !(x.mensal>0)){
+          RCL.aviso.push(`${op}: nenhum ${t} próprio com parcela de depreciação vigente na base do CPK em ${String(rd.mes||'—')} — a linha de depreciação do ${t} caiu no modelo. Confira a aba Depreciação do CPK: ativo sem data de compra, com prazo encerrado ou marcado como vendido/baixado não gera parcela.`
+            + ((x&&x.pulados&&x.pulados.length)?` Registros mais novos que foram pulados: ${x.pulados.map(q=>q.placa+' ('+q.motivo+')').join(' · ')}.`:''));
+          return;
+        }
+        const faixa=(RCL_CFG.depMesBanda&&RCL_CFG.depMesBanda[t])||[0,Infinity];
+        if(x.mensal<faixa[0] || x.mensal>faixa[1])
+          RCL.aviso.push(`${op}: a parcela mensal de ${brl(x.mensal)} do ${t} de referência (${x.placa}) está fora da faixa de sanidade ${brl(faixa[0])}–${brl(faixa[1])}/mês e NÃO foi usada — a linha caiu no modelo. Quase sempre é valor total no lugar da parcela, prazo em anos onde se esperava meses, ou um dígito a mais no cadastro do CPK.`);
       });
     });
   }
@@ -13804,9 +13966,14 @@ function rclPainel(chaveCli, k3, semScroll){
      fazer. Agora ela mostra o valor EFETIVAMENTE cobrado e diz por quê. */
   const pedHere = cu ? cu.pedagioHere : null;
   const pedFon  = fon('pedagio');
+  /* Eixos e chave da volta usados nesta rota — vêm do preparo junto com os
+     dois trechos, para a nota e a memória contarem a mesma história. */
+  const pd      = cu && cu.pedDet ? cu.pedDet : null;
   add('Pedágio','pedagio',li.pedagio,
       pedFon==='here' && cu && cu.pedOk
-        ? `ida ${brl(cu.pIda)} + volta ${brl(cu.pVolta)}${cu.aprov>0?` · volta ${pct(1-cu.aprov,0)}`:''}`
+        ? `ida ${brl(cu.pIda)} (${num(pd?pd.eixosIda:0,0)} eixos)`
+          + (pd&&!pd.cobrarVolta ? ` · volta não cobrada` : ` + volta ${brl(cu.pVolta)} (${num(pd?pd.eixosVolta:0,0)} eixos)`)
+          + (cu.aprov>0?` · volta ${pct(1-cu.aprov,0)}`:'')
         : (cu&&cu.pedOk?`HERE ${brl(pedHere)} · cobrado por km`:'sem base de praças'),
       mem('Pedágio',{selo:selo('pedagio'),
         fonte: pedFon==='here'
@@ -13817,13 +13984,22 @@ function rclPainel(chaveCli, k3, semScroll){
               ? 'A HERE não conseguiu medir praça nesta rota. Só aqui a linha cai no R$/km do pedágio realizado do Mapinha (aba Pedágios, Valor Cobrado + Vale Comix) — é uma média de frota, não o pedágio desta rota.'
               : 'Pedágio do modelo, sem base de praças e sem realizado.')),
         formula: pedFon==='here'
-          ? `praças da HERE, ida + volta na fração não aproveitada\n${brl(cu?cu.pIda:null)} + ${num(cu?(1-cu.aprov):1,2)} × ${brl(cu?cu.pVolta:null)} = ${brl(li.pedagio)}`
+          ? `tarifa por eixo medida no percurso × eixos de cada sentido\n`
+            + `ida ${num(pd?pd.porEixoIda:0,2)}/eixo × ${num(pd?pd.eixosIda:0,0)} = ${brl(cu?cu.pIda:null)}\n`
+            + (pd&&!pd.cobrarVolta ? `volta não cobrada (chave nas premissas)\n`
+               : `volta ${num(pd?pd.porEixoVolta:0,2)}/eixo × ${num(pd?pd.eixosVolta:0,0)} = ${brl(cu?cu.pVolta:null)}\n`)
+            + `${brl(cu?cu.pIda:null)} + ${num(cu?(1-cu.aprov):1,2)} × ${brl(cu?cu.pVolta:null)} = ${brl(li.pedagio)}`
           : (pedFon==='mapinha+here'
             ? `pedágio HERE da viagem × fator de nivelamento\n${brl(pedHere)} × ${num(T?T.pedagioFator:1,4)} = ${brl(li.pedagio)}`
             : `R$/km de pedágio × km da viagem\n${brl(T?T.pedagioKm:null)} × ${num(kmV,1)} km = ${brl(li.pedagio)}`),
         linhas:[
-          cu&&cu.pedOk?['Praças HERE — ida', brl(cu.pIda)]:null,
-          cu&&cu.pedOk?['Praças HERE — volta', brl(cu.pVolta)]:null,
+          cu&&cu.pedOk?['Praças HERE — ida', brl(cu.pIda)+' · '+num(pd?pd.eixosIda:0,0)+' eixos']:null,
+          cu&&cu.pedOk?['Praças HERE — volta', (pd&&!pd.cobrarVolta)
+              ? 'não cobrada'+(pd.brutoVolta!=null?' (mediria '+brl(pd.brutoVolta)+')':'')
+              : brl(cu.pVolta)+' · '+num(pd?pd.eixosVolta:0,0)+' eixos']:null,
+          (pd&&pd.porEixoIda)?['Tarifa por eixo — ida', brl(pd.porEixoIda)+'/eixo']:null,
+          (pd&&pd.porEixoVolta)?['Tarifa por eixo — volta', brl(pd.porEixoVolta)+'/eixo']:null,
+          (pd&&pd.aprox)?['Abertura por praça','indisponível — por-eixo estimado a partir do total medido']:null,
           ['Retorno aproveitado', pct(cu?cu.aprov:0,0)],
           cu&&cu.pedOk?['HERE cobrado nesta viagem', brl(pedHere)]:null,
           (pedFon!=='here'&&cu&&cu.pedOk)?['Diferença para a HERE', brl((li.pedagio||0)-(pedHere||0))]:null,
@@ -14004,10 +14180,18 @@ function rclPainel(chaveCli, k3, semScroll){
   const depPulados=(x)=> (x&&x.pulados&&x.pulados.length)
     ? x.pulados.map(q=>`${q.placa}${q.compra?' ('+q.compra+')':''} — ${q.motivo}`).join(' · ') : '';
 
+  /* Quando a fonte escolhida é o ativo de referência e a linha aparece como
+     MODELO, o motivo tem de estar na própria linha: foi assim que a
+     depreciação do cavalo passou uma rodada inteira exibindo a conta da
+     premissa sem ninguém saber por quê. */
+  const depMotivo=(k)=>{ const rs=ress(k);
+    return (P.fonteDeprec==='cpk_novo' && noModelo(k) && rs)
+      ? `<br><span class="muted">sem o ativo de referência: ${esc(rs.motivo)}</span>` : ''; };
+
   add('Depreciação do cavalo','deprecCavalo',li.deprecCavalo,
       fon('deprecCavalo')==='cpk·novo'
         ? `${brl(dCav?dCav.mensal:null)}/mês ÷ ${num(vgMesR,2)} viagens<br><span class="muted">${esc(depQuem(dCav))}</span>`
-        : notaFonte('deprecCavalo', T?`${brl(T.depCavVg)}/viagem`:''),
+        : notaFonte('deprecCavalo', T?`${brl(T.depCavVg)}/viagem`:'')+depMotivo('deprecCavalo'),
       memFonte('Depreciação do cavalo','deprecCavalo',
       fon('deprecCavalo')==='cpk·novo'
       ? mem('Depreciação do cavalo',{selo:selo('deprecCavalo'),
@@ -14052,7 +14236,7 @@ function rclPainel(chaveCli, k3, semScroll){
   add('Depreciação da carreta','deprecCarreta',li.deprecCarreta,
       fon('deprecCarreta')==='cpk·novo'
         ? `${brl(dCar?dCar.mensal:null)}/mês${dRef&&dRef.carretas>1?' × '+num(dRef.carretas,0):''} ÷ ${num(vgMesR,2)} viagens<br><span class="muted">${esc(depQuem(dCar))}</span>`
-        : notaFonte('deprecCarreta', T?`${brl(T.depCarVg)}/viagem`:''),
+        : notaFonte('deprecCarreta', T?`${brl(T.depCarVg)}/viagem`:'')+depMotivo('deprecCarreta'),
       memFonte('Depreciação da carreta','deprecCarreta',
       fon('deprecCarreta')==='cpk·novo'
       ? mem('Depreciação da carreta',{selo:selo('deprecCarreta'),
@@ -14924,6 +15108,12 @@ function rclPremModal(){
       <select id="rcl_${id}" ${ed?'':'disabled'}>${ops.map(o=>`<option value="${o[0]}" ${String(v)===String(o[0])?'selected':''}>${o[1]}</option>`).join('')}</select></label>`;
   const c=(id,l,v,dica)=>`<label class="fld"><span class="fl">${l}${dica?`<i>${dica}</i>`:''}</span>
       <select id="rcl_${id}" ${ed?'':'disabled'}><option value="1" ${v?'selected':''}>Sim</option><option value="0" ${v?'':'selected'}>Não</option></select></label>`;
+  /* Eixos vêm dos conjuntos cadastrados, como no Simulador. A primeira opção
+     é o padrão vivo: se amanhã entrar um conjunto com menos eixos, ela passa
+     a valer sozinha, sem ninguém ter de reabrir esta tela. */
+  const eixosCad=(typeof simEixosCadastrados==='function')?simEixosCadastrados():[];
+  const opsEixos=[['',`Menor cadastrado (${num(rclEixosMin(),0)} eixos)`]]
+    .concat(eixosCad.map(x=>[String(x.eixos), `${x.eixos} eixos`+(x.perfis&&x.perfis.filter(Boolean).length?` · ${x.perfis.filter(Boolean)[0]}`:'')]));
 
   mdAbrir('Premissas do resultado por cliente',
    `<div class="muted" style="margin-bottom:10px">
@@ -15012,10 +15202,24 @@ function rclPremModal(){
       Simulador — depois disso a rota não é recalculada sozinha, nem quando o perfil da composição muda. Refazer a
       medição de uma rota já salva é sempre manual, pelo botão <b>🗺 Medir rotas na HERE</b>. A chave abaixo decide
       apenas se as rotas que <b>nunca</b> foram medidas entram na fila ao abrir a janela.
+      <br><br>Três travas seguram o consumo: rotas que ligam o <b>mesmo par de cidades</b> compartilham uma medição só
+      (o trajeto é idêntico, o pedágio também); rota que <b>falhou</b> só volta sozinha à fila depois de 24 h; e a
+      rodada automática respeita o teto abaixo, atendendo primeiro as rotas de maior faturamento.
     </div>
     <div class="rt-fields grid3">
       ${c('hereAuto','Medir sozinho o que nunca foi medido', P.hereAuto, 'nunca refaz rota já salva')}
-      ${n('hereAutoTeto','Teto por rodada automática', P.hereAutoTeto, '10', 'rotas')}
+      ${n('hereAutoTeto','Teto por rodada automática', P.hereAutoTeto, '10', 'rotas · o botão não tem teto')}
+    </div>
+    <div class="muted" style="font-size:10.5px;margin:10px 0 6px">
+      O pedágio é medido nos <b>dois sentidos</b>. O que os campos abaixo mudam é quantos eixos pagam em cada um e se a
+      volta é cobrada — tudo aplicado sobre a tarifa por eixo já medida no percurso, então
+      <b>trocar eixos não gasta chamada de HERE</b>. O padrão é o menor número de eixos entre os conjuntos cadastrados
+      em Veículos &amp; Eixos (${num(rclEixosMin(),0)} eixos): cobrar pelo piso e subir por decisão, nunca o contrário.
+    </div>
+    <div class="rt-fields grid3">
+      ${s('pedagioEixosIda','Eixos — ida (carregado)', P.pedagioEixosIda==null?'':P.pedagioEixosIda, opsEixos, 'padrão = menor cadastrado')}
+      ${s('pedagioEixosVolta','Eixos — volta (vazio)', P.pedagioEixosVolta==null?'':P.pedagioEixosVolta, opsEixos, 'eixo erguido = menos eixos')}
+      ${c('pedagioCobrarVolta','Cobrar o pedágio da volta', P.pedagioCobrarVolta!==false, 'marcado por padrão')}
     </div>
 
     <h3 style="font-size:12px;margin-top:12px">Sobrescritas manuais das taxas</h3>
@@ -15062,6 +15266,8 @@ function rclPremModal(){
       fonteDiesel:gS('fonteDiesel'), fonteArla:gS('fonteArla'), arlaBase:gS('arlaBase'),
       arlaPct:gN('arlaPct')||0.05,
       fontePedagio:gS('fontePedagio'), fontePneus:gS('fontePneus'),
+      pedagioEixosIda:gN('pedagioEixosIda'), pedagioEixosVolta:gN('pedagioEixosVolta'),
+      pedagioCobrarVolta:gB('pedagioCobrarVolta'),
       fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
       fonteDocSeguros:gS('fonteDocSeguros'), fontePessoal:gS('fontePessoal'),
       pessoalCpkBase:gS('pessoalCpkBase'), fonteDeprec:gS('fonteDeprec'),
@@ -15277,8 +15483,23 @@ function rclHereAutoTalvez(){
 /* Abre a escolha quando o clique é manual: medir só o que falta, ou refazer
    a medição de rotas que já estão salvas. O recálculo do que já foi medido
    NUNCA acontece sozinho — é este modal, e só ele, que o dispara. */
+/* Quantas rotas de uma lista têm par origem/destino DISTINTO — é o número
+   que vira chamada de verdade, depois do dedupe. Sem coordenada resolvida
+   ainda (rota nunca medida), o par é estimado pelo texto origem→destino,
+   que erra para mais e nunca promete economia que não existe. */
+function rclParesDistintos(lista){
+  const set=new Set();
+  (lista||[]).forEach(r=>{
+    const c=RT.hereCache.get(r.k3);
+    if(c && c.geo) set.add(rtParChave({lat:c.geo.oLat,lng:c.geo.oLng},{lat:c.geo.dLat,lng:c.geo.dLng}));
+    else set.add('t:'+String(r.origem||'').toUpperCase()+'→'+String(r.destino||'').toUpperCase());
+  });
+  return set.size;
+}
 function rclHereModal(){
-  const pend=rclRotasPendentesHere().length, med=rclRotasMedidasHere().length;
+  const lp=rclRotasPendentesHere(), lm=rclRotasMedidasHere();
+  const pend=lp.length, med=lm.length;
+  const parPend=rclParesDistintos(lp), parTodas=rclParesDistintos(lp.concat(lm));
   if(!pend && !med){ toast('Nenhuma rota com viagem no período para medir.','am'); return; }
   mdAbrir('Percurso e pedágio na HERE',
    `<div class="muted" style="margin-bottom:10px">
@@ -15290,11 +15511,11 @@ function rclHereModal(){
       <label class="rt-chk" style="display:flex;gap:8px;align-items:flex-start;padding:6px 0">
         <input type="radio" name="rclHereEsc" value="pend" ${pend?'checked':''} ${pend?'':'disabled'}>
         <span><b>Medir as rotas que ainda não têm pedágio salvo</b><br>
-        <span class="muted" style="font-weight:400">${num(pend,0)} rota(s) · ~${num(pend*2,0)} chamadas</span></span></label>
+        <span class="muted" style="font-weight:400">${num(pend,0)} rota(s) · ${num(parPend,0)} trajeto(s) distinto(s) · ~${num(parPend*2,0)} chamadas</span></span></label>
       <label class="rt-chk" style="display:flex;gap:8px;align-items:flex-start;padding:6px 0">
         <input type="radio" name="rclHereEsc" value="todas" ${pend?'':'checked'}>
         <span><b>Recalcular também as já medidas</b><br>
-        <span class="muted" style="font-weight:400">${num(pend+med,0)} rota(s) · ~${num((pend+med)*2,0)} chamadas · sobrescreve o pedágio salvo</span></span></label>
+        <span class="muted" style="font-weight:400">${num(pend+med,0)} rota(s) · ${num(parTodas,0)} trajeto(s) distinto(s) · ~${num(parTodas*2,0)} chamadas · sobrescreve o pedágio salvo</span></span></label>
     </div>`,
    `<button class="btn" onclick="mdFechar()">Cancelar</button>
     <button class="btn pri" id="rclHereGo">Iniciar</button>`);
@@ -15319,12 +15540,20 @@ async function rclAtualizarHere(manual){
     if(manual) toast('Todas as rotas da janela já estão medidas na HERE, com pedágio e postos do trecho.','gn');
     return;
   }
-  const teto=Math.max(1, Math.round(Number(P.hereAutoTeto)||400));
+  /* Ordem por faturamento da rota na janela: se o teto cortar, o que fica de
+     fora é a cauda de rotas que quase ninguém abre, não a rota do contrato
+     grande. */
+  const receitaDe=(r)=>{ const bk=RCL.porRota instanceof Map ? RCL.porRota.get(r.k3) : null;
+                         return bk ? (Number(bk.receita)||0) : 0; };
+  alvo.sort((a,b)=>receitaDe(b)-receitaDe(a));
+  /* O teto vale para a rodada automática. No manual quem decide é quem
+     clicou, e o modal já mostrou quantas chamadas aquilo custa. */
+  const teto=manual ? Infinity : Math.max(1, Math.round(Number(P.hereAutoTeto)||60));
   const cortou = alvo.length>teto;
   if(cortou) alvo=alvo.slice(0,teto);
   const res=await rtSimularHereLista(alvo);
   try{ rtAplicarHere(RT.rotas); }catch(_){}
-  if(cortou) toast(`Teto de ${teto} rotas por rodada atingido — rode de novo para as restantes.`,'am');
+  if(cortou) toast(`Teto de ${teto} rotas por rodada automática atingido — as demais ficam para o botão 🗺 Medir rotas na HERE.`,'am');
   rclRecalcular();
   return res;
 }
