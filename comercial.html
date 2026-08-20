@@ -174,6 +174,15 @@ input[type=number]{font-family:var(--m)}
 .rcl-leg b{font-family:var(--m);color:var(--tx);font-weight:600}
 .rcl-leg span::before{content:'';display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;background:currentColor}
 @media(max-width:1100px){ .rcl-kpis{grid-template-columns:repeat(2,1fr)} }
+/* Campo aberto da alíquota, na própria linha de Impostos do resultado. */
+.rcl-aliq-wrap{display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--mu)}
+input.rcl-aliq{width:56px;padding:1px 5px;border:1px solid var(--bd);border-radius:5px;
+  font-family:var(--m);font-size:11px;text-align:right;background:var(--wh);color:var(--tx)}
+input.rcl-aliq:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 2px rgba(37,99,235,.15)}
+input.rcl-aliq.editado{border-color:var(--ac);background:#eff6ff;font-weight:600}
+button.rcl-aliq-x{border:1px solid var(--bd);background:var(--wh);color:var(--mu);border-radius:5px;
+  font-size:11px;line-height:1;padding:1px 4px;cursor:pointer}
+button.rcl-aliq-x:hover{border-color:var(--ac);color:var(--ac)}
 
 /* ╔══════════════════ RCLMEM-INICIO (CSS) ══════════════════════════════════╗
    ║ CAMADA TEMPORÁRIA DE VALIDAÇÃO — MEMÓRIA DE CÁLCULO EM HOVER DE 3 s     ║
@@ -217,9 +226,18 @@ input[type=number]{font-family:var(--m)}
    rótulo, um valor ou a fórmula abre o segundo nível, sem atraso. */
 #rclMemPop [data-orig]{cursor:help;border-radius:3px}
 #rclMemPop [data-orig]:hover{background:var(--ac-bg);box-shadow:inset 0 0 0 1px var(--ac)}
+/* Bloco "de onde saiu cada parcela": a decomposição da fórmula, insumo por
+   insumo, cada um com a sua própria procedência no segundo nível. */
+#rclMemPop .mm-ins{margin:2px 0 6px;border-left:2px solid var(--bd2);padding-left:7px}
+#rclMemPop .mm-ins .mm-ih{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--mu);font-weight:700;margin-bottom:2px}
+#rclMemPop .mm-ins .mm-i{display:flex;justify-content:space-between;gap:12px;padding:2px 0;
+  font-size:10.5px}
+#rclMemPop .mm-ins .mm-i b{font-family:var(--m);font-weight:600;white-space:nowrap}
+#rclMemPop .mm-ins .mm-i i{font-style:normal;color:var(--mu);font-size:9.5px;display:block}
 #rclMemPop2{position:fixed;z-index:10001;max-width:360px;background:var(--hd);color:#fff;
   border-radius:7px;box-shadow:0 8px 24px rgba(0,0,0,.30);padding:8px 10px;font-size:10.5px;
-  line-height:1.5;display:none;pointer-events:none}
+  line-height:1.5;display:none;pointer-events:none;white-space:pre-wrap}
 #rclMemPop2.on{display:block}
 #rclMemPop2 .m2-t{font-weight:700;font-size:10.5px;margin-bottom:3px;color:#bfd4ff;
   text-transform:uppercase;letter-spacing:.04em}
@@ -10632,7 +10650,7 @@ const RCLMEM_GLOSS = [
   [/tonelada|(^|\b)ton\b|peso/, 'Toneladas', 'Campo de peso do CT-e no SZB, somado e dividido por 1.000. Peso zerado no CT-e derruba a completude e deixa o R$/t sem base.'],
   [/receita l[íi]quida/, 'Receita líquida', 'Receita bruta menos os impostos sobre a venda. É a base de toda a cascata daí para baixo — o custo nunca é comparado com a receita bruta.'],
   [/receita bruta|faturamento/, 'Receita bruta', 'Soma do Valor Total dos CT-e do SZB na janela, sem nenhum desconto. É o número que bate com o faturamento do Protheus para as rotas resolvidas.'],
-  [/imposto|al[íi]quota|pis|cofins|icms/, 'Impostos', 'PIS/COFINS + ICMS pela alíquota efetiva da filial, das premissas do módulo. Pode ser sobrescrita por uma alíquota manual em "⚙ Premissas do resultado".'],
+  [/imposto|al[íi]quota|pis|cofins|icms/, 'Impostos', 'Receita bruta × alíquota adotada. A alíquota tem um campo aberto na própria linha de Impostos do resultado da rota: o que estiver digitado ali vale só para aquela rota; em branco, vale o padrão do módulo (10%). A alíquota fiscal da filial (PIS/COFINS + ICMS das premissas) continua calculada e aparece na memória, ao lado da adotada, para que a diferença nunca fique escondida.'],
   [/km atribu|quil[óo]metro|(^|\b)km\b|dist[âa]ncia/, 'Quilometragem', 'Km da rota × viagens. O km da rota vem da SZY quando ela tem a distância cadastrada, e da HERE quando não tem ou quando o cálculo é porta a porta. Ida carregada + volta vazia, salvo quando o retorno foi aproveitado.'],
   [/(^|\b)cpk\b/, 'CPK', 'Custo total ÷ km atribuído. É o custo por quilômetro rodado e o número que amarra esta tela com o módulo CPK.'],
   [/(^|\b)vpk\b/, 'VPK', 'Receita bruta ÷ km atribuído. É a receita por quilômetro. VPK menos CPK é a margem por quilômetro.'],
@@ -10643,12 +10661,12 @@ const RCLMEM_GLOSS = [
   [/margem de contribui/, 'Margem de contribuição', 'Receita líquida menos custo variável. É o que a rota deixa para pagar o custo fixo — rota com MC negativa perde dinheiro a cada viagem, mesmo com a frota parada.'],
   [/margem|% da receita/, 'Margem', 'Resultado ÷ receita bruta. Percentual, não valor: duas rotas com o mesmo resultado e receitas diferentes têm margens diferentes.'],
   [/resultado/, 'Resultado', 'Receita líquida − custo total − comissão − estrutura. É o último degrau da cascata.'],
-  [/diesel|litro|km\/l|consumo/, 'Diesel e consumo', 'Litros vêm do modelo físico (massa, relevo da HERE, curvas), calibrados pelo fator de aderência; o preço vem da SZC (média ponderada por litros) ou do R$ do Mapinha ÷ litros da SZC, o que estiver dentro da banda sã.'],
+  [/diesel|litro|km\/l|consumo/, 'Diesel e consumo', 'Quatro camadas: premissa da frota → modelo físico da rota (massa, relevo da HERE, curvas) → calibração pelo diesel comprado, com os dois lados da razão na escala da frota → guarda de plausibilidade que impede um km/l fora do que a composição alcança. O preço vem da SZC (média ponderada por litros) ou do R$ do Mapinha ÷ litros da SZC, o que estiver dentro da banda sã.'],
   [/ped[áa]gio/, 'Pedágio', 'Aba Pedágios do Mapinha, por placa (Valor Cobrado + Vale Comix), com a rota da SZY como referência de praças. Rota sem pedágio identificado derruba a completude.'],
-  [/fator|ader[êe]ncia|calibra/, 'Fator de aderência', 'Litros comprados na SZC ÷ litros que o modelo previu, ambos do mês-base. Corrige o km/l de todas as rotas da operação de uma vez. Fora da banda sã não é aplicado — vira sintoma de base incompleta.'],
+  [/fator|ader[êe]ncia|calibra/, 'Fator de aderência', 'Litros comprados na SZC ÷ litros ESPERADOS DA FROTA, ambos do mês-base. Os esperados são os litros que o modelo pede para as viagens amarradas, divididos pela cobertura — sem essa correção de escala o diesel da unidade inteira era comparado com o modelo de apenas parte das viagens, e a razão media cobertura junto com consumo. Corrige o km/l de todas as rotas da operação de uma vez. Fora da banda sã não é aplicado — vira sintoma de base incompleta.'],
   [/placa/, 'Placa', 'Campo Placa do CT-e. Sem placa não há como medir aproveitamento de retorno, e toda volta é cobrada como vazia (na dúvida, o custo maior).'],
   [/retorno|aproveit/, 'Aproveitamento de retorno', 'Fração das viagens em que a MESMA placa emitiu outro CT-e saindo de onde acabou de entregar, dentro da janela de dias das premissas. Nessas, a volta foi paga por outro frete e não é cobrada aqui.'],
-  [/deprecia/, 'Depreciação', 'Cadastro de depreciação por placa do módulo CPK (coleção cpk_lancamentos/DEPRECIACAO). Placa sem cadastro entra sem custo de capital.'],
+  [/deprecia/, 'Depreciação', 'Custo de capital do conjunto. Quando a linha está marcada CPK, vem do cadastro de depreciação por placa do módulo CPK (coleção cpk_lancamentos/DEPRECIACAO), somado no período e dividido pelas viagens medidas no mês-base — placa sem cadastro entra sem custo de capital. Quando a linha está marcada MODELO, esse caminho foi recusado (taxa ausente ou fora da banda ¼–4×) e o valor vem do núcleo de custo: valor do equipamento ÷ vida útil ÷ 12 ÷ viagens do mês. O selo ao lado do nome da linha diz qual dos dois está valendo.'],
   [/pessoal|folha|35%/, 'Pessoal', 'Campo Custo Frota 35% da Premissa (CPK) — a mesma memória de folha com AE diluído que o módulo CPK usa. Não vem dos lançamentos 13/14/15.01 do DRE.'],
   [/base|compet[êe]ncia|m[êe]s|fechamento/, 'Mês-base', 'Competência FECHADA no Mapinha de onde saem as médias de consumo e as taxas de custo. Viagens, receita e km continuam vindo da janela analisada — só o R$/km e o R$/viagem recuam para o mês fechado.'],
   [/completude|qualidade|banda|situa/, 'Qualidade do dado', 'Fração do cálculo sustentada por dado medido: HERE 25% + elevação 20% + pedágio 20% + placa 15% + SZC 10% + peso 10%. É o que separa "a rota dá 12%" de "a rota parece dar 12%".'],
@@ -10683,15 +10701,41 @@ function rclMemHtml(d){
         + (selo?`<span class="mm-src"${rclOrig(sl?sl[0]:'Fonte', sl?sl[1]:('Módulo de origem deste número: '+selo))}>${esc2(selo)}</span>`:'')
         + `<button type="button" class="mm-x" title="Fechar (Esc)" onclick="rclMemEsconder(true)">×</button></div>`;
   if(d.fonte)   h += `<div${rclOrig('De onde o número vem', 'Caminho exato percorrido até este valor: qual base foi lida, qual filtro foi aplicado e o que ficou de fora. É a frase que responde a pergunta "esse número saiu de onde?".')}><b>Origem:</b> ${esc2(d.fonte)}</div>`;
-  if(d.formula) h += `<div class="mm-s"${rclOrig('A conta que foi feita', 'A aritmética realmente executada, com os valores já substituídos. Reproduza na calculadora e tem de dar o mesmo número — se não der, o erro está numa das parcelas, não na fórmula.', d.formula)}>${esc2(d.formula)}</div>`;
+  /* ══ A CONTA QUE FOI FEITA ══════════════════════════════════════════════
+     Antes, o segundo nível da fórmula mandava conferir na calculadora — o
+     que não ajuda ninguém: o resultado já está na tela, o que falta saber é
+     de ONDE veio cada parcela. Agora a fórmula vem acompanhada dos seus
+     INSUMOS: cada número que entra nela, com o valor e a procedência, e
+     cada insumo abre a sua própria explicação quando o mouse para em cima. */
+  const ins = Array.isArray(d.insumos) ? d.insumos.filter(x=>x && x.length) : [];
+  if(d.formula){
+    const txtF = ins.length
+      ? 'Esta conta tem '+ins.length+' parcela(s), e cada uma delas foi buscada em um lugar:\n'
+        + ins.map(i=>`• ${i[0]} = ${i[1]==null?'—':i[1]}\n    ${i[2]||'origem não declarada'}`).join('\n')
+        + '\n\nA lista abaixo repete essas parcelas na janela: pare o mouse em qualquer uma para ver a origem sozinha.'
+      : 'A aritmética executada, com os valores já substituídos. As parcelas que a compõem estão nas linhas desta janela — pare o mouse em cada uma para ver de onde ela veio.';
+    h += `<div class="mm-s"${rclOrig('A conta que foi feita', txtF, d.formula)}>${esc2(d.formula)}</div>`;
+  }
+  if(ins.length){
+    h += `<div class="mm-ins"><div class="mm-ih"${rclOrig('De onde saiu cada parcela',
+            'A decomposição da conta acima. Cada linha é um número que ENTROU na fórmula, com o valor usado e a base de onde ele foi lido. Parar o mouse em uma delas mostra o caminho completo daquele insumo.')}>de onde saiu cada parcela</div>`
+       + ins.map(i=>`<div class="mm-i"${rclOrig(String(i[0]||''), String(i[2]||'Insumo desta conta.'))}>`
+                    + `<span>${esc2(i[0])}${i[3]?`<i>${esc2(i[3])}</i>`:''}</span>`
+                    + `<b>${i[1]==null?'—':i[1]}</b></div>`).join('')
+       + `</div>`;
+  }
   if(Array.isArray(d.linhas) && d.linhas.length)
     h += d.linhas.filter(l=>l && l.length).map(l=>{
-      const o=rclMemOrigem(l[0], selo);
+      /* Terceiro elemento da linha = a sua própria origem, escrita à mão.
+         É o que tira do genérico as linhas que o glossário não alcança
+         (peças, documentação, alimentação, as somas da tela). */
+      const o = l[2] ? (typeof l[2]==='string' ? {t:String(l[0]), txt:l[2]} : l[2])
+                     : rclMemOrigem(l[0], selo);
       return `<div class="mm-l"${rclOrig(o.t, o.txt)}><span>${esc2(l[0])}</span><b>${l[1]==null?'—':l[1]}</b></div>`;
     }).join('');
   if(d.obs)    h += `<div class="mm-o"${rclOrig('Por que é assim', 'A regra de negócio por trás da conta — o motivo de o número ser calculado desta forma e não de outra.')}>${esc2(d.obs)}</div>`;
   if(d.alerta) h += `<div class="mm-o mm-w"${rclOrig('Alerta', 'Condição que faz este número deixar de ser confiável. Enquanto o alerta estiver na tela, trate o valor como indicativo, não como fechado.')}>⚠ ${esc2(d.alerta)}</div>`;
-  h += `<div class="mm-ft"><span>Passe o mouse sobre qualquer linha desta janela para ver de onde ela vem.</span><span>clique fora para fechar</span></div>`;
+  h += `<div class="mm-ft"><span>Passe o mouse sobre qualquer linha desta janela para ver de onde ela vem.</span><span>× , Esc ou clique fora fecham</span></div>`;
   return h;
 }
 function rclMemPop(){
@@ -10786,7 +10830,18 @@ function rclMemOrigMostrar(el, x, y){
   document.addEventListener('click', ev=>{
     const pop=RCLMEM._pop;
     if(!pop || !pop.classList.contains('on')) return;
-    if(pop.contains(ev.target)){ ev.stopPropagation(); return; }
+    if(pop.contains(ev.target)){
+      /* O × mora DENTRO da janela. Como este listener roda na fase de
+         captura, o stopPropagation abaixo matava o evento antes de ele
+         chegar ao onclick do próprio botão — era por isso que o × existia
+         na tela e não fechava nada. Agora o botão é atendido aqui, na
+         captura, e só depois o clique é barrado para não vazar para a
+         tabela (que abriria o painel da rota). */
+      const x = ev.target.closest ? ev.target.closest('.mm-x') : null;
+      ev.stopPropagation();
+      if(x){ ev.preventDefault(); rclMemEsconder(true); }
+      return;
+    }
     rclMemEsconder(true);
   }, true);
   document.addEventListener('scroll', ev=>{
@@ -11030,10 +11085,41 @@ const RCL_CFG = {
      cinética perdida na freada é o que a retomada tem de repor. */
   vCurvaDe: 80, vCurvaPara: 60,          /* km/h                            */
   fracCurvasRelevantes: 0.35,            /* das curvas não-fechadas         */
-  /* Banda sã do fator de aderência. Fora dela o número deixa de ser
-     "consumo real" e passa a ser sintoma de base incompleta — o módulo
-     avisa e não aplica. */
-  aderenciaMin: 0.70, aderenciaMax: 1.60,
+  /* ── Calibração do consumo pelo diesel comprado ─────────────────────────
+     O fator de aderência compara o que a frota COMPROU de diesel com o que
+     o modelo diz que ela deveria ter queimado. Havia um erro de escala nessa
+     razão, e era ele que produzia km/l impossíveis na tela:
+
+       numerador   = litros da SZC → a UNIDADE INTEIRA do mês (todo abastecimento)
+       denominador = litros do modelo → só as viagens que o módulo conseguiu
+                     amarrar a uma rota da SZY
+
+     Com 73% de cobertura, o denominador é 27% menor que o rodado real e o
+     fator sai inflado por 1/0,73 ≈ 1,37 — exatamente a ordem de grandeza que
+     derrubava o consumo adotado de 2,0 para 1,09 km/l. Não é a frota gastando
+     37% a mais: é o módulo comparando a frota inteira com um pedaço dela.
+
+     A correção é levar o modelado para a escala da frota antes de dividir:
+
+       litros esperados da frota = litros modelados ÷ cobertura
+       fator = litros comprados ÷ litros esperados da frota
+
+     que é o mesmo que multiplicar o fator antigo pela cobertura.           */
+  aderenciaPorCobertura: true,
+  coberturaMinFator: 0.40,   /* cobertura abaixo disto não corrige nada     */
+  /* Banda sã do fator JÁ CORRIGIDO. Ela pôde ser apertada justamente porque
+     o viés de cobertura saiu de dentro do número: o que sobra fora desta
+     banda não é consumo diferente, é base incompleta. */
+  aderenciaMin: 0.75, aderenciaMax: 1.35,
+  /* ── Guarda física do km/l adotado ──────────────────────────────────────
+     Última trava, depois de modelo e calibração: o km/l que chega à tela não
+     pode se afastar da premissa da frota além do que a física de uma rota
+     explica. O modelo sozinho já é limitado a +80%/−30% de litros, o que dá
+     0,556× a 1,429× do km/l da premissa; a banda abaixo é um pouco mais
+     larga que isso, então ela NUNCA corta o modelo — só corta a calibração
+     quando ela empurra o número para fora do plausível. Quando corta, a tela
+     diz que cortou. */
+  kmlPisoRel: 0.50, kmlTetoRel: 1.55,
   /* Placas-marcador de carta-frete complementar (mesma regra do pd.html) */
   reCFC: /^F(SC|SP|PR)[0O]+$/,
   maxLedger: 60000
@@ -11128,6 +11214,28 @@ const RCL_PADRAO = {
   ovAlimentacaoViagem: null, ovTempoHora: null
 };
 
+/* ══ ALÍQUOTA POR ROTA ════════════════════════════════════════════════════
+   A linha "Impostos" do resultado deixou de ser um número fechado: ela tem
+   um campo aberto, digitado na própria tela, rota a rota. Quem não for
+   alterada segue o PADRÃO DO MÓDULO, 10% — número redondo de trabalho, não
+   a alíquota fiscal da filial. A alíquota da filial (PIS/COFINS + ICMS das
+   premissas) continua calculada e aparece na memória de cálculo ao lado da
+   adotada, para que a diferença nunca fique escondida.
+
+   A chave é cliente ¦ rota, que é exatamente a célula que a tela mostra:
+   a mesma rota atendendo dois clientes pode ter tributação diferente.     */
+const RCL_ALIQ_PADRAO = 0.10;
+function rclAliqChave(chaveCli, k3){ return String(chaveCli||'')+'¦'+String(k3||''); }
+/* Aceita "10", "10,5", "10.5", "10,5%" e devolve fração (0,105). Vazio →
+   null, que significa "voltar ao padrão", não "zero imposto". */
+function rclAliqParse(txt){
+  const s=String(txt==null?'':txt).replace('%','').replace(/\s/g,'').replace(',','.');
+  if(s==='') return null;
+  const v=Number(s);
+  if(!isFinite(v) || v<0) return null;
+  return Math.min(v,100)/100;
+}
+
 const RCL = {
   prem: null, premCarregada: false,
   clientes: [], rotas: [], porRota: new Map(),
@@ -11136,6 +11244,7 @@ const RCL = {
   calculado: false, aviso: [],
   real: null, realCarregado: false,   /* realizado do Mapinha / CPK          */
   base: null, fech: null,             /* mês-base fechado e status lidos     */
+  aliqRota: {},                       /* 'cliente¦rota' → fração digitada    */
   _prom: null
 };
 
@@ -12023,12 +12132,35 @@ function rclPreparo(bk, ctx){
   const tonViagem = bk.viagens>0 && bk.ton>0 ? bk.ton/bk.viagens : null;
   const cons=bk._cons || rclConsumoRota(bk, bk._base||{carregado:2,vazio:3}, ctx.ref, ctx.perfil, tonViagem, P);
   const norm=ctx.norm||1, fator=ctx.fator(r.op);
-  const kmlC = cons.carregado/(norm*fator), kmlV = cons.vazio/(norm*fator);
+  /* ══ GUARDA FÍSICA DO km/l ADOTADO ══════════════════════════════════════
+     Modelo e calibração são camadas diferentes com riscos diferentes. O
+     modelo é físico e já nasce limitado (+80% / −30% de litros). A
+     calibração é uma razão entre duas bases que podem estar em escalas
+     diferentes — e quando estão, ela empurra o km/l para valores que
+     nenhuma composição atinge. A trava abaixo protege exatamente esse
+     caso: ela é mais larga que o próprio limite do modelo, então nunca
+     corta a física; só corta a calibração, e quando corta, avisa.        */
+  const baseKm = bk._base || {carregado:2, vazio:3};
+  const trava=(v, base)=>{
+    const piso = base*RCL_CFG.kmlPisoRel, teto = base*RCL_CFG.kmlTetoRel;
+    if(!(v>0)) return {v:base, travado:true, piso, teto};
+    if(v<piso) return {v:piso, travado:true, piso, teto};
+    if(v>teto) return {v:teto, travado:true, piso, teto};
+    return {v, travado:false, piso, teto};
+  };
+  const kmlCbruto = cons.carregado/(norm*fator), kmlVbruto = cons.vazio/(norm*fator);
+  const tC = trava(kmlCbruto, baseKm.carregado||2);
+  const tV = trava(kmlVbruto, baseKm.vazio||3);
+  const kmlC = tC.v, kmlV = tV.v;
+  const kmlTravado = tC.travado || tV.travado;
+  const kmlBanda = { pisoC:tC.piso, tetoC:tC.teto, pisoV:tV.piso, tetoV:tV.teto,
+                     brutoC:kmlCbruto, brutoV:kmlVbruto };
   /* aproveitamento do retorno */
   const ap=ctx.aprovIdx.get(r.k3);
   const temPlaca = !!(ap && ap.comPlaca>0);
   const aprov = (P.aproveitarRetorno && temPlaca && ap.tot>0) ? ap.ok/ap.tot : 0;
-  return {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, tonViagem, cons, norm, fator, kmlC, kmlV, temPlaca, aprov};
+  return {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, tonViagem, cons,
+          norm, fator, kmlC, kmlV, kmlTravado, kmlBanda, baseKml:baseKm, temPlaca, aprov};
 }
 
 /* Passo 1 da calibração: só os LITROS. Não chama o motor de custo — as
@@ -12050,7 +12182,8 @@ function rclCustoBucket(bk, ctx){
   const nMeses=Math.max(RCL.meses.length,1);
   const q=rclPreparo(bk, ctx);
   if(!q){ bk.erro='sem distância na SZY nem na HERE'; bk.custo=null; bk.litrosAtrib=0; return; }
-  const {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, tonViagem, cons, norm, fator, kmlC, kmlV, temPlaca, aprov}=q;
+  const {Pb, kmIda, kmVolta, fonteDist, distMeta, pIda, pVolta, pedOk, tonViagem, cons,
+         norm, fator, kmlC, kmlV, kmlTravado, kmlBanda, baseKml, temPlaca, aprov}=q;
 
   const pr = ctx.precos[r.op] || ctx.precos._geral || {};
   const prG = ctx.precos._geral || {};
@@ -12079,6 +12212,27 @@ function rclCustoBucket(bk, ctx){
   });
   const litrosViagem= cFull.litros - aprov*(cFull.litros-(cIda.erro?cFull.litros:cIda.litros));
   const kmViagem    = kmIda + (1-aprov)*kmVolta;
+
+  /* ══ FOTOGRAFIA DO MODELADO, ANTES DA TROCA ═══════════════════════════════
+     A partir daqui algumas linhas serão substituídas pelo realizado e outras
+     não. Sem guardar o modelado agora, a tela fica sem como explicar as que
+     NÃO foram substituídas: era exatamente esse o defeito das depreciações e
+     das peças, que exibiam a taxa recusada como se fosse a conta feita.
+     Guardamos o VALOR modelado de cada linha e a FÓRMULA que o núcleo de
+     custo usou para chegar nele. */
+  const linhasModelo={};
+  Object.keys(linhas).forEach(k=>{
+    if(typeof linhas[k]==='number') linhasModelo[k]=Math.abs(linhas[k]);
+  });
+  const MEM_MOD_ROT = { diesel:'Diesel — litros', lubrificante:'Lubrificante', pecas:'Peças',
+                        pneus:'Pneus', docSeguros:'Documentação e seguros',
+                        pessoal:'Pessoal (sem comissão)', deprecCavalo:'Depreciação do cavalo',
+                        deprecCarreta:'Depreciação da carreta', arla:'Arla',
+                        tempo:'Tempo parado (carga + espera)' };
+  const memModelo={};
+  (cFull.memoria||[]).forEach(m=>{
+    Object.keys(MEM_MOD_ROT).forEach(k=>{ if(MEM_MOD_ROT[k]===m.o) memModelo[k]={formula:m.f, valor:m.v}; });
+  });
 
   /* ══════════════════════════════════════════════════════════════════════
      SUBSTITUIÇÃO PELO REALIZADO
@@ -12236,9 +12390,16 @@ function rclCustoBucket(bk, ctx){
     precoDiesel: precoEfetDiesel!=null?precoEfetDiesel:cFull.dieselRS,
     precoArla:   precoEfetArla!=null  ?precoEfetArla  :linhas.precoArla,
     precoDieselModelo: cFull.dieselRS, arlaPct: arlaPctUsado,
-    litrosViagem, kmlC, kmlV, tonViagem, viagensMes,
+    litrosViagem, kmlC, kmlV, kmlTravado, kmlBanda, baseKml, tonViagem, viagensMes,
+    /* Leituras operacionais do consumo — o km/l de uma composição de 45 t em
+       serra é um número difícil de julgar de cabeça; litros por viagem e
+       l/100 km são os que o gestor de frota consegue conferir contra a
+       própria nota de abastecimento. */
+    litros100km: kmViagem>0 ? litrosViagem/kmViagem*100 : null,
+    kmlMedio:    litrosViagem>0 ? kmViagem/litrosViagem : null,
     pedagioHere,
-    linhas, fontes, ressalvas, taxas:T, realBk:rb, tempoDet:bk._tempoDet||null,
+    linhas, linhasModelo, memModelo, viagensMesModelo:cFull.viagensMes,
+    fontes, ressalvas, taxas:T, realBk:rb, tempoDet:bk._tempoDet||null,
     variavel:varia, fixo, custoViagem, custoModelado,
     desvioModelo: custoModelado>0 ? custoViagem/custoModelado-1 : null,
     cpk: kmViagem>0 ? custoViagem/kmViagem : null,
@@ -12256,11 +12417,23 @@ function rclCustoBucket(bk, ctx){
    lucro". Margem de contribuição responde a primeira: receita líquida menos
    o custo que só existe porque o caminhão saiu. Resultado responde a
    segunda: depois de comissão e da estrutura que a rota tem de sustentar. */
-function rclResultado(receita, cfcValor, custoOp, custoVar, custoFixo, kmTot, op, P){
+function rclResultado(receita, cfcValor, custoOp, custoVar, custoFixo, kmTot, op, P, aliqRota){
   const prem = premissasEfetivas(null, op, null) || {};
-  const aliq = P.aliqManual!=null && P.aliqManual>=0
-      ? P.aliqManual
-      : (P.usarImpostos ? (Number(prem.pis_cofins)||0.0965)+(Number(prem.icms)||0.12) : 0);
+  /* Alíquota da filial — continua sendo calculada mesmo quando não é a
+     adotada, porque é ela que dá a régua de comparação na memória. */
+  const aliqFilial = (Number(prem.pis_cofins)||0.0965)+(Number(prem.icms)||0.12);
+  /* Ordem de precedência, da mais específica para a mais geral:
+       1. o que foi DIGITADO na linha Impostos desta rota
+       2. a alíquota manual das "⚙ Premissas do resultado"
+       3. o padrão do módulo (10%)
+     A alíquota da filial só entra se os impostos estiverem desligados —
+     aí não entra nada, e a linha vale zero.                              */
+  const aliqOrigem = (aliqRota!=null && aliqRota>=0) ? 'rota'
+                   : (P.aliqManual!=null && P.aliqManual>=0) ? 'manual'
+                   : (P.usarImpostos ? 'padrao' : 'desligado');
+  const aliq = aliqOrigem==='rota'   ? aliqRota
+             : aliqOrigem==='manual' ? P.aliqManual
+             : aliqOrigem==='padrao' ? RCL_ALIQ_PADRAO : 0;
   const receitaTotal = receita + (P.cfcSeparado?0:cfcValor);
   const impostos = receitaTotal*aliq;
   const rl = receitaTotal - impostos;
@@ -12271,7 +12444,8 @@ function rclResultado(receita, cfcValor, custoOp, custoVar, custoFixo, kmTot, op
                  : P.overheadModo==='km'  ? kmTot*(P.overheadKm||0) : 0;
   const margemContrib = rl - custoVar;
   const resultado = rl - custoOp - comissao - overhead;
-  return { aliq, impostos, receitaBruta:receitaTotal, receitaLiquida:rl,
+  return { aliq, aliqOrigem, aliqFilial, aliqPadrao:RCL_ALIQ_PADRAO,
+           impostos, receitaBruta:receitaTotal, receitaLiquida:rl,
            comisPct, comissao, overhead, custoOp, custoVar, custoFixo,
            margemContrib, resultado,
            margemPct: receitaTotal>0 ? resultado/receitaTotal : null,
@@ -12395,10 +12569,23 @@ function rclCalcular(){
     const med = op ? (medOp[op]||{}) : (medOp._geral||{});
     const mod  = med.litros||0;
     const real = ((op?precos[op]:precos._geral)||{}).litrosDiesel||0;
-    const f = (mod>0 && real>0) ? real/mod : null;
+    /* ── Escala: o modelado é só das viagens amarradas; o comprado é da
+       frota inteira. Sem levar os dois para a mesma escala, a razão mede
+       cobertura, não consumo. ───────────────────────────────────────────── */
+    const cobBruta = ((op?cobOp[op]:cobOp._geral)||{}).cobertura;
+    const cobOk = cobBruta!=null && isFinite(cobBruta)
+               && cobBruta>=RCL_CFG.coberturaMinFator && cobBruta<1;
+    const usaCob = !!(RCL_CFG.aderenciaPorCobertura && cobOk);
+    const cob = usaCob ? cobBruta : 1;
+    const modFrota = mod>0 ? mod/cob : 0;
+    const fBruto = (mod>0 && real>0) ? real/mod : null;          /* como era */
+    const f      = (modFrota>0 && real>0) ? real/modFrota : null;/* corrigido */
     const dentro = f!=null && f>=RCL_CFG.aderenciaMin && f<=RCL_CFG.aderenciaMax;
     const b = op ? (baseR.porOp&&baseR.porOp[op]) : null;
-    return { op:op||'consolidado', modelado:mod, realizado:real, fator:f, dentro,
+    return { op:op||'consolidado',
+             modelado:mod, modeladoFrota:modFrota, realizado:real,
+             cobertura: cobBruta!=null?cobBruta:1, corrigidoPorCobertura:usaCob,
+             fatorBruto:fBruto, fator:f, dentro,
              base:(op?mesesDaOp(op):mesesGeral).join(', '),
              baseTipo:b?b.tipo:'janela',
              aplicado: (P.aderencia && dentro) ? f : 1 };
@@ -12543,7 +12730,8 @@ function rclCalcular(){
       const custoVar = cu.variavel*cb.viagens;
       const custoFix = cu.fixo*cb.viagens;
       const kmTot    = cu.kmViagem*cb.viagens;
-      const res=rclResultado(cb.receita, cb.cfcValor, custoOp, custoVar, custoFix, kmTot, r.op, P);
+      const res=rclResultado(cb.receita, cb.cfcValor, custoOp, custoVar, custoFix, kmTot, r.op, P,
+                             RCL.aliqRota[rclAliqChave(cb.chave, r.k3)]);
       const inf=rclNomeSA1(cb.chave, cb.nome);
       const linha={
         chaveCli:cb.chave, cliente:inf.nome, sa1:inf.sa1, cnpj:cb.cnpj,
@@ -12553,6 +12741,10 @@ function rclCalcular(){
         ufO:r.ufO, ufD:r.ufD, k3:r.k3, rotaObj:r, bucket:bk,
         viagens:cb.viagens, ton:cb.ton, kmTot,
         cfcValor:cb.cfcValor, cfcQtd:cb.cfcQtd,
+        /* Receita crua dos CT-e, antes de a carta-frete entrar ou não no
+           total. Guardada porque recalcular só a alíquota precisa dela
+           exatamente como o cálculo original a recebeu. */
+        _receitaCTE:cb.receita,
         custoViagem:cu.custoViagem, cpk:cu.cpk, custoTon:cu.custoTon,
         kmlC:cu.kmlC, kmlV:cu.kmlV, aprov:cu.aprov, fator:cu.fator,
         tarifaTon: cb.ton>0 ? cb.receita/cb.ton : null,
@@ -12623,7 +12815,18 @@ function rclCalcular(){
              semDist:buckets.filter(b=>!b.custo).length };
   if(!ref.ok) RCL.aviso.push('Nenhuma rota simulada na HERE com perfil de elevação — o modelo de consumo por relevo está desligado e todas as rotas usam o km/l da premissa.');
   if(P.aderencia && ader._geral.fator!=null && !ader._geral.dentro)
-    RCL.aviso.push(`Fator de aderência consolidado de ${num(ader._geral.fator,2)} está fora da banda ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)} e NÃO foi aplicado. Costuma indicar SZC ou SZB incompletos no período.`);
+    RCL.aviso.push(`Fator de aderência consolidado de ${num(ader._geral.fator,2)} está fora da banda ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)} e NÃO foi aplicado. Já corrigido pela escala de cobertura, um fator assim indica SZC ou SZB incompletos no período — o consumo ficou no modelo puro.`);
+  /* A correção de escala muda o consumo de TODAS as rotas da operação. Uma
+     mudança dessa ordem não pode acontecer em silêncio. */
+  ops.concat(['_geral']).forEach(op=>{
+    const a=ader[op]; if(!a || !a.corrigidoPorCobertura || a.fatorBruto==null) return;
+    if(Math.abs(a.fatorBruto-a.fator)<0.02) return;
+    RCL.aviso.push(`${op==='_geral'?'Consolidado':op}: fator de aderência corrigido pela escala de cobertura — de ${num(a.fatorBruto,3)} para ${num(a.fator,3)}. O diesel comprado é da unidade inteira e os litros modelados vinham só das viagens amarradas a uma rota (${pct(a.cobertura,0)} dos CT-e); a razão media cobertura junto com consumo. Com a correção, o km/l adotado de todas as rotas desta operação sobe na mesma proporção.`);
+  });
+  /* Rotas em que a calibração teve de ser limitada pela banda física. */
+  const travadas = buckets.filter(b=>b.custo && b.custo.kmlTravado).length;
+  if(travadas)
+    RCL.aviso.push(`${num(travadas,0)} rota(s) tiveram o km/l limitado pela banda física (${pct(RCL_CFG.kmlPisoRel,0)}–${pct(RCL_CFG.kmlTetoRel,0)} da premissa da frota). A calibração estava empurrando o consumo para fora do que a composição alcança — o valor foi preso à banda e a memória de cálculo de cada rota mostra o número antes da trava.`);
   if(!RCL.diag.comPlaca && P.aproveitarRetorno)
     RCL.aviso.push('Nenhum CT-e do período trouxe placa — o aproveitamento de retorno não pôde ser medido e toda volta está sendo cobrada como vazia.');
   if(!real)
@@ -12925,13 +13128,28 @@ function rclRenderKpis(lista){
          : 'sem SZC no período',
        mem('Aderência do modelo de consumo',{selo:'SZC × MODELO',
          fonte:'A pergunta que este número responde: o modelo físico está prevendo o consumo que a frota realmente teve?',
-         formula:`fator = litros comprados na SZC ÷ litros previstos pelo modelo\n${num(ad?ad.realizado:0,0)} ÷ ${num(ad?ad.modelado:0,0)} = ${ad&&ad.fator!=null?num(ad.fator,4):'—'}\ndesvio = fator − 1 = ${adTxt}`,
-         linhas:[['Litros comprados (SZC)', num(ad?ad.realizado:0,0)+' l'],
-                 ['Litros previstos (modelo)', num(ad?ad.modelado:0,0)+' l'],
-                 ['Fator', ad&&ad.fator!=null?num(ad.fator,4):'—'],
-                 ['Banda sã', num(RCL_CFG.aderenciaMin,2)+' – '+num(RCL_CFG.aderenciaMax,2)],
-                 ['Situação', !ad||ad.fator==null?'sem SZC':(ad.dentro?'aplicado a todas as rotas':'FORA da banda — não aplicado')]],
-         obs:'Fator acima de 1 significa que a frota comprou mais diesel do que o modelo previu para as rotas faturadas. Parte disso é consumo real acima do modelo; parte é quilômetro que não está em rota faturada — transferência, deslocamento para manutenção, reposicionamento. O fator corrige o km/l de todas as rotas da operação de uma vez, para que o custo de diesel do módulo feche com a nota fiscal.',
+         formula:`fator = litros comprados na SZC ÷ litros esperados da frota\n${num(ad?ad.realizado:0,0)} ÷ ${num(ad?ad.modeladoFrota:0,0)} = ${ad&&ad.fator!=null?num(ad.fator,4):'—'}\ndesvio = fator − 1 = ${adTxt}`,
+         insumos:[
+           ['Litros comprados (SZC)', num(ad?ad.realizado:0,0)+' l',
+            'Notas de abastecimento da competência-base, da unidade inteira. Dado de nota fiscal — é o lado duro da razão.'],
+           ['Litros modelados (viagens amarradas)', num(ad?ad.modelado:0,0)+' l',
+            'O que o modelo físico pede para as viagens que o módulo ligou a uma rota da SZY. É só um pedaço do rodado da frota.'],
+           ['Cobertura da competência-base', ad?pct(ad.cobertura,0):'—',
+            'Fração dos CT-e daquele mês resolvidos para uma rota. Quilômetro de transferência, ida para manutenção e reposicionamento fica de fora — e é isso que o restante representa.'],
+           ['Litros esperados da frota', num(ad?ad.modeladoFrota:0,0)+' l',
+            ad&&ad.corrigidoPorCobertura?'Litros modelados ÷ cobertura: o modelado trazido para a mesma escala em que o diesel comprado está medido.':'Sem correção nesta operação — cobertura ausente ou baixa demais para corrigir com segurança.'],
+           ['= Fator', ad&&ad.fator!=null?num(ad.fator,4):'—',
+            'A razão entre os dois, agora entre grandezas comparáveis. É ele que multiplica o consumo de todas as rotas da operação.']
+         ],
+         linhas:[['Litros comprados (SZC)', num(ad?ad.realizado:0,0)+' l','Numerador: nota fiscal de abastecimento da unidade no mês-base.'],
+                 ['Litros previstos (modelo)', num(ad?ad.modelado:0,0)+' l','O modelo aplicado só às viagens amarradas a uma rota.'],
+                 ['Cobertura da base', ad?pct(ad.cobertura,0):'—','Quanto do faturamento do mês-base virou viagem medida.'],
+                 ['Litros esperados da frota', num(ad?ad.modeladoFrota:0,0)+' l','Denominador corrigido de escala — é ele que entra na divisão.'],
+                 ad&&ad.fatorBruto!=null?['Fator sem correção de escala', num(ad.fatorBruto,4),'Como era antes: a razão direta, que media cobertura junto com consumo.']:null,
+                 ['Fator', ad&&ad.fator!=null?num(ad.fator,4):'—','O aplicado, depois da correção.'],
+                 ['Banda sã', num(RCL_CFG.aderenciaMin,2)+' – '+num(RCL_CFG.aderenciaMax,2),'Faixa em que o fator corrigido ainda se lê como consumo.'],
+                 ['Situação', !ad||ad.fator==null?'sem SZC':(ad.dentro?'aplicado a todas as rotas':'FORA da banda — não aplicado'),'O que o módulo fez com o número.']],
+         obs:'Fator acima de 1 significa que a frota comprou mais diesel do que o modelo previu para o rodado que ela fez. Antes desta rodada, boa parte do que aparecia aqui não era consumo: era o quilômetro fora de rota faturada — transferência, deslocamento para manutenção, reposicionamento — entrando no numerador sem entrar no denominador. A correção de escala pela cobertura tira esse viés; o que sobra é diferença de consumo de verdade.',
          alerta: ad&&ad.fator!=null&&!ad.dentro
            ? 'Fora da banda o número deixa de ser consumo e vira sintoma de base incompleta (SZC ou SZB faltando no período). Por isso NÃO foi aplicado.' : null}));
 }
@@ -12976,7 +13194,7 @@ function rclRodape(){
 }
 
 /* ══ Painel de uma rota ═══════════════════════════════════════════════════ */
-function rclPainel(chaveCli, k3){
+function rclPainel(chaveCli, k3, semScroll){
   const el=$('rclPainel'); if(!el) return;
   const cl=RCL.clientes.find(c=>c.chave===chaveCli);
   const r = cl && cl.rotas.find(x=>x.k3===k3);
@@ -13014,6 +13232,92 @@ function rclPainel(chaveCli, k3){
     if(typeof valor!=='number' || Math.abs(valor)<=0.005) return;
     cst.push([rotulo, valor, nota||'', memoria||'', chave]);
   };
+
+  /* ══ COERÊNCIA ENTRE O NÚMERO E A EXPLICAÇÃO ══════════════════════════════
+     Cada linha do custo por viagem pode ter sido TROCADA pelo realizado ou
+     ter CAÍDO DE VOLTA no modelo (taxa ausente, ou fora da banda ¼–4×). Até
+     aqui a nota e a memória contavam sempre a história do realizado, mesmo
+     quando ele havia sido recusado — e o resultado era a tela se contradizer
+     sozinha: "Depreciação da carreta · R$ 2.209,36/viagem" ao lado de
+     R$ 13,23, "Peças e serviços · R$ 213,14/viagem" ao lado de R$ 15,87.
+     O valor vinha do modelo; o texto, da taxa rejeitada.
+
+     Daqui em diante o texto SEGUE a fonte que o motor usou. Quando a fonte é
+     o modelo, a memória mostra a fórmula do núcleo de custo, o valor que o
+     realizado teria dado e o motivo exato da recusa.                       */
+  const ress    = (k)=> (cu && cu.ressalvas ? (cu.ressalvas.find(x=>x.linha===k)||null) : null);
+  const memMod  = (k)=> (cu && cu.memModelo ? (cu.memModelo[k]||null) : null);
+  const noModelo= (k)=> fon(k)==='modelo';
+  const modVal  = (k)=> (cu && cu.linhasModelo && cu.linhasModelo[k]!=null) ? cu.linhasModelo[k] : null;
+  const vgMesMod= (cu && cu.viagensMesModelo>0) ? cu.viagensMesModelo : (cu?cu.viagensMes:0);
+
+  /* Nota curta da linha quando ela vem do modelo: a própria fórmula do
+     núcleo, que já traz os insumos com os números usados. */
+  const notaMod=(k)=>{ const m=memMod(k); return m&&m.formula ? m.formula : 'fórmula do núcleo de custo'; };
+
+  /* Memória completa de uma linha modelada. Uma só estrutura para todas:
+     a conta do núcleo, os insumos dela, o que o realizado teria dado e
+     por que não foi aceito. */
+  const memModelado=(titulo, k, o)=>{
+    o=o||{};
+    const m=memMod(k), rs=ress(k);
+    const v = modVal(k)!=null ? modVal(k) : Math.abs(li[k]||0);
+    const formula = m&&m.formula ? `${m.formula}\n= ${brl(v)} por viagem` : `${brl(v)} por viagem`;
+    const insumos=[
+      ['Conta do núcleo de custo', m&&m.formula?m.formula:'—',
+       'Fórmula da aba Simulador para esta linha, com as premissas da filial já substituídas. É o mesmo cálculo que a Análise de Rotas e o Simulador fazem — não há uma segunda fórmula escondida aqui.'],
+      ['Viagens por mês desta rota', num(vgMesMod,2),
+       'Viagens da rota na janela ÷ meses da janela. É o divisor de tudo o que a planilha informa por MÊS (peças, documentação, pessoal, depreciação): custo mensal ÷ viagens do mês = custo por viagem.'],
+      ['Quilômetro da viagem', num(kmV,1)+' km',
+       'Ida + a fração da volta que este frete paga, na distância adotada ('+(cu?String(cu.fonteDist||'').toUpperCase():'—')+'). É o divisor das linhas que a planilha informa por KM.'],
+      ['= Valor modelado', brl(v), 'O resultado da conta acima, que é o número exibido nesta linha.']
+    ];
+    if(o.insumos) o.insumos.forEach(x=>insumos.push(x));
+    const linhas=[
+      ['Valor adotado nesta linha', brl(v), 'É o modelado: o realizado não entrou (veja o alerta abaixo).'],
+      rs&&rs.realizado!=null?['Realizado que foi recusado', brl(rs.realizado),
+        'O R$/viagem (ou R$/km) que o fechamento do Mapinha daria para esta linha. Foi calculado, comparado com o modelado e recusado — o número está aqui para que a recusa possa ser conferida, não para ser usado.']:null,
+      rs&&rs.razao!=null?['Quantas vezes o modelado', num(rs.razao,1)+'×',
+        'Razão entre o realizado e o modelado. A banda aceita vai de 0,25× a 4×: fora dela a diferença deixa de ser variação de operação e passa a ser sintoma de denominador errado.']:null,
+      ['Banda de aceitação', '0,25× – 4,00×',
+       'Larga de propósito. Realizado e modelo divergem por motivos legítimos (rodado improdutivo, sazonalidade de oficina). O que a banda pega é ordem de grandeza.']
+    ];
+    if(o.linhas) o.linhas.forEach(x=>{ if(x) linhas.push(x); });
+    return mem(titulo,{selo:'MODELO',
+      fonte:o.fonte||'Núcleo de custo do módulo (custosViagem) — a mesma fórmula do Simulador, com as premissas da filial. Esta linha NÃO foi substituída pelo realizado.',
+      formula, insumos, linhas,
+      obs:o.obs,
+      alerta: rs ? `Esta linha não usou o realizado: ${rs.motivo}. O que está na tela é o modelado — e é o modelado que entra no CPK.`
+                 : (o.alerta || 'Linha sem realizado apurável no mês-base: o módulo manteve o modelado em vez de zerar a linha. Custo que some é pior que custo aproximado.')});
+  };
+  /* Escolhe entre a memória do realizado e a do modelo conforme a fonte que
+     o motor efetivamente usou nesta rota. */
+  const memFonte=(titulo, k, memReal, oMod)=> noModelo(k) ? memModelado(titulo, k, oMod) : memReal;
+  const notaFonte=(k, notaReal)=> noModelo(k) ? notaMod(k) : notaReal;
+
+  /* Frase de origem de uma linha de custo, para uso DENTRO das janelas de
+     soma (custo variável, custo fixo, custo por viagem). Antes essas linhas
+     caíam no texto genérico do glossário — "valor calculado nesta tela" —
+     que é justamente a resposta que não ajuda ninguém. */
+  const RCL_ORIG_FONTE = {
+    mapinha:        'Vem do REALIZADO: o R$ do fechamento do Mapinha da competência-base, convertido em taxa (R$/km ou R$/viagem) sobre o que o módulo mediu naquele mês, e aplicado a esta rota.',
+    'mapinha+here': 'Vem de DUAS bases: a HERE diz o formato (quais praças, qual percurso) e o Mapinha diz o nível (quanto a frota pagou no mês). O fator de nivelamento reconcilia os dois.',
+    here:           'Vem da HERE: medição do percurso exato, praça a praça e por eixo. É valor medido, não média de frota.',
+    cpk:            'Vem do módulo CPK: Premissa (CPK) da competência-base e base de depreciação por placa, com a mesma fórmula que o CPK por placa usa.',
+    simulador:      'Vem da aba Simulador: premissa digitada na planilha para esta filial, rateada pelas viagens que a rota faz no mês.',
+    modelo:         'Vem do MODELO: a fórmula do núcleo de custo com as premissas da filial. O realizado não entrou nesta linha — ou não havia taxa apurável, ou a taxa ficou fora da banda de sanidade e foi recusada.'
+  };
+  const origemLinha=(k, oQueE)=>{
+    const rs=ress(k);
+    return (oQueE?oQueE+' ':'')
+         + (RCL_ORIG_FONTE[fon(k)] || RCL_ORIG_FONTE.modelo)
+         + ' Fonte adotada nesta rota: ' + selo(k) + '.'
+         + (rs?' Ressalva registrada: '+rs.motivo+'.':'');
+  };
+  /* Um valor por viagem, com a conta que o produziu, para virar insumo de
+     uma soma sem repetir a memória inteira da linha. */
+  const insLinha=(rot, k)=>[rot, brl(Math.abs(li[k]||0)),
+    origemLinha(k, 'Linha do custo por viagem, ao lado.') ];
 
   add('Diesel','diesel',li.diesel,
       `${num(cu?cu.litrosViagem:0,1)} l × ${brl(cu?cu.precoDiesel:null)}`,
@@ -13089,28 +13393,52 @@ function rclPainel(chaveCli, k3){
           : 'Enquanto a fonte não for "HERE exata da rota", uma rota com pedágio medido pode sair cobrando a média da frota. O fator de nivelamento só vale dentro da banda 0,50–2,00 e só quando o mês-base é a própria janela.'}));
 
   add('Pneus','pneus',li.pneus,
-      T?`${brl(T.pneusKm)}/km × ${num(kmV,0)} km`:'',
+      notaFonte('pneus', T?`${brl(T.pneusKm)}/km × ${num(kmV,0)} km`:''),
+      memFonte('Pneus','pneus',
       mem('Pneus',{selo:selo('pneus'),
         fonte:'Mapinha — lançamentos do grupo C.O classificados como pneus (nome do centro de custo contendo pneu / recapagem / borracharia; código 07.01 como rede de segurança). Agregados (12.01) ficam fora.',
         formula:`R$ de pneus no período ÷ km medido × km da viagem\n${brl(RB?RB.pneusRS:null)} ÷ ${num(T?T.km:0,0)} km = ${brl(T?T.pneusKm:null)}/km × ${num(kmV,1)} km = ${brl(li.pneus)}`,
-        linhas:[
-          RB?['Pneus no período (Mapinha)', brl(RB.pneusRS)]:null,
-          T?['km medido pelo módulo', num(T.km,0)+' km']:null,
-          T?['R$/km de pneu', brl(T.pneusKm)+(T.manual&&T.manual.pneusKm?' (manual)':'')]:null,
-          ['km desta viagem', num(kmV,1)+' km']
+        insumos:[
+          ['R$ de pneus no mês-base', brl(RB?RB.pneusRS:null),
+           'Lançamentos do Mapinha da competência-base classificados como pneu, recapagem ou borracharia (código 07.01 como rede de segurança), da unidade inteira. Pneu de agregado (12.01) fica de fora.'],
+          ['km medido no mês-base', num(T?T.km:0,0)+' km',
+           'Quilômetro que o módulo conseguiu atribuir a rotas naquele mês: distância adotada × viagens, já descontado o retorno aproveitado.'],
+          ['= R$ por km', brl(T?T.pneusKm:null),
+           'A divisão dos dois acima. É a taxa que vale para qualquer rota da unidade.'],
+          ['km desta viagem', num(kmV,1)+' km',
+           'Ida + a fração da volta que este frete paga. Multiplicado pela taxa acima, dá o valor da linha.']
         ],
-        obs:'Rateio por KM porque pneu se gasta rodando: rota longa consome mais que rota curta, e é isso que a divisão por viagem esconderia.'}));
+        linhas:[
+          RB?['Pneus no período (Mapinha)', brl(RB.pneusRS), 'Numerador: o gasto de pneu da unidade na competência-base.']:null,
+          T?['km medido pelo módulo', num(T.km,0)+' km', 'Denominador: o quilômetro atribuído a rotas naquele mesmo mês.']:null,
+          T?['R$/km de pneu', brl(T.pneusKm)+(T.manual&&T.manual.pneusKm?' (manual)':''),
+             'O quociente. Marcado como (manual) quando foi digitado nas ⚙ Premissas do resultado em vez de calculado.']:null,
+          ['km desta viagem', num(kmV,1)+' km', 'O multiplicador que converte a taxa da frota no custo desta rota.']
+        ],
+        obs:'Rateio por KM porque pneu se gasta rodando: rota longa consome mais que rota curta, e é isso que a divisão por viagem esconderia.'}),
+      {fonte:'Núcleo de custo (custosViagem): jogo de pneus (lisos + borrachudos) da premissa do Simulador ÷ rendimento em km × km desta viagem. O realizado do Mapinha não entrou nesta rota.',
+       obs:'Rateio por KM porque pneu se gasta rodando.'}));
 
   add('Lubrificante','lubrificante',li.lubrificante,
-      T?`${brl(T.lubKm)}/km × ${num(kmV,0)} km`:'',
+      notaFonte('lubrificante', T?`${brl(T.lubKm)}/km × ${num(kmV,0)} km`:''),
+      memFonte('Lubrificante','lubrificante',
       mem('Lubrificante',{selo:selo('lubrificante'),
         fonte:'Mapinha — C.O classificado como lubrificante (nome com lubrificante / óleo / graxa / aditivo; código 05.01 de reserva).',
         formula:`R$ de lubrificante no período ÷ km medido × km da viagem\n${brl(RB?RB.lubRS:null)} ÷ ${num(T?T.km:0,0)} = ${brl(T?T.lubKm:null)}/km × ${num(kmV,1)} = ${brl(li.lubrificante)}`,
+        insumos:[
+          ['R$ de lubrificante no mês-base', brl(RB?RB.lubRS:null),
+           'Óleo de motor, câmbio e diferencial, graxa e aditivos lançados no Mapinha da competência-base, da unidade inteira.'],
+          ['km medido no mês-base', num(T?T.km:0,0)+' km', 'O mesmo quilômetro que serve de denominador para pneu e pedágio.'],
+          ['= R$ por km', brl(T?T.lubKm:null), 'A taxa da unidade.'],
+          ['km desta viagem', num(kmV,1)+' km', 'O multiplicador desta rota.']
+        ],
         linhas:[
-          RB?['Lubrificante no período', brl(RB.lubRS)]:null,
-          T?['R$/km', brl(T.lubKm)]:null,
-          ['km desta viagem', num(kmV,1)+' km']
-        ]}));
+          RB?['Lubrificante no período', brl(RB.lubRS), 'Numerador da taxa.']:null,
+          T?['km medido pelo módulo', num(T.km,0)+' km', 'Denominador da taxa.']:null,
+          T?['R$/km', brl(T.lubKm), 'O quociente.']:null,
+          ['km desta viagem', num(kmV,1)+' km', 'O multiplicador que dá o valor da linha.']
+        ]}),
+      {fonte:'Núcleo de custo (custosViagem): gasto mensal de lubrificante da premissa do Simulador ÷ rendimento em km × km desta viagem. O realizado do Mapinha não entrou nesta rota.'}));
 
   add('Descarga pressurizada','compressor',li.compressor,'',
       mem('Descarga pressurizada',{selo:'MODELO',
@@ -13119,76 +13447,150 @@ function rclPainel(chaveCli, k3){
         obs:'É o custo que separa esta operação do granel comum. Continua modelado — candidato natural à próxima rodada de realizado.'}));
 
   add('Peças e serviços','pecas',li.pecas,
-      T?`${brl(T.pecasVg)}/viagem`:'',
+      notaFonte('pecas', T?`${brl(T.pecasVg)}/viagem`:''),
+      memFonte('Peças e serviços','pecas',
       mem('Peças e serviços',{selo:selo('pecas'),
         fonte:'Mapinha — C.O classificado como peças/serviços/manutenção (nome com peç / serv / manuten / oficina / revis / reforma; códigos 06.01, 03.01 e 23.01 de reserva). Empréstimos e custos de placa agregada (11.01) ficam fora.',
         formula:`R$ de peças no período ÷ viagens medidas\n${brl(RB?RB.pecasRS:null)} ÷ ${num(T?T.viagens:0,0)} viagens = ${brl(li.pecas)}`,
-        linhas:[
-          RB?['Peças e serviços no período', brl(RB.pecasRS)]:null,
-          T?['Viagens medidas no período', num(T.viagens,0)]:null,
-          T?['R$/viagem', brl(T.pecasVg)]:null
+        insumos:[
+          ['R$ de peças no mês-base', brl(RB?RB.pecasRS:null),
+           'Soma dos lançamentos do Mapinha da competência-base classificados como peças/serviços/manutenção, da unidade INTEIRA — não desta rota. Agregado (11.01) fica de fora.'],
+          ['Viagens medidas no mês-base', num(T?T.viagens:0,0),
+           'CT-e do mesmo mês que o módulo conseguiu amarrar a uma rota da SZY. É este número que reparte o R$ da frota entre as viagens.'],
+          ['= R$ por viagem', brl(T?T.pecasVg:null),
+           'A divisão dos dois acima. Este é o valor que a linha exibe, igual para toda rota da mesma unidade — peças não escalam com o trecho.']
         ],
-        obs:'Rateio por VIAGEM, não por km: manutenção corretiva acompanha o uso do conjunto e o ciclo de oficina, não a quilometragem de um trecho específico.'}));
+        linhas:[
+          RB?['Peças e serviços no período', brl(RB.pecasRS),
+              'Numerador da conta: o gasto de oficina da unidade inteira na competência-base, lido da coleção mapinha_lancamentos.']:null,
+          T?['Viagens medidas no período', num(T.viagens,0),
+             'Denominador da conta: viagens do mês-base amarradas a uma rota. Se a cobertura for baixa, este número é menor que o real e o R$/viagem sai inflado.']:null,
+          T?['R$/viagem', brl(T.pecasVg), 'O quociente — exatamente o valor desta linha.']:null,
+          T?['Cobertura do mês-base', pct(T.cobertura,0),
+             'Fração dos CT-e do mês-base que virou viagem medida. Cobertura de 80% significa denominador 20% menor que o real, e cada R$/viagem 25% maior.']:null
+        ],
+        obs:'Rateio por VIAGEM, não por km: manutenção corretiva acompanha o uso do conjunto e o ciclo de oficina, não a quilometragem de um trecho específico.'}),
+      {fonte:'Núcleo de custo (custosViagem): valor MENSAL de peças e serviços da premissa do Simulador, rateado pelas viagens que esta rota faz por mês. O realizado do Mapinha não entrou nesta rota.',
+       obs:'Rateio por VIAGEM, não por km: manutenção corretiva acompanha o ciclo de oficina, não a quilometragem do trecho.'}));
 
   add('Documentação e seguros','docSeguros',li.docSeguros,
-      T?`${brl(T.docVg)}/viagem`:'',
+      notaFonte('docSeguros', T?`${brl(T.docVg)}/viagem`:''),
+      memFonte('Documentação e seguros','docSeguros',
       mem('Documentação e seguros',{selo:selo('docSeguros'),
         fonte:'Mapinha — C.O classificado como documentação/seguros (nome com licenciamento / seguro / IPVA / DPVAT / laudo / CRLV / ANTT / RNTRC; código 08.01 de reserva).',
         formula:`R$ do período ÷ viagens medidas\n${brl(RB?RB.docRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.docSeguros)}`,
-        linhas:[
-          RB?['Documentação e seguros no período', brl(RB.docRS)]:null,
-          T?['R$/viagem', brl(T.docVg)]:null
+        insumos:[
+          ['R$ de documentação e seguros no mês-base', brl(RB?RB.docRS:null),
+           'Licenciamento, IPVA, DPVAT, seguros de casco e RCTR-C, laudos, ANTT/RNTRC — lançamentos da competência-base da unidade inteira.'],
+          ['Viagens medidas no mês-base', num(T?T.viagens:0,0),
+           'Mesmo denominador de peças: CT-e do mês-base amarrados a uma rota.'],
+          ['= R$ por viagem', brl(T?T.docVg:null),
+           'O quociente. Custo de posse diluído entre as viagens que o conjunto fez no mês.']
         ],
-        obs:'Custo de posse, não de rodagem: existe com o caminhão parado. Por isso viagem, não km.'}));
+        linhas:[
+          RB?['Documentação e seguros no período', brl(RB.docRS),
+              'Numerador: o que a unidade pagou de documentação e seguro na competência-base.']:null,
+          T?['Viagens medidas no período', num(T.viagens,0), 'Denominador da divisão.']:null,
+          T?['R$/viagem', brl(T.docVg), 'O quociente — o valor desta linha.']:null
+        ],
+        obs:'Custo de posse, não de rodagem: existe com o caminhão parado. Por isso viagem, não km.'}),
+      {fonte:'Núcleo de custo (custosViagem): valor ANUAL de documentação e seguros da premissa do Simulador ÷ 12 ÷ viagens do mês desta rota. O realizado do Mapinha não entrou nesta rota.',
+       obs:'Custo de posse, não de rodagem: existe com o caminhão parado.'}));
 
   add('Pessoal (sem comissão)','pessoal',li.pessoal,
-      T?`${brl(T.pessoalVg)}/viagem`:'',
+      notaFonte('pessoal', T?`${brl(T.pessoalVg)}/viagem`:''),
+      memFonte('Pessoal','pessoal',
       mem('Pessoal',{selo:selo('pessoal'),
         fonte:'Premissa (CPK) do fechamento do Mapinha — a mesma memória de folha com AE diluído que o módulo CPK usa. Não vem dos lançamentos 13/14/15.01 do DRE, que pertencem ao card "Custo de Pessoal — Realizado".',
         formula: P.pessoalCpkBase==='ambos'
           ? `(Custo Frota 35% + Custo Agregado 65%) ÷ viagens medidas\n(${brl(RB?RB.pessoalFrota35:null)} + ${brl(RB?RB.pessoalAgregado65:null)}) ÷ ${num(T?T.viagens:0,0)} = ${brl(li.pessoal)}`
           : `Custo Frota 35% ÷ viagens medidas\n${brl(RB?RB.pessoalFrota35:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.pessoal)}`,
+        insumos:[
+          ['Custo Frota 35%', brl(RB?RB.pessoalFrota35:null),
+           'Campo "Custo Frota 35%" da Premissa (CPK) da competência-base: a folha de motoristas da frota própria já com encargos e com o adicional de estadia diluído, exatamente como o módulo CPK a lê. NÃO são os lançamentos 13/14/15.01 do DRE.'],
+          P.pessoalCpkBase==='ambos'?['Custo Agregado 65%', brl(RB?RB.pessoalAgregado65:null),
+           'A fatia da folha que sustenta a operação de agregados. Está somando aqui porque a premissa "Base do pessoal" está em "os dois valores" — o CPK por placa usa só os 35%.']:null,
+          ['Viagens medidas no mês-base', num(T?T.viagens:0,0),
+           'O divisor: CT-e do mês-base amarrados a uma rota da SZY.'],
+          ['= R$ por viagem', brl(T?T.pessoalVg:null),
+           'A folha do mês dividida pelas viagens do mês. Comissão não entra aqui — ela é função da tarifa e aparece depois, na cascata.']
+        ],
         linhas:[
-          RB?['Custo Frota 35%', brl(RB.pessoalFrota35)]:null,
-          RB?['Custo Agregado 65%', brl(RB.pessoalAgregado65)]:null,
-          RB?['Base final após AE (referência)', brl(RB.pessoalBaseFinal)]:null,
-          ['Base escolhida', P.pessoalCpkBase==='ambos'?'os dois valores':'só a fatia da frota'],
-          T?['Pessoal considerado no período', brl(T.pessoalRS)]:null,
-          T?['Viagens medidas', num(T.viagens,0)]:null
+          RB?['Custo Frota 35%', brl(RB.pessoalFrota35),
+              'Numerador (ou parte dele): folha da frota própria da Premissa CPK da competência-base.']:null,
+          RB?['Custo Agregado 65%', brl(RB.pessoalAgregado65),
+              'A outra parcela possível do numerador. Só entra quando a base escolhida é "os dois valores".']:null,
+          RB?['Base final após AE (referência)', brl(RB.pessoalBaseFinal),
+              'Soma das duas parcelas depois de diluído o adicional de estadia. Fica aqui como conferência com o módulo CPK.']:null,
+          ['Base escolhida', P.pessoalCpkBase==='ambos'?'os dois valores':'só a fatia da frota',
+           'Premissa "Base do pessoal (CPK)" das ⚙ Premissas do resultado. Trocar para "só a fatia da frota" reproduz o CPK por placa.'],
+          T?['Pessoal considerado no período', brl(T.pessoalRS), 'O numerador efetivamente usado, já conforme a base escolhida.']:null,
+          T?['Viagens medidas', num(T.viagens,0), 'O denominador.']:null
         ],
         obs:'Parcela por mês da janela, resolvendo a vigência da premissa (carry-forward) mês a mês. A comissão NÃO entra aqui — é função da tarifa e aparece depois, na cascata do resultado.',
         alerta: P.pessoalCpkBase==='ambos'
           ? 'Escolha em validação: somando Frota 35% + Agregado 65%, a rota da frota própria carrega a folha INTEIRA da unidade, inclusive a parcela que sustenta a operação de agregados. O CPK por placa usa só os 35%. Se a intenção for reproduzir o CPK, trocar a base para "só a fatia da frota" nas Premissas.'
-          : null}));
+          : null}),
+      {fonte:'Núcleo de custo (custosViagem): salário × fator de encargos da premissa do Simulador ÷ viagens do mês desta rota. A Premissa (CPK) do fechamento não entrou nesta rota.',
+       obs:'Comissão não está aqui: ela é função da tarifa e aparece depois, na cascata do resultado.'}));
 
   add('Depreciação do cavalo','deprecCavalo',li.deprecCavalo,
-      T?`${brl(T.depCavVg)}/viagem`:'',
+      notaFonte('deprecCavalo', T?`${brl(T.depCavVg)}/viagem`:''),
+      memFonte('Depreciação do cavalo','deprecCavalo',
       mem('Depreciação do cavalo',{selo:selo('deprecCavalo'),
         fonte:'Base de depreciação do CPK (cpk_lancamentos/DEPRECIACAO), placa a placa, com a MESMA fórmula do módulo CPK: linear sobre o valor depreciável, percentual anual ou valor manual, respeitando data de compra, prazo, residual e status.',
         formula:`Σ depreciação mensal das placas × meses da janela ÷ viagens medidas\n${brl(RB?RB.deprecCavaloRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.deprecCavalo)}`,
-        linhas:[
-          RB?['Depreciação de cavalos no período', brl(RB.deprecCavaloRS)]:null,
-          RB?['Placas com depreciação cadastrada', num(RB.nPlacasDep,0)]:null,
-          ['Meses da janela', num(nMes,0)],
-          T?['R$/viagem', brl(T.depCavVg)]:null
+        insumos:[
+          ['Depreciação de cavalos no período', brl(RB?RB.deprecCavaloRS:null),
+           'Soma da depreciação MENSAL de cada cavalo cadastrado em cpk_lancamentos/DEPRECIACAO, multiplicada pelos meses da janela. Placa sem cadastro entra com zero — não é estimada.'],
+          ['Placas com depreciação cadastrada', num(RB?RB.nPlacasDep:0,0),
+           'Quantas placas têm base de capital cadastrada. Se for muito menor que a frota que roda a rota, o custo de capital está subdimensionado.'],
+          ['Meses da janela', num(nMes,0), 'Quantos meses a janela analisada cobre — a depreciação é mensal e precisa ser multiplicada por eles.'],
+          ['Viagens medidas', num(T?T.viagens:0,0), 'O divisor: viagens do mês-base amarradas a uma rota.'],
+          ['= R$ por viagem', brl(T?T.depCavVg:null), 'O quociente, que é o valor exibido nesta linha.']
         ],
-        obs:'Custo mensal FIXO: incide mesmo no mês em que a placa não rodou. Placa sem depreciação cadastrada não gera custo — a base incompleta puxa o CPK para baixo, e isso aparece no card de completude.'}));
+        linhas:[
+          RB?['Depreciação de cavalos no período', brl(RB.deprecCavaloRS), 'Numerador: custo de capital dos cavalos da unidade no período.']:null,
+          RB?['Placas com depreciação cadastrada', num(RB.nPlacasDep,0), 'Cobertura da base de capital. Placa sem cadastro não gera custo.']:null,
+          ['Meses da janela', num(nMes,0), 'Multiplicador do numerador mensal.'],
+          T?['Viagens medidas', num(T.viagens,0), 'Denominador da divisão.']:null,
+          T?['R$/viagem', brl(T.depCavVg), 'O quociente.']:null
+        ],
+        obs:'Custo mensal FIXO: incide mesmo no mês em que a placa não rodou. Placa sem depreciação cadastrada não gera custo — a base incompleta puxa o CPK para baixo, e isso aparece no card de completude.'}),
+      {fonte:'Núcleo de custo (custosViagem): valor do cavalo na premissa do Simulador ÷ vida útil em anos ÷ 12 ÷ viagens do mês desta rota. A base de capital do CPK não entrou nesta rota.',
+       insumos:[['Taxa do CPK que ficou de fora', T&&T.depCavVg!=null?brl(T.depCavVg)+'/viagem':'não apurada',
+                 'É o R$/viagem que a base de depreciação por placa do CPK daria. Quando ela aparece como R$ 0,00, quase sempre significa que nenhuma placa da unidade tem depreciação cadastrada na competência-base — e zero não é um custo de capital plausível, por isso a linha ficou no modelo.']],
+       obs:'Custo mensal FIXO: incide mesmo no mês em que a placa não rodou.'}));
 
   add('Depreciação da carreta','deprecCarreta',li.deprecCarreta,
-      T?`${brl(T.depCarVg)}/viagem`:'',
+      notaFonte('deprecCarreta', T?`${brl(T.depCarVg)}/viagem`:''),
+      memFonte('Depreciação da carreta','deprecCarreta',
       mem('Depreciação da carreta',{selo:selo('deprecCarreta'),
         fonte:'Mesma base do CPK, filtrando os registros classificados como carreta (semirreboque, silo, tanque, bitrem, rodotrem, vanderleia).',
         formula:`Σ depreciação mensal das carretas no período ÷ viagens medidas\n${brl(RB?RB.deprecCarretaRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.deprecCarreta)}`,
+        insumos:[
+          ['Depreciação de carretas no período', brl(RB?RB.deprecCarretaRS:null),
+           'Soma da depreciação mensal de TODAS as carretas da unidade, pelos meses da janela. É custo de frota — nenhuma carreta é atribuída a uma rota específica.'],
+          ['Viagens no denominador', num(T?T.viagens:0,0),
+           'Viagens do mês-base amarradas a uma rota'+(T&&T.corrigidoPorCobertura?', já corrigidas pela cobertura (nivelamento por taxa).':'. Sem correção por cobertura: o nivelamento está em "medido", que força o fechamento com o Mapinha.')],
+          ['= R$ por viagem', brl(T?T.depCarVg:null),
+           'O quociente. Esta é a linha mais sensível da tela ao denominador: metade das viagens de fora dobra o valor.']
+        ],
         linhas:[
-          RB?['Depreciação de carretas no período', brl(RB.deprecCarretaRS)]:null,
-          RB?['Placas com depreciação cadastrada', num(RB.nPlacasDep,0)]:null,
-          T?['Viagens no denominador', num(T.viagens,0)+(T.corrigidoPorCobertura?' (corrigido pela cobertura)':'')]:null,
-          T?['Cobertura do mês-base', pct(T.cobertura,0)]:null,
-          T?['R$/viagem', brl(T.depCarVg)]:null,
-          cu?['Quanto isso é do custo da viagem', pct(cu.custoViagem>0?Math.abs(li.deprecCarreta||0)/cu.custoViagem:null,1)]:null
+          RB?['Depreciação de carretas no período', brl(RB.deprecCarretaRS), 'Numerador: capital das carretas da unidade no período.']:null,
+          RB?['Placas com depreciação cadastrada', num(RB.nPlacasDep,0), 'Quantas placas têm base de capital cadastrada no CPK.']:null,
+          T?['Viagens no denominador', num(T.viagens,0)+(T.corrigidoPorCobertura?' (corrigido pela cobertura)':''), 'Divisor da conta.']:null,
+          T?['Cobertura do mês-base', pct(T.cobertura,0), 'Fração dos CT-e do mês-base que virou viagem medida. É o que separa esta taxa de estar certa ou inflada por 1/cobertura.']:null,
+          T?['R$/viagem', brl(T.depCarVg), 'O quociente.']:null,
+          cu?['Quanto isso é do custo da viagem', pct(cu.custoViagem>0?Math.abs(li.deprecCarreta||0)/cu.custoViagem:null,1),
+              'Peso desta linha no custo total da viagem. Acima de uns 15% o número merece conferência de denominador antes de ir para uma negociação.']:null
         ],
         obs:'Carreta não roda km próprio e não tem CPK individual — a sua depreciação é custo da frota, rateado entre as viagens, exatamente como o CPK faz ao diluí-la entre as placas da filial.',
-        alerta:'Esta é a linha mais sensível ao denominador de toda a tela: o numerador é a depreciação de TODAS as carretas da unidade no mês, e o denominador só as viagens que o módulo amarrou a uma rota. Se ela aparecer respondendo por metade do custo da viagem, o problema quase nunca é a depreciação — é o denominador. Confira a cobertura acima e o mês-base antes de levar o número para uma negociação.'}));
+        alerta:'Esta é a linha mais sensível ao denominador de toda a tela: o numerador é a depreciação de TODAS as carretas da unidade no mês, e o denominador só as viagens que o módulo amarrou a uma rota. Se ela aparecer respondendo por metade do custo da viagem, o problema quase nunca é a depreciação — é o denominador. Confira a cobertura acima e o mês-base antes de levar o número para uma negociação.'}),
+      {fonte:'Núcleo de custo (custosViagem): valor da carreta na premissa do Simulador ÷ vida útil em anos ÷ 12 ÷ viagens do mês desta rota. A base de capital do CPK não entrou nesta rota.',
+       insumos:[['Taxa do CPK que ficou de fora', T&&T.depCarVg!=null?brl(T.depCarVg)+'/viagem':'não apurada',
+                 'É o R$/viagem que a base de depreciação por placa do CPK daria para esta linha. Foi calculado, comparado com o modelado e recusado — é este número, e não o exibido, que costuma denunciar denominador errado no mês-base.']],
+       obs:'Carreta não roda km próprio: a sua depreciação é custo de frota, rateado entre as viagens.'}));
 
   add('Tempo parado no cliente','tempo',li.tempo,
       cu&&cu.tempoDet?`${num(cu.tempoDet.tParado,2)} h × ${brl(cu.tempoDet.custoH)}/h`:'',
@@ -13204,14 +13606,25 @@ function rclPainel(chaveCli, k3){
         ]:null,
         obs:'Custo de oportunidade zero mantém a linha visível valendo zero: o comercial vê que ela existe e decide se quer precificar a hora parada.'}));
 
+  const alimMesPrem = Number((premissasEfetivas(null,r.op,null)||{}).alimentacao_mes)||0;
   add('Alimentação','alimentacao',li.alimentacao,
-      `${brl(cu?cu.viagensMes:0)}`.length?'do E32 do Simulador':'',
+      `${brl(alimMesPrem)}/mês ÷ ${num(cu?cu.viagensMes:0,2)} viagens/mês`,
       mem('Alimentação',{selo:selo('alimentacao'),
-        fonte:'Premissa alimentacao_mes (célula E32) da aba Simulador, dividida pelas viagens do mês desta rota.',
-        formula:`alimentação mensal ÷ viagens no mês\n${brl(Number((premissasEfetivas(null,r.op,null)||{}).alimentacao_mes)||0)} ÷ ${num(cu?cu.viagensMes:0,2)} = ${brl(li.alimentacao)}`,
+        fonte:'Premissa alimentacao_mes (célula E32) da aba Simulador, para a filial desta rota, dividida pelas viagens que ESTA rota faz por mês.',
+        formula:`alimentação mensal ÷ viagens da rota no mês\n${brl(alimMesPrem)} ÷ ${num(cu?cu.viagensMes:0,2)} = ${brl(li.alimentacao)}`,
+        insumos:[
+          ['Alimentação mensal (E32)', brl(alimMesPrem),
+           'Valor digitado na aba Simulador, célula E32, nas premissas da filial '+(r.op||'—')+'. É o gasto de alimentação de um motorista por mês — não é lançamento do Mapinha nem folha do CPK.'],
+          ['Viagens da rota por mês', num(cu?cu.viagensMes:0,2),
+           'Viagens desta rota na janela ÷ meses da janela ('+num(r.viagens,0)+' ÷ '+num(nMes,0)+'). Rota que roda pouco carrega mais alimentação por viagem, porque o gasto mensal é o mesmo.'],
+          ['= R$ por viagem', brl(Math.abs(li.alimentacao||0)),
+           'A divisão dos dois acima — o valor desta linha.']
+        ],
         linhas:[
-          ['Alimentação mensal (E32)', brl(Number((premissasEfetivas(null,r.op,null)||{}).alimentacao_mes)||0)],
-          ['Viagens da rota por mês', num(cu?cu.viagensMes:0,2)]
+          ['Alimentação mensal (E32)', brl(alimMesPrem), 'Numerador: premissa mensal da aba Simulador para esta filial.'],
+          ['Viagens da rota por mês', num(cu?cu.viagensMes:0,2), 'Denominador: quantas viagens desta rota diluem aquele gasto mensal.'],
+          ['Viagens na janela', num(r.viagens,0), 'De onde sai o denominador, junto com os meses da janela.'],
+          ['Meses da janela', num(nMes,0), 'Divisor das viagens para chegar às viagens por mês.']
         ],
         obs:'Antes desta rodada a alimentação estava ENTERRADA dentro da linha de pessoal do núcleo (pessoalFixo = salário×encargos÷V + alimentação÷V). Ela saiu de lá e ganhou linha própria — sem isso, trocar o pessoal pelo CPK teria apagado a alimentação em silêncio.'}));
 
@@ -13262,43 +13675,113 @@ function rclPainel(chaveCli, k3){
   const memCPK=mem('CPK — custo por quilômetro',{selo:'INDICADOR',
     fonte:'Não é lido de lugar nenhum: é o FECHAMENTO de tudo o que está nesta tela. Custo total da rota no período ÷ quilômetros atribuídos a ela.',
     formula:`CPK = custo total ÷ km atribuído\n${brl(r.custoOp)} ÷ ${num(r.kmTot,0)} km = ${brl(r.cpk)}`,
+    insumos:[
+      ['Custo variável no período', brl(r.custoVar),
+       'R$ '+num(Math.abs(cu?cu.variavel:0),2)+' por viagem × '+num(r.viagens,0)+' viagens. O custo por viagem sai das seis linhas variáveis da tabela ao lado, cada uma na sua fonte.'],
+      ['Custo fixo rateado no período', brl(r.custoFixo),
+       'R$ '+num(Math.abs(cu?cu.fixo:0),2)+' por viagem × '+num(r.viagens,0)+' viagens. Cada linha fixa é um R$ mensal da unidade dividido pelas viagens medidas no mês-base.'],
+      ['= Custo total', brl(r.custoOp), 'A soma dos dois acima. É o numerador.'],
+      ['Km atribuídos', num(r.kmTot,0)+' km',
+       '('+num(cu?cu.kmIda:0,1)+' + (1−'+num(cu?cu.aprov:0,2)+') × '+num(cu?cu.kmVolta:0,1)+') km × '+num(r.viagens,0)+' viagens, na distância '+(cu?String(cu.fonteDist||'').toUpperCase():'—')+'. É o denominador — e qualquer erro aqui vira erro de CPK na mesma proporção.'],
+      ['= CPK', brl(r.cpk), 'A divisão. Este é o número que o módulo CPK por placa tem de reproduzir para as premissas estarem validadas.']
+    ],
     linhas:[
-      ['Custo variável no período', brl(r.custoVar)],
-      ['Custo fixo rateado', brl(r.custoFixo)],
-      ['= Custo total', brl(r.custoOp)],
-      ['Km atribuídos', num(r.kmTot,0)+' km'],
-      ['CPK', brl(r.cpk)],
-      ['VPK (receita por km)', brl(r.vpk)],
-      ['VPK − CPK', brl((r.vpk||0)-(r.cpk||0))+'/km']
+      ['Custo variável no período', brl(r.custoVar), 'Diesel, Arla, pedágio, pneus, lubrificante e descarga, multiplicados pelas viagens da rota.'],
+      ['Custo fixo rateado', brl(r.custoFixo), 'Peças, documentação, pessoal, depreciações, alimentação e tempo, multiplicados pelas viagens da rota.'],
+      ['= Custo total', brl(r.custoOp), 'Numerador do CPK.'],
+      ['Km atribuídos', num(r.kmTot,0)+' km', 'Denominador do CPK: distância adotada × viagens, já descontado o retorno aproveitado.'],
+      ['CPK', brl(r.cpk), 'Custo por quilômetro rodado desta rota, no período.'],
+      ['VPK (receita por km)', brl(r.vpk), 'Receita bruta ÷ o MESMO quilômetro. Vem do SZB, base independente do custo — é o que torna a comparação válida.'],
+      ['VPK − CPK', brl((r.vpk||0)-(r.cpk||0))+'/km', 'A margem por quilômetro, antes de imposto, comissão e estrutura.']
     ],
     obs:'A cadeia inteira: km da rota (SZY, controlado pela HERE) × viagens do SZB → o modelo físico reparte diesel e pedágio → o realizado do Mapinha e a premissa do CPK definem o nível de cada linha → soma = custo total → ÷ km = CPK. Cada elo tem a sua própria memória de cálculo nesta tela. Quando o CPK daqui bater com o CPK do módulo por placa, as premissas estão validadas.'});
 
-  const memConsumo=mem('Consumo adotado — como é calculado, calibrado e definido',{selo:'3 CAMADAS',
-    fonte:'Três camadas empilhadas, nesta ordem. Nenhuma delas sozinha é o número final.',
-    formula:`km/l final = km/l do modelo ÷ (normalização × fator de aderência)\n${num(cu&&cu.cons?cu.cons.carregado:0,3)} ÷ (${num(cu?cu.norm:1,4)} × ${num(cu?cu.fator:1,4)}) = ${num(r.kmlC,2)} km/l carregado`,
-    linhas:[
-      ['1. PREMISSA — ponto de partida', num(bk._base?bk._base.carregado:0,2)+' / '+num(bk._base?bk._base.vazio:0,2)+' km/l'],
-      ['2. MODELO — depois da física da rota', num(cu&&cu.cons?cu.cons.carregado:0,2)+' / '+num(cu&&cu.cons?cu.cons.vazio:0,2)],
-      ['   normalização (tira o viés do modelo)', num(cu?cu.norm:1,4)],
-      ['3. CALIBRAÇÃO — fator do realizado', num(cu?cu.fator:1,4)],
-      ['   apurado sobre a competência', baseTxt],
-      ['= Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l']
+  /* Detalhe da aderência da operação desta rota — precisa aparecer aqui,
+     porque é ele que explica por que o km/l adotado não é o da premissa. */
+  const ad = (RCL.diag && RCL.diag.ader) ? (RCL.diag.ader[r.op] || RCL.diag.ader._geral) : null;
+  const kb = cu ? cu.kmlBanda : null;
+  const bs = cu && cu.baseKml ? cu.baseKml : (bk._base||{carregado:0,vazio:0});
+  const memConsumo=mem('Consumo adotado — como é calculado, calibrado e definido',{selo:'4 CAMADAS',
+    fonte:'Quatro camadas empilhadas, nesta ordem: premissa da frota → física da rota → calibração pelo diesel comprado → guarda de plausibilidade. Nenhuma delas sozinha é o número final, e cada uma responde por uma pergunta diferente.',
+    formula:`km/l final = km/l do modelo ÷ (normalização × fator de aderência), dentro da banda física\n${num(cu&&cu.cons?cu.cons.carregado:0,3)} ÷ (${num(cu?cu.norm:1,4)} × ${num(cu?cu.fator:1,4)}) = ${num(kb?kb.brutoC:r.kmlC,2)} → adotado ${num(r.kmlC,2)} km/l carregado`,
+    insumos:[
+      ['Premissa da frota', num(bs.carregado,2)+' / '+num(bs.vazio,2)+' km/l',
+       'Ponto de partida: o km/l médio da frota rodando as rotas que ela roda, das premissas de custo (aba Rotas / Simulador). Não é o consumo desta rota — é a média contra a qual esta rota vai ser comparada.'],
+      ['km/l do modelo físico', num(cu&&cu.cons?cu.cons.carregado:0,2)+' / '+num(cu&&cu.cons?cu.cons.vazio:0,2),
+       'A premissa corrigida pela energia que ESTA rota exige: subida (m·g·Δh), descida recuperada em parte (κ) e curvas (½·m·Δv²), tudo medido contra a rota média da amostra e com a massa real de cada trecho — tara + carga na ida, só tara na volta. Rota com serra recebe menos km/l; rota plana, mais.'],
+      ['Normalização do modelo', num(cu?cu.norm:1,4),
+       'Escala que garante que LIGAR o modelo não muda o total de litros da frota, só a repartição entre rotas. Sem ela o teto de variação e a assimetria de massa criariam um viés silencioso: a frota inteira passaria a consumir mais no papel.'],
+      ['Fator de aderência aplicado', num(cu?cu.fator:1,4),
+       ad ? `Litros comprados na SZC (${num(ad.realizado,0)} l, unidade inteira) ÷ litros esperados da frota (${num(ad.modeladoFrota,0)} l). Os esperados saem do modelo (${num(ad.modelado,0)} l nas viagens amarradas) trazido para a escala da frota `+(ad.corrigidoPorCobertura?`pela cobertura de ${pct(ad.cobertura,0)}.`:'— nesta operação a cobertura não permitiu correção, e os dois números estão na mesma escala.')
+          : 'Razão entre o diesel comprado e o diesel que o modelo previu, na competência-base.'],
+      ['= km/l adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l',
+       'O número que entra no cálculo dos litros de cada viagem — e, por consequência, na maior linha do custo.']
     ],
-    obs:'DEFINIDO na premissa: 2,0 km/l carregado e 3,0 vazio, que é a média da frota rodando as rotas que ela roda — pode ser sobrescrito por rota ou pelo Simulador. CALCULADO pelo modelo físico: a rota com serra recebe menos km/l e a rota plana recebe mais, contra a rota média da amostra. CALIBRADO pela nota fiscal do MÊS FECHADO: o fator de aderência move o nível para que a soma dos litros feche com o que foi comprado. Mês corrente nunca calibra — em rascunho faltam abastecimentos lançados e a média sairia por baixo. Sem simulação da HERE com elevação, a camada 2 não roda e o número é a premissa pura, e a tela avisa.',
-    alerta: baseMesma?null:('Média apurada sobre '+baseTxt+', não sobre a janela analisada. '+baseMotivo)});
+    linhas:[
+      ['1. PREMISSA — ponto de partida', num(bs.carregado,2)+' / '+num(bs.vazio,2)+' km/l',
+       'Média da frota nas rotas que ela roda. Editável por rota (Premissas de custo da Análise de Rotas) ou globalmente nas ⚙ Premissas do resultado.'],
+      ['2. MODELO — depois da física da rota', num(cu&&cu.cons?cu.cons.carregado:0,2)+' / '+num(cu&&cu.cons?cu.cons.vazio:0,2),
+       'Resultado do modelo de energia sobre o perfil de elevação da HERE. Sem simulação com elevação esta camada não roda e o número segue igual à premissa.'],
+      ['   normalização (tira o viés do modelo)', num(cu?cu.norm:1,4),
+       'Fator que devolve ao total da frota os litros que o modelo redistribuiu. Quem move o TOTAL é a nota fiscal, nunca o modelo.'],
+      ['3. CALIBRAÇÃO — fator de aderência', num(cu?cu.fator:1,4),
+       'Diesel comprado ÷ diesel esperado da frota, na competência-base. Acima de 1 derruba o km/l de todas as rotas da operação; abaixo de 1, levanta.'],
+      ad&&ad.corrigidoPorCobertura?['   cobertura usada na correção', pct(ad.cobertura,0),
+       'Fração dos CT-e da competência-base que o módulo amarrou a uma rota. É por ela que os litros modelados são divididos para chegar à escala da frota inteira — sem isso o fator media cobertura, não consumo.']:null,
+      ad&&ad.fatorBruto!=null?['   fator sem a correção (como era)', num(ad.fatorBruto,4),
+       'O valor que o fator tinha antes da correção de escala. Se ele for bem maior que o corrigido, a diferença inteira era cobertura — não consumo real.']:null,
+      ['   apurado sobre a competência', baseTxt,
+       'Mês FECHADO no Mapinha de onde saem os litros comprados. Mês em rascunho nunca calibra: faltariam abastecimentos lançados e a média sairia por baixo.'],
+      kb?['4. GUARDA — banda física do km/l', num(kb.pisoC,2)+' – '+num(kb.tetoC,2)+' km/l',
+       'Última trava: '+pct(RCL_CFG.kmlPisoRel,0)+' a '+pct(RCL_CFG.kmlTetoRel,0)+' do km/l da premissa. É mais larga que o próprio limite do modelo físico, então nunca corta a física — corta só a calibração quando ela empurra o número para fora do que uma composição atinge.']:null,
+      kb&&cu&&cu.kmlTravado?['   km/l antes da guarda', num(kb.brutoC,2)+' / '+num(kb.brutoV,2),
+       'O que a calibração teria imposto. Foi limitado pela banda acima — e por isso este número e o adotado são diferentes.']:null,
+      ['= Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l',
+       'Carregado / vazio. É o que produz os litros de cada viagem.'],
+      cu?['Leitura operacional — l/100 km', num(cu.litros100km,1)+' l/100 km',
+       'O mesmo consumo, na unidade que se confere contra a nota de abastecimento. Para uma composição pesada em relevo severo, este é o número que se julga de cabeça — km/l engana.']:null,
+      cu?['Litros por viagem', num(cu.litrosViagem,1)+' l',
+       'Litros que o cálculo atribui a uma viagem completa desta rota, já descontado o retorno aproveitado. Multiplicado pelo preço efetivo do diesel, é a maior linha do custo.']:null,
+      cu?['Massa considerada', num((cu.tonViagem||0),1)+' t de carga',
+       'Peso médio faturado por viagem, do CT-e. Entra na energia de subida e de curva — é o que faz a mesma serra pesar muito mais no sentido carregado.']:null
+    ],
+    obs:'DEFINIDO na premissa (média da frota); CALCULADO pelo modelo físico (a rota com serra recebe menos km/l que a rota plana, contra a rota média da amostra); CALIBRADO pela nota fiscal do mês FECHADO, agora comparando frota com frota — antes o módulo dividia o diesel da unidade inteira pelos litros de apenas uma parte das viagens, e o excesso de escala aparecia como se fosse consumo. Por último, a GUARDA impede que qualquer resíduo dessa conta produza um km/l que nenhuma composição alcança.',
+    alerta: (cu&&cu.kmlTravado)
+        ? `A calibração levaria o km/l a ${num(kb?kb.brutoC:0,2)} carregado, fora da banda física ${num(kb?kb.pisoC:0,2)}–${num(kb?kb.tetoC:0,2)}. O valor foi limitado à banda. Isso é sintoma de base incompleta (SZC ou SZB) na competência-base, não de consumo real.`
+        : (ad && ad.fator!=null && !ad.dentro)
+        ? `Fator de aderência de ${num(ad.fator,3)} está fora da banda ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)} e NÃO foi aplicado — o consumo aqui é modelo puro. Já corrigido pela cobertura, um fator assim indica SZC ou SZB incompletos no período.`
+        : (baseMesma?null:('Média apurada sobre '+baseTxt+', não sobre a janela analisada. '+baseMotivo))});
 
   const memCalib=mem('Calibração pelo realizado — o que isso significa',{selo:'ADERÊNCIA',
-    fonte:'É o fator de aderência aplicado a ESTA rota. Mesmo número, dito de outra forma.',
-    formula:`fator = litros comprados na SZC ÷ litros que o modelo previu\ndesvio mostrado = fator − 1 = ${cu&&cu.fator!=null?pct(cu.fator-1,2):'—'}`,
-    linhas:[
-      ['Fator aplicado', cu?num(cu.fator,4):'—'],
-      ['Leitura', cu&&cu.fator>1?'a frota gastou MAIS do que o modelo previu → km/l cai':(cu&&cu.fator<1?'a frota gastou MENOS do que o modelo previu → km/l sobe':'não aplicada')],
-      ['Banda sã', num(RCL_CFG.aderenciaMin,2)+' – '+num(RCL_CFG.aderenciaMax,2)],
-      ['Origem do fator', P.aderenciaFonte==='geral'?'consolidado das três filiais':'da operação desta rota'],
-      ['Competência-base', baseTxt],
-      ['Base é a janela?', baseMesma?'sim — janela já fechada':'NÃO — a média veio do mês fechado']
+    fonte:'É o fator de aderência aplicado a ESTA rota. Mesmo número do Consumo adotado, dito pelo desvio em vez do multiplicador.',
+    formula:`fator = litros comprados na SZC ÷ litros esperados da frota\n${ad?num(ad.realizado,0):'—'} ÷ ${ad?num(ad.modeladoFrota,0):'—'} = ${cu?num(cu.fator,4):'—'}   ·   desvio = fator − 1 = ${cu&&cu.fator!=null?pct(cu.fator-1,2):'—'}`,
+    insumos:[
+      ['Litros comprados na SZC', ad?num(ad.realizado,0)+' l':'—',
+       'Soma dos litros de diesel das notas de abastecimento da competência-base, da unidade inteira. É o dado mais duro que existe nesta tela: veio de nota fiscal.'],
+      ['Litros modelados nas viagens amarradas', ad?num(ad.modelado,0)+' l':'—',
+       'O que o modelo físico pede para as viagens que o módulo conseguiu ligar a uma rota da SZY. É só um PEDAÇO do rodado da frota — e era com este número, fora de escala, que o diesel da frota inteira vinha sendo comparado.'],
+      ad&&ad.corrigidoPorCobertura?['Cobertura da competência-base', pct(ad.cobertura,0),
+       'Fração dos CT-e daquele mês que virou viagem medida. É o que converte o modelado do pedaço para o modelado da frota.']:null,
+      ['Litros esperados da frota', ad?num(ad.modeladoFrota,0)+' l':'—',
+       ad&&ad.corrigidoPorCobertura?'Litros modelados ÷ cobertura. Agora numerador e denominador falam da mesma frota, e a razão volta a medir consumo.':'Iguais aos modelados: a cobertura não permitiu correção nesta operação.'],
+      ['= Fator', cu?num(cu.fator,4):'—',
+       'Acima de 1, a frota comprou mais diesel do que o modelo previu e o km/l de todas as rotas da operação cai. Abaixo de 1, o contrário.']
     ],
-    obs:'Em uma frase: o modelo diz quanto de diesel DEVERIA ter sido queimado; a nota fiscal diz quanto foi COMPRADO; a razão entre os dois vira um multiplicador que corrige o km/l de todas as rotas da operação de uma vez. "Não aplicada" quer dizer que o fator ficou fora da banda sã e o módulo preferiu não mexer — ou que não houve SZC no período. Não é o modelo estar certo ou errado: é a régua sendo ajustada pelo que a empresa efetivamente pagou.'});
+    linhas:[
+      ['Fator aplicado', cu?num(cu.fator,4):'—', 'O multiplicador que efetivamente entrou no consumo desta rota. Vale 1 quando a calibração não foi aplicada.'],
+      ad&&ad.fatorBruto!=null?['Fator sem correção de escala', num(ad.fatorBruto,4),
+       'Como o módulo calculava antes: diesel da frota inteira ÷ litros de apenas as viagens amarradas. Toda a diferença para o fator aplicado era cobertura disfarçada de consumo.']:null,
+      ['Leitura', cu&&cu.fator>1?'a frota gastou MAIS do que o modelo previu → km/l cai':(cu&&cu.fator<1?'a frota gastou MENOS do que o modelo previu → km/l sobe':'não aplicada'),
+       'Como interpretar o número em uma frase.'],
+      ['Banda sã', num(RCL_CFG.aderenciaMin,2)+' – '+num(RCL_CFG.aderenciaMax,2),
+       'Faixa em que o fator corrigido ainda pode ser lido como consumo. Fora dela o módulo não aplica: prefere o modelo puro a um número que não consegue defender.'],
+      ['Origem do fator', P.aderenciaFonte==='geral'?'consolidado das três filiais':'da operação desta rota',
+       'Premissa "Fonte da aderência". Por operação respeita a realidade de cada filial; consolidado dá mais massa de dados quando uma filial tem pouca nota.'],
+      ['Competência-base', baseTxt, 'Mês fechado de onde saíram tanto os litros comprados quanto os litros modelados. Os dois têm de ser do MESMO mês, senão a razão não significa nada.'],
+      ['Base é a janela?', baseMesma?'sim — janela já fechada':'NÃO — a média veio do mês fechado',
+       'Quando a janela analisada ainda está em rascunho no Mapinha, a calibração recua para o último mês fechado. Viagens, receita e km continuam sendo os da janela.']
+    ],
+    obs:'Em uma frase: o modelo diz quanto de diesel DEVERIA ter sido queimado; a nota fiscal diz quanto foi COMPRADO; a razão entre os dois corrige o km/l de todas as rotas da operação de uma vez. O que mudou nesta rodada é que os dois lados da razão passaram a falar da mesma frota — antes o numerador era a unidade inteira e o denominador só as viagens amarradas, e a diferença de escala aparecia na tela como consumo pior do que o real.'});
 
   const memDist=mem('Distância adotada',{selo:cu?(cu.fonteDist||'').toUpperCase():'—',
     fonte: cu&&cu.fonteDist==='szy'
@@ -13326,6 +13809,49 @@ function rclPainel(chaveCli, k3){
       ['Volta cobrada', pct(1-(cu?cu.aprov:0),0)]
     ],
     obs:'A regra é simétrica de propósito: se A→B aproveita a volta e B→A também, cada uma cobra só a sua ida e a soma fecha com o rodado real. Um retorno absorve UMA ida só — sem essa trava, dez viagens seguidas se dariam por aproveitadas em cima do mesmo CT-e.'});
+
+  /* ══ Linha de Impostos com campo aberto ═══════════════════════════════════
+     O percentual deixou de ser rótulo e virou entrada. O que estiver digitado
+     vale só para esta rota; o que não for digitado usa o padrão do módulo
+     (10%). A alíquota da filial continua visível na memória, ao lado da
+     adotada — trocar a régua sem dizer qual era a anterior seria pior do que
+     não deixar trocar. */
+  const aliqCh   = rclAliqChave(chaveCli, k3);
+  const aliqDig  = RCL.aliqRota[aliqCh];
+  const aliqTxt  = num((aliqDig!=null?aliqDig:(r.aliq||0))*100, 2);
+  const aliqOrig = r.aliqOrigem||'padrao';
+  const aliqNota = aliqOrig==='rota'      ? 'digitado nesta rota'
+                 : aliqOrig==='manual'    ? 'manual das ⚙ Premissas do resultado'
+                 : aliqOrig==='desligado' ? 'impostos desligados nas premissas'
+                                          : `padrão do módulo (${pct(RCL_ALIQ_PADRAO,0)})`;
+  const memImpostos = mem('Impostos sobre a receita',{selo:'PREMISSA',
+    fonte:'Campo aberto na própria linha. O que estiver digitado vale só para esta rota; em branco, vale o padrão do módulo de 10%. A alíquota fiscal da filial (PIS/COFINS + ICMS das premissas do Comercial) fica abaixo, como referência.',
+    formula:`receita bruta × alíquota adotada\n${brl(r.receitaBruta)} × ${pct(r.aliq,3)} = ${brl(r.impostos)}`,
+    insumos:[
+      ['Receita bruta', brl(r.receitaBruta), 'SZB — soma do Valor Total dos CT-e desta rota e deste cliente na janela. É o mesmo número da linha de cima.'],
+      ['Alíquota adotada', pct(r.aliq,3), 'Digitada no campo desta linha; em branco, o padrão de '+pct(RCL_ALIQ_PADRAO,0)+' do módulo.'],
+      ['= Impostos', brl(r.impostos), 'Multiplicação direta dos dois valores acima.']
+    ],
+    linhas:[
+      ['Alíquota adotada', pct(r.aliq,3), 'A que multiplicou a receita nesta linha. Vem do campo ao lado do rótulo.'],
+      ['De onde ela veio', aliqNota, 'Ordem de precedência: o que estiver digitado nesta rota manda; depois a alíquota manual das ⚙ Premissas do resultado; por último o padrão do módulo.'],
+      ['Padrão do módulo', pct(RCL_ALIQ_PADRAO,0), 'Valor que vale para toda rota cujo campo não foi alterado. É premissa de trabalho, não apuração fiscal.'],
+      ['PIS/COFINS + ICMS da filial', r.aliqFilial!=null?pct(r.aliqFilial,3):'—',
+       'Alíquota efetiva das premissas do módulo Comercial para a filial '+(r.op||'—')+'. Fica aqui como referência: é contra ela que se julga se a alíquota digitada faz sentido.'],
+      r.aliqFilial!=null?['Diferença para a filial', brl(r.receitaBruta*(r.aliq-r.aliqFilial)),
+       'Quanto de imposto esta linha tem a mais (ou a menos) do que teria com a alíquota da filial. É o tamanho da decisão que o campo acima toma.']:null
+    ],
+    obs:'IR/CS e ISS não entram aqui — o módulo trabalha com alíquota sobre faturamento, não sobre resultado tributável. Mudar o campo recalcula na hora a receita líquida, a margem de contribuição, a comissão (que incide sobre a líquida) e o resultado desta rota, e reagrega o cliente.'});
+  const linhaImpostos = `<tr>
+      <td class="muted"><span${memImpostos}>Impostos</span>
+        <span class="rcl-aliq-wrap">(<input type="text" inputmode="decimal" id="rclAliqIn"
+           class="rcl-aliq${aliqDig!=null?' editado':''}" value="${aliqTxt}"
+           data-cli="${esc(chaveCli)}" data-k3="${esc(k3)}"
+           title="Alíquota desta rota, em %. Enter aplica. Campo vazio volta ao padrão de ${pct(RCL_ALIQ_PADRAO,0)}."><b>%</b>)
+        ${aliqDig!=null?`<button type="button" class="rcl-aliq-x" id="rclAliqReset" title="Voltar ao padrão de ${pct(RCL_ALIQ_PADRAO,0)}">↺</button>`:''}</span></td>
+      <td class="num"${memImpostos}>− ${brl(r.impostos)}</td>
+      <td class="muted" style="font-size:10.5px">${esc(aliqNota)}</td>
+    </tr>`;
 
   el.innerHTML=`<div class="card">
     <h3>${esc(cl.nome)} · ${esc(r.op||'—')} ${esc(r.codigo||'')} · ${esc(r.origem)} → ${esc(r.destino)}
@@ -13387,35 +13913,45 @@ function rclPainel(chaveCli, k3){
                 formula:`${brl(r.receitaBruta)} ÷ ${num(r.viagens,0)} viagens = ${brl(r.viagens>0?r.receitaBruta/r.viagens:null)}/viagem`,
                 linhas:[['R$/tonelada', brl(r.tarifaTon)],['R$/km (VPK)', brl(r.vpk)],
                         r.cfcQtd?['Carta-frete complementar', brl(r.cfcValor)+' ('+(P.cfcSeparado?'fora':'dentro')+')']:null]}))}
-          ${L('Impostos ('+pct(r.aliq,2)+')', '− '+brl(r.impostos), undefined,
-              mem('Impostos sobre a receita',{selo:'PREMISSAS',
-                fonte:'Alíquotas das Premissas do módulo Comercial para a filial desta rota (PIS/COFINS + ICMS), ou a alíquota manual das Premissas do resultado.',
-                formula:`receita bruta × alíquota\n${brl(r.receitaBruta)} × ${pct(r.aliq,3)} = ${brl(r.impostos)}`,
-                linhas:[['Alíquota aplicada', pct(r.aliq,3)],['Origem', P.aliqManual!=null?'manual nas Premissas do resultado':'PIS/COFINS + ICMS das premissas da filial']],
-                obs:'IR/CS e ISS não entram aqui — o módulo trabalha com a alíquota sobre faturamento, não com o resultado tributável.'}))}
+          ${linhaImpostos}
           ${L('<b>Receita líquida</b>', '<b>'+brl(r.receitaLiquida)+'</b>', undefined,
               mem('Receita líquida',{selo:'CASCATA',formula:`receita bruta − impostos\n${brl(r.receitaBruta)} − ${brl(r.impostos)} = ${brl(r.receitaLiquida)}`,
                 obs:'É a base de tudo o que vem abaixo, inclusive da comissão.'}))}
           ${L('Custo variável', '− '+brl(r.custoVar), undefined,
               mem('Custo variável',{selo:'SOMA',
-                fonte:'Linhas que só existem porque o caminhão saiu: diesel, Arla, pedágio, pneus, lubrificante e descarga pressurizada.',
-                formula:`${brl(cu?cu.variavel:null)}/viagem × ${num(r.viagens,0)} viagens = ${brl(r.custoVar)}`,
-                linhas:[['Diesel', brl(Math.abs(li.diesel||0))],['Arla', brl(Math.abs(li.arla||0))],
-                        ['Pedágio', brl(Math.abs(li.pedagio||0))],['Pneus', brl(Math.abs(li.pneus||0))],
-                        ['Lubrificante', brl(Math.abs(li.lubrificante||0))],['Descarga', brl(Math.abs(li.compressor||0))]]}))}
+                fonte:'Linhas que só existem porque o caminhão saiu: diesel, Arla, pedágio, pneus, lubrificante e descarga pressurizada. Cada uma tem a sua própria fonte, listada abaixo.',
+                formula:`custo variável por viagem × viagens da rota\n${brl(cu?cu.variavel:null)} × ${num(r.viagens,0)} = ${brl(r.custoVar)}`,
+                insumos:[
+                  ['Custo variável por viagem', brl(cu?cu.variavel:null),
+                   'Soma das seis linhas variáveis da tabela ao lado, cada uma já na fonte que o motor escolheu para ela. É o número que aparece na coluna R$/viagem.'],
+                  ['Viagens da rota', num(r.viagens,0),
+                   'CT-e não cancelados do SZB emitidos na janela e resolvidos para esta rota deste cliente. Carta-frete complementar não conta.'],
+                  ['= Custo variável no período', brl(r.custoVar), 'A multiplicação dos dois acima.']
+                ],
+                linhas:[insLinha('Diesel','diesel'), insLinha('Arla','arla'),
+                        insLinha('Pedágio','pedagio'), insLinha('Pneus','pneus'),
+                        insLinha('Lubrificante','lubrificante'), insLinha('Descarga','compressor')],
+                obs:'"Variável" aqui é no sentido econômico: some se a viagem não acontecer. É esta soma que a receita líquida tem de cobrir para a viagem valer a pena.'}))}
           ${L('<b>Margem de contribuição</b>', '<b>'+brl(r.margemContrib)+'</b>', pct(r.mcPct,1)+' da receita',
               mem('Margem de contribuição',{selo:'CASCATA',
                 formula:`receita líquida − custo variável\n${brl(r.receitaLiquida)} − ${brl(r.custoVar)} = ${brl(r.margemContrib)}`,
                 obs:'Responde "sobrou dinheiro nesta viagem?". É o que cada viagem entrega para pagar a estrutura. Margem de contribuição positiva com resultado negativo significa que a rota ajuda a pagar a conta, mas não se sustenta sozinha.'}))}
           ${L('Custo fixo rateado', '− '+brl(r.custoFixo), undefined,
               mem('Custo fixo rateado',{selo:'SOMA',
-                fonte:'Linhas que existem com o caminhão parado: peças, documentação e seguros, pessoal, depreciações, alimentação, limpeza e tempo.',
-                formula:`${brl(cu?cu.fixo:null)}/viagem × ${num(r.viagens,0)} viagens = ${brl(r.custoFixo)}`,
-                linhas:[['Peças e serviços', brl(Math.abs(li.pecas||0))],['Documentação e seguros', brl(Math.abs(li.docSeguros||0))],
-                        ['Pessoal', brl(Math.abs(li.pessoal||0))],['Depreciação cavalo', brl(Math.abs(li.deprecCavalo||0))],
-                        ['Depreciação carreta', brl(Math.abs(li.deprecCarreta||0))],['Alimentação', brl(Math.abs(li.alimentacao||0))],
-                        ['Tempo parado', brl(Math.abs(li.tempo||0))]],
-                obs:'"Rateado" porque o custo é da frota e do mês; o que chega à rota é a fatia proporcional às viagens que ela consumiu.'}))}
+                fonte:'Linhas que existem com o caminhão parado: peças, documentação e seguros, pessoal, depreciações, alimentação, limpeza e tempo. Cada uma tem fonte própria — abaixo, linha a linha, está de onde cada uma veio.',
+                formula:`custo fixo por viagem × viagens da rota\n${brl(cu?cu.fixo:null)} × ${num(r.viagens,0)} = ${brl(r.custoFixo)}`,
+                insumos:[
+                  ['Custo fixo por viagem', brl(cu?cu.fixo:null),
+                   'Soma das linhas fixas da tabela ao lado. Cada uma nasce de um R$ MENSAL (da unidade ou da premissa) dividido pelas viagens do mês — nunca do quilômetro do trecho.'],
+                  ['Viagens da rota', num(r.viagens,0),
+                   'CT-e desta rota e deste cliente na janela. É o multiplicador que leva o custo por viagem para o custo do período.'],
+                  ['= Custo fixo no período', brl(r.custoFixo), 'A multiplicação dos dois acima.']
+                ],
+                linhas:[insLinha('Peças e serviços','pecas'), insLinha('Documentação e seguros','docSeguros'),
+                        insLinha('Pessoal','pessoal'), insLinha('Depreciação cavalo','deprecCavalo'),
+                        insLinha('Depreciação carreta','deprecCarreta'), insLinha('Alimentação','alimentacao'),
+                        insLinha('Tempo parado','tempo')],
+                obs:'"Rateado" porque o custo é da frota e do mês; o que chega à rota é a fatia proporcional às viagens que ela consumiu. Duas coisas mudam este bloco inteiro: o mês-base (de onde vem o R$) e a cobertura (quantas viagens dividem esse R$).'}))}
           ${L('Comissão ('+pct(r.comisPct,1)+')', '− '+brl(r.comissao), undefined,
               mem('Comissão',{selo:'PREMISSAS',
                 fonte:'Percentual sobre a receita LÍQUIDA. Fica fora do CPK de propósito: comissão é função da tarifa, não do quilômetro.',
@@ -13447,8 +13983,20 @@ function rclPainel(chaveCli, k3){
           ${L('Tarifa realizada', brl(r.tarifaTon)+' /t', undefined,
               mem('Tarifa realizada',{selo:'SZB',formula:`receita bruta ÷ toneladas\n${brl(r.receitaBruta)} ÷ ${num(r.ton,1)} t = ${brl(r.tarifaTon)}`}))}
           ${L('Custo por tonelada', brl(r.custoTon)+' /t', undefined,
-              mem('Custo por tonelada',{selo:'DERIVADO',formula:`custo total ÷ toneladas\n${brl(r.custoOp)} ÷ ${num(r.ton,1)} = ${brl(r.custoTon)}`,
-                linhas:[['Tarifa − custo', brl((r.tarifaTon||0)-(r.custoTon||0))+'/t']]}))}
+              mem('Custo por tonelada',{selo:'DERIVADO',
+                fonte:'Nenhuma base tem este número: ele é a divisão de dois valores que já estão nesta tela, e serve para comparar custo com tarifa na mesma unidade em que o frete é negociado.',
+                formula:`custo total ÷ toneladas\n${brl(r.custoOp)} ÷ ${num(r.ton,1)} = ${brl(r.custoTon)}`,
+                insumos:[
+                  ['Custo total no período', brl(r.custoOp),
+                   'Custo por viagem ('+brl(r.custoViagem)+') × '+num(r.viagens,0)+' viagens. O custo por viagem, por sua vez, é a soma das linhas da tabela ao lado — variável '+brl(Math.abs(cu?cu.variavel:0))+' + fixo '+brl(Math.abs(cu?cu.fixo:0))+'.'],
+                  ['Toneladas no período', num(r.ton,1)+' t',
+                   'Soma do campo peso dos CT-e desta rota e deste cliente na janela, ÷ 1.000. Média de '+num(r.viagens>0?r.ton/r.viagens:0,1)+' t por viagem. Peso zerado no CT-e derruba este denominador e infla o R$/t.'],
+                  ['= Custo por tonelada', brl(r.custoTon),
+                   'A divisão dos dois acima. Compare com a tarifa realizada ('+brl(r.tarifaTon)+'/t) na linha de cima: a diferença é o que sobra por tonelada antes de imposto, comissão e estrutura.']
+                ],
+                linhas:[['Tarifa realizada', brl(r.tarifaTon)+'/t', 'Receita bruta ÷ toneladas. É o preço que a rota efetivamente praticou, não o de tabela.'],
+                        ['Tarifa − custo', brl((r.tarifaTon||0)-(r.custoTon||0))+'/t', 'A diferença bruta por tonelada, ANTES de imposto, comissão e estrutura — não é margem.'],
+                        ['t por viagem', num(r.viagens>0?r.ton/r.viagens:0,2)+' t', 'Carga média do período. É ela que alimenta a massa do modelo de consumo.']]}))}
           ${L('<b>CPK — custo por km</b>', '<b>'+brl(r.cpk)+'</b>', 'o número que tudo persegue', memCPK)}
           ${L('VPK — receita por km', brl(r.vpk), undefined,
               mem('VPK — valor por quilômetro',{selo:'DERIVADO',
@@ -13458,12 +14006,61 @@ function rclPainel(chaveCli, k3){
                 obs:'O espelho do CPK pelo lado da receita. É o par CPK × VPK que define a margem da rota — e é contra ele que o CPK precisa ser validado.'}))}
           ${L('Custo por viagem', brl(r.custoViagem), undefined,
               mem('Custo por viagem',{selo:'SOMA',
-                formula:`custo variável + custo fixo, por viagem\n${brl(Math.abs(cu?cu.variavel:0))} + ${brl(Math.abs(cu?cu.fixo:0))} = ${brl(r.custoViagem)}`,
-                linhas:[['Se fosse tudo modelado', brl(cu?cu.custoModelado:null)],
-                        ['Diferença do realizado vs. modelo', cu&&cu.desvioModelo!=null?pct(cu.desvioModelo,1):'—']],
+                fonte:'Não é lido de lugar nenhum: é a soma das '+cst.length+' linha(s) da tabela "Custo por viagem, linha a linha", ao lado. Cada linha nasceu em uma base diferente — abaixo está o caminho de cada uma até aqui.',
+                formula:`Σ das linhas do custo por viagem\nvariável ${brl(Math.abs(cu?cu.variavel:0))} + fixo ${brl(Math.abs(cu?cu.fixo:0))} = ${brl(r.custoViagem)}`,
+                insumos:[
+                  ['1. Distância adotada', num(kmV,1)+' km',
+                   'Ida '+num(cu?cu.kmIda:0,1)+' km + volta '+num(cu?cu.kmVolta:0,1)+' km, descontada a fração de retorno aproveitado ('+pct(cu?cu.aprov:0,0)+'), na fonte '+(cu?String(cu.fonteDist||'').toUpperCase():'—')+'. É o que multiplica todas as linhas cobradas por km.'],
+                  ['2. Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l',
+                   'Premissa da frota corrigida pela física da rota (relevo, curvas, massa) e calibrada pelo diesel realmente comprado. É o que define os litros da viagem.'],
+                  ['3. Litros da viagem', num(cu?cu.litrosViagem:0,1)+' l',
+                   'km carregado ÷ km/l carregado + km vazio ÷ km/l vazio. Multiplicados pelo preço efetivo do diesel, dão a maior linha do custo.'],
+                  ['4. Custo variável por viagem', brl(Math.abs(cu?cu.variavel:0)),
+                   'Diesel, Arla, pedágio, pneus, lubrificante e descarga — o que só existe porque a roda girou. Diesel e o que é por km escalam com o item 1; o pedágio vem medido praça a praça.'],
+                  ['5. Custo fixo por viagem', brl(Math.abs(cu?cu.fixo:0)),
+                   'Peças, documentação, pessoal, depreciações, alimentação e tempo: R$ mensal da unidade (ou da premissa) ÷ viagens do mês. Não depende do tamanho do trecho.'],
+                  ['= Custo por viagem', brl(r.custoViagem),
+                   'A soma de 4 com 5. Multiplicado pelas viagens dá o custo do período; dividido pelo km da viagem dá o CPK.']
+                ],
+                linhas:[
+                  ['Custo variável por viagem', brl(Math.abs(cu?cu.variavel:0)),
+                   'Soma das seis linhas variáveis da tabela ao lado, cada uma na fonte que o motor escolheu.'],
+                  ['Custo fixo por viagem', brl(Math.abs(cu?cu.fixo:0)),
+                   'Soma das linhas fixas da tabela ao lado, todas rateadas por viagem.'],
+                  ['÷ km da viagem = CPK', brl(cu?cu.cpk:null),
+                   'O mesmo custo, dito por quilômetro. É por aqui que este número conversa com o módulo CPK por placa.'],
+                  ['÷ toneladas = custo/t', brl(cu?cu.custoTon:null),
+                   'O mesmo custo, dito por tonelada — a unidade em que a tarifa é negociada.'],
+                  ['Se fosse tudo modelado', brl(cu?cu.custoModelado:null),
+                   'O que a viagem custaria se NENHUMA linha tivesse sido trocada pelo realizado: só a fórmula do núcleo de custo com as premissas da planilha. Serve de controle, não entra em nada.'],
+                  ['Diferença do realizado vs. modelo', cu&&cu.desvioModelo!=null?pct(cu.desvioModelo,1):'—',
+                   'Quanto a troca de fontes moveu o custo. Diferença pequena significa que premissa e fechamento contam a mesma história; diferença muito grande costuma ser fechamento incompleto no período, não custo real diferente.']
+                ],
                 obs:'A comparação com o modelado é a prova de que a troca de fontes está fazendo o que se espera: diferença muito grande costuma indicar fechamento do Mapinha incompleto no período, não custo real diferente.'}))}
-          ${L('Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l', 'carregado / vazio', memConsumo)}
-          ${L('Calibração pelo realizado', r.fator===1?'não aplicada':pct(r.fator-1,1), 'aderência desta operação', memCalib)}
+          ${L('Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l',
+               'carregado / vazio'+(cu&&cu.kmlTravado?' <span class="src-tag alerta" title="A calibração foi limitada pela banda física do km/l">TRAVADO</span>':''), memConsumo)}
+          ${cu?L('Consumo da viagem', num(cu.litros100km,1)+' l/100 km',
+               num(cu.litrosViagem,1)+' l na viagem · média '+num(cu.kmlMedio,2)+' km/l',
+               mem('Consumo da viagem — leitura operacional',{selo:'DERIVADO',
+                 fonte:'O mesmo consumo adotado, dito nas unidades que se conferem contra a nota de abastecimento. km/l de composição pesada em relevo severo é um número difícil de julgar de cabeça; litros por viagem, não.',
+                 formula:`litros da viagem ÷ km da viagem × 100\n${num(cu.litrosViagem,2)} ÷ ${num(kmV,1)} × 100 = ${num(cu.litros100km,1)} l/100 km`,
+                 insumos:[
+                   ['Litros da viagem', num(cu.litrosViagem,2)+' l',
+                    'km carregado ÷ km/l carregado + km vazio ÷ km/l vazio, já descontada a fração da volta que outro frete pagou.'],
+                   ['km da viagem', num(kmV,1)+' km',
+                    'Ida + (1 − aproveitamento) × volta, na distância '+(cu?String(cu.fonteDist||'').toUpperCase():'—')+'.'],
+                   ['= l/100 km', num(cu.litros100km,1),
+                    'A forma europeia de dizer consumo: quanto se queima para andar 100 km. Sobe quando o consumo piora, o que a torna mais intuitiva que km/l.']
+                 ],
+                 linhas:[
+                   ['Litros por viagem', num(cu.litrosViagem,1)+' l', 'O volume que uma viagem completa desta rota consome.'],
+                   ['km/l médio da viagem', num(cu.kmlMedio,2), 'Média ponderada de ida e volta pelo km de cada trecho — não é a média aritmética entre carregado e vazio.'],
+                   ['Preço efetivo do diesel', brl(cu.precoDiesel)+'/l', 'R$ de diesel do fechamento ÷ litros abastecidos na SZC. Reconcilia com o DRE.'],
+                   ['= Diesel da viagem', brl(Math.abs(li.diesel||0)), 'Litros × preço. É a maior linha do custo desta rota.']
+                 ],
+                 obs:'Regra de bolso de frota pesada: uma composição de 45 t em rodovia de relevo moderado fica na casa de 40 a 55 l/100 km. Muito acima disso em rota plana, ou muito abaixo em serra, é sinal de base incompleta antes de ser sinal de operação.'})):''}
+          ${L('Calibração pelo realizado', r.fator===1?'não aplicada':pct(r.fator-1,1),
+               'aderência desta operação'+(ad&&ad.corrigidoPorCobertura?' · corrigida pela cobertura de '+pct(ad.cobertura,0):''), memCalib)}
           ${L('Retorno aproveitado', cu&&cu.temPlaca?pct(r.aprov,0):'sem placa no CT-e',
                cu&&cu.temPlaca?'volta cobrada: '+pct(1-r.aprov,0):'volta cobrada inteira', memRetorno)}
           ${L('Distância adotada', num(cu?cu.kmIda:0,1)+' + '+num(cu?cu.kmVolta:0,1)+' km',
@@ -13587,7 +14184,72 @@ function rclPainel(chaveCli, k3){
     ${bloco}
   </div>`;
   const fc=$('rclFechaPainel'); if(fc) fc.onclick=()=>{ el.innerHTML=''; };
-  el.scrollIntoView({behavior:'smooth', block:'nearest'});
+
+  /* Campo da alíquota: aplica no Enter e ao sair do campo, nunca a cada
+     tecla — recalcular a cascata a cada dígito faria o número piscar
+     enquanto ainda se está digitando. */
+  const ai=$('rclAliqIn');
+  if(ai){
+    const aplica=()=>rclAliqDefinir(chaveCli, k3, ai.value);
+    ai.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); ai.blur(); }
+                        if(e.key==='Escape'){ e.preventDefault(); ai.value=aliqTxt; ai.blur(); } };
+    ai.onchange=aplica;
+    ai.onblur=aplica;
+    ai.onfocus=()=>ai.select();
+  }
+  const ar=$('rclAliqReset');
+  if(ar) ar.onclick=()=>rclAliqDefinir(chaveCli, k3, '');
+
+  if(!semScroll) el.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+/* ══ Alíquota digitada: guarda, recalcula e redesenha ══════════════════════
+   Só a célula mexida é recalculada — a cascata daquela rota e a reagregação
+   do cliente que a contém. Nada de rodar a varredura do SZB inteira de novo
+   por causa de um percentual: o custo já está medido e não muda com imposto.
+   Devolve o foco ao campo para que dê para corrigir sem procurar o cursor. */
+let _rclAliqBusy=false;
+function rclAliqDefinir(chaveCli, k3, txt){
+  if(!RCL.calculado || _rclAliqBusy) return;
+  /* Redesenhar o painel arranca o próprio input do DOM, e arrancar um campo
+     com foco dispara blur — que chamaria esta função outra vez. A trava é o
+     que impede o laço. */
+  _rclAliqBusy=true;
+  try{ rclAliqDefinir_(chaveCli, k3, txt); }
+  finally{ _rclAliqBusy=false; }
+}
+function rclAliqDefinir_(chaveCli, k3, txt){
+  const P=rclPrem();
+  const tinhaFoco = !!(document.activeElement && document.activeElement.id==='rclAliqIn');
+  const ch=rclAliqChave(chaveCli,k3);
+  const f=rclAliqParse(txt);
+  if(f==null) delete RCL.aliqRota[ch]; else RCL.aliqRota[ch]=f;
+
+  /* A chave é cliente ¦ rota, e a tela pode ter mais de uma linha nessa
+     mesma célula quando o cliente atende a rota com remetentes ou
+     destinatários diferentes. Todas elas seguem a alíquota — é a mesma
+     regra que o cálculo completo aplicaria. */
+  const alvos=RCL.rotas.filter(x=>x.chaveCli===chaveCli && x.k3===k3);
+  alvos.forEach(linha=>{
+    const res=rclResultado(linha._receitaCTE!=null?linha._receitaCTE:linha.receitaBruta,
+                           linha.cfcValor, linha.custoOp, linha.custoVar, linha.custoFixo,
+                           linha.kmTot, linha.op, P, RCL.aliqRota[ch]);
+    Object.assign(linha, res);
+  });
+  const cl=RCL.clientes.find(c=>c.chave===chaveCli);
+  if(cl){
+    ['viagens','ton','kmTot','receitaBruta','receitaLiquida','impostos','custoOp',
+     'custoVar','custoFixo','comissao','overhead','margemContrib','resultado',
+     'cfcValor','cfcQtd'].forEach(k=>{
+       cl[k]=cl.rotas.reduce((a,x)=>a+(Number(x[k])||0),0); });
+    try{ if(window.__rclDerivar) window.__rclDerivar(cl); }catch(_){}
+  }
+  rclRender();
+  rclPainel(chaveCli, k3, true);
+  if(tinhaFoco){
+    const ai=$('rclAliqIn');
+    if(ai){ ai.focus(); try{ ai.setSelectionRange(ai.value.length, ai.value.length); }catch(_){} }
+  }
 }
 
 /* ══ Diagnóstico da aderência ═════════════════════════════════════════════ */
@@ -13597,9 +14259,17 @@ function rclRenderDiag(){
   const linha=(a)=>`<tr>
       <td>${esc(a.op)}</td>
       <td>${esc(a.base||'—')}${a.baseTipo==='anterior'?' <span class="src-tag alerta">RECUOU</span>':(a.baseTipo==='parcial'?' <span class="src-tag alerta">PARCIAL</span>':'')}</td>
-      <td class="num">${num(a.modelado,0)} l</td>
+      <td class="num"${mem('Litros modelados',{selo:'MODELO',
+          fonte:'Litros que o modelo físico pede para as viagens que o módulo amarrou a uma rota da SZY, na competência-base.',
+          formula:`modelado das viagens amarradas ÷ cobertura = esperado da frota\n${num(a.modelado,0)} ÷ ${num(a.cobertura,3)} = ${num(a.modeladoFrota,0)} l`,
+          linhas:[['Viagens amarradas', num(a.modelado,0)+' l','O que o modelo pede para o pedaço do rodado que o módulo enxerga.'],
+                  ['Cobertura da base', pct(a.cobertura,0),'Fração dos CT-e da competência-base resolvidos para uma rota.'],
+                  ['Esperado da frota', num(a.modeladoFrota,0)+' l','O modelado trazido para a escala em que o diesel comprado está medido.']],
+          obs:'É esta conversão de escala que faltava. Sem ela, o diesel da unidade inteira era dividido pelos litros de apenas parte das viagens, e o excesso aparecia na tela como consumo pior.'})}>${num(a.modelado,0)} l${a.corrigidoPorCobertura?`<br><span class="muted" style="font-size:9.5px">frota: ${num(a.modeladoFrota,0)} l</span>`:''}</td>
       <td class="num">${num(a.realizado,0)} l</td>
-      <td class="num">${a.fator==null?'—':num(a.fator,3)}</td>
+      <td class="num">${a.cobertura==null?'—':pct(a.cobertura,0)}${a.corrigidoPorCobertura?'':' <span class="muted" style="font-size:9.5px">n/c</span>'}</td>
+      <td class="num">${a.fatorBruto==null?'—':num(a.fatorBruto,3)}</td>
+      <td class="num"><b>${a.fator==null?'—':num(a.fator,3)}</b></td>
       <td class="num">${a.fator==null?'—':pct(a.fator-1,1)}</td>
       <td>${a.fator==null?'<span class="pill mu">sem SZC</span>'
             :a.dentro?(P.aderencia?'<span class="pill gn">aplicado</span>':'<span class="pill mu">desligado</span>')
@@ -13622,6 +14292,13 @@ function rclRenderDiag(){
       carga real diferente da faturada). Parte é quilômetro que simplesmente <b>não está em rota faturada</b> —
       transferência entre filiais, deslocamento para manutenção, reposicionamento sem carga. Esse diesel foi comprado
       e precisa aparecer em algum lugar; a aderência o distribui sobre as rotas que geraram receita.<br><br>
+      <b>A escala dos dois lados da razão.</b> O diesel comprado na SZC é da <b>unidade inteira</b> do mês; os litros
+      modelados só cobrem as viagens que o módulo conseguiu amarrar a uma rota da SZY. Enquanto a razão foi feita
+      direto entre os dois, ela media <b>cobertura</b> junto com consumo: com 73% de cobertura o fator saía inflado
+      em 1/0,73 ≈ 1,37 e derrubava o km/l de todas as rotas — 2,0 km/l de premissa chegavam à tela como 1,09.
+      Agora o modelado é levado à escala da frota antes da divisão (<b>modelado ÷ cobertura</b>), e a coluna
+      <i>Fator bruto</i> abaixo mostra quanto disso era escala. Foi por isso que a banda pôde ser apertada para
+      ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)}.<br><br>
       <b>Por que existe uma banda:</b> ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)}. Fora dela o número
       deixa de ser consumo e vira sintoma de base incompleta — SZC de um mês faltando, SZB carregado pela metade.
       Nesse caso o módulo <b>não aplica</b> o fator e avisa na tela, em vez de contaminar o custo em silêncio.<br><br>
@@ -13658,7 +14335,8 @@ function rclRenderDiag(){
     </table>`:''}
     <table class="tb">
       <thead><tr><th>Operação</th><th>Mês-base</th><th class="num">Modelado</th><th class="num">Comprado (SZC)</th>
-        <th class="num">Fator</th><th class="num">Desvio</th><th>Situação</th></tr></thead>
+        <th class="num">Cobertura</th><th class="num">Fator bruto</th>
+        <th class="num">Fator corrigido</th><th class="num">Desvio</th><th>Situação</th></tr></thead>
       <tbody>${ops.map(linha).join('')}${linha(d.ader._geral)}</tbody>
     </table>
     <h3 style="font-size:12px;margin-top:14px">Rota média da amostra — a referência do modelo</h3>
