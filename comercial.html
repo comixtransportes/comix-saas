@@ -1287,7 +1287,7 @@ details.cfg-det>.card{margin-top:10px}
   <span class="tabs-r">
     <button class="btn sm" id="rclBtnPrem" title="Premissas do resultado: impostos, comissão, distância, fonte de cada linha de custo e modelo de consumo">⚙ Premissas do resultado</button>
     <button class="btn sm" id="rclBtnDiag" title="Aderência do modelo de consumo e conciliação com o realizado do Mapinha e do CPK">🔎 Aderência e realizado</button>
-    <button class="btn sm" id="rclBtnHere" title="Calcula na HERE as rotas da janela que ainda não têm percurso medido, com o pedágio real praça a praça e os postos do trecho">🗺 Atualizar rotas na HERE</button>
+    <button class="btn sm" id="rclBtnHere" title="Mede na HERE as rotas que ainda não têm pedágio salvo — praça a praça, por eixo — e grava no Firestore. Rota já medida só é recalculada por aqui, manualmente.">🗺 Medir rotas na HERE</button>
     <button class="btn sm" id="rclBtnRecalc" title="Refaz o cálculo com as premissas atuais">↻ Recalcular</button>
     <button class="btn sm" id="rclBtnExport" title="Exportação executiva (.xlsx)">⬇ Excel</button>
   </span>
@@ -9347,6 +9347,17 @@ function rtPostosDoTrecho(trecho){
    relevo válidos, mas não tem esses dois — e é por isso que ela volta para a
    fila em vez de ser considerada pronta. */
 const RT_HERE_VER = 3;
+/* Duas perguntas diferentes, e confundi-las custa chamada de API à toa:
+
+   rtHereSemMedicao  — esta rota JÁ foi medida alguma vez? É a que decide o
+     que roda sozinho. Rota medida e gravada no Firestore não volta a rodar,
+     nem quando o perfil da composição muda: o pedágio dela já está salvo, e
+     refazer é decisão de gente, não do sistema.
+   rtHereIncompleta  — esta rota está atualizada com o perfil vigente? É a
+     que a fila manual da Análise de Rotas usa, para oferecer o recálculo. */
+function rtHereSemMedicao(c){
+  return !c || c.erro || !(Number(c.v)>=RT_HERE_VER);
+}
 function rtHereIncompleta(c){
   if(!c || c.erro || c.obsoleto) return true;
   if(c.perfil!==RT.perfilHash) return true;
@@ -11257,6 +11268,15 @@ const RCL_PADRAO = {
        'modelo'    → fórmula do núcleo com o preço da premissa/SZC          */
   fonteDiesel:      'posto',       /* posto · realizado · modelo            */
   fonteArla:        'realizado',   /* realizado · modelo — regra dos 5% fica */
+  /* Base dos 5% do Arla. Decisão do comercial (ago/2026): o Arla passa a ser
+     5% do VALOR DA LINHA DE CIMA — o diesel da viagem, já ao preço pago no
+     posto da rota. É a leitura mais direta na tela: a linha de baixo é uma
+     fração da de cima, e as duas andam juntas quando o preço do posto muda.
+       'diesel' → arlaPct × R$ da linha de diesel (padrão)
+       'preco'  → arlaPct × litros × R$/l do Arla apurado (comportamento
+                  anterior; o Arla a granel custa menos que o diesel, então
+                  esta base dá um número menor)                             */
+  arlaBase:         'diesel',      /* diesel · preco                        */
   /* Pedágio: HERE por padrão. O pedágio é o único custo da rota que a HERE
      MEDE praça a praça e por eixo para o percurso exato — trocar um número
      medido por uma média de frota (R$/km) é perder informação, não ganhar
@@ -11835,10 +11855,23 @@ async function rclRealCarregar(base){
     const fil=String(rec.unidade||(cad&&(cad.unidade||cad.filial))||'').toUpperCase().slice(0,2);
     const bk=buckets[fil]; if(!bk) return;
     const tipo = rclrTipoVeic({...(cad||{}), tipo:rec.tipo||(cad&&cad.tipo)});
-    if(tipo==='cavalo' || tipo==='carreta'){
-      const item={placa, rec, fil, tipo};
-      candDep[fil][tipo].push(item);
-      candDep._geral[tipo].push(item);
+    /* ── Classificação do CANDIDATO, espelhando o rateio logo abaixo ──────
+       O rateio da frota manda para o balde do CAVALO tudo que não é carreta
+       nem carro de apoio (é o `else` da soma). A lista de candidatos
+       precisava seguir a mesma regra: enquanto ela só aceitava tipo==='cavalo'
+       literal, um cavalo cadastrado no CPK como "Outro ativo da frota" — ou
+       sem cadastro em `veiculos` para dar o tipo — ficava fora, a unidade
+       terminava sem referência e SÓ a linha do cavalo caía no modelo,
+       enquanto a da carreta funcionava. Era exatamente esse o sintoma.
+       Compressor fica de fora dos dois: é ativo de operação, não de tração,
+       e sendo caro e recente viraria "o cavalo mais novo" da frota.        */
+    const ehCompressor = /compress/i.test(String(rec.tipo||'')+' '+String(rec.modelo||'')+' '+String(rec.marca||''));
+    const tipoRef = tipo==='carreta' ? 'carreta'
+                  : (tipo==='apoio' || ehCompressor) ? null : 'cavalo';
+    if(tipoRef){
+      const item={placa, rec, fil, tipo, tipoRef};
+      candDep[fil][tipoRef].push(item);
+      candDep._geral[tipoRef].push(item);
     }
     let soma=0;
     ((base.porOp[fil]&&base.porOp[fil].meses)||[]).forEach(m=>{ soma += rclrDepMes(rec, m); });
@@ -12566,12 +12599,28 @@ function rclCustoBucket(bk, ctx){
           : 'sem preço efetivo de diesel apurável no mês-base'});
   const dieselAceito = fontes.diesel!=='modelo';
 
-  /* ── Arla: regra dos 5% mantida; só o preço vem do Mapinha ── */
+  /* ── Arla ─────────────────────────────────────────────────────────────
+     Duas bases possíveis para os mesmos 5%, e a diferença entre elas é só
+     o preço com que os litros de Arla são valorados:
+       'diesel' → 5% do R$ da linha de diesel. Os litros de Arla saem
+                  valorados ao preço do DIESEL pago no posto da rota.
+       'preco'  → 5% dos litros × R$/l do Arla apurado no Mapinha/SZC.
+     A primeira é o pedido do comercial e é a que a tela explica melhor; a
+     segunda é a mais fiel ao desembolso, porque o Arla a granel custa perto
+     da metade do diesel. A memória de cálculo mostra sempre as duas.      */
   const precoEfetArla = (T && T.precoArlaEfetivo>0) ? T.precoArlaEfetivo : null;
   const arlaPctUsado  = P.arlaPct>0 ? P.arlaPct : 0.05;
-  troca('arla', P.fonteArla,
-        precoEfetArla!=null ? litrosViagem*arlaPctUsado*precoEfetArla : null, 'mapinha',
-        {taxa:'arla'});
+  const arlaPorPreco  = precoEfetArla!=null ? litrosViagem*arlaPctUsado*precoEfetArla : null;
+  const dieselLinha   = (typeof linhas.diesel==='number') ? Math.abs(linhas.diesel) : null;
+  const arlaPorDiesel = dieselLinha!=null ? dieselLinha*arlaPctUsado : null;
+  if(P.fonteArla!=='modelo' && P.arlaBase!=='preco'){
+    /* Sem banda: esta linha é, por definição, uma fração exata da linha de
+       cima — comparar com o modelado só produziria uma recusa sem sentido. */
+    troca('arla','realizado', arlaPorDiesel, 'diesel5', {taxa:'arla', semBanda:true,
+          motivoSemTaxa:'a linha de diesel não pôde ser apurada, então não há base para os 5%'});
+  }else{
+    troca('arla', P.fonteArla, arlaPorPreco, 'mapinha', {taxa:'arla'});
+  }
 
   /* ── Pedágio ──────────────────────────────────────────────────────────
      O pedágio da rota é MEDIDO, não estimado: a HERE devolve praça a praça,
@@ -12681,6 +12730,8 @@ function rclCustoBucket(bk, ctx){
                                             criterio:refDep?refDep.criterio:null} : null,
     precoArla:   precoEfetArla!=null  ?precoEfetArla  :linhas.precoArla,
     precoDieselModelo: cFull.dieselRS, arlaPct: arlaPctUsado,
+    arlaBase: (P.fonteArla!=='modelo' && P.arlaBase!=='preco') ? 'diesel' : 'preco',
+    arlaPorDiesel, arlaPorPreco, dieselLinha,
     litrosViagem, kmlC, kmlV, kmlTravado, kmlBanda, baseKml, tonViagem, viagensMes,
     /* Leituras operacionais do consumo — o km/l de uma composição de 45 t em
        serra é um número difícil de julgar de cabeça; litros por viagem e
@@ -13106,6 +13157,18 @@ function rclCalcular(){
              comSZY:buckets.filter(b=>b.custo&&b.custo.fonteDist==='szy').length,
              distDivergente:buckets.filter(b=>b.custo&&b.custo.distMeta&&b.custo.distMeta.alerta).length,
              semDist:buckets.filter(b=>!b.custo).length };
+  /* Referência de depreciação ausente: a linha cai no modelo e ninguém
+     percebe pelo número. O aviso diz qual unidade e qual tipo faltou. */
+  if(P.fonteDeprec==='cpk_novo' && real && real.refDep){
+    ops.forEach(op=>{
+      const rd=real.refDep[op]||real.refDep._geral; if(!rd) return;
+      ['cavalo','carreta'].forEach(t=>{
+        const x=rd[t];
+        if(!x || !(x.mensal>0))
+          RCL.aviso.push(`${op}: nenhum ${t} próprio com parcela de depreciação vigente na base do CPK em ${String(rd.mes||'—')} — a linha de depreciação do ${t} caiu no modelo. Confira a aba Depreciação do CPK: ativo sem data de compra, com prazo encerrado ou marcado como vendido/baixado não gera parcela.`);
+      });
+    });
+  }
   if(!ref.ok) RCL.aviso.push('Nenhuma rota simulada na HERE com perfil de elevação — o modelo de consumo por relevo está desligado e todas as rotas usam o km/l da premissa.');
   if(P.aderencia && ader._geral.fator!=null && !ader._geral.dentro)
     RCL.aviso.push(`Fator de aderência consolidado de ${num(ader._geral.fator,2)} está fora da banda ${num(RCL_CFG.aderenciaMin,2)}–${num(RCL_CFG.aderenciaMax,2)} e NÃO foi aplicado. Já corrigido pela escala de cobertura, um fator assim indica SZC ou SZB incompletos no período — o consumo ficou no modelo puro.`);
@@ -13506,10 +13569,11 @@ function rclPainel(chaveCli, k3, semScroll){
   const fon=(k)=>(cu&&cu.fontes?cu.fontes[k]:'modelo')||'modelo';
   const selo=(k)=>({mapinha:'MAPINHA','mapinha+here':'MAPINHA × HERE',cpk:'CPK',simulador:'SIMULADOR',
                     modelo:'MODELO',here:'HERE',shellbox:'POSTO NA ROTA',
-                    'shellbox·unidade':'SHELLBOX · UNIDADE','cpk·novo':'CPK · ATIVO NOVO'}[fon(k)]||'MODELO');
+                    'shellbox·unidade':'SHELLBOX · UNIDADE','cpk·novo':'CPK · ATIVO NOVO',
+                    diesel5:'% DO DIESEL'}[fon(k)]||'MODELO');
   const tag=(k)=>{const f=fon(k);
     const c={mapinha:'map','mapinha+here':'map',cpk:'cpk','cpk·novo':'cpk',simulador:'sim',
-             modelo:'prem',here:'here',shellbox:'here','shellbox·unidade':'map'}[f]||'prem';
+             modelo:'prem',here:'here',shellbox:'here','shellbox·unidade':'map',diesel5:'here'}[f]||'prem';
     return `<span class="src-tag ${c}">${selo(k)}</span>`;};
 
   /* L(rótulo, valor, nota, memória) — a memória viaja no rótulo E no valor,
@@ -13601,6 +13665,7 @@ function rclPainel(chaveCli, k3, semScroll){
     shellbox:       'Vem do POSTO DA ROTA: último abastecimento registrado no ShellBox em um posto que a base identificou dentro do percurso calculado pela HERE. É preço pago, com o desconto de rede daquele corredor já dentro dele.',
     'shellbox·unidade': 'Vem do SHELLBOX, mas não do posto da rota: nenhum posto da base foi identificado no percurso, então entrou a média ponderada por litros da unidade que opera a rota — a mesma segunda opção do Simulador.',
     'cpk·novo':     'Vem do CPK, do EQUIPAMENTO DE REFERÊNCIA: parcela mensal do ativo mais novo cadastrado na aba Depreciação, dividida pelas viagens que esta rota faz no mês.',
+    diesel5:        'É uma FRAÇÃO DA LINHA DE DIESEL desta mesma viagem: o percentual da premissa aplicado sobre o R$ de diesel já valorado ao preço pago no posto da rota. Muda junto com o diesel, por construção.',
     cpk:            'Vem do módulo CPK: Premissa (CPK) da competência-base e base de depreciação por placa, com a mesma fórmula que o CPK por placa usa.',
     simulador:      'Vem da aba Simulador: premissa digitada na planilha para esta filial, rateada pelas viagens que a rota faz no mês.',
     modelo:         'Vem do MODELO: a fórmula do núcleo de custo com as premissas da filial. O realizado não entrou nesta linha — ou não havia taxa apurável, ou a taxa ficou fora da banda de sanidade e foi recusada.'
@@ -13685,19 +13750,52 @@ function rclPainel(chaveCli, k3, semScroll){
         alerta: (cu&&cu.precoDiesel==null)?'Sem preço apurável — a linha caiu no modelo.'
               : (sbP&&sbP.foraDaBanda?`${sbP.foraDaBanda} lançamento(s) dos postos deste trecho foram ignorados por R$/l fora da banda em torno da mediana (R$ ${num(sbP.bandaRef,3)}/l).`:null)}));
 
+  /* ══ ARLA — fração da LINHA DE CIMA ═══════════════════════════════════
+     Decisão do comercial (ago/2026): o Arla é o percentual da premissa
+     aplicado sobre o R$ da linha de diesel, que já está ao preço pago no
+     posto da rota. A memória mostra as duas bases lado a lado, porque a
+     diferença entre elas não é arredondamento: o Arla a granel custa perto
+     da metade do diesel, e valorar os litros de Arla ao preço do diesel é
+     uma escolha, não um detalhe.                                          */
+  const arlaNoDiesel = cu && cu.arlaBase==='diesel';
   add('Arla','arla',li.arla,
-      `${pct(cu?cu.arlaPct:0.05,1)} dos litros × ${brl(cu?cu.precoArla:null)}`,
+      arlaNoDiesel
+        ? `${pct(cu?cu.arlaPct:0.05,1)} de ${brl(cu?cu.dieselLinha:null)} (linha do diesel)`
+        : `${pct(cu?cu.arlaPct:0.05,1)} dos litros × ${brl(cu?cu.precoArla:null)}`,
       mem('Arla 32',{selo:selo('arla'),
-        fonte:'Regra dos 5% mantida: o volume de Arla é uma fração dos litros de diesel da própria viagem. Só o PREÇO passou a vir do Mapinha (CC 04.01, Arla da frota).',
-        formula:`litros de diesel × ${pct(cu?cu.arlaPct:0.05,1)} × R$/l\n${num(cu?cu.litrosViagem:0,2)} × ${num(cu?cu.arlaPct:0.05,3)} × ${num(cu?cu.precoArla:0,4)} = ${brl(li.arla)}`,
+        fonte: arlaNoDiesel
+          ? 'Fração da linha de cima: o percentual da premissa aplicado sobre o R$ de diesel desta viagem — que já saiu do preço pago no posto da rota. Quando o preço do posto muda, esta linha acompanha sozinha.'
+          : 'Regra dos 5% sobre os LITROS: o volume de Arla é uma fração dos litros de diesel da própria viagem, valorado pelo R$/l do Arla apurado no Mapinha (CC 04.01, Arla da frota).',
+        formula: arlaNoDiesel
+          ? `R$ da linha de diesel × ${pct(cu?cu.arlaPct:0.05,1)}\n${brl(cu?cu.dieselLinha:null)} × ${num(cu?cu.arlaPct:0.05,3)} = ${brl(li.arla)}`
+          : `litros de diesel × ${pct(cu?cu.arlaPct:0.05,1)} × R$/l\n${num(cu?cu.litrosViagem:0,2)} × ${num(cu?cu.arlaPct:0.05,3)} × ${num(cu?cu.precoArla:0,4)} = ${brl(li.arla)}`,
+        insumos: arlaNoDiesel ? [
+          ['Linha de diesel desta viagem', brl(cu?cu.dieselLinha:null),
+           'É a linha imediatamente acima, com os litros do modelo já valorados pelo preço pago no posto da rota ('+brl(cu?cu.precoDiesel:null)+'/l).'],
+          ['Percentual da premissa', pct(cu?cu.arlaPct:0.05,1),
+           'Campo arlaPct nas Premissas do resultado. É a média observada da frota, não um número do fabricante.'],
+          ['= Arla da viagem', brl(li.arla),
+           'O produto dos dois acima. Sobe e desce junto com o diesel, inclusive quando o posto da rota muda de preço.']
+        ] : null,
         linhas:[
-          ['Litros de Arla', num((cu?cu.litrosViagem:0)*(cu?cu.arlaPct:0.05),2)+' l'],
+          arlaNoDiesel?['Base adotada','R$ da linha de diesel']:['Base adotada','litros × R$/l do Arla'],
           ['Percentual adotado', pct(cu?cu.arlaPct:0.05,1)],
-          ['Preço adotado', brl(cu?cu.precoArla:null)+'/l'],
-          T?['Como o preço saiu', T.precoArlaFonte]:null,
+          arlaNoDiesel?['R$ da linha de diesel', brl(cu?cu.dieselLinha:null)]:null,
+          ['Litros de Arla implícitos', num((cu?cu.litrosViagem:0)*(cu?cu.arlaPct:0.05),2)+' l'],
+          ['Preço do Arla apurado', brl(cu?cu.precoArla:null)+'/l'],
+          ['Quanto daria pela outra base', brl(arlaNoDiesel?(cu?cu.arlaPorPreco:null):(cu?cu.arlaPorDiesel:null)),
+           arlaNoDiesel
+             ? 'É o que a linha custaria valorando os litros de Arla pelo preço do próprio Arla. A diferença para o número exibido é o efeito de valorá-los ao preço do diesel.'
+             : 'É o que a linha custaria como percentual do R$ de diesel.'],
+          T?['Como o preço do Arla saiu', T.precoArlaFonte]:null,
           RB?['Arla do Mapinha no período', brl(RB.arlaRS)]:null
         ],
-        obs:'Os 5% são premissa do módulo (campo arlaPct nas Premissas do resultado), não um número do fabricante — é a média observada da frota.'}));
+        obs: arlaNoDiesel
+          ? 'A chave "Base dos 5% do Arla" nas Premissas do resultado devolve a base anterior (litros × preço do Arla) sem mexer em mais nada.'
+          : 'Os 5% são premissa do módulo (campo arlaPct nas Premissas do resultado), não um número do fabricante — é a média observada da frota.',
+        alerta: (arlaNoDiesel && cu && cu.arlaPorPreco>0 && cu.arlaPorDiesel>0 && cu.arlaPorDiesel/cu.arlaPorPreco>1.25)
+          ? `Valorados ao preço do diesel, os litros de Arla saem ${num(cu.arlaPorDiesel/cu.arlaPorPreco,2)}× o que sairiam ao preço do próprio Arla (${brl(cu.arlaPorPreco)}). O Arla a granel custa perto da metade do diesel — a diferença é deliberada, mas convém saber que ela está aqui.`
+          : null}));
 
   /* A dica do pedágio tinha de mudar junto com a linha. Ela mostrava "ida
      R$ 161,70 + volta R$ 161,70" mesmo quando a linha cobrava R$ 134,70 de
@@ -14890,8 +14988,9 @@ function rclPremModal(){
     </div>
     <div class="rt-fields grid3">
       ${s('fonteDiesel','Diesel', P.fonteDiesel, [['posto','Posto na rota (ShellBox)'],['realizado','Mapinha (preço efetivo)'],['modelo','Modelo / SZC']], 'posto da rota → média da unidade')}
-      ${s('fonteArla','Arla', P.fonteArla, [['realizado','Mapinha (preço)'],['modelo','Modelo / SZC']])}
-      ${n('arlaPct','Arla — % dos litros', P.arlaPct, '0.005', 'regra dos 5% — fração')}
+      ${s('fonteArla','Arla', P.fonteArla, [['realizado','Apurado'],['modelo','Modelo / SZC']])}
+      ${s('arlaBase','Base do % do Arla', P.arlaBase, [['diesel','% do R$ da linha de diesel'],['preco','% dos litros × R$/l do Arla']], 'a primeira acompanha o preço do posto')}
+      ${n('arlaPct','Arla — percentual', P.arlaPct, '0.005', 'fração — 0,05 = 5%')}
       ${s('fontePedagio','Pedágio', P.fontePedagio, [['here','HERE exata da rota'],['realizado','Mapinha nivelando a HERE'],['modelo','Modelo']])}
       ${s('fontePneus','Pneus', P.fontePneus, [['realizado','Mapinha (R$/km)'],['modelo','Modelo']])}
       ${s('fonteLubrificante','Lubrificante', P.fonteLubrificante, [['realizado','Mapinha (R$/km)'],['modelo','Modelo']])}
@@ -14909,12 +15008,13 @@ function rclPremModal(){
     <h3 style="font-size:12px;margin-top:12px">Percurso e pedágio (HERE)</h3>
     <div class="muted" style="font-size:10.5px;margin-bottom:6px">
       O pedágio desta sub-aba é sempre o <b>real do percurso calculado pela HERE</b>: praça a praça, tarifa por eixo,
-      nunca uma média de frota. Quando a rota ainda não tem percurso medido — ou está em cache antigo, sem o pedágio
-      medido e sem os postos do trecho — o módulo manda a HERE calcular sozinho ao abrir a janela. Cada rota consome
-      duas chamadas (ida carregada e volta vazia) e o resultado fica salvo.
+      nunca uma média de frota. A medição é feita <b>uma única vez por rota</b> e fica gravada no Firestore, como no
+      Simulador — depois disso a rota não é recalculada sozinha, nem quando o perfil da composição muda. Refazer a
+      medição de uma rota já salva é sempre manual, pelo botão <b>🗺 Medir rotas na HERE</b>. A chave abaixo decide
+      apenas se as rotas que <b>nunca</b> foram medidas entram na fila ao abrir a janela.
     </div>
     <div class="rt-fields grid3">
-      ${c('hereAuto','Calcular na HERE automaticamente', P.hereAuto, 'rotas da janela sem percurso medido')}
+      ${c('hereAuto','Medir sozinho o que nunca foi medido', P.hereAuto, 'nunca refaz rota já salva')}
       ${n('hereAutoTeto','Teto por rodada automática', P.hereAutoTeto, '10', 'rotas')}
     </div>
 
@@ -14959,7 +15059,8 @@ function rclPremModal(){
       aproveitarRetorno:gB('aproveitarRetorno'), janelaRetornoDias:gN('janelaRetornoDias')||2,
       distPreferida:gS('distPreferida'), distAlertaPct:gN('distAlertaPct')||0.10,
       baseRealizado:gS('baseRealizado'), baseMaxMeses:gN('baseMaxMeses')||12,
-      fonteDiesel:gS('fonteDiesel'), fonteArla:gS('fonteArla'), arlaPct:gN('arlaPct')||0.05,
+      fonteDiesel:gS('fonteDiesel'), fonteArla:gS('fonteArla'), arlaBase:gS('arlaBase'),
+      arlaPct:gN('arlaPct')||0.05,
       fontePedagio:gS('fontePedagio'), fontePneus:gS('fontePneus'),
       fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
       fonteDocSeguros:gS('fonteDocSeguros'), fontePessoal:gS('fontePessoal'),
@@ -15146,7 +15247,18 @@ function rclRotasPendentesHere(){
     const r=bk&&bk.rota; if(!r||!r.k3) return;
     if(!(bk.viagens>0)) return;              /* rota sem viagem no período  */
     if(vistas.has(r.k3)) return; vistas.add(r.k3);
-    if(rtHereIncompleta(RT.hereCache.get(r.k3))) out.push(r);
+    if(rtHereSemMedicao(RT.hereCache.get(r.k3))) out.push(r);
+  });
+  return out;
+}
+/* Rotas da janela já medidas — só entram em recálculo por ação manual. */
+function rclRotasMedidasHere(){
+  const out=[], vistas=new Set();
+  const mapa = RCL.porRota instanceof Map ? RCL.porRota : new Map();
+  mapa.forEach(bk=>{
+    const r=bk&&bk.rota; if(!r||!r.k3||!(bk.viagens>0)) return;
+    if(vistas.has(r.k3)) return; vistas.add(r.k3);
+    if(!rtHereSemMedicao(RT.hereCache.get(r.k3))) out.push(r);
   });
   return out;
 }
@@ -15162,6 +15274,36 @@ function rclHereAutoTalvez(){
     setTimeout(()=>{ rclAtualizarHere(false).catch(e=>console.warn('[Rota clientes] HERE:',e&&e.message)); }, 400);
   }catch(_){}
 }
+/* Abre a escolha quando o clique é manual: medir só o que falta, ou refazer
+   a medição de rotas que já estão salvas. O recálculo do que já foi medido
+   NUNCA acontece sozinho — é este modal, e só ele, que o dispara. */
+function rclHereModal(){
+  const pend=rclRotasPendentesHere().length, med=rclRotasMedidasHere().length;
+  if(!pend && !med){ toast('Nenhuma rota com viagem no período para medir.','am'); return; }
+  mdAbrir('Percurso e pedágio na HERE',
+   `<div class="muted" style="margin-bottom:10px">
+      A medição é feita <b>uma vez por rota</b> e fica salva no Firestore, como no Simulador: o pedágio real
+      praça a praça, por eixo, e os postos do trecho. Depois disso a rota não é recalculada sozinha —
+      nem quando o perfil da composição muda. Recalcular é sempre uma decisão manual, aqui.
+    </div>
+    <div class="rt-fields" style="gap:8px">
+      <label class="rt-chk" style="display:flex;gap:8px;align-items:flex-start;padding:6px 0">
+        <input type="radio" name="rclHereEsc" value="pend" ${pend?'checked':''} ${pend?'':'disabled'}>
+        <span><b>Medir as rotas que ainda não têm pedágio salvo</b><br>
+        <span class="muted" style="font-weight:400">${num(pend,0)} rota(s) · ~${num(pend*2,0)} chamadas</span></span></label>
+      <label class="rt-chk" style="display:flex;gap:8px;align-items:flex-start;padding:6px 0">
+        <input type="radio" name="rclHereEsc" value="todas" ${pend?'':'checked'}>
+        <span><b>Recalcular também as já medidas</b><br>
+        <span class="muted" style="font-weight:400">${num(pend+med,0)} rota(s) · ~${num((pend+med)*2,0)} chamadas · sobrescreve o pedágio salvo</span></span></label>
+    </div>`,
+   `<button class="btn" onclick="mdFechar()">Cancelar</button>
+    <button class="btn pri" id="rclHereGo">Iniciar</button>`);
+  const b=$('rclHereGo');
+  if(b) b.onclick=()=>{ const e=document.querySelector('input[name=rclHereEsc]:checked');
+    const modo=e?e.value:'pend'; mdFechar();
+    rclAtualizarHere(modo==='todas'?'todas':'pendentes'); };
+}
+
 async function rclAtualizarHere(manual){
   const P=rclPrem();
   if(RT.fila.rodando){ if(manual) toast('Já existe uma simulação em andamento.','am'); return; }
@@ -15170,7 +15312,9 @@ async function rclAtualizarHere(manual){
      sem ela a rota seria gravada sem posto e o diesel cairia na média da
      unidade para sempre, sem ninguém entender por quê. */
   try{ if(typeof sbGarantirBase==='function') await sbGarantirBase(); }catch(_){}
-  let alvo=rclRotasPendentesHere();
+  let alvo = manual==='todas'
+           ? rclRotasPendentesHere().concat(rclRotasMedidasHere())
+           : rclRotasPendentesHere();
   if(!alvo.length){
     if(manual) toast('Todas as rotas da janela já estão medidas na HERE, com pedágio e postos do trecho.','gn');
     return;
@@ -15300,7 +15444,7 @@ try{ window.__ATLAS_ROTA_CLIENTES__ = RCL; window.__ATLAS_RCL_CFG__ = RCL_CFG; }
   rclSemearPeriodo(); rclPeriodoVisivel();
   const bs=$('rclBusca'); if(bs){ let t=null; bs.oninput=()=>{ clearTimeout(t); t=setTimeout(rclRender,200); }; }
   const br=$('rclBtnRecalc'); if(br) br.onclick=()=>{ RCL.real=null; RCL.base=null; RCL.fech=null; rclRecalcularAsync(); };
-  const bh=$('rclBtnHere');   if(bh) bh.onclick=()=>rclAtualizarHere(true);
+  const bh=$('rclBtnHere');   if(bh) bh.onclick=rclHereModal;
   const bp=$('rclBtnPrem');   if(bp) bp.onclick=rclPremModal;
   const bx=$('rclBtnExport'); if(bx) bx.onclick=rclExportar;
   const bd=$('rclBtnDiag');   if(bd) bd.onclick=()=>{ const c=$('rclCardDiag');
