@@ -1505,7 +1505,7 @@ if (!firebase.apps || !firebase.apps.length) firebase.initializeApp(firebaseConf
 const auth = firebase.auth();
 const db   = firebase.firestore();
 
-let currentUser = null, currentPerfil = "motorista";
+let currentUser = null, currentPerfil = "motorista", currentUserUnit = null;
 
 /* Instrumentação opcional (atlas-performance.js) — no-op se ausente. */
 const PERF = {
@@ -1639,6 +1639,28 @@ function up(v){ return String(v||'').trim().toUpperCase(); }
 function norm(v){ return String(v==null?'':v).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().trim(); }
 function num(v,d=0){ const n=Number(v); return Number.isFinite(n)?n.toFixed(d):'—'; }
 function normalizeEmail(e){ return String(e||'').trim().toLowerCase(); }
+
+/* Unidade-base do usuário logado. É usada SOMENTE como valor inicial em
+   + Nova Demanda; o select continua livre para alteração manual. O cadastro de
+   usuários do Atlas já passou por mais de uma nomenclatura, então aceitamos os
+   campos usuais de unidade/filial e, como fallback, perfis LU_SC/LU_PR/LU_SP. */
+function unidadeDoUsuario(p){
+  p=p||{};
+  const vals=[
+    p.unidade_slug,p.unidade,p.filial,p.filial_sigla,p.sigla_filial,
+    p.unidade_responsavel,p.unidadeResponsavel,p.base,p.lotacao
+  ];
+  if(Array.isArray(p.filiais) && p.filiais.length===1) vals.push(p.filiais[0]);
+  if(Array.isArray(p.unidades) && p.unidades.length===1) vals.push(p.unidades[0]);
+  vals.push(p.perfil,p.tipo);
+  for(const raw of vals){
+    const v=norm(raw); if(!v) continue;
+    if(v==='SC'||v==='17'||v==='017'||v==='0017'||/SANTA CATARINA|CAPIVARI/.test(v)||/(^|\W)LU[ _-]?SC($|\W)/.test(v)) return 'SC';
+    if(v==='PR'||v==='18'||v==='018'||v==='0018'||/PARANA|CURITIBA/.test(v)||/(^|\W)LU[ _-]?PR($|\W)/.test(v)) return 'PR';
+    if(v==='SP'||v==='03'||v==='3'||v==='003'||v==='0003'||/SAO PAULO|OSASCO/.test(v)||/(^|\W)LU[ _-]?SP($|\W)/.test(v)) return 'SP';
+  }
+  return null;
+}
 
 /* Traduz o erro do Firestore em algo acionável. O caso mais comum em módulo
    novo é permission-denied: a coleção ainda não foi liberada nas regras. */
@@ -1847,11 +1869,13 @@ window.forgotPassword=function(){
 auth.onAuthStateChanged(async function(user){
   if(!user){
     currentUser=null;
+    currentUserUnit=null;
     document.getElementById('scr_login').classList.add('active');
     document.getElementById('scr_home').classList.remove('active');
     return;
   }
   currentUser=user;
+  currentUserUnit=null;
   try{
     const s=await db.collection('usuarios').doc(user.uid).get();
     let p = s.exists ? {id:s.id,...s.data()} : null;
@@ -1865,6 +1889,7 @@ auth.onAuthStateChanged(async function(user){
       return;
     }
     currentPerfil = p ? (p.perfil||p.tipo||'motorista') : 'usuario';
+    currentUserUnit = unidadeDoUsuario(p);
     /* PROGRAMAÇÃO É EXCEÇÃO (31/07/2026): os líderes de unidade (lu_sc, lu_pr,
        lu_sp) NÃO ficam presos à própria filial aqui. Quem tem a tela liberada
        vê as três unidades + "Todas", independentemente da filial de origem.
@@ -4307,7 +4332,11 @@ window.abrirDemanda=function(){
   document.getElementById('tiDem').textContent='Nova Demanda';
   ['dCliente','dProduto','dPedido','dQtd','dOrigem','dUfO','dDestino','dUfD','dRota','dRotaBusca','dJcIni','dJcFim','dJdIni','dJdFim','dObs']
     .forEach(id=>{ const e=document.getElementById(id); if(e) e.value=''; });
-  document.getElementById('dUnid').value=uniAtual()||'SC';
+  /* Nova demanda nasce na unidade-base do usuário logado, sem travar o campo.
+     Se o cadastro antigo não trouxer unidade, preservamos o comportamento
+     anterior como fallback (filial do filtro; em consolidado, SC). */
+  document.getElementById('dUnid').value=currentUserUnit||uniAtual()||'SC';
+  document.getElementById('dUnid').disabled=false;
   document.getElementById('dData').value=ST.data;
   document.getElementById('dComp').value='caminhao';
   document.getElementById('dTipoFrete').value='CIF';
