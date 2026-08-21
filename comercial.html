@@ -154,6 +154,17 @@ input[type=number]{font-family:var(--m)}
 .rcl-tb tr.rot-row{cursor:pointer}
 .rcl-tb tr.rot-row:hover{background:var(--ht)}
 .rcl-tb tr.rot-row td:first-child{padding-left:26px;color:var(--mu)}
+/* ── Linha selecionada ────────────────────────────────────────────────────
+   Clicar num cliente e depois numa rota dele deixa AS DUAS linhas marcadas:
+   a do cliente fica de fundo azul claro e a rota aberta, marcada também. O
+   :hover continua existindo, mas perde para a seleção — senão passar o mouse
+   por cima apagaria visualmente a linha que está aberta no painel de baixo. */
+.rcl-tb tr.cli-row.sel, .rcl-tb tr.cli-row.sel:hover{background:var(--ac-bg)}
+.rcl-tb tr.cli-row.sel td{border-top-color:var(--ac)}
+.rcl-tb tr.cli-row.sel td:first-child{box-shadow:inset 3px 0 0 var(--ac);color:var(--ac)}
+.rcl-tb tr.rot-row.sel, .rcl-tb tr.rot-row.sel:hover{background:var(--ac-bg)}
+.rcl-tb tr.rot-row.sel td{border-top:1px solid var(--ac-bg);border-bottom:1px solid var(--ac-bg)}
+.rcl-tb tr.rot-row.sel td:first-child{box-shadow:inset 3px 0 0 var(--ac);color:var(--ac);font-weight:600}
 /* Remetente → destinatário na PRÓPRIA linha. Deixaram de ser um nível da
    árvore (que abria uma segunda linha e afastava a rota do cliente) e viraram
    o subtítulo da linha: quem coleta, quem recebe, na mesma altura do nome. */
@@ -11314,6 +11325,14 @@ const RCL_CFG = {
      truck ao rodotrem — abaixo de 4 não existe conjunto nosso e acima de 9
      não existe tarifa na ANTT. */
   eixosOpcoes: [4,5,6,7,8,9],
+  /* Eixos com que TODA rota começa, enquanto ninguém escolher outro número.
+     Decisão do comercial (ago/2026): ida carregada em 7 eixos e volta vazia
+     em 4 — a volta vazia roda com eixo erguido, então ela não paga o mesmo
+     que a ida. Antes o padrão era o menor conjunto cadastrado nos dois
+     sentidos, o que subestimava a ida. Trocar aqui muda o ponto de partida
+     de todas as rotas; trocar na linha do Custo por viagem muda a escolha
+     salva nas premissas. */
+  eixosPadrao: { ida:7, volta:4 },
   /* Placas-marcador de carta-frete complementar (mesma regra do pd.html) */
   reCFC: /^F(SC|SP|PR)[0O]+$/,
   maxLedger: 60000
@@ -11382,10 +11401,10 @@ const RCL_PADRAO = {
      há contrato em que ela simplesmente não é cobrada. Os eixos entram como
      multiplicador sobre a tarifa por eixo já medida no percurso — trocar o
      número aqui NÃO gasta chamada de HERE nenhuma, o trajeto é o mesmo.
-     null nos dois campos = o MENOR número de eixos entre os conjuntos
-     cadastrados, que é o padrão pedido: cobrar pelo piso, nunca pelo teto. */
-  pedagioEixosIda:  null,          /* null = menor eixo cadastrado          */
-  pedagioEixosVolta:null,          /* null = menor eixo cadastrado          */
+     null nos dois campos = o padrão do módulo (RCL_CFG.eixosPadrao): 7 eixos
+     na ida carregada e 4 na volta vazia, que roda com eixo erguido. */
+  pedagioEixosIda:  null,          /* null = padrão do módulo (7 eixos)     */
+  pedagioEixosVolta:null,          /* null = padrão do módulo (4 eixos)     */
   pedagioCobrarVolta: true,        /* a volta entra sempre, por padrão      */
   fontePneus:       'realizado',   /* realizado · modelo                    */
   fonteLubrificante:'realizado',   /* realizado · modelo                    */
@@ -11498,6 +11517,7 @@ const RCL = {
   clientes: [], rotas: [], porRota: new Map(),
   diag: null, ref: null, precos: null, meses: [],
   abertos: new Set(), sel: null,
+  selCli: null, selK3: null,          /* linha marcada: cliente e rota      */
   calculado: false, aviso: [],
   real: null, realCarregado: false,   /* realizado do Mapinha / CPK          */
   base: null, fech: null,             /* mês-base fechado e status lidos     */
@@ -11511,8 +11531,9 @@ const RCL = {
    index.html nem em firestore.rules). */
 function rclPrem(){ return {...RCL_PADRAO, ...(RCL.prem||{})}; }
 /* Menor número de eixos entre os conjuntos cadastrados em Veículos & Eixos.
-   É o padrão dos dois campos de eixos do pedágio: começar pelo piso e subir
-   por decisão, nunca o contrário. */
+   Deixou de ser o padrão dos campos de eixos (hoje é RCL_CFG.eixosPadrao,
+   7 na ida e 4 na volta), mas continua sendo mostrado na tela de premissas
+   como referência de qual é o conjunto mais leve da frota. */
 function rclEixosMin(){
   try{
     const l=(typeof simEixosCadastrados==='function') ? simEixosCadastrados() : [];
@@ -11522,10 +11543,15 @@ function rclEixosMin(){
   const e=Number(rtPerfilAtivo().eixos);
   return e>0?e:5;
 }
+function rclEixosPadrao(lado){
+  const d=RCL_CFG.eixosPadrao||{};
+  const n=Number(lado==='volta' ? d.volta : d.ida);
+  return n>0 ? Math.round(n) : (lado==='volta' ? 4 : 7);
+}
 function rclEixosDe(P, lado){
   const fx=RCL_CFG.eixosOpcoes, lo=fx[0], hi=fx[fx.length-1];
   const v=Number(lado==='volta' ? P.pedagioEixosVolta : P.pedagioEixosIda);
-  const n=v>0 ? Math.round(v) : rclEixosMin();
+  const n=v>0 ? Math.round(v) : rclEixosPadrao(lado);
   return Math.min(hi, Math.max(lo, n));
 }
 
@@ -11586,6 +11612,23 @@ async function rclCarregarPrem(){
   if(RCL.premCarregada) return;
   RCL.premCarregada = true;
   try{ const d=await fsGetDoc(COL.config,'rotas_cliente'); if(d&&d.data) RCL.prem=d.data; }catch(_){}
+  rclMigrarEixosPadrao();
+}
+/* ══ MIGRAÇÃO ÚNICA — padrão de eixos 7 ida / 4 volta ═════════════════════
+   Mudar o padrão no código só vale para quem nunca escolheu eixos: se o
+   documento de premissas já tem um número gravado (o seletor da linha do
+   pedágio grava a cada troca), ele venceria o padrão novo e as rotas
+   continuariam com os eixos antigos. Esta migração roda uma vez, apaga a
+   escolha herdada e deixa os dois campos caírem no padrão novo. Depois
+   dela, qualquer escolha manual volta a mandar — o carimbo eixosPadraoV2
+   viaja junto na próxima gravação e a migração não roda de novo.        */
+function rclMigrarEixosPadrao(){
+  const p=RCL.prem||{};
+  if(p.eixosPadraoV2===true) return;
+  RCL.prem={...p, pedagioEixosIda:null, pedagioEixosVolta:null, eixosPadraoV2:true};
+  if(p.pedagioEixosIda!=null || p.pedagioEixosVolta!=null)
+    console.info('[Rota clientes] eixos do pedágio migrados para o padrão '
+      + rclEixosPadrao('ida') + ' (ida) / ' + rclEixosPadrao('volta') + ' (volta).');
 }
 async function rclGravarPrem(p){
   RCL.prem = p;
@@ -13730,15 +13773,42 @@ function rclRender(){
   tb.innerHTML=linhas.join('');
   tb.querySelectorAll('tr.cli-row').forEach(tr=>{
     tr.onclick=()=>{ const k=tr.dataset.cli;
+      /* Trocar de cliente solta a rota marcada: manter a marca de uma rota
+         que não está mais visível confundiria mais do que ajudaria. */
+      if(RCL.selCli!==k) RCL.selK3=null;
+      RCL.selCli=k;
       if(RCL.abertos.has(k)) RCL.abertos.delete(k); else RCL.abertos.add(k);
       rclRender(); };
   });
   tb.querySelectorAll('tr.rot-row').forEach(tr=>{
     tr.onclick=()=>{ rclPainel(tr.dataset.cli, tr.dataset.k3); };
   });
+  rclMarcarSel();
   RCL._cortadas=cortadas;
   rclRenderKpis(lista);
   rclRodape();
+}
+
+/* ══ LINHA SELECIONADA ════════════════════════════════════════════════════
+   Pedido do comercial (ago/2026): clicar num cliente e depois numa rota dele
+   tem de deixar as DUAS linhas marcadas, para não se perder de vista qual
+   rota está aberta no painel de baixo quando a tabela é longa.
+
+   Feito por classe, sem redesenhar a tabela: abrir uma rota não mexe em
+   nenhuma outra linha, então repintar 2.500 <tr> só para trocar uma cor
+   seria caro e ainda faria a tela piscar. */
+function rclMarcarSel(){
+  const tb=$('rclTbody'); if(!tb) return;
+  tb.querySelectorAll('tr.sel').forEach(tr=>tr.classList.remove('sel'));
+  if(RCL.selCli){
+    const c=tb.querySelector(`tr.cli-row[data-cli="${(window.CSS&&CSS.escape)?CSS.escape(RCL.selCli):RCL.selCli}"]`);
+    if(c) c.classList.add('sel');
+  }
+  if(RCL.selCli && RCL.selK3){
+    tb.querySelectorAll('tr.rot-row').forEach(tr=>{
+      if(tr.dataset.cli===RCL.selCli && tr.dataset.k3===RCL.selK3) tr.classList.add('sel');
+    });
+  }
 }
 
 function rclPillCompl(p){
@@ -13873,6 +13943,10 @@ function rclRodape(){
 /* ══ Painel de uma rota ═══════════════════════════════════════════════════ */
 function rclPainel(chaveCli, k3, semScroll){
   RCL._painelAberto={chaveCli, k3};
+  /* A marcação mora aqui, e não só no clique: o painel também é reaberto
+     por outros caminhos (troca de eixos, recálculo), e em todos eles a
+     linha marcada tem de continuar sendo a que está aberta embaixo. */
+  RCL.selCli=chaveCli; RCL.selK3=k3; rclMarcarSel();
   const el=$('rclPainel'); if(!el) return;
   const cl=RCL.clientes.find(c=>c.chave===chaveCli);
   const r = cl && cl.rotas.find(x=>x.k3===k3);
@@ -14131,8 +14205,8 @@ function rclPainel(chaveCli, k3, semScroll){
   const pd      = cu && cu.pedDet ? cu.pedDet : null;
   add('Pedágio','pedagio',li.pedagio,
       pedFon==='here' && cu && cu.pedOk
-        ? `ida ${brl(cu.pIda)} · ${rclEixosSelect('ida', pd?pd.eixosIda:5)}`
-          + (pd&&!pd.cobrarVolta ? ` · volta não cobrada` : ` + volta ${brl(cu.pVolta)} · ${rclEixosSelect('volta', pd?pd.eixosVolta:5)}`)
+        ? `ida ${brl(cu.pIda)} · ${rclEixosSelect('ida', pd?pd.eixosIda:rclEixosPadrao('ida'))}`
+          + (pd&&!pd.cobrarVolta ? ` · volta não cobrada` : ` + volta ${brl(cu.pVolta)} · ${rclEixosSelect('volta', pd?pd.eixosVolta:rclEixosPadrao('volta'))}`)
           + (cu.aprov>0?` · volta ${pct(1-cu.aprov,0)}`:'')
         : (cu&&cu.pedOk?`HERE ${brl(pedHere)} · cobrado por km`:'sem base de praças'),
       mem('Pedágio',{selo:selo('pedagio'),
@@ -15282,12 +15356,16 @@ function rclPremModal(){
       <select id="rcl_${id}" ${ed?'':'disabled'}>${ops.map(o=>`<option value="${o[0]}" ${String(v)===String(o[0])?'selected':''}>${o[1]}</option>`).join('')}</select></label>`;
   const c=(id,l,v,dica)=>`<label class="fld"><span class="fl">${l}${dica?`<i>${dica}</i>`:''}</span>
       <select id="rcl_${id}" ${ed?'':'disabled'}><option value="1" ${v?'selected':''}>Sim</option><option value="0" ${v?'':'selected'}>Não</option></select></label>`;
-  /* Eixos vêm dos conjuntos cadastrados, como no Simulador. A primeira opção
-     é o padrão vivo: se amanhã entrar um conjunto com menos eixos, ela passa
-     a valer sozinha, sem ninguém ter de reabrir esta tela. */
+  /* A lista aqui é a MESMA do seletor que fica na linha do pedágio (4 a 9),
+     e não só os conjuntos cadastrados: se as duas divergissem, um número
+     escolhido na linha poderia não existir nesta tela e sumir no primeiro
+     salvamento. Onde há conjunto cadastrado com aquele número de eixos, o
+     nome do perfil entra no rótulo, para não virar um número solto. */
   const eixosCad=(typeof simEixosCadastrados==='function')?simEixosCadastrados():[];
-  const opsEixos=[['',`Menor cadastrado (${num(rclEixosMin(),0)} eixos)`]]
-    .concat(eixosCad.map(x=>[String(x.eixos), `${x.eixos} eixos`+(x.perfis&&x.perfis.filter(Boolean).length?` · ${x.perfis.filter(Boolean)[0]}`:'')]));
+  const perfilDe=n=>{ const c=eixosCad.find(x=>Number(x.eixos)===n);
+    const p=c&&c.perfis?c.perfis.filter(Boolean):[]; return p.length?` · ${p[0]}`:''; };
+  const opsEixos=[['',`Padrão do módulo (ida ${num(rclEixosPadrao('ida'),0)} · volta ${num(rclEixosPadrao('volta'),0)})`]]
+    .concat(RCL_CFG.eixosOpcoes.map(n=>[String(n), `${n} eixos${perfilDe(n)}`]));
 
   mdAbrir('Premissas do resultado por cliente',
    `<div class="muted" style="margin-bottom:10px">
@@ -15388,12 +15466,13 @@ function rclPremModal(){
     <div class="muted" style="font-size:10.5px;margin:10px 0 6px">
       O pedágio é medido nos <b>dois sentidos</b>. O que os campos abaixo mudam é quantos eixos pagam em cada um e se a
       volta é cobrada — tudo aplicado sobre a tarifa por eixo já medida no percurso, então
-      <b>trocar eixos não gasta chamada de HERE</b>. O padrão é o menor número de eixos entre os conjuntos cadastrados
-      em Veículos &amp; Eixos (${num(rclEixosMin(),0)} eixos): cobrar pelo piso e subir por decisão, nunca o contrário.
+      <b>trocar eixos não gasta chamada de HERE</b>. Toda rota começa com <b>${num(rclEixosPadrao('ida'),0)} eixos na ida</b>
+      carregada e <b>${num(rclEixosPadrao('volta'),0)} na volta</b> vazia, que roda com eixo erguido — o menor conjunto
+      cadastrado em Veículos &amp; Eixos hoje tem ${num(rclEixosMin(),0)} eixos, mas ele deixou de ser o ponto de partida.
     </div>
     <div class="rt-fields grid3">
-      ${s('pedagioEixosIda','Eixos — ida (carregado)', P.pedagioEixosIda==null?'':P.pedagioEixosIda, opsEixos, 'padrão = menor cadastrado')}
-      ${s('pedagioEixosVolta','Eixos — volta (vazio)', P.pedagioEixosVolta==null?'':P.pedagioEixosVolta, opsEixos, 'eixo erguido = menos eixos')}
+      ${s('pedagioEixosIda','Eixos — ida (carregado)', P.pedagioEixosIda==null?'':P.pedagioEixosIda, opsEixos, `padrão = ${num(rclEixosPadrao('ida'),0)} eixos`)}
+      ${s('pedagioEixosVolta','Eixos — volta (vazio)', P.pedagioEixosVolta==null?'':P.pedagioEixosVolta, opsEixos, `padrão = ${num(rclEixosPadrao('volta'),0)} · eixo erguido`)}
       ${c('pedagioCobrarVolta','Cobrar o pedágio da volta', P.pedagioCobrarVolta!==false, 'marcado por padrão')}
     </div>
 
@@ -15422,7 +15501,7 @@ function rclPremModal(){
       : `<button class="btn" onclick="mdFechar()">Fechar</button>`);
 
   const bp=$('rclPremPadrao');
-  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO}); mdFechar();
+  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO, eixosPadraoV2:true}); mdFechar();
     RCL.real=null; RCL.base=null; await rclRecalcularAsync(); toast('Premissas do resultado no padrão.','ac'); };
   const bs=$('rclPremSalvar');
   if(bs) bs.onclick=async()=>{
@@ -15443,6 +15522,10 @@ function rclPremModal(){
       fontePedagio:gS('fontePedagio'), fontePneus:gS('fontePneus'),
       pedagioEixosIda:gN('pedagioEixosIda'), pedagioEixosVolta:gN('pedagioEixosVolta'),
       pedagioCobrarVolta:gB('pedagioCobrarVolta'),
+      /* Carimbo da migração do padrão de eixos: sem ele aqui, salvar esta
+         tela apagaria o carimbo e a migração rodaria de novo no próximo
+         boot, desfazendo justamente a escolha que acabou de ser salva. */
+      eixosPadraoV2:true,
       fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
       fonteDocSeguros:gS('fonteDocSeguros'), fontePessoal:gS('fontePessoal'),
       pessoalCpkBase:gS('pessoalCpkBase'), fonteDeprec:gS('fonteDeprec'),
