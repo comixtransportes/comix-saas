@@ -3965,11 +3965,24 @@ function simMontarTiposCarreta(){
   if(anterior){ sel.value=anterior; if(sel.value!==anterior) sel.value='auto'; }
 }
 
-/* As opções de eixos saem dos perfis cadastrados na aba Veículos & Eixos —
-   nada de número digitado à mão que não corresponda a nenhum conjunto real.
-   Um valor já escolhido que suma da tabela (perfil editado/removido) é
-   preservado na lista, marcado como fora do cadastro, para não apagar em
-   silêncio o que uma simulação anterior gravou. */
+/* Faixa de eixos oferecida no quadro de trechos. É a MESMA da linha do
+   pedágio em Rotas → Rota clientes → Custo por viagem (RCL_CFG.eixosOpcoes,
+   4 a 9): o número de eixos que paga pedágio não é o do conjunto cadastrado
+   — a volta vazia roda com eixo erguido, e o cadastro não tem essa variação.
+   Leitura defensiva porque RCL_CFG é `const` num bloco <script> avaliado
+   DEPOIS deste; enquanto ela está na zona morta temporal até `typeof`
+   estoura ReferenceError, então o fallback abaixo precisa ser literal. */
+const SIM_EIXOS_FAIXA = [4,5,6,7,8,9];
+function simEixosOpcoes(){
+  try{
+    const f = RCL_CFG && RCL_CFG.eixosOpcoes;
+    if(Array.isArray(f) && f.length) return f.map(Number).filter(n=>Number.isFinite(n)&&n>0);
+  }catch(_){}
+  return SIM_EIXOS_FAIXA.slice();
+}
+
+/* Os perfis cadastrados na aba Veículos & Eixos deixaram de ser a FONTE da
+   lista e viraram só quem dá o nome do conjunto no tooltip de cada opção. */
 function simEixosCadastrados(){
   const mapa=new Map();
   frotaConjuntosPossiveis().forEach(c=>{
@@ -3981,20 +3994,27 @@ function simEixosCadastrados(){
   return [...mapa.entries()].sort((a,b)=>a[0]-b[0]).map(([n,nomes])=>({eixos:n,perfis:nomes}));
 }
 function simMontarEixos(){
-  const lista=simEixosCadastrados();
+  const faixa=simEixosOpcoes();
+  const cad=simEixosCadastrados();
+  const perfilDe=n=>{
+    const x=cad.find(c=>String(c.eixos)===String(n));
+    const nomes=x? x.perfis.filter(Boolean).join(' · ') : '';
+    return nomes || 'Sem conjunto cadastrado com esse número de eixos';
+  };
   ['simEixosIda','simEixosVolta'].forEach(id=>{
     const sel=$(id); if(!sel) return;
     const anterior=sel.value;
-    const extras=[];
-    const tem=n=>lista.some(x=>String(x.eixos)===String(n));
-    if(anterior && !tem(anterior)) extras.push(Number(anterior));
     const conj=simEixosConjunto();
+    /* Valor fora da faixa — escolha antiga gravada ou conjunto exótico do
+       cadastro — continua na lista marcado, para não sumir em silêncio. */
+    const extras=[];
+    const tem=n=>faixa.some(x=>String(x)===String(n));
+    if(anterior && !tem(anterior)) extras.push(Number(anterior));
     if(conj && !tem(conj) && !extras.includes(conj)) extras.push(conj);
-    sel.innerHTML = lista.map(x=>
-        `<option value="${x.eixos}" title="${esc(x.perfis.filter(Boolean).join(' · '))}">${x.eixos} eixos</option>`).join('')
-      + extras.sort((a,b)=>a-b).map(n=>
-        `<option value="${n}" title="Fora dos perfis cadastrados">${n} eixos ⚠</option>`).join('')
-      + (lista.length||extras.length?'':'<option value="">— sem perfis cadastrados —</option>');
+    sel.innerHTML = faixa.map(n=>
+        `<option value="${n}" title="${esc(perfilDe(n))}">${n} eixos</option>`).join('')
+      + extras.filter(n=>Number.isFinite(n)&&n>0).sort((a,b)=>a-b).map(n=>
+        `<option value="${n}" title="Fora da faixa de eixos pedagiáveis (${faixa[0]} a ${faixa[faixa.length-1]})">${n} eixos ⚠</option>`).join('');
     if(anterior){ sel.value=anterior; if(sel.value!==anterior) sel.value=String(conj||''); }
   });
 }
