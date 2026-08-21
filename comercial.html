@@ -11341,6 +11341,51 @@ const RCL_CFG = {
      conjunto real e estreita o bastante para pegar dígito a mais, valor
      total no lugar da parcela ou centavo lido como real.                  */
   depMesBanda: { cavalo:[500, 60000], carreta:[100, 20000] },
+  /* ══ JANELA DE MÉDIA MÓVEL POR NATUREZA DE CUSTO ════════════════════════
+     O mês-base fechado resolveu o problema do mês INCOMPLETO. Não resolveu o
+     do mês ATÍPICO, que é maior — e as linhas do Mapinha não se comportam
+     todas do mesmo jeito no tempo:
+
+       · DOCUMENTAÇÃO E SEGUROS é o caso escandaloso. IPVA, licenciamento e
+         CRLV se concentram no primeiro trimestre e a apólice de casco é
+         anual. Com mês-base único, fevereiro entrega R$ 230/viagem e agosto
+         R$ 15/viagem na MESMA frota, na MESMA rota, sem que nada tenha
+         mudado na operação. Nenhum dos dois está certo.
+       · PEÇAS E SERVIÇOS e PNEUS são "lumpy": uma reforma de motor de
+         R$ 90 mil ou uma compra de pneu em lote caem num mês só e deslocam
+         a linha da unidade inteira.
+       · PESSOAL é o oposto — ele DERIVA. Dissídio, admissão, desligamento:
+         a média de doze meses entregaria uma folha que não existe mais.
+         Média longa é boa contra RUÍDO e ruim contra DERIVA, e é por isso
+         que esta linha fica em 1 mês (decisão do comercial, ago/2026).
+
+     A regra do cálculo, que é onde essa ideia costuma dar errado: a taxa é
+     a RAZÃO DAS SOMAS, nunca a média das razões mensais.
+
+         certo:  Σ R$ dos K meses ÷ Σ viagens dos K meses
+         errado: média de (R$ do mês ÷ viagens do mês)
+
+     É a mesma regra da média ponderada por litros do rtPrecoMedio.        */
+  janelaTeto: 12,                        /* teto absoluto, em meses         */
+  janelaPadrao: { pneus:6, lub:3, pecas:6, doc:12, pessoal:1,
+                  deprec:1, pedagio:3, diesel:3, arla:3, aderencia:3 },
+  /* Rótulo e explicação de cada natureza, para a tela não precisar repetir. */
+  janelaInfo: {
+    pneus:    ['Pneus',                  'compra em lote concentra o gasto num mês'],
+    lub:      ['Lubrificante',           'gasto regular, pouco ruído'],
+    pecas:    ['Peças e serviços',       'reforma pontual precisa ser diluída'],
+    doc:      ['Documentação e seguros', 'IPVA, licenciamento e apólice são anuais'],
+    pessoal:  ['Pessoal',                'DERIVA com o dissídio — média longa atrasa a folha'],
+    deprec:   ['Depreciação (rateio)',   'parcela mensal, não precisa de média'],
+    pedagio:  ['Pedágio (reserva R$/km)','acompanha o rodado'],
+    diesel:   ['Diesel — preço efetivo', 'ruído de estoque no fim do mês'],
+    arla:     ['Arla — preço efetivo',   'compra esparsa, amostra pequena'],
+    aderencia:['Aderência do consumo',   'tanque cheio no dia 30 é diesel do mês seguinte']
+  },
+  /* Coeficiente de variação das taxas mensais acima do qual a tela chama a
+     linha de dispersa. Não é erro: é o aviso de que aquela natureza é
+     sazonal e de que um mês-base único estaria mentindo. */
+  dispersaoAlerta: 0.35,
   /* Eixos pedagiáveis oferecidos na linha do pedágio. 4 a 9 cobre do
      truck ao rodotrem — abaixo de 4 não existe conjunto nosso e acima de 9
      não existe tarifa na ANTT. */
@@ -11400,15 +11445,26 @@ const RCL_PADRAO = {
        'modelo'    → fórmula do núcleo com o preço da premissa/SZC          */
   fonteDiesel:      'posto',       /* posto · realizado · modelo            */
   fonteArla:        'realizado',   /* realizado · modelo — regra dos 5% fica */
-  /* Base dos 5% do Arla. Decisão do comercial (ago/2026): o Arla passa a ser
-     5% do VALOR DA LINHA DE CIMA — o diesel da viagem, já ao preço pago no
-     posto da rota. É a leitura mais direta na tela: a linha de baixo é uma
-     fração da de cima, e as duas andam juntas quando o preço do posto muda.
-       'diesel' → arlaPct × R$ da linha de diesel (padrão)
-       'preco'  → arlaPct × litros × R$/l do Arla apurado (comportamento
-                  anterior; o Arla a granel custa menos que o diesel, então
-                  esta base dá um número menor)                             */
-  arlaBase:         'diesel',      /* diesel · preco                        */
+  /* Base dos 5% do Arla. Decisão do comercial (ago/2026, SEGUNDA rodada — a
+     anterior era 'diesel' e foi revertida): o Arla volta a ser
+     `litros de diesel da viagem × % × R$/l do ARLA`, e não uma fração do R$
+     da linha de diesel.
+
+     A razão é de preço, não de fórmula: o Arla 32 a granel custa perto da
+     METADE do diesel. Valorar os litros de Arla ao preço do diesel inflava
+     a linha em torno de 80% — a conta ficava fácil de ler na tela e errada
+     no resultado. Como a linha entra no CPK da rota, o erro ia direto para
+     a margem.
+       'preco'  → arlaPct × litros de diesel × R$/l do Arla (PADRÃO)
+       'diesel' → arlaPct × R$ da linha de diesel (comportamento anterior,
+                  mantido na chave para conferência)                        */
+  arlaBase:         'preco',       /* preco · diesel                        */
+  /* De onde sai o R$/l do Arla, com a MESMA cascata do diesel:
+       'posto'     → ShellBox: Arla no posto da rota → média da unidade →
+                     consolidado → preço efetivo do Mapinha (PADRÃO)
+       'realizado' → direto o preço efetivo do Mapinha (R$ de Arla do
+                     fechamento ÷ litros de Arla da SZC)                     */
+  fonteArlaPreco:   'posto',       /* posto · realizado                     */
   /* Pedágio: HERE por padrão. O pedágio é o único custo da rota que a HERE
      MEDE praça a praça e por eixo para o percurso exato — trocar um número
      medido por uma média de frota (R$/km) é perder informação, não ganhar
@@ -11493,6 +11549,19 @@ const RCL_PADRAO = {
        'janela'   → a própria janela, fechada ou não (comportamento antigo) */
   baseRealizado:    'fechado',     /* fechado · anterior · janela           */
   baseMaxMeses:     12,            /* até quantos meses andar para trás     */
+  /* ══ MÉDIA MÓVEL DE MESES FECHADOS ═════════════════════════════════════
+     Ligada, a base deixa de ser UM mês fechado e passa a ser a série dos
+     meses fechados da unidade até a data presente — cada natureza de custo
+     consumindo a sua própria janela (RCL_CFG.janelaPadrao). Desligada, o
+     módulo volta exatamente ao comportamento anterior: um mês só.
+
+     O que se perde, e precisa ser aceito de olhos abertos: a soma das rotas
+     deixa de fechar com o Mapinha de UM mês específico. Ela passa a fechar
+     com a MÉDIA do período. Na prática isso já acontecia sempre que a base
+     recuava para um mês anterior à janela — a diferença é que agora é
+     permanente e está declarada na tela.                                  */
+  baseMediaMovel:   true,
+  janelaMeses:      null,          /* objeto por natureza; null = padrão    */
   /* Sobrescritas manuais das taxas do realizado (vazio = calcula do Mapinha) */
   ovDieselRS: null, ovArlaRS: null, ovPedagioKm: null, ovPneusKm: null,
   ovLubKm: null, ovPecasViagem: null, ovDocViagem: null, ovPessoalViagem: null,
@@ -11633,6 +11702,7 @@ async function rclCarregarPrem(){
   RCL.premCarregada = true;
   try{ const d=await fsGetDoc(COL.config,'rotas_cliente'); if(d&&d.data) RCL.prem=d.data; }catch(_){}
   rclMigrarEixosPadrao();
+  rclMigrarArlaLitros();
 }
 /* ══ MIGRAÇÃO ÚNICA — padrão de eixos 7 ida / 4 volta ═════════════════════
    Mudar o padrão no código só vale para quem nunca escolheu eixos: se o
@@ -11649,6 +11719,24 @@ function rclMigrarEixosPadrao(){
   if(p.pedagioEixosIda!=null || p.pedagioEixosVolta!=null)
     console.info('[Rota clientes] eixos do pedágio migrados para o padrão '
       + rclEixosPadrao('ida') + ' (ida) / ' + rclEixosPadrao('volta') + ' (volta).');
+}
+/* ══ MIGRAÇÃO ÚNICA — Arla por litros × R$/l do Arla ══════════════════════
+   Mesma armadilha da migração de eixos: mudar o padrão no código só valeria
+   para quem nunca salvou as Premissas do resultado. O modal grava TODOS os
+   campos de uma vez, então quem abriu e salvou aquela tela alguma vez tem
+   arlaBase:'diesel' persistido, e o valor gravado venceria o padrão novo —
+   a correção não chegaria justamente em quem mais mexe no módulo.
+
+   Esta migração roda uma vez, devolve a base para 'preco' e liga a cascata
+   de posto do Arla. O carimbo viaja junto na próxima gravação (e no "Voltar
+   ao padrão"), então ela não roda de novo e qualquer escolha manual feita
+   DEPOIS dela volta a mandar.                                             */
+function rclMigrarArlaLitros(){
+  const p=RCL.prem||{};
+  if(p.arlaLitrosV3===true) return;
+  RCL.prem={...p, arlaBase:'preco', fonteArlaPreco:'posto', arlaLitrosV3:true};
+  if(p.arlaBase==='diesel')
+    console.info('[Rota clientes] Arla migrado para litros de diesel × % × R$/l do Arla da rota.');
 }
 async function rclGravarPrem(p){
   RCL.prem = p;
@@ -11902,45 +11990,100 @@ function rclEstaFechado(fil, mes){
 
 /* Resolve, por unidade, quais competências servem de base para o realizado.
    Devolve também o MOTIVO, que vai inteiro para a tela — se o número mudou
-   porque o mês de referência recuou, isso não pode ficar implícito. */
+   porque o mês de referência recuou, isso não pode ficar implícito.
+
+   ══ O QUE MUDOU EM AGO/2026 ═══════════════════════════════════════════════
+   Antes esta função devolvia UM mês fechado por unidade. Agora ela devolve a
+   SÉRIE dos meses fechados, do mais antigo para o mais recente, com tamanho
+   suficiente para atender a natureza de custo mais faminta (documentação e
+   seguros, 12 meses). Cada linha do custo por viagem depois recorta dessa
+   série a sua própria janela — ver rclJanelaDe().
+
+   A razão é a sazonalidade: com mês-base único, a linha de documentação da
+   mesma rota vale R$ 230/viagem se a base cair em fevereiro (IPVA) e
+   R$ 15/viagem se cair em agosto. O mês fechado resolveu o mês incompleto;
+   a série resolve o mês atípico.
+
+   Meses ABERTOS continuam fora, sempre: um mês em rascunho no Mapinha entra
+   por baixo e contamina a média sem que nada acuse. Buraco no meio da série
+   (um mês reaberto entre dois fechados) não interrompe a busca — ele é
+   pulado e a série continua para trás, porque o que se quer são K meses
+   COMPLETOS, não K meses consecutivos.                                    */
 function rclResolverBase(mesesJanela, P){
   const SIGLAS=['SC','PR','SP'];
   const ini=mesesJanela[0], fim=mesesJanela[mesesJanela.length-1];
   const maxT=Math.max(1, P.baseMaxMeses||12);
-  const out={ porOp:{}, modo:P.baseRealizado||'fechado', janela:mesesJanela.slice(), aviso:[] };
+  const alvoN=rclJanelaMax(P);           /* quantos meses fechados juntar   */
+  const movel=!!P.baseMediaMovel && (P.baseRealizado||'fechado')!=='janela';
+  const out={ porOp:{}, modo:P.baseRealizado||'fechado', janela:mesesJanela.slice(),
+              mediaMovel:movel, alvoMeses:alvoN, aviso:[] };
 
   SIGLAS.forEach(f=>{
     if(out.modo==='janela'){
       out.porOp[f]={ meses:mesesJanela.slice(), motivo:'janela analisada, fechada ou não (escolha nas premissas)',
-                     tipo:'janela', abertos:mesesJanela.filter(m=>!rclEstaFechado(f,m)) };
+                     tipo:'janela', abertos:mesesJanela.filter(m=>!rclEstaFechado(f,m)), mediaMovel:false };
       return;
     }
-    /* 'anterior' começa a busca um mês antes da janela, de propósito: serve
-       para comparar a janela contra o mês fechado que a antecede. */
     const fechadosNaJanela = out.modo==='fechado' ? mesesJanela.filter(m=>rclEstaFechado(f,m)) : [];
-    if(fechadosNaJanela.length===mesesJanela.length){
-      out.porOp[f]={ meses:fechadosNaJanela, motivo:'a própria janela já está fechada no Mapinha',
-                     tipo:'janela', abertos:[] };
-      return;
-    }
-    if(fechadosNaJanela.length){
-      out.porOp[f]={ meses:fechadosNaJanela,
-                     motivo:`${fechadosNaJanela.length} de ${mesesJanela.length} meses da janela estão fechados; os abertos ficaram fora da base`,
-                     tipo:'parcial', abertos:mesesJanela.filter(m=>!rclEstaFechado(f,m)) };
-      return;
-    }
-    /* Nenhum mês da janela fechado — anda para trás até achar o último. */
-    let m = out.modo==='anterior' ? rclMesAnterior(ini) : rclMesAnterior(fim);
-    for(let i=0;i<maxT;i++){
-      if(rclEstaFechado(f,m)){
-        out.porOp[f]={ meses:[m], tipo:'anterior', abertos:mesesJanela.slice(),
-          motivo:`a janela não tem mês fechado no Mapinha; a referência é ${dtSimplesBR(m+'-01').slice(3)}, o fechamento mais recente com todos os custos aplicados` };
+
+    if(!movel){
+      /* ── Comportamento anterior, preservado inteiro pela chave ────────── */
+      if(fechadosNaJanela.length===mesesJanela.length){
+        out.porOp[f]={ meses:fechadosNaJanela, motivo:'a própria janela já está fechada no Mapinha',
+                       tipo:'janela', abertos:[], mediaMovel:false };
         return;
       }
+      if(fechadosNaJanela.length){
+        out.porOp[f]={ meses:fechadosNaJanela,
+                       motivo:`${fechadosNaJanela.length} de ${mesesJanela.length} meses da janela estão fechados; os abertos ficaram fora da base`,
+                       tipo:'parcial', abertos:mesesJanela.filter(m=>!rclEstaFechado(f,m)), mediaMovel:false };
+        return;
+      }
+      let m = out.modo==='anterior' ? rclMesAnterior(ini) : rclMesAnterior(fim);
+      for(let i=0;i<maxT;i++){
+        if(rclEstaFechado(f,m)){
+          out.porOp[f]={ meses:[m], tipo:'anterior', abertos:mesesJanela.slice(), mediaMovel:false,
+            motivo:`a janela não tem mês fechado no Mapinha; a referência é ${dtSimplesBR(m+'-01').slice(3)}, o fechamento mais recente com todos os custos aplicados` };
+          return;
+        }
+        m=rclMesAnterior(m);
+      }
+      out.porOp[f]={ meses:[], tipo:'nenhum', abertos:mesesJanela.slice(), mediaMovel:false,
+        motivo:`nenhum fechamento encontrado nos últimos ${maxT} meses` };
+      return;
+    }
+
+    /* ── MÉDIA MÓVEL: junta os fechados andando para trás ───────────────── */
+    const partida = out.modo==='anterior' ? rclMesAnterior(ini) : fim;
+    const limite  = alvoN + maxT;        /* folga para pular meses abertos  */
+    const achados=[], pulados=[];
+    let m=partida;
+    for(let i=0;i<limite && achados.length<alvoN;i++){
+      if(rclEstaFechado(f,m)) achados.push(m);
+      else if(pulados.length<8) pulados.push(m);
       m=rclMesAnterior(m);
     }
-    out.porOp[f]={ meses:[], tipo:'nenhum', abertos:mesesJanela.slice(),
-      motivo:`nenhum fechamento encontrado nos últimos ${maxT} meses` };
+    achados.reverse();                   /* ordem crescente                 */
+    if(!achados.length){
+      out.porOp[f]={ meses:[], tipo:'nenhum', abertos:mesesJanela.slice(), mediaMovel:true,
+        motivo:`nenhum fechamento encontrado nos últimos ${limite} meses`, pulados };
+      return;
+    }
+    const recente=achados[achados.length-1];
+    const cobreJanela = mesesJanela.every(x=>achados.indexOf(x)>-1);
+    const tipo = cobreJanela ? 'janela'
+               : (fechadosNaJanela.length ? 'parcial' : 'anterior');
+    const abertos=mesesJanela.filter(x=>!rclEstaFechado(f,x));
+    const rot=(x)=>dtSimplesBR(x+'-01').slice(3);
+    let motivo;
+    if(achados.length<alvoN)
+      motivo=`${achados.length} de ${alvoN} meses fechados disponíveis (${rot(achados[0])} a ${rot(recente)}); as linhas de janela mais longa usam o que existe`;
+    else
+      motivo=`série de ${achados.length} meses fechados, de ${rot(achados[0])} a ${rot(recente)} — cada linha de custo recorta a sua janela`;
+    if(tipo!=='janela' && abertos.length)
+      motivo += `. A janela analisada ainda tem ${abertos.length} mês(es) em aberto: ${abertos.join(', ')}`;
+    out.porOp[f]={ meses:achados, tipo, abertos, mediaMovel:true, pulados,
+                   completa:achados.length>=alvoN, recente, motivo };
   });
 
   /* Chaves distintas de conjuntos de meses — cada uma exige uma medição de
@@ -11950,12 +12093,40 @@ function rclResolverBase(mesesJanela, P){
   out.uniao=[...new Set(SIGLAS.flatMap(f=>out.porOp[f].meses||[]))].sort();
   return out;
 }
+/* ══ JANELA DE CADA NATUREZA ══════════════════════════════════════════════
+   Devolve quantos meses aquela linha de custo consome. A premissa vence o
+   padrão; o teto vence as duas. Com a média móvel desligada, tudo vira 1 —
+   que é o comportamento anterior do módulo, inteiro.                      */
+function rclJanelaDe(nat, P){
+  P = P || rclPrem();
+  if(!P.baseMediaMovel) return 1;
+  const cfg=(P.janelaMeses && typeof P.janelaMeses==='object') ? P.janelaMeses : {};
+  const v = Number(cfg[nat]!=null ? cfg[nat] : RCL_CFG.janelaPadrao[nat]);
+  if(!isFinite(v) || v<1) return 1;
+  return Math.min(Math.round(v), RCL_CFG.janelaTeto);
+}
+/* Quantos meses a busca de fechamentos precisa juntar para atender a linha
+   mais faminta. Sem isso, a natureza de janela 12 receberia os mesmos meses
+   da de janela 1 e a média móvel seria decorativa. */
+function rclJanelaMax(P){
+  P = P || rclPrem();
+  if(!P.baseMediaMovel) return 1;
+  return Object.keys(RCL_CFG.janelaPadrao)
+    .reduce((a,k)=>Math.max(a, rclJanelaDe(k,P)), 1);
+}
+/* Os K meses MAIS RECENTES de uma série já ordenada em ordem crescente. */
+function rclUltimosMeses(meses, k){
+  const l=Array.isArray(meses)?meses:[];
+  const n=Math.max(1, Math.min(k|0 || 1, l.length));
+  return l.slice(Math.max(0, l.length-n));
+}
 /* Rótulo curto do mês-base de uma unidade, para a tela. */
 function rclRotuloBase(f){
   const b=RCL.base&&RCL.base.porOp?RCL.base.porOp[f]:null;
   if(!b || !b.meses.length) return 'sem fechamento';
   if(b.meses.length===1) return dtSimplesBR(b.meses[0]+'-01').slice(3);
-  return dtSimplesBR(b.meses[0]+'-01').slice(3)+' a '+dtSimplesBR(b.meses[b.meses.length-1]+'-01').slice(3);
+  return dtSimplesBR(b.meses[0]+'-01').slice(3)+' a '+dtSimplesBR(b.meses[b.meses.length-1]+'-01').slice(3)
+       + ' ('+b.meses.length+' fechados)';
 }
 
 /* Carrega o realizado usando, para CADA unidade, as competências que a base
@@ -11989,20 +12160,30 @@ async function rclRealCarregar(base){
     return String(v.unidade||v.filial||v.sigla||'').toUpperCase().slice(0,2);
   };
 
-  /* ── lançamentos do Mapinha, mês a mês ── */
-  const buckets={}; SIGLAS.forEach(s=>buckets[s]=rclrBucket(s));
+  /* ── lançamentos do Mapinha, mês a mês ─────────────────────────────────
+     A acumulação passou a ser POR MÊS (ago/2026). Cada natureza de custo
+     recorta depois dessa série a sua própria janela — doze meses para
+     documentação e seguros, um mês para pessoal — e a taxa é sempre a razão
+     das somas daquela janela, nunca a média das razões mensais.
+     buckets[f] continua existindo, como a soma de todos os meses lidos,
+     para o que ainda lê o total. */
+  const porMes={}; SIGLAS.forEach(s=>porMes[s]={});
+  const lidos={}, semLanc={}; SIGLAS.forEach(s=>{ lidos[s]=[]; semLanc[s]=[]; });
+  const mesBk=(f,m)=>{ if(!porMes[f]) return null;
+    if(!porMes[f][m]) porMes[f][m]=rclrBucket(f);
+    return porMes[f][m]; };
   for(const m of meses){
     let linhas=[];
     try{ linhas = await fsGetCollection('mapinha_lancamentos',{where:[['mesRef','==',m]]}); }
     catch(e){ falta.push('lançamentos de '+m); continue; }
-    if(!linhas.length){ SIGLAS.forEach(s=>{ if(daUnidade(s,m)) buckets[s].mesesSem.push(m); }); continue; }
-    SIGLAS.forEach(s=>{ if(daUnidade(s,m)) buckets[s].mesesLidos.push(m); });
+    if(!linhas.length){ SIGLAS.forEach(s=>{ if(daUnidade(s,m)) semLanc[s].push(m); }); continue; }
+    SIGLAS.forEach(s=>{ if(daUnidade(s,m)){ lidos[s].push(m); mesBk(s,m); } });
     linhas.forEach(d=>{
       const l=d.data||{};
       if(String(l.status||'').toLowerCase()==='estornado') return;
       const fil=String(l.filial||'').toUpperCase().slice(0,2);
-      const bk=buckets[fil]; if(!bk) return;
       if(!daUnidade(fil,m)) return;          /* competência fora da base desta unidade */
+      const bk=mesBk(fil,m); if(!bk) return;
       const cod=String(l.centroCusto||'').trim();
       const nome=l.centroCustoNome||'';
       const v=+l.valor||0;
@@ -12026,10 +12207,10 @@ async function rclRealCarregar(base){
       else bk.coOutrosRS+=v;
     });
   }
-  SIGLAS.forEach(s=>{
-    const b=buckets[s];
+  SIGLAS.forEach(s=>Object.keys(porMes[s]).forEach(m=>{
+    const b=porMes[s][m];
     b.dieselRS = b.dieselInterno + b.dieselExterno - b.dieselReembolso;
-  });
+  }));
 
   /* ── pedágio: 1 documento por mês, detalhado por placa ── */
   for(const m of meses){
@@ -12040,8 +12221,8 @@ async function rclRealCarregar(base){
     if(placas.length){
       placas.forEach(p=>{
         const fil = String(p.filial||filialDaPlaca(p.placa)||'').toUpperCase().slice(0,2);
-        const bk=buckets[fil]; if(!bk) return;
         if(!daUnidade(fil,m)) return;
+        const bk=mesBk(fil,m); if(!bk) return;
         const val=+p.comix||0;
         bk.pedagioRS+=val;
         if(p.semCadastro) bk.pedagioSemCadastro+=val;
@@ -12049,7 +12230,7 @@ async function rclRealCarregar(base){
       });
     } else {
       const pf=doc.data.porFilial||{};
-      Object.keys(pf).forEach(s=>{ if(buckets[s] && daUnidade(s,m)) buckets[s].pedagioRS += (+pf[s].comix||0); });
+      Object.keys(pf).forEach(s=>{ if(porMes[s] && daUnidade(s,m)){ mesBk(s,m).pedagioRS += (+pf[s].comix||0); } });
     }
   }
 
@@ -12079,10 +12260,10 @@ async function rclRealCarregar(base){
     return o;
   };
   SIGLAS.forEach(s=>{
-    const b=buckets[s];
     ((base.porOp[s]&&base.porOp[s].meses)||[]).forEach(m=>{
       const o=cpkDaFilial(s,m);
       if(!Object.keys(o).length) return;
+      const b=mesBk(s,m); if(!b) return;
       b.temPremissaCpk=true;
       b.pessoalFrota35    += (+o.custoFrota35||0);
       b.pessoalAgregado65 += (+o.custoAgregado65||0);
@@ -12109,7 +12290,7 @@ async function rclRealCarregar(base){
     const cad=mapaVeic.get(placa);
     if(cad && !rclrPlacaProp(placa,mapaVeic)) return;          /* só frota própria */
     const fil=String(rec.unidade||(cad&&(cad.unidade||cad.filial))||'').toUpperCase().slice(0,2);
-    const bk=buckets[fil];
+    const temFil=!!porMes[fil];
     const tipo = rclrTipoVeic({...(cad||{}), tipo:rec.tipo||(cad&&cad.tipo)});
     /* ── Classificação do CANDIDATO, espelhando o rateio logo abaixo ──────
        O rateio da frota manda para o balde do CAVALO tudo que não é carreta
@@ -12131,17 +12312,23 @@ async function rclRealCarregar(base){
          somá-lo —, mas ENTRA na lista consolidada de candidatos. Perder um
          cavalo por falta de cadastro de unidade era outro caminho para a
          unidade terminar sem referência e a linha cair no modelo. */
-      if(bk) candDep[fil][tipoRef].push(item);
+      if(temFil) candDep[fil][tipoRef].push(item);
       candDep._geral[tipoRef].push(item);
     }
-    if(!bk) return;
-    let soma=0;
-    ((base.porOp[fil]&&base.porOp[fil].meses)||[]).forEach(m=>{ soma += rclrDepMes(rec, m); });
-    if(!(soma>0)) return;
-    bk.nPlacasDep++;
-    if(tipo==='carreta')      bk.deprecCarretaRS+=soma;
-    else if(tipo==='apoio')   bk.deprecApoioRS+=soma;
-    else                      bk.deprecCavaloRS+=soma;
+    if(!temFil) return;
+    /* Parcela mês a mês: a linha de depreciação usa janela de 1 mês por
+       padrão, mas quem a mudar precisa da série, não de um total agregado. */
+    let contou=false;
+    ((base.porOp[fil]&&base.porOp[fil].meses)||[]).forEach(m=>{
+      const v=rclrDepMes(rec, m);
+      if(!(v>0)) return;
+      const b=mesBk(fil,m); if(!b) return;
+      if(!contou){ contou=true; }
+      b.nPlacasDep++;
+      if(tipo==='carreta')      b.deprecCarretaRS+=v;
+      else if(tipo==='apoio')   b.deprecApoioRS+=v;
+      else                      b.deprecCavaloRS+=v;
+    });
   });
   /* Referência resolvida na ÚLTIMA competência da base de cada unidade: é a
      parcela mensal vigente daquele ativo, não uma média de meses. */
@@ -12176,9 +12363,22 @@ async function rclRealCarregar(base){
                      cavalo:candDep._geral.cavalo.length,
                      carreta:candDep._geral.carreta.length };
 
+  /* Soma de todos os meses lidos, por unidade — é o que a tela usa quando
+     precisa de um total do período, e o que o Excel exporta. As TAXAS não
+     saem daqui: elas saem da série por mês, recortada pela janela de cada
+     natureza (ver rclrTaxas). */
+  const buckets={};
+  SIGLAS.forEach(s=>{
+    const ms=Object.keys(porMes[s]).sort();
+    buckets[s]=ms.reduce((a,m)=>rclrSomar(a, porMes[s][m]), rclrBucket(s));
+    buckets[s].filial=s;
+    buckets[s].mesesLidos=lidos[s].slice();
+    buckets[s].mesesSem=semLanc[s].slice();
+  });
   const total=SIGLAS.map(s=>buckets[s]).reduce((a,b)=>rclrSomar(a,b), rclrBucket('consolidado'));
-  RCL.real={ chave, meses:meses.slice(), base, porOp:buckets, total, refDep,
-             falta:[...new Set(falta)], nota,
+  total.mesesLidos=[...new Set(SIGLAS.flatMap(s=>lidos[s]))].sort();
+  RCL.real={ chave, meses:meses.slice(), base, porOp:buckets, porOpMes:porMes,
+             total, refDep, falta:[...new Set(falta)], nota,
              lidoEm:agoraISO() };
   RCL.realCarregado=true;
   return RCL.real;
@@ -12371,59 +12571,143 @@ function rclDepEscolherRef(lista, mes, criterio, modoParcela){
            parcelaModo: usarBase?'base':'vigente' };
 }
 
-/* ══ Taxas do realizado ═══════════════════════════════════════════════════
-   Converte o R$ do período em R$/km e R$/viagem usando o km e as viagens do
-   mês-base. Duas coisas mudaram aqui, e as duas são a razão de as linhas do
-   custo por viagem virem incoerentes:
+/* ══ Taxas do realizado — UMA JANELA POR NATUREZA ═════════════════════════
+   Converte o R$ do Mapinha em R$/km e R$/viagem. Três coisas moram aqui, e
+   as três já foram causa de número errado na tela:
 
    1) DIVISÃO POR UM. O denominador vinha com Math.max(...,1): quando a
-      medição do mês-base falhava (mês sem CT-e resolvido, import atrasado),
-      vg virava 1 e o R$ do MÊS INTEIRO da frota aparecia como custo de UMA
-      viagem. Era assim que uma depreciação de carreta chegava a R$ 2.209 por
-      viagem — 59% do custo da rota. Agora, sem denominador não há taxa: a
-      função devolve null e a linha CAI DE VOLTA no modelado, que é o
-      comportamento honesto.
+      medição do mês-base falhava, vg virava 1 e o R$ do MÊS INTEIRO da
+      frota aparecia como custo de UMA viagem. Sem denominador não há taxa —
+      a função devolve null e a linha cai de volta no modelado.
 
    2) COBERTURA. O numerador é a frota inteira do mês; o denominador só as
-      viagens que este módulo conseguiu amarrar a uma rota. Todo CT-e órfão
-      ou ambíguo encolhe o denominador sem encolher o numerador, e cada
-      R$/viagem sai inflado por 1/cobertura. Com nivelamento 'medido' isso é
-      deliberado (força o fechamento com o Mapinha); com 'taxa' o denominador
-      é corrigido pela cobertura e a taxa passa a valer por viagem de
-      verdade. A premissa existia na tela e não era lida por ninguém.       */
-function rclrTaxas(bk, kmMedido, viagensMedidas, P, cobertura){
-  const cob = (cobertura!=null && isFinite(cobertura) && cobertura>0.05 && cobertura<=1) ? cobertura : 1;
-  const corrigir = (P && P.nivelamento==='taxa') ? cob : 1;
-  const kmBruto = Number(kmMedido)||0, vgBruto = Number(viagensMedidas)||0;
-  const km = kmBruto>0 ? kmBruto/corrigir : 0;
-  const vg = vgBruto>0 ? vgBruto/corrigir : 0;
-  /* Toda taxa sai como NÚMERO puro — quem consome multiplica direto por km ou
-     por viagem. Sem denominador a taxa é null, nunca zero: zero seria um
-     custo que sumiu, e custo que some é pior que custo aproximado. */
-  const manual={};
-  const g=(nome, ov, num, den)=>{
-    if(ov!=null && ov>=0){ manual[nome]=true; return ov; }
-    if(!(den>0)) return null;
-    const v=num/den;
-    return isFinite(v)?v:null;
+      viagens que este módulo amarrou a uma rota. Todo CT-e órfão encolhe o
+      denominador sem encolher o numerador, e cada R$/viagem sai inflado por
+      1/cobertura. Com nivelamento 'medido' isso é deliberado (força o
+      fechamento com o Mapinha); com 'taxa' o denominador é corrigido.
+
+   3) JANELA POR NATUREZA (ago/2026). Cada linha recorta da série de meses
+      fechados a sua própria janela, e a taxa é a RAZÃO DAS SOMAS daquela
+      janela — nunca a média das razões mensais:
+
+          certo:  Σ R$ dos K meses ÷ Σ viagens dos K meses
+          errado: média de (R$ do mês ÷ viagens do mês)
+
+      Com 100 mil em 1.000 viagens num mês e 400 mil em 1.200 no outro, a
+      média das razões dá R$ 216,67 e a razão das somas dá R$ 227,27. A
+      segunda é a única que reconstrói o R$ total quando multiplicada de
+      volta pelas viagens.
+
+   A dispersão entre os meses vai junto (coeficiente de variação ponderado):
+   ela não é erro, é o aviso de que aquela natureza é sazonal — e de que o
+   mês-base único estava mentindo.
+   ══════════════════════════════════════════════════════════════════════════ */
+/* Soma uma janela da série. `serie` é uma lista, em ordem crescente, de
+   { mes, bk, km, viagens, litros, resolvidas, orfaos, ambiguos }. */
+function rclrSomaJanela(serie, k){
+  const jan=rclUltimosMeses(serie.map(x=>x.mes), k);
+  const set=new Set(jan);
+  const usados=serie.filter(x=>set.has(x.mes));
+  const o={ meses:usados.map(x=>x.mes), n:usados.length, km:0, viagens:0, litros:0,
+            resolvidas:0, orfaos:0, ambiguos:0, bk:null };
+  const acc=rclrBucket('janela');
+  usados.forEach(x=>{
+    o.km+=x.km||0; o.viagens+=x.viagens||0; o.litros+=x.litros||0;
+    o.resolvidas+=x.resolvidas||0; o.orfaos+=x.orfaos||0; o.ambiguos+=x.ambiguos||0;
+    if(x.bk) Object.keys(x.bk).forEach(kk=>{ if(typeof x.bk[kk]==='number') acc[kk]=(acc[kk]||0)+x.bk[kk]; });
+  });
+  o.bk=acc;
+  const tot=o.resolvidas+o.orfaos+o.ambiguos;
+  o.cobertura = tot>0 ? o.resolvidas/tot : 1;
+  return o;
+}
+/* Coeficiente de variação das taxas MENSAIS de uma natureza. Serve só para
+   a tela: dispersão alta significa custo sazonal ou lumpy, e é exatamente
+   por causa dela que a média móvel existe. */
+function rclrDispersao(serie, campo, chave){
+  const pts=[];
+  serie.forEach(x=>{
+    const den = chave==='km' ? (x.km||0) : (x.viagens||0);
+    const rs  = x.bk ? (Number(x.bk[campo])||0) : 0;
+    if(den>0) pts.push({taxa:rs/den, peso:den, rs, den, mes:x.mes});
+  });
+  if(pts.length<2) return {n:pts.length, cv:null, min:null, max:null, pts};
+  const pesoT=pts.reduce((a,x)=>a+x.peso,0);
+  const media=pts.reduce((a,x)=>a+x.rs,0)/Math.max(pesoT,1e-9);
+  const varr=pts.reduce((a,x)=>a+x.peso*Math.pow(x.taxa-media,2),0)/Math.max(pesoT,1e-9);
+  const dp=Math.sqrt(Math.max(varr,0));
+  const arr=pts.map(x=>x.taxa).sort((a,b)=>a-b);
+  return { n:pts.length, cv: media>0 ? dp/media : null, media, dp,
+           min:arr[0], max:arr[arr.length-1], pts };
+}
+function rclrTaxas(serie, P, opRotulo){
+  serie = Array.isArray(serie) ? serie.slice().sort((a,b)=>String(a.mes).localeCompare(String(b.mes))) : [];
+  const jan=(nat)=>rclrSomaJanela(serie, rclJanelaDe(nat,P));
+  const manual={}, det={};
+  /* Uma natureza por vez: soma da janela dela, denominador da mesma janela,
+     correção por cobertura quando o nivelamento é 'taxa'. */
+  const taxa=(nat, nome, ov, campo, chave)=>{
+    const j=jan(nat);
+    const corrigir=(P && P.nivelamento==='taxa') ? (j.cobertura>0.05 && j.cobertura<=1 ? j.cobertura : 1) : 1;
+    const denBruto = chave==='km' ? j.km : j.viagens;
+    const den = denBruto>0 ? denBruto/corrigir : 0;
+    const rs  = Number(j.bk[campo])||0;
+    let v=null, ehManual=false;
+    if(ov!=null && ov>=0){ v=ov; ehManual=true; manual[nome]=true; }
+    else if(den>0){ const q=rs/den; v=isFinite(q)?q:null; }
+    const disp=rclrDispersao(serie.filter(x=>j.meses.indexOf(x.mes)>-1), campo, chave);
+    det[nome]={ natureza:nat, janela:rclJanelaDe(nat,P), meses:j.meses, n:j.n,
+                rs, km:j.km, viagens:j.viagens, chave, den, denBruto,
+                cobertura:j.cobertura, corrigidoPorCobertura:corrigir!==1,
+                manual:ehManual, valor:v,
+                dispersao:disp.cv, dispMin:disp.min, dispMax:disp.max, dispPts:disp.pts,
+                disperso: disp.cv!=null && disp.cv>RCL_CFG.dispersaoAlerta };
+    return v;
   };
-  const nb=k=>{ const v=Number(bk&&bk[k]); return isFinite(v)?v:0; };
-  const pessoalRS = P.pessoalCpkBase==='frota' ? nb('pessoalFrota35')
-                                               : (nb('pessoalFrota35') + nb('pessoalAgregado65'));
-  return {
-    km, viagens:vg, kmMedido:kmBruto, viagensMedidas:vgBruto,
-    cobertura:cob, corrigidoPorCobertura: corrigir!==1, manual,
-    semDenominador: !(kmBruto>0) || !(vgBruto>0),
-    pedagioKm:  g('pedagioKm', P.ovPedagioKm,  nb('pedagioRS'), km),
-    pneusKm:    g('pneusKm',   P.ovPneusKm,    nb('pneusRS'),   km),
-    lubKm:      g('lubKm',     P.ovLubKm,      nb('lubRS'),     km),
-    pecasVg:    g('pecasVg',   P.ovPecasViagem,nb('pecasRS'),   vg),
-    docVg:      g('docVg',     P.ovDocViagem,  nb('docRS'),     vg),
-    pessoalVg:  g('pessoalVg', P.ovPessoalViagem, pessoalRS,    vg),
-    depCavVg:   g('depCavVg',  P.ovDeprecCavaloViagem,  nb('deprecCavaloRS'), vg),
-    depCarVg:   g('depCarVg',  P.ovDeprecCarretaViagem, nb('deprecCarretaRS'), vg),
-    pessoalRS
+  /* Pessoal tem numerador próprio (duas parcelas da Premissa do CPK), então
+     não passa pelo `taxa` genérico — mas usa a mesma janela e a mesma
+     razão das somas. */
+  const jPes=jan('pessoal');
+  const pessoalRS = P.pessoalCpkBase==='frota'
+      ? (Number(jPes.bk.pessoalFrota35)||0)
+      : ((Number(jPes.bk.pessoalFrota35)||0) + (Number(jPes.bk.pessoalAgregado65)||0));
+  const corrPes=(P && P.nivelamento==='taxa') ? (jPes.cobertura>0.05&&jPes.cobertura<=1?jPes.cobertura:1) : 1;
+  const denPes = jPes.viagens>0 ? jPes.viagens/corrPes : 0;
+  let pessoalVg=null;
+  if(P.ovPessoalViagem!=null && P.ovPessoalViagem>=0){ pessoalVg=P.ovPessoalViagem; manual.pessoalVg=true; }
+  else if(denPes>0) pessoalVg=pessoalRS/denPes;
+  det.pessoalVg={ natureza:'pessoal', janela:rclJanelaDe('pessoal',P), meses:jPes.meses, n:jPes.n,
+                  rs:pessoalRS, km:jPes.km, viagens:jPes.viagens, chave:'viagem',
+                  den:denPes, denBruto:jPes.viagens, cobertura:jPes.cobertura,
+                  corrigidoPorCobertura:corrPes!==1, manual:!!manual.pessoalVg, valor:pessoalVg,
+                  dispersao:null, disperso:false };
+
+  /* Janela de referência da tela: a mais curta que ainda tem denominador —
+     é ela que responde "km e viagens medidos em …" no rodapé. */
+  const jRef=jan('pessoal');
+  const out={
+    /* compatibilidade: km e viagens "do rateio" continuam existindo */
+    km:jRef.km, viagens:jRef.viagens, kmMedido:jRef.km, viagensMedidas:jRef.viagens,
+    cobertura:jRef.cobertura, corrigidoPorCobertura:(P&&P.nivelamento==='taxa'&&jRef.cobertura<1),
+    manual, det, serie, opRotulo:opRotulo||'',
+    semDenominador: !(jRef.km>0) || !(jRef.viagens>0),
+    pedagioKm:  taxa('pedagio','pedagioKm', P.ovPedagioKm,  'pedagioRS', 'km'),
+    pneusKm:    taxa('pneus',  'pneusKm',   P.ovPneusKm,    'pneusRS',   'km'),
+    lubKm:      taxa('lub',    'lubKm',     P.ovLubKm,      'lubRS',     'km'),
+    pecasVg:    taxa('pecas',  'pecasVg',   P.ovPecasViagem,'pecasRS',   'viagem'),
+    docVg:      taxa('doc',    'docVg',     P.ovDocViagem,  'docRS',     'viagem'),
+    pessoalVg, pessoalRS,
+    depCavVg:   taxa('deprec', 'depCavVg',  P.ovDeprecCavaloViagem,  'deprecCavaloRS',  'viagem'),
+    depCarVg:   taxa('deprec', 'depCarVg',  P.ovDeprecCarretaViagem, 'deprecCarretaRS', 'viagem')
   };
+  /* Janelas do diesel e do Arla: quem consome não é uma taxa por km, é o
+     preço efetivo (R$ do fechamento ÷ litros da SZC), montado fora daqui. */
+  out.janDiesel = jan('diesel');
+  out.janArla   = jan('arla');
+  out.janelas   = Object.keys(RCL_CFG.janelaPadrao)
+                    .reduce((a,k)=>{ a[k]=rclJanelaDe(k,P); return a; },{});
+  out.mediaMovel = !!P.baseMediaMovel;
+  return out;
 }
 
 /* ══ Varredura do SZB na janela ═══════════════════════════════════════════
@@ -12441,6 +12725,11 @@ function rclVarrer(meses, modoCliente){
   const porRota=new Map();      /* k3 → bucket da rota                      */
   const ledger=[];              /* viagens físicas, para o retorno          */
   let orfaos=0, ambiguos=0, usados=0, cfc=0, cfcValor=0;
+  /* Contagem POR COMPETÊNCIA: é ela que permite medir km, viagens e
+     cobertura de cada mês da série sem varrer o SZB uma vez por mês. */
+  const porMesCob={};
+  const cobDe=(mm)=>{ if(!porMesCob[mm]) porMesCob[mm]={resolvidas:0, orfaos:0, ambiguos:0};
+                      return porMesCob[mm]; };
 
   for(let i=0;i<RT.szb.length;i++){
     const b=RT.szb[i];
@@ -12448,9 +12737,11 @@ function rclVarrer(meses, modoCliente){
     if(!iso || !mesesSet.has(iso.slice(0,7))) continue;
     if(rtDataISO(rtGet(b,mB,'cancel'))) continue;
 
+    const mesCTE=iso.slice(0,7);
+    const cbM=cobDe(mesCTE);
     const res=rtResolverCTE(b, mB, idx);
-    if(!res.rota){ orfaos++; continue; }
-    if(!res.alvo){ if(res.cand) ambiguos++; else orfaos++; continue; }
+    if(!res.rota){ orfaos++; cbM.orfaos++; continue; }
+    if(!res.alvo){ if(res.cand){ ambiguos++; cbM.ambiguos++; } else { orfaos++; cbM.orfaos++; } continue; }
 
     const r=res.alvo;
     const valor=rtGetN(b,mB,'valor'), ton=rtGetN(b,mB,'peso')/1000;
@@ -12460,9 +12751,11 @@ function rclVarrer(meses, modoCliente){
     let bk=porRota.get(r.k3);
     if(!bk){
       bk={ rota:r, viagens:0, ton:0, receita:0, cfcQtd:0, cfcValor:0,
-           clientes:new Map(), placas:new Map(), retornoOk:0, ctes:[] };
+           clientes:new Map(), placas:new Map(), retornoOk:0, ctes:[],
+           viagensMes:{} };
       porRota.set(r.k3, bk);
     }
+    if(!bk.viagensMes) bk.viagensMes={};
 
     /* A célula do cálculo é CLIENTE × REMETENTE × DESTINATÁRIO × ROTA. O
        cliente continua sendo o que o seletor "Cliente é" diz; remetente e
@@ -12485,19 +12778,20 @@ function rclVarrer(meses, modoCliente){
       cfc++; cfcValor+=valor;
     }else{
       bk.viagens++; bk.ton+=ton; bk.receita+=valor;
+      bk.viagensMes[mesCTE]=(bk.viagensMes[mesCTE]||0)+1;
       cb.viagens++; cb.ton+=ton; cb.receita+=valor;
       const p=rclPlaca(placa);
       if(p){ const pv=bk.placas.get(p)||0; bk.placas.set(p,pv+1); }
       if(ledger.length<RCL_CFG.maxLedger)
         ledger.push({placa:p, iso, o:res.o, d:res.d, k3:r.k3, idx:ledger.length});
     }
-    usados++;
+    usados++; cbM.resolvidas++;
     if(bk.ctes.length<400) bk.ctes.push({
       cte:rtGet(b,mB,'cte'), ctrc:rtGet(b,mB,'ctrc'), data:iso, placa:placa,
       ton, valor, cfc:ehCFC, cliente:cli.nome
     });
   }
-  return {porRota, ledger, orfaos, ambiguos, usados, cfc, cfcValor};
+  return {porRota, ledger, orfaos, ambiguos, usados, cfc, cfcValor, porMesCob};
 }
 
 /* ══ Aproveitamento do retorno ════════════════════════════════════════════
@@ -12816,13 +13110,58 @@ function rclDieselDaRota(r, ctx){
         if(d && d.valor>0) return {preco:d.valor, fonte:'posto', det:d, nPostos:postos.length};
       }
     }
-    const med = sbMediaUnidadeCache(r.op) || sbMediaUnidadeCache('');
+    const med = sbMediaUnidadeCache(r.op,'s10') || sbMediaUnidadeCache('','s10');
     if(med && med.valor>0)
       return {preco:med.valor, fonte:'unidade', det:med,
               semPostos: !(chaves && chaves.length),
               semSimulacao: !(r && r.here && !r.here.erro)};
     return null;
   }catch(e){ console.warn('[Rota clientes] diesel do posto:',e&&e.message); return null; }
+}
+
+/* ══ PREÇO DO ARLA DA ROTA — mesma cascata do diesel ══════════════════════
+   Pedido do comercial (ago/2026): a linha de Arla passa a ser
+   `litros de diesel da viagem × 5% × R$/l do ARLA NA ROTA`, e não mais uma
+   fração do R$ da linha de diesel. A diferença é material: o Arla 32 a
+   granel custa perto da METADE do diesel, então valorar os litros de Arla
+   ao preço do diesel inflava a linha em cerca de 80%.
+
+   A cascata é literalmente a mesma do diesel, e por isso reaproveita o
+   mesmo motor (sbPrecoDePostos / sbMediaUnidadeProd), só trocando o
+   produto:
+
+     1º  último abastecimento de ARLA em um POSTO IDENTIFICADO NO PERCURSO.
+         Os postos do trecho já ficaram gravados quando a rota foi simulada
+         na HERE — aqui não se gasta chamada nenhuma.
+     2º  média ponderada por litros da UNIDADE que opera a rota. É o
+         "em casos que não haja o valor em litros, utilize a média da
+         unidade, como é feito com o diesel".
+     3º  consolidado das três filiais.
+     4º  fora daqui, quem responde é o preço efetivo do Mapinha (R$ de Arla
+         do fechamento ÷ litros de Arla da SZC) e depois a premissa.
+
+   Diferença técnica de um produto para o outro: a janela de litragem de
+   50–1.200 l NÃO se aplica ao Arla — abastecimento de Arla é de dezenas de
+   litros e a janela zeraria a amostra. O corte de preço fora da curva e a
+   banda de ±20% da mediana continuam valendo (ver sbUsaJanelaLitros).   */
+function rclArlaDaRota(r, ctx){
+  try{
+    if(typeof SB==='undefined' || !SB.carregado || !Array.isArray(SB.rows) || !SB.rows.length) return null;
+    const chaves=(r && r.here && Array.isArray(r.here.postos)) ? r.here.postos : null;
+    if(chaves && chaves.length){
+      const postos=sbPostosPorChaves(chaves);
+      if(postos.length){
+        const a=sbPrecoDePostos(postos,'arla');
+        if(a && a.valor>0) return {preco:a.valor, fonte:'posto', det:a, nPostos:postos.length};
+      }
+    }
+    const med = sbMediaUnidadeCache(r.op,'arla') || sbMediaUnidadeCache('','arla');
+    if(med && med.valor>0)
+      return {preco:med.valor, fonte:'unidade', det:med,
+              semPostos: !(chaves && chaves.length),
+              semSimulacao: !(r && r.here && !r.here.erro)};
+    return null;
+  }catch(e){ console.warn('[Rota clientes] Arla do posto:',e&&e.message); return null; }
 }
 
 function rclCustoBucket(bk, ctx){
@@ -12974,16 +13313,32 @@ function rclCustoBucket(bk, ctx){
      da metade do diesel. A memória de cálculo mostra sempre as duas.      */
   const precoEfetArla = (T && T.precoArlaEfetivo>0) ? T.precoArlaEfetivo : null;
   const arlaPctUsado  = P.arlaPct>0 ? P.arlaPct : 0.05;
-  const arlaPorPreco  = precoEfetArla!=null ? litrosViagem*arlaPctUsado*precoEfetArla : null;
+  /* ShellBox primeiro, exatamente como no diesel: o R$/l do Arla do posto da
+     rota é preço PAGO naquele corredor. Sem posto de Arla no percurso, a
+     média ponderada da unidade; sem ela, o consolidado; só então o preço
+     efetivo do Mapinha, que era o comportamento anterior. */
+  const az = (P.fonteArla!=='modelo' && P.fonteArlaPreco==='posto') ? rclArlaDaRota(r, ctx) : null;
+  const precoArlaFinal = az ? az.preco : precoEfetArla;
+  const arlaSelo = az ? (az.fonte==='posto' ? 'shellbox' : 'shellbox·unidade') : 'mapinha';
+  const litrosArlaViagem = litrosViagem*arlaPctUsado;
+  const arlaPorPreco  = precoArlaFinal!=null ? litrosArlaViagem*precoArlaFinal : null;
   const dieselLinha   = (typeof linhas.diesel==='number') ? Math.abs(linhas.diesel) : null;
   const arlaPorDiesel = dieselLinha!=null ? dieselLinha*arlaPctUsado : null;
-  if(P.fonteArla!=='modelo' && P.arlaBase!=='preco'){
-    /* Sem banda: esta linha é, por definição, uma fração exata da linha de
-       cima — comparar com o modelado só produziria uma recusa sem sentido. */
+  if(P.fonteArla!=='modelo' && P.arlaBase==='diesel'){
+    /* Base anterior, mantida na chave: % do R$ da linha de cima. Sem banda —
+       esta linha é, por definição, uma fração exata do diesel, e comparar
+       com o modelado só produziria uma recusa sem sentido. */
     troca('arla','realizado', arlaPorDiesel, 'diesel5', {taxa:'arla', semBanda:true,
           motivoSemTaxa:'a linha de diesel não pôde ser apurada, então não há base para os 5%'});
   }else{
-    troca('arla', P.fonteArla, arlaPorPreco, 'mapinha', {taxa:'arla'});
+    /* Base PADRÃO (ago/2026): litros de diesel × % × R$/l do Arla da rota.
+       Sem banda contra o modelado pelo mesmo motivo do diesel — o preço vem
+       de nota fiscal, não de estimativa, e a banda recusaria justamente o
+       número que se quer usar quando a premissa do Simulador está velha. */
+    troca('arla', P.fonteArla==='modelo'?'modelo':'realizado', arlaPorPreco, arlaSelo,
+          {taxa:'arla', semBanda:true, motivoSemTaxa: P.fonteArlaPreco==='posto'
+            ? 'nenhum abastecimento de Arla em posto da rota, nenhuma média de unidade e nenhum preço efetivo do Mapinha apurável'
+            : 'sem preço de Arla apurável no mês-base'});
   }
 
   /* ── Pedágio ──────────────────────────────────────────────────────────
@@ -13101,9 +13456,11 @@ function rclCustoBucket(bk, ctx){
     depRef: (P.fonteDeprec==='cpk_novo') ? {cavalo:refCav||null, carreta:refCar||null,
                                             carretas:nCarretas, mes:refDep?refDep.mes:null,
                                             criterio:refDep?refDep.criterio:null} : null,
-    precoArla:   precoEfetArla!=null  ?precoEfetArla  :linhas.precoArla,
+    precoArla:   precoArlaFinal!=null ?precoArlaFinal :linhas.precoArla,
+    precoArlaMapinha: precoEfetArla, arlaShellbox: az||null, arlaFonte: fontes.arla,
+    litrosArlaViagem,
     precoDieselModelo: cFull.dieselRS, arlaPct: arlaPctUsado,
-    arlaBase: (P.fonteArla!=='modelo' && P.arlaBase!=='preco') ? 'diesel' : 'preco',
+    arlaBase: (P.fonteArla!=='modelo' && P.arlaBase==='diesel') ? 'diesel' : 'preco',
     arlaPorDiesel, arlaPorPreco, dieselLinha,
     litrosViagem, kmlC, kmlV, kmlTravado, kmlBanda, baseKml, tonViagem, viagensMes,
     /* Leituras operacionais do consumo — o km/l de uma composição de 45 t em
@@ -13193,101 +13550,153 @@ function rclCalcular(){
   const ctx1={P, ref, perfil, precos:precosJan, aprovIdx, norm:nrm.norm, fator:()=>1};
   buckets.forEach(bk=>rclLitrosBucket(bk, ctx1));
 
-  /* PASSO 2 — MEDIÇÃO DO MÊS-BASE ══════════════════════════════════════════
+  /* PASSO 2 — MEDIÇÃO DA SÉRIE DE MESES FECHADOS ═══════════════════════════
      Aqui está a diferença que o mês corrente impunha. A média de consumo e as
      taxas de custo NÃO podem sair de um mês cujo Mapinha ainda está em
      rascunho: falta nota, falta OS, falta o import do pedágio. Média tirada
      dali sai por baixo e nada na tela acusa, porque o número existe.
 
-     Então o realizado vem do mês FECHADO — o mais recente até o fim da
-     janela, ou o anterior a ela quando a janela inteira está aberta. Para
-     virar taxa, o R$ daquele mês precisa do km e das viagens DAQUELE mês:
-     dividir o custo de maio pelo quilômetro de junho seria trocar o erro de
-     lugar. Por isso a medição do mês-base é uma varredura própria do SZB.
+     Desde ago/2026 o realizado não vem de UM mês fechado: vem da SÉRIE dos
+     meses fechados até a data presente, e cada natureza de custo recorta a
+     sua janela dessa série (doze meses para documentação e seguros, um mês
+     para pessoal). O motivo é a sazonalidade — IPVA e apólice de casco se
+     concentram em poucos meses, e uma reforma de motor cai num mês só.
 
-     Quando a base coincide com a janela — analisar um mês já fechado — nada
-     disso roda: os números do passo 1 servem, e a aba não fica mais lenta. */
+     Para o R$ virar taxa, ele precisa do km e das viagens DAQUELES MESMOS
+     meses: dividir o custo de maio pelo quilômetro de junho seria trocar o
+     erro de lugar. Por isso a medição é uma varredura própria do SZB — mas
+     UMA varredura só sobre toda a série, repartida depois por competência
+     usando a contagem de viagens por mês de cada rota. Doze meses custam
+     uma passada, não doze.                                                */
   const baseR = RCL.base || { porOp:{}, uniao:RCL.meses.slice(), conjuntos:[RCL.meses.join(',')], modo:'janela' };
   const mesesDaOp = (op)=>{
     const b = baseR.porOp && baseR.porOp[op];
     return (b && b.meses && b.meses.length) ? b.meses : RCL.meses;
   };
   const janKey = RCL.meses.join(',');
-  const medicoes = new Map();           /* 'meses' → {porOp:{op:{km,viagens,litros}}} */
-  const medirConjunto = (mesesSet)=>{
-    const k=mesesSet.join(',');
-    if(medicoes.has(k)) return medicoes.get(k);
-    if(k===janKey){                     /* a base é a própria janela */
-      const m={ meses:mesesSet, mesma:true, porOp:{} };
-      const acc=(op)=>{
-        const alvo = op ? buckets.filter(b=>b.rota.op===op) : buckets;
-        return { km:alvo.reduce((a,b)=>a+(b.kmAtrib||0),0),
-                 viagens:alvo.reduce((a,b)=>a+(b.viagens||0),0),
-                 litros:alvo.reduce((a,b)=>a+(b.litrosAtrib||0),0) };
-      };
-      ops.forEach(op=>{ m.porOp[op]=acc(op); }); m.porOp._geral=acc('');
-      /* COBERTURA — a fração do faturamento do período que virou viagem
-         medida. É o denominador honesto das taxas do realizado: o numerador
-         é a frota inteira do mês, então todo CT-e órfão ou ambíguo infla
-         cada R$/viagem por 1/cobertura sem que nada na tela acuse. */
-      m.resolvidas=V.usados||0; m.orfaos=V.orfaos||0; m.ambiguos=V.ambiguos||0;
-      m.cobertura = (m.resolvidas+m.orfaos+m.ambiguos)>0
-                  ? m.resolvidas/(m.resolvidas+m.orfaos+m.ambiguos) : 1;
-      medicoes.set(k,m); return m;
-    }
-    /* varredura própria do mês-base */
-    let m={ meses:mesesSet, mesma:false, porOp:{}, erro:null };
-    try{
-      const Vb=rclVarrer(mesesSet, modo);
-      const bkb=[...Vb.porRota.values()].filter(b=>b.viagens>0);
-      if(!bkb.length){ m.erro='sem CT-e resolvido no mês-base'; medicoes.set(k,m); return m; }
-      const refb=rclRefTopo(bkb);
-      const apb = P.aproveitarRetorno ? rclAproveitamento(Vb.ledger, P.janelaRetornoDias||2) : new Map();
-      const nrmb=rclPreConsumo(bkb, refb, perfil, P);
-      const ctxb={P, ref:refb, perfil, precos:precosJan, aprovIdx:apb, norm:nrmb.norm, fator:()=>1};
-      bkb.forEach(b=>rclLitrosBucket(b, ctxb));
-      const acc=(op)=>{
-        const alvo = op ? bkb.filter(b=>b.rota.op===op) : bkb;
-        return { km:alvo.reduce((a,b)=>a+(b.kmAtrib||0),0),
-                 viagens:alvo.reduce((a,b)=>a+(b.viagens||0),0),
-                 litros:alvo.reduce((a,b)=>a+(b.litrosAtrib||0),0) };
-      };
-      ops.forEach(op=>{ m.porOp[op]=acc(op); }); m.porOp._geral=acc('');
-      m.rotas=bkb.length;
-      m.resolvidas=Vb.usados||0; m.orfaos=Vb.orfaos||0; m.ambiguos=Vb.ambiguos||0;
-      m.cobertura = (m.resolvidas+m.orfaos+m.ambiguos)>0
-                  ? m.resolvidas/(m.resolvidas+m.orfaos+m.ambiguos) : 1;
-    }catch(e){ m.erro=String(e&&e.message||e); }
-    medicoes.set(k,m); return m;
-  };
-  /* SZC e medição do mês-base, por operação */
-  const precos={}, medOp={}, cobOp={};
-  ops.forEach(op=>{
-    const mm=mesesDaOp(op);
-    precos[op]=rclSZCJanela(mm,op);
-    const md=medirConjunto(mm);
-    medOp[op]=md.porOp[op] || {km:0,viagens:0,litros:0};
-    cobOp[op]={cobertura:md.cobertura!=null?md.cobertura:1,
-               resolvidas:md.resolvidas||0, orfaos:md.orfaos||0, ambiguos:md.ambiguos||0};
-  });
   const mesesGeral = baseR.uniao && baseR.uniao.length ? baseR.uniao : RCL.meses;
-  precos._geral = rclSZCJanela(mesesGeral,'');
-  const mdG = medirConjunto(mesesGeral);
-  medOp._geral  = mdG.porOp._geral || {km:0,viagens:0,litros:0};
-  cobOp._geral  = {cobertura:mdG.cobertura!=null?mdG.cobertura:1,
-                   resolvidas:mdG.resolvidas||0, orfaos:mdG.orfaos||0, ambiguos:mdG.ambiguos||0};
 
-  /* PASSO 3 — aderência: litros comprados ÷ litros modelados, AMBOS do
-     mês-base. O modelo reparte entre rotas; a nota fiscal define o nível. */
+  /* ── Reparte um conjunto de buckets por competência ───────────────────────
+     km e litros de uma rota são por VIAGEM (a rota é a mesma em qualquer
+     mês); as viagens é que variam. Então o km do mês é o km por viagem
+     vezes as viagens daquele mês — exato, sem nova varredura.            */
+  const repartirPorMes=(bks, cobPorMes, opsAlvo)=>{
+    const out={};                       /* mes → op → {km,viagens,litros}   */
+    const toca=(m,op)=>{ if(!out[m]) out[m]={};
+      if(!out[m][op]) out[m][op]={km:0, viagens:0, litros:0};
+      return out[m][op]; };
+    bks.forEach(b=>{
+      const vg=b.viagens||0; if(!(vg>0)) return;
+      const kmV=(b.kmAtrib||0)/vg, ltV=(b.litrosAtrib||0)/vg;
+      const op=b.rota.op||'';
+      const vm=b.viagensMes||{};
+      Object.keys(vm).forEach(m=>{
+        const n=vm[m]||0; if(!(n>0)) return;
+        [op,'_geral'].forEach(o=>{ const a=toca(m,o);
+          a.km+=kmV*n; a.viagens+=n; a.litros+=ltV*n; });
+      });
+    });
+    /* cobertura da competência, para o denominador honesto das taxas */
+    Object.keys(cobPorMes||{}).forEach(m=>{
+      const c=cobPorMes[m]||{};
+      (opsAlvo||[]).concat(['_geral']).forEach(o=>{ const a=toca(m,o);
+        a.resolvidas=c.resolvidas||0; a.orfaos=c.orfaos||0; a.ambiguos=c.ambiguos||0; });
+    });
+    return out;
+  };
+  /* A cobertura é contada por CT-e, sem separar operação — o mesmo número
+     serve para todas as unidades daquela competência, que é como ela já era
+     usada antes desta rodada. */
+  const medPorMes={};
+  const juntarMed=(mapa)=>{ Object.keys(mapa).forEach(m=>{
+    if(!medPorMes[m]) medPorMes[m]={};
+    Object.keys(mapa[m]).forEach(o=>{ medPorMes[m][o]=mapa[m][o]; }); }); };
+
+  /* A janela analisada já está medida (passo 1) — aproveita. */
+  juntarMed(repartirPorMes(buckets, V.porMesCob, ops));
+
+  /* Meses da base que NÃO estão na janela: uma varredura só para todos. */
+  const faltamMeses=[...new Set(mesesGeral)].filter(m=>RCL.meses.indexOf(m)<0);
+  let medErro=null;
+  if(faltamMeses.length){
+    try{
+      const Vb=rclVarrer(faltamMeses, modo);
+      const bkb=[...Vb.porRota.values()].filter(b=>b.viagens>0);
+      if(bkb.length){
+        const refb=rclRefTopo(bkb);
+        const apb = P.aproveitarRetorno ? rclAproveitamento(Vb.ledger, P.janelaRetornoDias||2) : new Map();
+        const nrmb=rclPreConsumo(bkb, refb, perfil, P);
+        const ctxb={P, ref:refb, perfil, precos:precosJan, aprovIdx:apb, norm:nrmb.norm, fator:()=>1};
+        bkb.forEach(b=>rclLitrosBucket(b, ctxb));
+        juntarMed(repartirPorMes(bkb, Vb.porMesCob, ops));
+      } else medErro='sem CT-e resolvido nos meses fechados fora da janela';
+    }catch(e){ medErro=String(e&&e.message||e); }
+  }
+  /* Série por operação, em ordem crescente de competência. */
+  const serieDe=(op)=>{
+    const ms=(op?mesesDaOp(op):mesesGeral).slice().sort();
+    const bkMes=(RCL.real&&RCL.real.porOpMes)||null;
+    return ms.map(m=>{
+      const md=(medPorMes[m]&&(op?medPorMes[m][op]:medPorMes[m]._geral))||{};
+      let bk=null;
+      if(bkMes){
+        if(op) bk=(bkMes[op]&&bkMes[op][m])||null;
+        else {
+          const soma=rclrBucket('consolidado');
+          ['SC','PR','SP'].forEach(f=>{ const b=bkMes[f]&&bkMes[f][m];
+            if(b) Object.keys(b).forEach(k=>{ if(typeof b[k]==='number') soma[k]=(soma[k]||0)+b[k]; }); });
+          bk=soma;
+        }
+      }
+      return { mes:m, bk, km:md.km||0, viagens:md.viagens||0, litros:md.litros||0,
+               resolvidas:md.resolvidas||0, orfaos:md.orfaos||0, ambiguos:md.ambiguos||0 };
+    });
+  };
+  const series={}; ops.forEach(op=>{ series[op]=serieDe(op); }); series._geral=serieDe('');
+
+  /* Compatibilidade com a tela: medOp/cobOp continuam existindo, agora como
+     a soma da janela mais curta (a de pessoal), que é a que responde
+     "km e viagens medidos em …". */
+  const medOp={}, cobOp={};
+  const resumoOp=(op)=>{
+    const j=rclrSomaJanela(series[op]||[], rclJanelaDe('pessoal',P));
+    return [{km:j.km, viagens:j.viagens, litros:j.litros},
+            {cobertura:j.cobertura, resolvidas:j.resolvidas, orfaos:j.orfaos, ambiguos:j.ambiguos}];
+  };
+  ops.forEach(op=>{ const [a,b]=resumoOp(op); medOp[op]=a; cobOp[op]=b; });
+  { const [a,b]=resumoOp('_geral'); medOp._geral=a; cobOp._geral=b; }
+  if(medErro) RCL.aviso.push('Medição dos meses fechados fora da janela: '+medErro+'. As taxas daquelas competências caíram no que a janela mediu.');
+
+  /* SZC — o preço médio de bomba, na janela de cada produto. */
+  const precos={};
+  const szcDe=(op, nat)=>{
+    const ms=rclUltimosMeses((op?mesesDaOp(op):mesesGeral).slice().sort(), rclJanelaDe(nat,P));
+    return rclSZCJanela(ms, op);
+  };
+  ops.forEach(op=>{
+    precos[op]=szcDe(op,'diesel');
+    precos[op]._arla=szcDe(op,'arla');
+    precos[op]._ader=szcDe(op,'aderencia');
+  });
+  precos._geral=szcDe('','diesel');
+  precos._geral._arla=szcDe('','arla');
+  precos._geral._ader=szcDe('','aderencia');
+
+  /* PASSO 3 — aderência: litros comprados ÷ litros modelados, na JANELA DA
+     ADERÊNCIA (3 meses por padrão). Um mês só de SZC tem ruído de estoque
+     puro: tanque cheio no dia 30 é diesel do mês seguinte pago neste.
+     O modelo reparte entre rotas; a nota fiscal define o nível.          */
   const ader={};
   const calc=(op)=>{
-    const med = op ? (medOp[op]||{}) : (medOp._geral||{});
-    const mod  = med.litros||0;
-    const real = ((op?precos[op]:precos._geral)||{}).litrosDiesel||0;
+    const serie=series[op||'_geral']||[];
+    const j=rclrSomaJanela(serie, rclJanelaDe('aderencia',P));
+    const mod  = j.litros||0;
+    const szc  = (op?precos[op]:precos._geral)||{};
+    const real = (szc._ader&&szc._ader.litrosDiesel) || 0;
     /* ── Escala: o modelado é só das viagens amarradas; o comprado é da
        frota inteira. Sem levar os dois para a mesma escala, a razão mede
        cobertura, não consumo. ───────────────────────────────────────────── */
-    const cobBruta = ((op?cobOp[op]:cobOp._geral)||{}).cobertura;
+    const cobBruta = j.cobertura;
     const cobOk = cobBruta!=null && isFinite(cobBruta)
                && cobBruta>=RCL_CFG.coberturaMinFator && cobBruta<1;
     const usaCob = !!(RCL_CFG.aderenciaPorCobertura && cobOk);
@@ -13301,7 +13710,8 @@ function rclCalcular(){
              modelado:mod, modeladoFrota:modFrota, realizado:real,
              cobertura: cobBruta!=null?cobBruta:1, corrigidoPorCobertura:usaCob,
              fatorBruto:fBruto, fator:f, dentro,
-             base:(op?mesesDaOp(op):mesesGeral).join(', '),
+             janela:rclJanelaDe('aderencia',P), mesesUsados:j.meses.slice(),
+             base:j.meses.join(', '),
              baseTipo:b?b.tipo:'janela',
              aplicado: (P.aderencia && dentro) ? f : 1 };
   };
@@ -13313,24 +13723,21 @@ function rclCalcular(){
     const a=ader[op];
     return (a && a.fator!=null) ? a.aplicado : ader._geral.aplicado;
   };
-  /* PASSO 3 — TAXAS DO REALIZADO ═══════════════════════════════════════════
-     Agora que o km e as viagens de cada rota estão medidos, o R$ do Mapinha
-     vira R$/km e R$/viagem. Uma taxa por operação (cada filial fecha o seu
-     mês) e uma consolidada para as rotas cuja operação não tem fechamento.  */
+
+  /* PASSO 4 — TAXAS DO REALIZADO ═══════════════════════════════════════════
+     Agora que o km e as viagens de cada competência estão medidos, o R$ do
+     Mapinha vira R$/km e R$/viagem — cada natureza na sua janela. Uma taxa
+     por operação (cada filial fecha o seu mês) e uma consolidada para as
+     rotas cuja operação não tem fechamento.                               */
   const real = RCL.real || null;
   const taxas={}, realBk={};
   if(real){
     const monta=(op)=>{
+      const serie=series[op||'_geral']||[];
+      const temBk=serie.some(x=>x.bk);
+      if(!temBk) return null;
       const alvo = op ? buckets.filter(b=>b.rota.op===op) : buckets;
-      const bkR  = op ? real.porOp[op] : real.total;
-      if(!bkR) return null;
-      /* Denominador do MÊS-BASE, não da janela: o R$ de maio dividido pelo
-         quilômetro de junho não seria taxa nenhuma. */
-      const med = op ? (medOp[op]||{}) : (medOp._geral||{});
-      const km = med.km||0;
-      const vg = med.viagens||0;
-      const cob = (op ? cobOp[op] : cobOp._geral) || {cobertura:1};
-      const t  = rclrTaxas(bkR, km, vg, P, cob.cobertura);
+      const t = rclrTaxas(serie, P, op||'consolidado');
       t.base = (op?mesesDaOp(op):mesesGeral).slice();
       t.baseTipo = op && baseR.porOp && baseR.porOp[op] ? baseR.porOp[op].tipo : 'janela';
       t.baseMotivo = op && baseR.porOp && baseR.porOp[op] ? baseR.porOp[op].motivo : '';
@@ -13339,29 +13746,21 @@ function rclCalcular(){
          tamanho da base com o tamanho do que está sendo custeado. */
       t.kmJanela = alvo.reduce((a,b)=>a+(b.kmAtrib||0),0);
       t.viagensJanela = alvo.reduce((a,b)=>a+(b.viagens||0),0);
-      /* Preço efetivo do diesel: R$ do fechamento ÷ litros abastecidos na
-         SZC. É o que amarra o custo de diesel do módulo ao DRE. */
+      /* ── Preço efetivo do diesel: R$ do fechamento ÷ litros da SZC, os
+         dois na janela do diesel ───────────────────────────────────────
+         O preço efetivo é uma DIVISÃO. Quando o denominador está incompleto
+         — SZC de um mês faltando, ou litro de um mês contra R$ de outro — o
+         quociente sai errado e contamina todo o custo de diesel. Duas
+         conferências, e a segunda é a que importa:
+           · banda absoluta R$ 3,50–12,00/l, a faixa em que o S-10 transita;
+           · divergência contra o PREÇO DE BOMBA DA PRÓPRIA SZC, que é
+             medido, não derivado. Mais de 30% não é câmbio nem reembolso:
+             é denominador errado. Nesse caso vence o medido.             */
       const szc = (op?precos[op]:precos._geral)||{};
-      /* ── Banda de sanidade do preço derivado ──────────────────────────
-         O preço efetivo é uma DIVISÃO: R$ do fechamento ÷ litros da SZC.
-         Quando o denominador está incompleto — SZC de um mês faltando, ou
-         litro de um mês contra R$ de outro — o quociente sai errado e
-         contaminava todo o custo de diesel.
-
-         A banda anterior (R$ 2–15/l) era larga demais para pegar isso: um
-         preço efetivo de R$ 2,46/l passava por ela sem um alerta, e o custo
-         de diesel da rota saía com menos da metade do valor real. Diesel a
-         R$ 2,46 não existe no país desde 2016.
-
-         Duas conferências agora, e a segunda é a que importa:
-           · banda absoluta R$ 3,50–12,00/l, que é a faixa em que o S-10
-             efetivamente transita;
-           · divergência contra o PREÇO DE BOMBA DA PRÓPRIA SZC, que é um
-             número medido, não derivado. Mais de 30% de diferença entre o
-             derivado e o medido não é câmbio nem reembolso: é denominador
-             errado. Nesse caso vence o medido.                            */
+      const szcArla = szc._arla || szc;
       const saoPreco=(v,lo,hi)=> (v!=null && isFinite(v) && v>=lo && v<=hi) ? v : null;
-      const dieselCalc = (bkR.dieselRS>0 && szc.litrosDiesel>0) ? bkR.dieselRS/szc.litrosDiesel : null;
+      const dRS = Number(t.janDiesel && t.janDiesel.bk && t.janDiesel.bk.dieselRS)||0;
+      const dieselCalc = (dRS>0 && szc.litrosDiesel>0) ? dRS/szc.litrosDiesel : null;
       const dieselBanda= saoPreco(dieselCalc, 3.5, 12);
       const precoBomba = szc.precoDiesel>0 ? szc.precoDiesel : null;
       const divergeBomba = (dieselBanda!=null && precoBomba!=null)
@@ -13379,12 +13778,13 @@ function rclCalcular(){
           : (dieselBanda==null && dieselCalc!=null ? 'szc — preço do Mapinha fora da banda R$ 3,50–12,00/l'
             : (divergeBomba!=null ? 'szc — derivado divergiu '+pct(divergeBomba,0)+' do preço de bomba da SZC'
               : 'szc')));
-      const litrosArlaMod = (med.litros||0)*(P.arlaPct>0?P.arlaPct:0.05);
-      const arlaSzc  = (bkR.arlaRS>0 && szc.litrosArla>0) ? bkR.arlaRS/szc.litrosArla : null;
-      const arlaMod  = (bkR.arlaRS>0 && litrosArlaMod>0)  ? bkR.arlaRS/litrosArlaMod  : null;
+      const aRS = Number(t.janArla && t.janArla.bk && t.janArla.bk.arlaRS)||0;
+      const litrosArlaMod = (t.janArla?t.janArla.litros:0)*(P.arlaPct>0?P.arlaPct:0.05);
+      const arlaSzc  = (aRS>0 && szcArla.litrosArla>0) ? aRS/szcArla.litrosArla : null;
+      const arlaMod  = (aRS>0 && litrosArlaMod>0)      ? aRS/litrosArlaMod      : null;
       const arlaOk   = saoPreco(arlaSzc, 0.5, 20) || saoPreco(arlaMod, 0.5, 20);
       t.precoArlaEfetivo = (P.ovArlaRS!=null && P.ovArlaRS>0) ? P.ovArlaRS
-        : (arlaOk!=null ? arlaOk : (szc.precoArla||null));
+        : (arlaOk!=null ? arlaOk : (szcArla.precoArla||null));
       t.precoArlaFonte = (P.ovArlaRS!=null && P.ovArlaRS>0) ? 'manual'
         : (arlaOk!=null ? (saoPreco(arlaSzc,0.5,20)!=null?'mapinha÷szc':'mapinha÷modelo')
           : ((arlaSzc!=null||arlaMod!=null) ? 'szc — preço do Mapinha fora da banda R$ 0,50–20/l' : 'szc'));
@@ -13393,32 +13793,36 @@ function rclCalcular(){
           + (precoBomba!=null?`, contra ${brl(precoBomba)}/l de preço de bomba medido na SZC`:'')
           + `. O módulo usou o preço de bomba. Costuma indicar SZC incompleta no período ou R$ do fechamento de competência diferente dos litros.`);
       if(t.semDenominador)
-        RCL.aviso.push(`Sem km e viagens medidos no mês-base de ${op||'consolidado'} (${t.base.join(', ')}): nenhuma taxa de R$/km ou R$/viagem foi apurada e todas as linhas do custo caíram no modelado. Antes disso o módulo dividia por 1 e o custo de um MÊS inteiro aparecia como custo de uma viagem.`);
+        RCL.aviso.push(`Sem km e viagens medidos na competência-base de ${op||'consolidado'} (${t.base.join(', ')}): nenhuma taxa de R$/km ou R$/viagem foi apurada e todas as linhas do custo caíram no modelado.`);
       else if(t.cobertura<0.85)
-        RCL.aviso.push(`Cobertura de ${pct(t.cobertura,0)} no mês-base de ${op||'consolidado'}: ${num((1-t.cobertura)*100,0)}% dos CT-e não foram amarrados a uma rota. Como o R$ do Mapinha é da frota inteira, cada R$/viagem está `+(P.nivelamento==='taxa'?'corrigido pela cobertura (nivelamento por taxa).':'inflado por 1/cobertura — é o preço de fechar com o Mapinha (nivelamento medido).'));
+        RCL.aviso.push(`Cobertura de ${pct(t.cobertura,0)} na competência-base de ${op||'consolidado'}: ${num((1-t.cobertura)*100,0)}% dos CT-e não foram amarrados a uma rota. Como o R$ do Mapinha é da frota inteira, cada R$/viagem está `+(P.nivelamento==='taxa'?'corrigido pela cobertura (nivelamento por taxa).':'inflado por 1/cobertura — é o preço de fechar com o Mapinha (nivelamento medido).'));
+      /* Linhas dispersas: não são erro, são o motivo de a média móvel
+         existir. Aviso uma vez por natureza, na operação consolidada. */
+      if(!op) Object.keys(t.det||{}).forEach(k=>{
+        const dd=t.det[k];
+        if(dd && dd.disperso && dd.n>1){
+          const inf=(RCL_CFG.janelaInfo[dd.natureza]||[k,''])[0];
+          RCL.aviso.push(`${inf}: a taxa mensal variou ${pct(dd.dispersao,0)} entre os ${dd.n} meses da janela (de ${brl(dd.dispMin)} a ${brl(dd.dispMax)} por ${dd.chave==='km'?'km':'viagem'}). É sazonalidade, não erro — e é exatamente por isso que esta linha usa média de ${dd.janela} meses em vez de um mês só.`);
+        }
+      });
       /* Pedágio: fator que faz a soma do pedágio HERE das rotas fechar com o
-         Mapinha. Fora da banda 0,5–2,0 o fator não é aplicado (a base de
-         praças ou o import de pedágio está incompleto) e cai no R$/km. */
-      /* Nivelamento do pedágio pela HERE só faz sentido quando o pedágio
-         modelado e o realizado são do MESMO período. Com a base recuada para
-         um mês fechado, o pedágio HERE daquele mês não foi medido aqui — a
-         linha cai no R$/km, que é honesto, em vez de casar períodos
-         diferentes e chamar isso de fator. */
+         Mapinha. Só existe quando o pedágio modelado e o realizado são do
+         MESMO período — com a base recuada ou em média móvel, casar períodos
+         diferentes não seria fator nenhum, e a linha cai no R$/km, que é
+         honesto. Como o padrão da sub-aba é o pedágio EXATO da HERE, isso
+         quase nunca chega a importar. */
       const pedMod = t.baseMesma ? alvo.reduce((a,b)=>{
         const q=b._pedMod; return a + (q>0?q:0);
       },0) : 0;
-      /* Sem km medido não há R$/km: null, não uma divisão por 1. */
-      t.pedagioKm = (P.ovPedagioKm!=null && P.ovPedagioKm>=0) ? P.ovPedagioKm
-                  : (t.km>0 ? bkR.pedagioRS/t.km : null);
-      t.pedagioFator = (pedMod>0 && bkR.pedagioRS>0) ? bkR.pedagioRS/pedMod : 0;
+      const pedRS = Number(t.det&&t.det.pedagioKm?t.det.pedagioKm.rs:0)||0;
+      t.pedagioFator = (pedMod>0 && pedRS>0) ? pedRS/pedMod : 0;
       if(!(t.pedagioFator>=0.5 && t.pedagioFator<=2.0)) t.pedagioFator=0;
-      t.pedagioModelado=pedMod; t.pedagioRealizado=bkR.pedagioRS;
-      /* .cobertura é NUMÉRICO (vem de rclrTaxas). O detalhe da base vai em
-         .baseDet — antes um objeto era gravado por cima do número e a
-         correção por cobertura ficava inacessível para a tela. */
+      t.pedagioModelado=pedMod; t.pedagioRealizado=pedRS;
       t.baseDet = { km:t.kmMedido, viagens:t.viagensMedidas, meses:t.base.length,
                     kmUsado:t.km, viagensUsadas:t.viagens,
-                    resolvidas:cob.resolvidas, orfaos:cob.orfaos, ambiguos:cob.ambiguos };
+                    resolvidas:(cobOp[op||'_geral']||{}).resolvidas,
+                    orfaos:(cobOp[op||'_geral']||{}).orfaos,
+                    ambiguos:(cobOp[op||'_geral']||{}).ambiguos };
       return t;
     };
     /* pedágio modelado por bucket, para o fator acima */
@@ -13426,9 +13830,39 @@ function rclCalcular(){
       const q=rclPreparo(bk, {P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:fatorDe});
       bk._pedMod = (q && q.pedOk) ? ((q.pIda||0)+(1-q.aprov)*(q.pVolta||0))*bk.viagens : 0;
     });
-    ops.forEach(op=>{ const t=monta(op); if(t){ taxas[op]=t; realBk[op]=real.porOp[op]; } });
-    taxas._geral=monta(''); realBk._geral=real.total;
+    /* ── Bucket EFETIVO por operação ──────────────────────────────────────
+       Cada campo somado na janela da SUA natureza, para que a tela e o Excel
+       leiam "R$ de pneus no período" e recebam o R$ dos meses que a linha de
+       pneus realmente usou — e não um total de doze meses ao lado de uma
+       taxa de seis. */
+    const efetivo=(t, bruto)=>{
+      if(!t) return bruto;
+      const e=rclrBucket(bruto?bruto.filial:'—');
+      const de=(nat)=>rclrSomaJanela(t.serie||[], rclJanelaDe(nat,P)).bk;
+      const bPneus=de('pneus'), bLub=de('lub'), bPecas=de('pecas'), bDoc=de('doc'),
+            bPes=de('pessoal'), bDep=de('deprec'), bPed=de('pedagio'),
+            bDie=de('diesel'), bArl=de('arla');
+      e.pneusRS=bPneus.pneusRS; e.lubRS=bLub.lubRS; e.pecasRS=bPecas.pecasRS;
+      e.docRS=bDoc.docRS; e.pedagioRS=bPed.pedagioRS;
+      e.dieselRS=bDie.dieselRS; e.dieselInterno=bDie.dieselInterno;
+      e.dieselExterno=bDie.dieselExterno; e.dieselReembolso=bDie.dieselReembolso;
+      e.arlaRS=bArl.arlaRS;
+      e.pessoalFrota35=bPes.pessoalFrota35; e.pessoalAgregado65=bPes.pessoalAgregado65;
+      e.pessoalBaseFinal=bPes.pessoalBaseFinal;
+      e.deprecCavaloRS=bDep.deprecCavaloRS; e.deprecCarretaRS=bDep.deprecCarretaRS;
+      e.deprecApoioRS=bDep.deprecApoioRS;
+      e.coOutrosRS=bPecas.coOutrosRS; e.coAgregadoRS=bPecas.coAgregadoRS;
+      e.nLanc=bruto?bruto.nLanc:0; e.nPlacasDep=bDep.nPlacasDep;
+      e.temPremissaCpk=bruto?bruto.temPremissaCpk:false;
+      e.mesesLidos=bruto?(bruto.mesesLidos||[]).slice():[];
+      e.mesesSem=bruto?(bruto.mesesSem||[]).slice():[];
+      e.bruto=bruto||null;
+      return e;
+    };
+    ops.forEach(op=>{ const t=monta(op); if(t){ taxas[op]=t; realBk[op]=efetivo(t, real.porOp[op]); } });
+    taxas._geral=monta(''); realBk._geral=efetivo(taxas._geral, real.total);
   }
+
 
   const ctx2={P, ref, perfil, precos, aprovIdx, norm:nrm.norm, fator:fatorDe,
               taxas:real?taxas:null, realBk:real?realBk:null,
@@ -13520,7 +13954,7 @@ function rclCalcular(){
   RCL.ref=ref; RCL.precos=precos; RCL.calculado=true; RCL.norm=nrm;
   RCL.diag={ ader, ref, precos, ops, norm:nrm, meses:RCL.meses.slice(),
              real, taxas:real?taxas:null, realBk:real?realBk:null,
-             base:baseR, medOp, medicoes:[...medicoes.values()],
+             base:baseR, medOp, cobOp, series, medPorMes,
              orfaos:V.orfaos, ambiguos:V.ambiguos, usados:V.usados,
              cfc:V.cfc, cfcValor:V.cfcValor,
              rotasComViagem:buckets.length,
@@ -13585,7 +14019,11 @@ function rclCalcular(){
   });
   if(baseR.modo==='janela')
     RCL.aviso.push('Premissa "mês-base" está em JANELA: o realizado vem da própria janela, fechada ou não. Em mês corrente isso subestima consumo e custo.');
-  medicoes.forEach(m=>{ if(m.erro) RCL.aviso.push(`Medição do mês-base (${m.meses.join(', ')}) falhou: ${m.erro}. As taxas dessa competência não puderam ser apuradas.`); });
+  /* Séries curtas: a linha de janela longa usa o que existe e a tela diz. */
+  if(baseR.mediaMovel) ['SC','PR','SP'].forEach(f=>{
+    const b=baseR.porOp&&baseR.porOp[f]; if(!b||!b.meses.length||b.completa) return;
+    RCL.aviso.push(`${f}: só ${b.meses.length} mês(es) fechado(s) disponível(is) de ${baseR.alvoMeses} pedidos pela média móvel. As linhas de janela mais longa (documentação e seguros, peças) usam o que existe — quanto menor a série, mais a sazonalidade daquelas linhas ainda aparece na taxa.`);
+  });
   if(RCL.diag.distDivergente)
     RCL.aviso.push(`${num(RCL.diag.distDivergente,0)} rota(s) com divergência acima de ${pct(P.distAlertaPct||0.10,0)} entre a distância da SZY e a medida pela HERE. O cálculo seguiu com a SZY; a memória de cálculo de cada uma mostra as duas medições.`);
 }
@@ -13975,6 +14413,32 @@ function rclPainel(chaveCli, k3, semScroll){
   const P=rclPrem();
   const T = cu&&cu.taxas ? cu.taxas : null;
   const RB= cu&&cu.realBk ? cu.realBk : null;
+  /* ══ JANELA DE CADA TAXA ═══════════════════════════════════════════════
+     Desde ago/2026 cada linha tem a sua própria janela de meses fechados, e
+     o denominador é o km/viagens DAQUELES meses. Ler `T.km` para todas as
+     linhas voltaria a misturar o R$ de doze meses com o quilômetro de um —
+     que é exatamente o erro que a média móvel veio corrigir. Estes helpers
+     entregam, por taxa, o numerador, o denominador e a janela usada.    */
+  const dT   = (k)=> (T && T.det && T.det[k]) ? T.det[k] : null;
+  const janKm= (k)=>{ const d=dT(k); return d ? d.km : (T?T.km:0); };
+  const janVg= (k)=>{ const d=dT(k); return d ? d.viagens : (T?T.viagens:0); };
+  const mesRot=(m)=>{ try{ return dtSimplesBR(m+'-01').slice(3); }catch(_){ return m; } };
+  const janRot=(k)=>{ const d=dT(k); if(!d||!d.meses||!d.meses.length) return '—';
+    return d.n>1 ? `${d.n} meses fechados · ${mesRot(d.meses[0])} a ${mesRot(d.meses[d.meses.length-1])}`
+                 : `mês fechado de ${mesRot(d.meses[0])}`; };
+  /* Linhas comuns a toda taxa vinda do Mapinha: qual janela, quanta
+     dispersão houve entre os meses dela e o que isso significa. */
+  const janLinhas=(k)=>{ const d=dT(k); if(!d) return [];
+    const inf=RCL_CFG.janelaInfo[d.natureza]||['',''];
+    return [
+      ['Janela desta linha', janRot(k),
+       `Média móvel de ${d.janela} ${d.janela>1?'meses fechados':'mês fechado'} — ${inf[1]}. A taxa é a RAZÃO DAS SOMAS da janela (Σ R$ ÷ Σ ${d.chave==='km'?'km':'viagens'}), nunca a média das razões mensais: só assim ela reconstrói o R$ total quando multiplicada de volta.`],
+      d.dispersao!=null?['Dispersão entre os meses', pct(d.dispersao,0)+(d.disperso?' — alta':''),
+       d.disperso
+         ? `A taxa mensal foi de ${brl(d.dispMin)} a ${brl(d.dispMax)} por ${d.chave==='km'?'km':'viagem'} dentro da janela. Isso não é erro: é a sazonalidade desta natureza de custo — e é a prova de que um mês-base único entregaria um número que não se repete no mês seguinte.`
+         : `A taxa mensal variou pouco dentro da janela (de ${brl(d.dispMin)} a ${brl(d.dispMax)}). Linha estável: a média móvel aqui muda pouco o resultado, e é isso mesmo que se espera dela.`]:null,
+      d.manual?['Origem','digitada nas ⚙ Premissas do resultado — a janela não se aplica']:null
+    ].filter(Boolean); };
   const dm= cu&&cu.distMeta ? cu.distMeta : null;
   /* Competência de onde saem as médias e as taxas — pode não ser a janela. */
   const baseMeses = T&&T.base ? T.base : (RCL.base&&RCL.base.porOp&&RCL.base.porOp[r.op] ? RCL.base.porOp[r.op].meses : RCL.meses);
@@ -14173,44 +14637,99 @@ function rclPainel(chaveCli, k3, semScroll){
      diferença entre elas não é arredondamento: o Arla a granel custa perto
      da metade do diesel, e valorar os litros de Arla ao preço do diesel é
      uma escolha, não um detalhe.                                          */
+  /* ══ ARLA — litros de diesel × % × R$/l do ARLA DA ROTA ════════════════
+     Pedido do comercial (ago/2026, segunda rodada): a base volta a ser os
+     LITROS. A cascata do preço é a mesma do diesel — Arla no posto do
+     percurso, média ponderada da unidade, consolidado, preço efetivo do
+     Mapinha — e o rótulo ao lado do valor diz qual delas entrou.        */
   const arlaNoDiesel = cu && cu.arlaBase==='diesel';
+  const azz  = cu&&cu.arlaShellbox ? cu.arlaShellbox : null;
+  const azP  = azz && azz.fonte==='posto' ? azz.det : null;
+  const azPo = azP ? azP.posto : null;
+  const azOnde = azPo ? ((azPo.rodovia? (typeof sbRodoviaLabel==='function'? sbRodoviaLabel(azPo.rodovia, azPo.rodoviaNome) : azPo.rodovia) : 'via urbana')
+                        + (azPo.km!=null?' · km '+num(azPo.km, azPo.km%1?1:0):'')) : '';
+  const azNota = azP
+      ? `${esc(azPo.nome||'posto')} · ${esc(azOnde)}`
+      : (azz ? `média ponderada da unidade ${esc(String(azz.det&&azz.det.unidade||r.op||'consolidado'))}` : '');
+  const arlaFon = fon('arla');
+  const arlaDeShell = arlaFon==='shellbox' || arlaFon==='shellbox·unidade';
   add('Arla','arla',li.arla,
-      arlaNoDiesel
+      (arlaNoDiesel
         ? `${pct(cu?cu.arlaPct:0.05,1)} de ${brl(cu?cu.dieselLinha:null)} (linha do diesel)`
-        : `${pct(cu?cu.arlaPct:0.05,1)} dos litros × ${brl(cu?cu.precoArla:null)}`,
+        : `${num(cu?cu.litrosArlaViagem:0,1)} l × ${brl(cu?cu.precoArla:null)}`)
+        + (arlaDeShell ? `<br><span class="muted">${azNota}</span>` : ''),
       mem('Arla 32',{selo:selo('arla'),
         fonte: arlaNoDiesel
-          ? 'Fração da linha de cima: o percentual da premissa aplicado sobre o R$ de diesel desta viagem — que já saiu do preço pago no posto da rota. Quando o preço do posto muda, esta linha acompanha sozinha.'
-          : 'Regra dos 5% sobre os LITROS: o volume de Arla é uma fração dos litros de diesel da própria viagem, valorado pelo R$/l do Arla apurado no Mapinha (CC 04.01, Arla da frota).',
+          ? 'Fração da linha de cima: o percentual da premissa aplicado sobre o R$ de diesel desta viagem. Base ANTERIOR, mantida na chave "Base do % do Arla" para conferência — ela valora os litros de Arla ao preço do DIESEL.'
+          : (arlaFon==='shellbox'
+          ? 'Regra dos 5% sobre os LITROS: o volume de Arla é uma fração dos litros de diesel da própria viagem, valorado pelo R$/l do ÚLTIMO ABASTECIMENTO DE ARLA em um posto identificado dentro do percurso desta rota, na base ShellBox. Mesma cascata do diesel, mesmo motor — e sem gastar chamada de API, porque os postos do trecho ficaram gravados com a simulação da HERE.'
+          : (arlaFon==='shellbox·unidade'
+          ? 'Regra dos 5% sobre os LITROS, valorados pela SEGUNDA opção da cascata: nenhum abastecimento de Arla em posto do percurso, então entrou a média ponderada por litros dos abastecimentos de Arla da unidade que opera a rota — exatamente como o diesel faz.'
+          : 'Regra dos 5% sobre os LITROS: o volume de Arla é uma fração dos litros de diesel da própria viagem, valorado pelo R$/l do Arla apurado no Mapinha (CC 04.01, Arla da frota) — terceira opção da cascata.')),
         formula: arlaNoDiesel
           ? `R$ da linha de diesel × ${pct(cu?cu.arlaPct:0.05,1)}\n${brl(cu?cu.dieselLinha:null)} × ${num(cu?cu.arlaPct:0.05,3)} = ${brl(li.arla)}`
-          : `litros de diesel × ${pct(cu?cu.arlaPct:0.05,1)} × R$/l\n${num(cu?cu.litrosViagem:0,2)} × ${num(cu?cu.arlaPct:0.05,3)} × ${num(cu?cu.precoArla:0,4)} = ${brl(li.arla)}`,
+          : `litros de diesel × ${pct(cu?cu.arlaPct:0.05,1)} × R$/l do Arla\n${num(cu?cu.litrosViagem:0,2)} × ${num(cu?cu.arlaPct:0.05,3)} = ${num(cu?cu.litrosArlaViagem:0,2)} l de Arla\n${num(cu?cu.litrosArlaViagem:0,2)} × ${num(cu?cu.precoArla:0,4)} = ${brl(li.arla)}`,
         insumos: arlaNoDiesel ? [
           ['Linha de diesel desta viagem', brl(cu?cu.dieselLinha:null),
            'É a linha imediatamente acima, com os litros do modelo já valorados pelo preço pago no posto da rota ('+brl(cu?cu.precoDiesel:null)+'/l).'],
           ['Percentual da premissa', pct(cu?cu.arlaPct:0.05,1),
            'Campo arlaPct nas Premissas do resultado. É a média observada da frota, não um número do fabricante.'],
           ['= Arla da viagem', brl(li.arla),
-           'O produto dos dois acima. Sobe e desce junto com o diesel, inclusive quando o posto da rota muda de preço.']
-        ] : null,
+           'O produto dos dois acima. Sobe e desce junto com o diesel — inclusive quando o preço do DIESEL muda, o que é justamente o defeito desta base.']
+        ] : (azP ? [
+          ['Litros de diesel da viagem', num(cu?cu.litrosViagem:0,2)+' l',
+           'Do modelo físico de consumo, já normalizado e calibrado pela SZC. É sobre eles que o percentual incide.'],
+          ['Percentual da premissa', pct(cu?cu.arlaPct:0.05,1),
+           'Campo arlaPct nas Premissas do resultado. É a média observada da frota, não um número do fabricante.'],
+          ['= Litros de Arla', num(cu?cu.litrosArlaViagem:0,2)+' l',
+           'O volume que a viagem consome de Arla 32. É este número, e não o R$ do diesel, que é a base da linha.'],
+          ['Posto que deu o preço', String(azPo.nome||'—'),
+           'Último abastecimento de ARLA registrado no ShellBox em um posto que a base identificou dentro do percurso calculado pela HERE para esta rota.'],
+          ['Onde ele está', azOnde+(azPo.cidade?' · '+azPo.cidade+'/'+(azPo.uf||''):''),
+           'Rodovia e km saem do próprio endereço do posto no arquivo do ShellBox.'],
+          ['Data do abastecimento', azP.linha&&azP.linha.data ? (typeof sbDataBR==='function'?sbDataBR(azP.linha.data):azP.linha.data) : '—',
+           'O mais recente entre os postos da rota — a mesma regra do diesel.'],
+          ['R$/l do Arla pago', brl(cu?cu.precoArla:null)+'/l',
+           'Preço PAGO naquele corredor. Repare que ele costuma ficar perto da metade do R$/l do diesel — é exatamente essa diferença que a base anterior (% do R$ de diesel) apagava.'],
+          ['= Arla da viagem', brl(li.arla), 'Litros de Arla × R$/l do Arla.']
+        ] : (azz ? [
+          ['Litros de diesel da viagem', num(cu?cu.litrosViagem:0,2)+' l','Do modelo físico de consumo, já calibrado pela SZC.'],
+          ['= Litros de Arla', num(cu?cu.litrosArlaViagem:0,2)+' l', pct(cu?cu.arlaPct:0.05,1)+' dos litros de diesel.'],
+          ['Por que não veio de um posto', azz.semSimulacao?'rota ainda sem percurso medido na HERE':(azz.semPostos?'rota simulada, mas nenhum posto da base no trecho':'nenhum abastecimento de Arla utilizável nos postos do trecho'),
+           'Sem posto de Arla identificado no percurso, o módulo desce para a segunda opção em vez de deixar a linha sem preço — é o que o comercial pediu: "utilize a média da unidade, como é feito com o diesel".'],
+          ['Média da unidade', brl(azz.preco)+'/l',
+           'Média ponderada por litros dos abastecimentos de ARLA da unidade, com o corte de preço fora da curva e a banda de ±20% da mediana. A janela de litragem de 50–1.200 l NÃO se aplica aqui: abastecimento de Arla é de dezenas de litros e a janela zeraria a amostra.'],
+          ['Abastecimentos usados', num(azz.det&&azz.det.qtd||0,0)+' de '+num(azz.det&&azz.det.qtdBruta||0,0),
+           'Quantos sobreviveram aos filtros de preço dentro da janela de três meses.'],
+          ['= Arla da viagem', brl(li.arla), 'Litros de Arla × R$/l da unidade.']
+        ] : [
+          ['Litros de diesel da viagem', num(cu?cu.litrosViagem:0,2)+' l','Do modelo físico de consumo, já calibrado pela SZC.'],
+          ['= Litros de Arla', num(cu?cu.litrosArlaViagem:0,2)+' l', pct(cu?cu.arlaPct:0.05,1)+' dos litros de diesel.'],
+          ['R$/l do Arla', brl(cu?cu.precoArla:null)+'/l','Preço efetivo do Mapinha: R$ de Arla do fechamento ÷ litros de Arla da SZC.'],
+          ['= Arla da viagem', brl(li.arla), 'Litros de Arla × R$/l apurado.']
+        ])),
         linhas:[
-          arlaNoDiesel?['Base adotada','R$ da linha de diesel']:['Base adotada','litros × R$/l do Arla'],
+          arlaNoDiesel?['Base adotada','R$ da linha de diesel (base anterior)']:['Base adotada','litros de diesel × % × R$/l do Arla'],
           ['Percentual adotado', pct(cu?cu.arlaPct:0.05,1)],
           arlaNoDiesel?['R$ da linha de diesel', brl(cu?cu.dieselLinha:null)]:null,
-          ['Litros de Arla implícitos', num((cu?cu.litrosViagem:0)*(cu?cu.arlaPct:0.05),2)+' l'],
-          ['Preço do Arla apurado', brl(cu?cu.precoArla:null)+'/l'],
+          ['Litros de Arla da viagem', num(cu?cu.litrosArlaViagem:0,2)+' l'],
+          ['Preço do Arla adotado', brl(cu?cu.precoArla:null)+'/l'+(arlaDeShell?' · ShellBox':'')],
+          (cu&&cu.precoDiesel>0&&cu.precoArla>0)?['Arla ÷ diesel', num(cu.precoArla/cu.precoDiesel,2)+'×',
+            'Quanto o litro de Arla custa em relação ao litro de diesel nesta rota. Perto de 0,5 é o esperado — foi por isso que a base voltou a ser os litros.']:null,
+          (cu&&cu.precoArlaMapinha>0)?['Preço efetivo do Mapinha', brl(cu.precoArlaMapinha)+'/l',
+            'R$ de Arla do fechamento ÷ litros de Arla da SZC. É a opção seguinte da cascata.']:null,
           ['Quanto daria pela outra base', brl(arlaNoDiesel?(cu?cu.arlaPorPreco:null):(cu?cu.arlaPorDiesel:null)),
            arlaNoDiesel
-             ? 'É o que a linha custaria valorando os litros de Arla pelo preço do próprio Arla. A diferença para o número exibido é o efeito de valorá-los ao preço do diesel.'
-             : 'É o que a linha custaria como percentual do R$ de diesel.'],
-          T?['Como o preço do Arla saiu', T.precoArlaFonte]:null,
+             ? 'É o que a linha custaria valorando os litros de Arla pelo preço do próprio Arla — que é o PADRÃO desde agosto/2026.'
+             : 'É o que a linha custaria como percentual do R$ de diesel: a base anterior, que valorava os litros de Arla ao preço do diesel.'],
+          T?['Como o preço do Arla saiu do Mapinha', T.precoArlaFonte]:null,
           RB?['Arla do Mapinha no período', brl(RB.arlaRS)]:null
         ],
         obs: arlaNoDiesel
-          ? 'A chave "Base dos 5% do Arla" nas Premissas do resultado devolve a base anterior (litros × preço do Arla) sem mexer em mais nada.'
-          : 'Os 5% são premissa do módulo (campo arlaPct nas Premissas do resultado), não um número do fabricante — é a média observada da frota.',
+          ? 'Esta é a base ANTERIOR. A chave "Base do % do Arla" nas Premissas do resultado devolve o padrão (litros × R$/l do Arla) sem mexer em mais nada.'
+          : 'Os 5% são premissa do módulo (campo arlaPct nas Premissas do resultado), não um número do fabricante — é a média observada da frota. O que mudou em agosto/2026 foi o PREÇO com que esses litros são valorados: o do Arla, não o do diesel.',
         alerta: (arlaNoDiesel && cu && cu.arlaPorPreco>0 && cu.arlaPorDiesel>0 && cu.arlaPorDiesel/cu.arlaPorPreco>1.25)
-          ? `Valorados ao preço do diesel, os litros de Arla saem ${num(cu.arlaPorDiesel/cu.arlaPorPreco,2)}× o que sairiam ao preço do próprio Arla (${brl(cu.arlaPorPreco)}). O Arla a granel custa perto da metade do diesel — a diferença é deliberada, mas convém saber que ela está aqui.`
+          ? `Valorados ao preço do diesel, os litros de Arla saem ${num(cu.arlaPorDiesel/cu.arlaPorPreco,2)}× o que sairiam ao preço do próprio Arla (${brl(cu.arlaPorPreco)}). O Arla a granel custa perto da metade do diesel — esta base está inflando a linha. O padrão do módulo é a outra.`
           : null}));
 
   /* A dica do pedágio tinha de mudar junto com a linha. Ela mostrava "ida
@@ -14270,23 +14789,24 @@ function rclPainel(chaveCli, k3, semScroll){
       memFonte('Pneus','pneus',
       mem('Pneus',{selo:selo('pneus'),
         fonte:'Mapinha — lançamentos do grupo C.O classificados como pneus (nome do centro de custo contendo pneu / recapagem / borracharia; código 07.01 como rede de segurança). Agregados (12.01) ficam fora.',
-        formula:`R$ de pneus no período ÷ km medido × km da viagem\n${brl(RB?RB.pneusRS:null)} ÷ ${num(T?T.km:0,0)} km = ${brl(T?T.pneusKm:null)}/km × ${num(kmV,1)} km = ${brl(li.pneus)}`,
+        formula:`R$ de pneus na janela ÷ km medido na MESMA janela × km da viagem\n${brl(RB?RB.pneusRS:null)} ÷ ${num(janKm('pneusKm'),0)} km = ${brl(T?T.pneusKm:null)}/km × ${num(kmV,1)} km = ${brl(li.pneus)}`,
         insumos:[
-          ['R$ de pneus no mês-base', brl(RB?RB.pneusRS:null),
-           'Lançamentos do Mapinha da competência-base classificados como pneu, recapagem ou borracharia (código 07.01 como rede de segurança), da unidade inteira. Pneu de agregado (12.01) fica de fora.'],
-          ['km medido no mês-base', num(T?T.km:0,0)+' km',
-           'Quilômetro que o módulo conseguiu atribuir a rotas naquele mês: distância adotada × viagens, já descontado o retorno aproveitado.'],
+          ['R$ de pneus na janela', brl(RB?RB.pneusRS:null),
+           'Lançamentos do Mapinha classificados como pneu, recapagem ou borracharia (código 07.01 como rede de segurança), da unidade inteira, somados em '+janRot('pneusKm')+'. Pneu de agregado (12.01) fica de fora. A janela é de mais de um mês porque pneu se compra em LOTE: um mês só entrega a compra inteira ou nenhuma.'],
+          ['km medido na mesma janela', num(janKm('pneusKm'),0)+' km',
+           'Quilômetro que o módulo atribuiu a rotas NAQUELES MESMOS meses: distância adotada × viagens, já descontado o retorno aproveitado. Numerador e denominador precisam ser do mesmo período, senão a taxa só troca o erro de lugar.'],
           ['= R$ por km', brl(T?T.pneusKm:null),
            'A divisão dos dois acima. É a taxa que vale para qualquer rota da unidade.'],
           ['km desta viagem', num(kmV,1)+' km',
            'Ida + a fração da volta que este frete paga. Multiplicado pela taxa acima, dá o valor da linha.']
         ],
         linhas:[
-          RB?['Pneus no período (Mapinha)', brl(RB.pneusRS), 'Numerador: o gasto de pneu da unidade na competência-base.']:null,
-          T?['km medido pelo módulo', num(T.km,0)+' km', 'Denominador: o quilômetro atribuído a rotas naquele mesmo mês.']:null,
+          RB?['Pneus na janela (Mapinha)', brl(RB.pneusRS), 'Numerador: o gasto de pneu da unidade nos meses da janela.']:null,
+          T?['km medido pelo módulo', num(janKm('pneusKm'),0)+' km', 'Denominador: o quilômetro atribuído a rotas nos mesmos meses.']:null,
           T?['R$/km de pneu', brl(T.pneusKm)+(T.manual&&T.manual.pneusKm?' (manual)':''),
              'O quociente. Marcado como (manual) quando foi digitado nas ⚙ Premissas do resultado em vez de calculado.']:null,
-          ['km desta viagem', num(kmV,1)+' km', 'O multiplicador que converte a taxa da frota no custo desta rota.']
+          ['km desta viagem', num(kmV,1)+' km', 'O multiplicador que converte a taxa da frota no custo desta rota.'],
+          ...janLinhas('pneusKm')
         ],
         obs:'Rateio por KM porque pneu se gasta rodando: rota longa consome mais que rota curta, e é isso que a divisão por viagem esconderia.'}),
       {fonte:'Núcleo de custo (custosViagem): jogo de pneus (lisos + borrachudos) da premissa do Simulador ÷ rendimento em km × km desta viagem. O realizado do Mapinha não entrou nesta rota.',
@@ -14297,19 +14817,20 @@ function rclPainel(chaveCli, k3, semScroll){
       memFonte('Lubrificante','lubrificante',
       mem('Lubrificante',{selo:selo('lubrificante'),
         fonte:'Mapinha — C.O classificado como lubrificante (nome com lubrificante / óleo / graxa / aditivo; código 05.01 de reserva).',
-        formula:`R$ de lubrificante no período ÷ km medido × km da viagem\n${brl(RB?RB.lubRS:null)} ÷ ${num(T?T.km:0,0)} = ${brl(T?T.lubKm:null)}/km × ${num(kmV,1)} = ${brl(li.lubrificante)}`,
+        formula:`R$ de lubrificante na janela ÷ km medido na MESMA janela × km da viagem\n${brl(RB?RB.lubRS:null)} ÷ ${num(janKm('lubKm'),0)} = ${brl(T?T.lubKm:null)}/km × ${num(kmV,1)} = ${brl(li.lubrificante)}`,
         insumos:[
-          ['R$ de lubrificante no mês-base', brl(RB?RB.lubRS:null),
-           'Óleo de motor, câmbio e diferencial, graxa e aditivos lançados no Mapinha da competência-base, da unidade inteira.'],
-          ['km medido no mês-base', num(T?T.km:0,0)+' km', 'O mesmo quilômetro que serve de denominador para pneu e pedágio.'],
+          ['R$ de lubrificante na janela', brl(RB?RB.lubRS:null),
+           'Óleo de motor, câmbio e diferencial, graxa e aditivos lançados no Mapinha da unidade inteira, somados em '+janRot('lubKm')+'. Janela curta: é gasto regular, com pouco ruído mês a mês.'],
+          ['km medido na mesma janela', num(janKm('lubKm'),0)+' km', 'O quilômetro atribuído a rotas nos mesmos meses.'],
           ['= R$ por km', brl(T?T.lubKm:null), 'A taxa da unidade.'],
           ['km desta viagem', num(kmV,1)+' km', 'O multiplicador desta rota.']
         ],
         linhas:[
-          RB?['Lubrificante no período', brl(RB.lubRS), 'Numerador da taxa.']:null,
-          T?['km medido pelo módulo', num(T.km,0)+' km', 'Denominador da taxa.']:null,
+          RB?['Lubrificante na janela', brl(RB.lubRS), 'Numerador da taxa.']:null,
+          T?['km medido pelo módulo', num(janKm('lubKm'),0)+' km', 'Denominador da taxa.']:null,
           T?['R$/km', brl(T.lubKm), 'O quociente.']:null,
-          ['km desta viagem', num(kmV,1)+' km', 'O multiplicador que dá o valor da linha.']
+          ['km desta viagem', num(kmV,1)+' km', 'O multiplicador que dá o valor da linha.'],
+          ...janLinhas('lubKm')
         ]}),
       {fonte:'Núcleo de custo (custosViagem): gasto mensal de lubrificante da premissa do Simulador ÷ rendimento em km × km desta viagem. O realizado do Mapinha não entrou nesta rota.'}));
 
@@ -14324,23 +14845,24 @@ function rclPainel(chaveCli, k3, semScroll){
       memFonte('Peças e serviços','pecas',
       mem('Peças e serviços',{selo:selo('pecas'),
         fonte:'Mapinha — C.O classificado como peças/serviços/manutenção (nome com peç / serv / manuten / oficina / revis / reforma; códigos 06.01, 03.01 e 23.01 de reserva). Empréstimos e custos de placa agregada (11.01) ficam fora.',
-        formula:`R$ de peças no período ÷ viagens medidas\n${brl(RB?RB.pecasRS:null)} ÷ ${num(T?T.viagens:0,0)} viagens = ${brl(li.pecas)}`,
+        formula:`R$ de peças na janela ÷ viagens medidas na MESMA janela\n${brl(RB?RB.pecasRS:null)} ÷ ${num(janVg('pecasVg'),0)} viagens = ${brl(li.pecas)}`,
         insumos:[
-          ['R$ de peças no mês-base', brl(RB?RB.pecasRS:null),
-           'Soma dos lançamentos do Mapinha da competência-base classificados como peças/serviços/manutenção, da unidade INTEIRA — não desta rota. Agregado (11.01) fica de fora.'],
-          ['Viagens medidas no mês-base', num(T?T.viagens:0,0),
-           'CT-e do mesmo mês que o módulo conseguiu amarrar a uma rota da SZY. É este número que reparte o R$ da frota entre as viagens.'],
+          ['R$ de peças na janela', brl(RB?RB.pecasRS:null),
+           'Soma dos lançamentos do Mapinha classificados como peças/serviços/manutenção, da unidade INTEIRA — não desta rota — em '+janRot('pecasVg')+'. Agregado (11.01) fica de fora. A janela existe porque manutenção é "lumpy": uma reforma de motor cai num mês só e deslocaria a linha da unidade inteira.'],
+          ['Viagens medidas na mesma janela', num(janVg('pecasVg'),0),
+           'CT-e dos mesmos meses que o módulo conseguiu amarrar a uma rota da SZY. É este número que reparte o R$ da frota entre as viagens.'],
           ['= R$ por viagem', brl(T?T.pecasVg:null),
            'A divisão dos dois acima. Este é o valor que a linha exibe, igual para toda rota da mesma unidade — peças não escalam com o trecho.']
         ],
         linhas:[
           RB?['Peças e serviços no período', brl(RB.pecasRS),
               'Numerador da conta: o gasto de oficina da unidade inteira na competência-base, lido da coleção mapinha_lancamentos.']:null,
-          T?['Viagens medidas no período', num(T.viagens,0),
-             'Denominador da conta: viagens do mês-base amarradas a uma rota. Se a cobertura for baixa, este número é menor que o real e o R$/viagem sai inflado.']:null,
+          T?['Viagens medidas na janela', num(janVg('pecasVg'),0),
+             'Denominador da conta: viagens dos meses da janela amarradas a uma rota. Se a cobertura for baixa, este número é menor que o real e o R$/viagem sai inflado.']:null,
           T?['R$/viagem', brl(T.pecasVg), 'O quociente — exatamente o valor desta linha.']:null,
           T?['Cobertura do mês-base', pct(T.cobertura,0),
-             'Fração dos CT-e do mês-base que virou viagem medida. Cobertura de 80% significa denominador 20% menor que o real, e cada R$/viagem 25% maior.']:null
+             'Fração dos CT-e da janela que virou viagem medida. Cobertura de 80% significa denominador 20% menor que o real, e cada R$/viagem 25% maior.']:null,
+          ...janLinhas('pecasVg')
         ],
         obs:'Rateio por VIAGEM, não por km: manutenção corretiva acompanha o uso do conjunto e o ciclo de oficina, não a quilometragem de um trecho específico.'}),
       {fonte:'Núcleo de custo (custosViagem): valor MENSAL de peças e serviços da premissa do Simulador, rateado pelas viagens que esta rota faz por mês. O realizado do Mapinha não entrou nesta rota.',
@@ -14351,19 +14873,19 @@ function rclPainel(chaveCli, k3, semScroll){
       memFonte('Documentação e seguros','docSeguros',
       mem('Documentação e seguros',{selo:selo('docSeguros'),
         fonte:'Mapinha — C.O classificado como documentação/seguros (nome com licenciamento / seguro / IPVA / DPVAT / laudo / CRLV / ANTT / RNTRC; código 08.01 de reserva).',
-        formula:`R$ do período ÷ viagens medidas\n${brl(RB?RB.docRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.docSeguros)}`,
+        formula:`R$ da janela ÷ viagens medidas na MESMA janela\n${brl(RB?RB.docRS:null)} ÷ ${num(janVg('docVg'),0)} = ${brl(li.docSeguros)}`,
         insumos:[
-          ['R$ de documentação e seguros no mês-base', brl(RB?RB.docRS:null),
-           'Licenciamento, IPVA, DPVAT, seguros de casco e RCTR-C, laudos, ANTT/RNTRC — lançamentos da competência-base da unidade inteira.'],
-          ['Viagens medidas no mês-base', num(T?T.viagens:0,0),
-           'Mesmo denominador de peças: CT-e do mês-base amarrados a uma rota.'],
+          ['R$ de documentação e seguros na janela', brl(RB?RB.docRS:null),
+           'Licenciamento, IPVA, DPVAT, seguros de casco e RCTR-C, laudos, ANTT/RNTRC — da unidade inteira, somados em '+janRot('docVg')+'. Esta é a linha com a JANELA MAIS LONGA do módulo, e por um motivo simples: IPVA, licenciamento e apólice de casco são anuais. Com mês-base único, a mesma rota vale uma coisa em fevereiro e outra em agosto sem que nada tenha mudado na operação.'],
+          ['Viagens medidas na mesma janela', num(janVg('docVg'),0),
+           'Mesmo denominador de peças, na janela desta linha: CT-e amarrados a uma rota.'],
           ['= R$ por viagem', brl(T?T.docVg:null),
            'O quociente. Custo de posse diluído entre as viagens que o conjunto fez no mês.']
         ],
         linhas:[
           RB?['Documentação e seguros no período', brl(RB.docRS),
               'Numerador: o que a unidade pagou de documentação e seguro na competência-base.']:null,
-          T?['Viagens medidas no período', num(T.viagens,0), 'Denominador da divisão.']:null,
+          T?['Viagens medidas na janela', num(janVg('docVg'),0), 'Denominador da divisão.']:null,
           T?['R$/viagem', brl(T.docVg), 'O quociente — o valor desta linha.']:null
         ],
         obs:'Custo de posse, não de rodagem: existe com o caminhão parado. Por isso viagem, não km.'}),
@@ -14376,14 +14898,14 @@ function rclPainel(chaveCli, k3, semScroll){
       mem('Pessoal',{selo:selo('pessoal'),
         fonte:'Premissa (CPK) do fechamento do Mapinha — a mesma memória de folha com AE diluído que o módulo CPK usa. Não vem dos lançamentos 13/14/15.01 do DRE, que pertencem ao card "Custo de Pessoal — Realizado".',
         formula: P.pessoalCpkBase==='ambos'
-          ? `(Custo Frota 35% + Custo Agregado 65%) ÷ viagens medidas\n(${brl(RB?RB.pessoalFrota35:null)} + ${brl(RB?RB.pessoalAgregado65:null)}) ÷ ${num(T?T.viagens:0,0)} = ${brl(li.pessoal)}`
-          : `Custo Frota 35% ÷ viagens medidas\n${brl(RB?RB.pessoalFrota35:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.pessoal)}`,
+          ? `(Custo Frota 35% + Custo Agregado 65%) ÷ viagens medidas no MESMO mês\n(${brl(RB?RB.pessoalFrota35:null)} + ${brl(RB?RB.pessoalAgregado65:null)}) ÷ ${num(janVg('pessoalVg'),0)} = ${brl(li.pessoal)}`
+          : `Custo Frota 35% ÷ viagens medidas no MESMO mês\n${brl(RB?RB.pessoalFrota35:null)} ÷ ${num(janVg('pessoalVg'),0)} = ${brl(li.pessoal)}`,
         insumos:[
           ['Custo Frota 35%', brl(RB?RB.pessoalFrota35:null),
            'Campo "Custo Frota 35%" da Premissa (CPK) da competência-base: a folha de motoristas da frota própria já com encargos e com o adicional de estadia diluído, exatamente como o módulo CPK a lê. NÃO são os lançamentos 13/14/15.01 do DRE.'],
           P.pessoalCpkBase==='ambos'?['Custo Agregado 65%', brl(RB?RB.pessoalAgregado65:null),
            'A fatia da folha que sustenta a operação de agregados. Está somando aqui porque a premissa "Base do pessoal" está em "os dois valores" — o CPK por placa usa só os 35%.']:null,
-          ['Viagens medidas no mês-base', num(T?T.viagens:0,0),
+          ['Viagens medidas no mesmo mês', num(janVg('pessoalVg'),0),
            'O divisor: CT-e do mês-base amarrados a uma rota da SZY.'],
           ['= R$ por viagem', brl(T?T.pessoalVg:null),
            'A folha do mês dividida pelas viagens do mês. Comissão não entra aqui — ela é função da tarifa e aparece depois, na cascata.']
@@ -14398,9 +14920,10 @@ function rclPainel(chaveCli, k3, semScroll){
           ['Base escolhida', P.pessoalCpkBase==='ambos'?'os dois valores':'só a fatia da frota',
            'Premissa "Base do pessoal (CPK)" das ⚙ Premissas do resultado. Trocar para "só a fatia da frota" reproduz o CPK por placa.'],
           T?['Pessoal considerado no período', brl(T.pessoalRS), 'O numerador efetivamente usado, já conforme a base escolhida.']:null,
-          T?['Viagens medidas', num(T.viagens,0), 'O denominador.']:null
+          T?['Viagens medidas', num(janVg('pessoalVg'),0), 'O denominador.']:null,
+          ...janLinhas('pessoalVg')
         ],
-        obs:'Parcela por mês da janela, resolvendo a vigência da premissa (carry-forward) mês a mês. A comissão NÃO entra aqui — é função da tarifa e aparece depois, na cascata do resultado.',
+        obs:'Esta é a ÚNICA linha do Mapinha que continua em janela de UM mês, e a decisão é deliberada (comercial, ago/2026): pessoal não tem ruído, tem DERIVA. Dissídio, admissão e desligamento mudam o patamar e não voltam — uma média de seis ou doze meses entregaria uma folha que não existe mais. Média longa serve contra ruído; contra deriva, ela atrasa. As demais linhas do Mapinha usam média móvel justamente por serem o caso oposto.',
         alerta: P.pessoalCpkBase==='ambos'
           ? 'Escolha em validação: somando Frota 35% + Agregado 65%, a rota da frota própria carrega a folha INTEIRA da unidade, inclusive a parcela que sustenta a operação de agregados. O CPK por placa usa só os 35%. Se a intenção for reproduzir o CPK, trocar a base para "só a fatia da frota" nas Premissas.'
           : null}),
@@ -14478,21 +15001,22 @@ function rclPainel(chaveCli, k3, semScroll){
         alerta: depPulados(dCav) ? ('Registros mais novos que ficaram de fora: '+depPulados(dCav)+'.') : null})
       : mem('Depreciação do cavalo',{selo:selo('deprecCavalo'),
         fonte:'Base de depreciação do CPK (cpk_lancamentos/DEPRECIACAO), placa a placa, com a MESMA fórmula do módulo CPK: linear sobre o valor depreciável, percentual anual ou valor manual, respeitando data de compra, prazo, residual e status.',
-        formula:`Σ depreciação mensal das placas × meses da janela ÷ viagens medidas\n${brl(RB?RB.deprecCavaloRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.deprecCavalo)}`,
+        formula:`Σ depreciação mensal das placas ÷ viagens medidas no MESMO mês\n${brl(RB?RB.deprecCavaloRS:null)} ÷ ${num(janVg('depCavVg'),0)} = ${brl(li.deprecCavalo)}`,
         insumos:[
           ['Depreciação de cavalos no período', brl(RB?RB.deprecCavaloRS:null),
            'Soma da depreciação MENSAL de cada cavalo cadastrado em cpk_lancamentos/DEPRECIACAO, multiplicada pelos meses da janela. Placa sem cadastro entra com zero — não é estimada.'],
           ['Placas com depreciação cadastrada', num(RB?RB.nPlacasDep:0,0),
            'Quantas placas têm base de capital cadastrada. Se for muito menor que a frota que roda a rota, o custo de capital está subdimensionado.'],
           ['Meses da janela', num(nMes,0), 'Quantos meses a janela analisada cobre — a depreciação é mensal e precisa ser multiplicada por eles.'],
-          ['Viagens medidas', num(T?T.viagens:0,0), 'O divisor: viagens do mês-base amarradas a uma rota.'],
+          ['Viagens medidas no mesmo mês', num(janVg('depCavVg'),0), 'O divisor: viagens do mês-base amarradas a uma rota.'],
           ['= R$ por viagem', brl(T?T.depCavVg:null), 'O quociente, que é o valor exibido nesta linha.']
         ],
         linhas:[
           RB?['Depreciação de cavalos no período', brl(RB.deprecCavaloRS), 'Numerador: custo de capital dos cavalos da unidade no período.']:null,
           RB?['Placas com depreciação cadastrada', num(RB.nPlacasDep,0), 'Cobertura da base de capital. Placa sem cadastro não gera custo.']:null,
           ['Meses da janela', num(nMes,0), 'Multiplicador do numerador mensal.'],
-          T?['Viagens medidas', num(T.viagens,0), 'Denominador da divisão.']:null,
+          T?['Viagens medidas', num(janVg('depCavVg'),0), 'Denominador da divisão.']:null,
+          ...janLinhas('depCavVg'),
           T?['R$/viagem', brl(T.depCavVg), 'O quociente.']:null
         ],
         obs:'Custo mensal FIXO: incide mesmo no mês em que a placa não rodou. Placa sem depreciação cadastrada não gera custo — a base incompleta puxa o CPK para baixo, e isso aparece no card de completude.'}),
@@ -14525,11 +15049,11 @@ function rclPainel(chaveCli, k3, semScroll){
         alerta: depPulados(dCar) ? ('Registros mais novos que ficaram de fora: '+depPulados(dCar)+'.') : null})
       : mem('Depreciação da carreta',{selo:selo('deprecCarreta'),
         fonte:'Mesma base do CPK, filtrando os registros classificados como carreta (semirreboque, silo, tanque, bitrem, rodotrem, vanderleia).',
-        formula:`Σ depreciação mensal das carretas no período ÷ viagens medidas\n${brl(RB?RB.deprecCarretaRS:null)} ÷ ${num(T?T.viagens:0,0)} = ${brl(li.deprecCarreta)}`,
+        formula:`Σ depreciação mensal das carretas ÷ viagens medidas no MESMO mês\n${brl(RB?RB.deprecCarretaRS:null)} ÷ ${num(janVg('depCarVg'),0)} = ${brl(li.deprecCarreta)}`,
         insumos:[
           ['Depreciação de carretas no período', brl(RB?RB.deprecCarretaRS:null),
            'Soma da depreciação mensal de TODAS as carretas da unidade, pelos meses da janela. É custo de frota — nenhuma carreta é atribuída a uma rota específica.'],
-          ['Viagens no denominador', num(T?T.viagens:0,0),
+          ['Viagens no denominador', num(janVg('depCarVg'),0),
            'Viagens do mês-base amarradas a uma rota'+(T&&T.corrigidoPorCobertura?', já corrigidas pela cobertura (nivelamento por taxa).':'. Sem correção por cobertura: o nivelamento está em "medido", que força o fechamento com o Mapinha.')],
           ['= R$ por viagem', brl(T?T.depCarVg:null),
            'O quociente. Esta é a linha mais sensível da tela ao denominador: metade das viagens de fora dobra o valor.']
@@ -14537,7 +15061,8 @@ function rclPainel(chaveCli, k3, semScroll){
         linhas:[
           RB?['Depreciação de carretas no período', brl(RB.deprecCarretaRS), 'Numerador: capital das carretas da unidade no período.']:null,
           RB?['Placas com depreciação cadastrada', num(RB.nPlacasDep,0), 'Quantas placas têm base de capital cadastrada no CPK.']:null,
-          T?['Viagens no denominador', num(T.viagens,0)+(T.corrigidoPorCobertura?' (corrigido pela cobertura)':''), 'Divisor da conta.']:null,
+          T?['Viagens no denominador', num(janVg('depCarVg'),0)+(T.corrigidoPorCobertura?' (corrigido pela cobertura)':''), 'Divisor da conta.']:null,
+          ...janLinhas('depCarVg'),
           T?['Cobertura do mês-base', pct(T.cobertura,0), 'Fração dos CT-e do mês-base que virou viagem medida. É o que separa esta taxa de estar certa ou inflada por 1/cobertura.']:null,
           T?['R$/viagem', brl(T.depCarVg), 'O quociente.']:null,
           cu?['Quanto isso é do custo da viagem', pct(cu.custoViagem>0?Math.abs(li.deprecCarreta||0)/cu.custoViagem:null,1),
@@ -15075,6 +15600,41 @@ function rclPainel(chaveCli, k3, semScroll){
            O R$ do Mapinha é da frota inteira, mas o denominador só conta o que virou viagem medida: cada R$/viagem
            está ${T.corrigidoPorCobertura?`corrigido pela cobertura (nivelamento por <b>taxa</b>)`:`inflado por 1/cobertura, que é o preço de fechar com o Mapinha (nivelamento <b>medido</b>)`}.
            Trocar em <b>Premissas do resultado → Nivelamento do realizado</b>.</div></div>`:''}
+        ${(T&&T.mediaMovel&&T.det)?`<div class="alerta ac" style="margin-top:10px"><div>
+           <b>Cada linha do Mapinha usa a sua própria janela de meses fechados.</b>
+           O mês-base fechado resolvia o mês <i>incompleto</i>; a média móvel resolve o mês <i>atípico</i> — IPVA e
+           apólice de casco se concentram em poucos meses do ano, uma reforma de motor cai num mês só, e um
+           mês-base único faria a mesma rota valer R$ 230/viagem em fevereiro e R$ 15 em agosto sem que nada
+           tivesse mudado na operação. A taxa é sempre a <b>razão das somas</b> daquela janela
+           (Σ R$ ÷ Σ km ou viagens), nunca a média das razões mensais.
+           <table class="tb" style="margin-top:8px">
+             <thead><tr><th>Linha</th><th class="num">Janela</th><th>Competências usadas</th>
+               <th class="num">R$ na janela</th><th class="num">Denominador</th>
+               <th class="num">Taxa</th><th class="num">Dispersão</th></tr></thead>
+             <tbody>${['pneusKm','lubKm','pecasVg','docVg','pessoalVg','depCavVg','depCarVg','pedagioKm']
+               .map(k=>{ const d=T.det[k]; if(!d||!d.meses||!d.meses.length) return '';
+                 const inf=RCL_CFG.janelaInfo[d.natureza]||['',''];
+                 const rot=(m)=>{ try{ return dtSimplesBR(m+'-01').slice(3); }catch(_){ return m; } };
+                 const faixa = d.n>1 ? rot(d.meses[0])+' a '+rot(d.meses[d.meses.length-1]) : rot(d.meses[0]);
+                 return `<tr><td>${esc(inf[0]||k)}</td>
+                   <td class="num">${d.janela} ${d.janela>1?'meses':'mês'}</td>
+                   <td class="muted" style="font-size:10.5px">${esc(faixa)}${d.n<d.janela?` <span class="pill am">só ${d.n} fechado(s)</span>`:''}</td>
+                   <td class="num">${brl(d.rs)}</td>
+                   <td class="num">${d.chave==='km'?num(d.km,0)+' km':num(d.viagens,0)+' vg'}</td>
+                   <td class="num">${d.valor==null?'—':brl(d.valor)+(d.chave==='km'?'/km':'/vg')}${d.manual?' <span class="src-tag alerta">MANUAL</span>':''}</td>
+                   <td class="num">${d.dispersao==null?'—':pct(d.dispersao,0)}${d.disperso?' <span class="src-tag alerta">ALTA</span>':''}</td></tr>`;
+               }).join('')}</tbody>
+           </table>
+           <div style="margin-top:6px;font-size:10.5px">
+             <b>Pessoal fica em um mês de propósito</b> (decisão do comercial, ago/2026): ele não tem ruído, tem
+             <b>deriva</b> — dissídio, admissão e desligamento mudam o patamar e não voltam, e uma média longa
+             entregaria uma folha que não existe mais. Média longa serve contra ruído; contra deriva, atrasa.<br>
+             <b>Dispersão alta não é erro:</b> é a prova de que aquela natureza é sazonal, e de que um mês-base
+             único estaria entregando um número que não se repete no mês seguinte.<br>
+             <b>O que se perde:</b> a soma das rotas passa a fechar com a <b>média</b> do período, não com o Mapinha
+             de um mês específico. Desligar em <b>Premissas do resultado → Média móvel de meses fechados</b>.
+           </div>
+        </div></div>`:''}
         ${(T&&T.semDenominador)?`<div class="alerta rd" style="margin-top:10px"><div><b>Mês-base sem km e sem viagens medidos.</b>
            Nenhuma taxa de R$/km ou R$/viagem foi apurada e todas as linhas caíram no modelado. Antes desta correção
            o módulo dividia por 1 e o custo de um <b>mês inteiro</b> da frota aparecia como custo de uma viagem.</div></div>`:''}
@@ -15280,17 +15840,74 @@ function rclRenderDiag(){
       a soma das rotas volta a fechar exatamente com o Mapinha.
     </div>
     ${d.base?`<table class="tb">
-      <thead><tr><th>Unidade</th><th>Competência-base</th><th>Situação</th><th class="num">Km medido</th><th class="num">Viagens</th><th>Motivo</th></tr></thead>
+      <thead><tr><th>Unidade</th><th>Série de meses fechados</th><th>Situação</th><th class="num">Km medido</th><th class="num">Viagens</th><th>Motivo</th></tr></thead>
       <tbody>${['SC','PR','SP'].map(f=>{ const b=d.base.porOp[f]; if(!b) return '';
         const md=(d.medOp&&d.medOp[f])||{};
         const pil = b.tipo==='janela'?'<span class="pill gn">janela fechada</span>'
                   : b.tipo==='parcial'?'<span class="pill am">parcial</span>'
                   : b.tipo==='anterior'?'<span class="pill ac">recuou para o fechado</span>'
                   : '<span class="pill rd">sem fechamento</span>';
-        return `<tr><td>${f}</td><td>${esc(b.meses.join(', ')||'—')}</td><td>${pil}</td>
+        const rot=(m)=>{ try{ return dtSimplesBR(m+'-01').slice(3); }catch(_){ return m; } };
+        const serie = b.meses.length
+          ? (b.meses.length>3
+              ? `${rot(b.meses[0])} a ${rot(b.meses[b.meses.length-1])} · ${b.meses.length} meses`
+              : b.meses.map(rot).join(', '))
+          : '—';
+        return `<tr><td>${f}</td><td>${esc(serie)}${(b.mediaMovel&&!b.completa)?' <span class="pill am">série curta</span>':''}</td><td>${pil}</td>
           <td class="num">${num(md.km||0,0)} km</td><td class="num">${num(md.viagens||0,0)}</td>
           <td class="muted" style="font-size:10.5px">${esc(b.motivo||'')}</td></tr>`; }).join('')}</tbody>
-    </table>`:''}
+    </table>
+    <div class="muted" style="font-size:10.5px;margin-top:4px">
+      O km e as viagens da coluna acima são os da janela mais curta (pessoal, 1 mês) — é ela que responde
+      "de quando é a folha". Cada linha de custo tem o seu próprio denominador, na tabela de janelas abaixo.
+    </div>`:''}
+
+    ${(txT&&txT.det&&txT.mediaMovel)?`
+    <h3 style="font-size:12px;margin-top:16px">Janela de cada linha — por que não é o mesmo número de meses</h3>
+    <div class="muted" style="margin-bottom:9px;line-height:1.7">
+      O mês fechado resolveu o mês <b>incompleto</b>. Ele não resolve o mês <b>atípico</b>, que é o problema maior:
+      as linhas do Mapinha não se comportam do mesmo jeito no tempo.<br><br>
+      <b>Documentação e seguros</b> é o caso escandaloso — IPVA, licenciamento e CRLV se concentram no primeiro
+      trimestre e a apólice de casco é anual. Com mês-base único, a MESMA rota, na MESMA frota, vale
+      R$ 230/viagem se a base cair em fevereiro e R$ 15/viagem se cair em agosto, sem que nada tenha mudado na
+      operação. Nenhum dos dois está certo. <b>Peças</b> e <b>pneus</b> são o mesmo problema com outra cara:
+      uma reforma de motor ou uma compra de pneu em lote caem num mês só e deslocam a linha da unidade inteira.<br><br>
+      <b>Pessoal é o oposto e por isso fica em um mês.</b> Ele não tem ruído, tem <b>deriva</b>: dissídio,
+      admissão e desligamento mudam o patamar e não voltam. Média longa é boa contra ruído e ruim contra deriva —
+      doze meses entregariam uma folha que não existe mais.<br><br>
+      <b>A regra do cálculo</b>, que é onde essa ideia costuma dar errado: a taxa é a
+      <b>razão das somas</b>, nunca a média das razões mensais. Com R$ 100 mil em 1.000 viagens num mês e
+      R$ 400 mil em 1.200 no outro, a média das razões dá R$ 216,67/viagem e a razão das somas dá R$ 227,27 —
+      só a segunda reconstrói o R$ total quando multiplicada de volta pelas viagens. É a mesma regra da média
+      ponderada por litros do preço do diesel.
+    </div>
+    <table class="tb">
+      <thead><tr><th>Linha</th><th class="num">Janela</th><th>Competências</th><th class="num">R$ na janela</th>
+        <th class="num">Denominador</th><th class="num">Taxa</th><th class="num">Dispersão</th><th>Por que essa janela</th></tr></thead>
+      <tbody>${['pneusKm','lubKm','pecasVg','docVg','pessoalVg','depCavVg','depCarVg','pedagioKm']
+        .map(k=>{ const dd=txT.det[k]; if(!dd||!dd.meses||!dd.meses.length) return '';
+          const inf=RCL_CFG.janelaInfo[dd.natureza]||['',''];
+          const rot=(m)=>{ try{ return dtSimplesBR(m+'-01').slice(3); }catch(_){ return m; } };
+          const faixa = dd.n>1 ? rot(dd.meses[0])+' a '+rot(dd.meses[dd.meses.length-1]) : rot(dd.meses[0]);
+          return `<tr><td>${esc(inf[0]||k)}</td>
+            <td class="num">${dd.janela} ${dd.janela>1?'meses':'mês'}</td>
+            <td class="muted" style="font-size:10.5px">${esc(faixa)}${dd.n<dd.janela?` <span class="pill am">${dd.n} fechado(s)</span>`:''}</td>
+            <td class="num">${brl(dd.rs)}</td>
+            <td class="num">${dd.chave==='km'?num(dd.km,0)+' km':num(dd.viagens,0)+' vg'}</td>
+            <td class="num"><b>${dd.valor==null?'—':brl(dd.valor)+(dd.chave==='km'?'/km':'/vg')}</b>${dd.manual?' <span class="src-tag alerta">MANUAL</span>':''}</td>
+            <td class="num">${dd.dispersao==null?'—':pct(dd.dispersao,0)}${dd.disperso?' <span class="src-tag alerta">ALTA</span>':''}</td>
+            <td class="muted" style="font-size:10.5px">${esc(inf[1]||'')}</td></tr>`;
+        }).join('')}</tbody>
+    </table>
+    <div class="alerta am" style="margin-top:8px"><div style="font-size:10.5px">
+      <b>O que se perde, e precisa ser aceito de olhos abertos.</b> Com média móvel, a soma das rotas deixa de fechar
+      com o Mapinha de UM mês específico — ela passa a fechar com a MÉDIA do período. Na prática isso já acontecia
+      sempre que a base recuava para um mês anterior à janela; a diferença é que agora é permanente e está declarada.
+      Para precificar frete, uma taxa estável vale mais que uma conciliação exata com um mês que não se repete.
+      Para conferir contra o DRE de um mês, desligue a média móvel nas <b>⚙ Premissas do resultado</b>.<br>
+      <b>Dispersão ALTA</b> não é defeito da linha: é a medida de quanto aquele custo é sazonal — e a prova
+      de que o mês-base único estava entregando um número que não se repete.
+    </div></div>`:''}
     <table class="tb">
       <thead><tr><th>Operação</th><th>Mês-base</th><th class="num">Modelado</th><th class="num">Comprado (SZC)</th>
         <th class="num">Cobertura</th><th class="num">Fator bruto</th>
@@ -15325,7 +15942,14 @@ function rclRenderDiag(){
       <thead><tr><th>Linha</th><th>Fonte</th><th class="num">R$ no período</th><th>Chave</th><th class="num">Taxa aplicada</th></tr></thead>
       <tbody>
         <tr><td>Diesel</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.dieselRS)}</td><td>preço efetivo × litros do modelo</td><td class="num">${brl(txT?txT.precoDieselEfetivo:null)}/l</td></tr>
-        <tr><td>Arla</td><td><span class="src-tag map">MAPINHA</span></td><td class="num">${brl(rlT.arlaRS)}</td><td>${pct(P.arlaPct||0.05,1)} dos litros × preço</td><td class="num">${brl(txT?txT.precoArlaEfetivo:null)}/l</td></tr>
+        <tr><td>Arla</td>
+          <td>${P.arlaBase==='diesel'?'<span class="src-tag alerta">% DO DIESEL</span>'
+               :(P.fonteArlaPreco==='posto'?'<span class="src-tag here">POSTO NA ROTA</span> → <span class="src-tag map">MAPINHA</span>':'<span class="src-tag map">MAPINHA</span>')}</td>
+          <td class="num">${brl(rlT.arlaRS)}</td>
+          <td>${P.arlaBase==='diesel'
+               ? `${pct(P.arlaPct||0.05,1)} do R$ da linha de diesel — base anterior, valora os litros de Arla ao preço do DIESEL`
+               : `${pct(P.arlaPct||0.05,1)} dos litros de diesel × R$/l do ARLA da rota (posto no percurso → média da unidade → Mapinha)`}</td>
+          <td class="num">${brl(txT?txT.precoArlaEfetivo:null)}/l</td></tr>
         <tr><td>Pedágio</td>
           <td>${P.fontePedagio==='here'?'<span class="src-tag here">HERE</span>'
                :(txT&&txT.pedagioFator>0?'<span class="src-tag map">MAPINHA</span> × <span class="src-tag here">HERE</span>':'<span class="src-tag map">MAPINHA</span>')}</td>
@@ -15441,6 +16065,24 @@ function rclPremModal(){
     <div class="rt-fields grid3">
       ${s('baseRealizado','Competência do realizado', P.baseRealizado, [['fechado','Mês fechado mais recente (padrão)'],['anterior','Sempre o fechado anterior à janela'],['janela','A própria janela, fechada ou não']])}
       ${n('baseMaxMeses','Andar para trás no máximo', P.baseMaxMeses, '1', 'meses')}
+      ${c('baseMediaMovel','Média móvel de meses fechados', P.baseMediaMovel!==false, 'cada linha com a sua janela')}
+    </div>
+
+    <h3 style="font-size:12px;margin-top:12px">Janela de cada linha de custo</h3>
+    <div class="muted" style="font-size:10.5px;margin-bottom:6px">
+      O mês fechado resolve o mês <b>incompleto</b>; a janela resolve o mês <b>atípico</b>. IPVA, licenciamento e
+      apólice de casco são anuais, e uma reforma de motor cai num mês só — com mês-base único, a mesma rota vale
+      R$ 230/viagem em fevereiro e R$ 15 em agosto sem que nada tenha mudado na operação. A taxa é sempre a
+      <b>razão das somas</b> da janela (Σ R$ ÷ Σ km ou viagens), nunca a média das razões mensais.<br><br>
+      <b>Pessoal fica em 1 mês de propósito:</b> ele não tem ruído, tem <b>deriva</b> — dissídio, admissão e
+      desligamento mudam o patamar e não voltam. Média longa serve contra ruído; contra deriva, ela atrasa a folha.
+      Teto de ${num(RCL_CFG.janelaTeto,0)} meses; 1 devolve o comportamento anterior daquela linha isoladamente.
+    </div>
+    <div class="rt-fields grid3">
+      ${Object.keys(RCL_CFG.janelaPadrao).map(k=>{
+        const inf=RCL_CFG.janelaInfo[k]||[k,''];
+        return n('jan_'+k, inf[0], rclJanelaDe(k,P), '1', inf[1]);
+      }).join('')}
     </div>
 
     <h3 style="font-size:12px;margin-top:12px">Fonte de cada linha de custo</h3>
@@ -15451,7 +16093,8 @@ function rclPremModal(){
     <div class="rt-fields grid3">
       ${s('fonteDiesel','Diesel', P.fonteDiesel, [['posto','Posto na rota (ShellBox)'],['realizado','Mapinha (preço efetivo)'],['modelo','Modelo / SZC']], 'posto da rota → média da unidade')}
       ${s('fonteArla','Arla', P.fonteArla, [['realizado','Apurado'],['modelo','Modelo / SZC']])}
-      ${s('arlaBase','Base do % do Arla', P.arlaBase, [['diesel','% do R$ da linha de diesel'],['preco','% dos litros × R$/l do Arla']], 'a primeira acompanha o preço do posto')}
+      ${s('arlaBase','Base do % do Arla', P.arlaBase, [['preco','% dos litros × R$/l do Arla (padrão)'],['diesel','% do R$ da linha de diesel']], 'o Arla a granel custa ~metade do diesel')}
+      ${s('fonteArlaPreco','Preço do Arla', P.fonteArlaPreco, [['posto','Posto na rota (ShellBox)'],['realizado','Mapinha (preço efetivo)']], 'posto da rota → média da unidade')}
       ${n('arlaPct','Arla — percentual', P.arlaPct, '0.005', 'fração — 0,05 = 5%')}
       ${s('fontePedagio','Pedágio', P.fontePedagio, [['here','HERE exata da rota'],['realizado','Mapinha nivelando a HERE'],['modelo','Modelo']])}
       ${s('fontePneus','Pneus', P.fontePneus, [['realizado','Mapinha (R$/km)'],['modelo','Modelo']])}
@@ -15521,7 +16164,7 @@ function rclPremModal(){
       : `<button class="btn" onclick="mdFechar()">Fechar</button>`);
 
   const bp=$('rclPremPadrao');
-  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO, eixosPadraoV2:true}); mdFechar();
+  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO, eixosPadraoV2:true, arlaLitrosV3:true}); mdFechar();
     RCL.real=null; RCL.base=null; await rclRecalcularAsync(); toast('Premissas do resultado no padrão.','ac'); };
   const bs=$('rclPremSalvar');
   if(bs) bs.onclick=async()=>{
@@ -15537,6 +16180,10 @@ function rclPremModal(){
       aproveitarRetorno:gB('aproveitarRetorno'), janelaRetornoDias:gN('janelaRetornoDias')||2,
       distPreferida:gS('distPreferida'), distAlertaPct:gN('distAlertaPct')||0.10,
       baseRealizado:gS('baseRealizado'), baseMaxMeses:gN('baseMaxMeses')||12,
+      baseMediaMovel:gB('baseMediaMovel'),
+      janelaMeses: Object.keys(RCL_CFG.janelaPadrao).reduce((a,k)=>{
+        const v=gN('jan_'+k); if(v!=null && v>=1) a[k]=Math.min(Math.round(v), RCL_CFG.janelaTeto);
+        return a; },{}),
       fonteDiesel:gS('fonteDiesel'), fonteArla:gS('fonteArla'), arlaBase:gS('arlaBase'),
       arlaPct:gN('arlaPct')||0.05,
       fontePedagio:gS('fontePedagio'), fontePneus:gS('fontePneus'),
@@ -15546,6 +16193,11 @@ function rclPremModal(){
          tela apagaria o carimbo e a migração rodaria de novo no próximo
          boot, desfazendo justamente a escolha que acabou de ser salva. */
       eixosPadraoV2:true,
+      /* Mesmo motivo, para a migração do Arla: sem o carimbo aqui, salvar
+         esta tela faria a migração rodar de novo no próximo boot e desfazer
+         a escolha que acabou de ser salva. */
+      arlaLitrosV3:true,
+      fonteArlaPreco:gS('fonteArlaPreco'),
       fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
       fonteDocSeguros:gS('fonteDocSeguros'), fontePessoal:gS('fontePessoal'),
       pessoalCpkBase:gS('pessoalCpkBase'), fonteDeprec:gS('fonteDeprec'),
@@ -15654,7 +16306,12 @@ async function rclExportar(){
     if(RCL.diag){
       const d=RCL.diag;
       add('Aderência', [...d.ops.map(o=>d.ader[o]), d.ader._geral].filter(Boolean).map(a=>({
-        Operação:a.op, 'Litros modelados':+a.modelado.toFixed(0), 'Litros comprados':+a.realizado.toFixed(0),
+        Operação:a.op, 'Janela (meses)':a.janela||1, Competências:(a.mesesUsados||[]).join(' '),
+        'Litros modelados':+a.modelado.toFixed(0),
+        'Litros esperados da frota':+(a.modeladoFrota||0).toFixed(0),
+        'Cobertura %':a.cobertura==null?'':+(a.cobertura*100).toFixed(1),
+        'Litros comprados':+a.realizado.toFixed(0),
+        'Fator bruto':a.fatorBruto==null?'':+a.fatorBruto.toFixed(4),
         Fator:a.fator==null?'':+a.fator.toFixed(4), 'Desvio %':a.fator==null?'':+((a.fator-1)*100).toFixed(2),
         Situação:a.fator==null?'sem SZC':a.dentro?'dentro da banda':'fora da banda'
       })));
@@ -15672,11 +16329,43 @@ async function rclExportar(){
             'Depr. cavalo R$':+b.deprecCavaloRS.toFixed(2), 'Depr. carreta R$':+b.deprecCarretaRS.toFixed(2),
             'Km medido':tx?+tx.km.toFixed(0):'', 'Viagens medidas':tx?tx.viagens:'',
             'Diesel R$/l':tx&&tx.precoDieselEfetivo?+tx.precoDieselEfetivo.toFixed(4):'',
-            'Pedágio R$/km':tx?+tx.pedagioKm.toFixed(4):'', 'Pneus R$/km':tx?+tx.pneusKm.toFixed(4):'',
-            'Lubrificante R$/km':tx?+tx.lubKm.toFixed(4):'', 'Peças R$/viagem':tx?+tx.pecasVg.toFixed(2):'',
-            'Doc R$/viagem':tx?+tx.docVg.toFixed(2):'', 'Pessoal R$/viagem':tx?+tx.pessoalVg.toFixed(2):'' });
+            'Arla R$/l':tx&&tx.precoArlaEfetivo?+tx.precoArlaEfetivo.toFixed(4):'',
+            'Pedágio R$/km':tx&&tx.pedagioKm!=null?+tx.pedagioKm.toFixed(4):'',
+            'Pneus R$/km':tx&&tx.pneusKm!=null?+tx.pneusKm.toFixed(4):'',
+            'Lubrificante R$/km':tx&&tx.lubKm!=null?+tx.lubKm.toFixed(4):'',
+            'Peças R$/viagem':tx&&tx.pecasVg!=null?+tx.pecasVg.toFixed(2):'',
+            'Doc R$/viagem':tx&&tx.docVg!=null?+tx.docVg.toFixed(2):'',
+            'Pessoal R$/viagem':tx&&tx.pessoalVg!=null?+tx.pessoalVg.toFixed(2):'' });
         });
         add('Realizado Mapinha e CPK', rows);
+        /* ── Janela de cada linha ────────────────────────────────────────
+           Sem esta aba, o Excel mostra uma taxa sem dizer de quantos meses
+           ela saiu — e o R$ da aba anterior fica sem denominador conferível.
+           Uma linha por natureza e por unidade, com numerador, denominador,
+           competências usadas e a dispersão entre os meses da janela. */
+        const jl=[];
+        ['SC','PR','SP','_geral'].forEach(f=>{
+          const tx=d.taxas?d.taxas[f]:null; if(!tx||!tx.det) return;
+          ['pneusKm','lubKm','pecasVg','docVg','pessoalVg','depCavVg','depCarVg','pedagioKm'].forEach(k=>{
+            const dd=tx.det[k]; if(!dd||!dd.meses||!dd.meses.length) return;
+            const inf=RCL_CFG.janelaInfo[dd.natureza]||[k,''];
+            jl.push({ Unidade:f==='_geral'?'consolidado':f, Linha:inf[0],
+              'Janela (meses)':dd.janela, 'Meses fechados usados':dd.n,
+              Competências:dd.meses.join(' '),
+              'R$ na janela':+((dd.rs||0).toFixed(2)),
+              'Chave do rateio':dd.chave==='km'?'por km':'por viagem',
+              'Km na janela':+((dd.km||0).toFixed(0)), 'Viagens na janela':dd.viagens||0,
+              Denominador:+((dd.den||0).toFixed(2)),
+              Taxa:dd.valor==null?'':+dd.valor.toFixed(4),
+              Origem:dd.manual?'manual (premissa)':'apurado',
+              'Cobertura':dd.cobertura==null?'':+ (dd.cobertura*100).toFixed(1),
+              'Dispersão %':dd.dispersao==null?'':+(dd.dispersao*100).toFixed(1),
+              'Taxa mínima do mês':dd.dispMin==null?'':+dd.dispMin.toFixed(4),
+              'Taxa máxima do mês':dd.dispMax==null?'':+dd.dispMax.toFixed(4),
+              'Por que essa janela':inf[1] });
+          });
+        });
+        if(jl.length) add('Janela por linha', jl);
         /* Equipamento de referência da depreciação: sem esta aba, o Excel
            mostra um R$/viagem de capital sem dizer de qual ativo ele saiu. */
         if(d.real.refDep){
@@ -15884,9 +16573,14 @@ function rclMesesDaTela(){
 async function rclPrepararRealizado(meses){
   const P=rclPrem();
   /* Candidatos: a janela mais os meses para trás em que a busca pode cair. */
+  /* A busca precisa enxergar tantos meses quanto a natureza de janela mais
+     longa consome, mais a folga para pular meses ainda abertos. Sem esta
+     ampliação, a linha de documentação (12 meses) receberia os mesmos meses
+     da de pessoal (1) e a média móvel seria decorativa. */
   const cand=[...meses];
+  const alcance=Math.max(1,P.baseMaxMeses||12) + rclJanelaMax(P);
   let m=rclMesAnterior(meses[0]);
-  for(let i=0;i<Math.max(1,P.baseMaxMeses||12);i++){ cand.push(m); m=rclMesAnterior(m); }
+  for(let i=0;i<alcance;i++){ cand.push(m); m=rclMesAnterior(m); }
   await rclCarregarFechamentos([...new Set(cand)].sort());
   RCL.base = rclResolverBase(meses, P);
   await rclRealCarregar(RCL.base);
@@ -15914,14 +16608,34 @@ function rclRecalcular(){
       const bs=d&&d.base?d.base:null;
       const tipos=bs?['SC','PR','SP'].map(f=>bs.porOp[f]).filter(Boolean):[];
       const recuou=tipos.some(x=>x.tipo==='anterior'||x.tipo==='parcial');
+      const movel=!!(bs&&bs.mediaMovel);
+      const jRot=(nat)=>{ const j=rclJanelaDe(nat); return j+(j>1?' meses':' mês'); };
       meta.innerHTML = `<span class="pill ac">${esc(rclRotuloJanela())}</span>`
-        + (bs?`<span class="pill ${recuou?'am':'gn'}"${mem('Mês-base do realizado',{selo:'MAPINHA',
-             fonte:'Competência de onde saem as médias de consumo e as taxas de custo. Só mês FECHADO no Mapinha entra — em rascunho falta nota, OS e o import de pedágio, e a média sairia por baixo.',
-             formula:'viagens, receita e km ← janela analisada (SZB, tempo real)\nR$/l, R$/km, R$/viagem e aderência ← mês-base fechado',
-             linhas:['SC','PR','SP'].map(f=>{ const b=bs.porOp[f]; return b?[f, (b.meses.length?b.meses.join(', '):'sem fechamento')+' · '+b.tipo]:null; }),
-             obs: recuou
-               ? 'A base recuou porque a janela analisada ainda não fechou. As taxas do mês fechado são aplicadas ao quilômetro e às viagens da janela.'
-               : 'A janela analisada já está fechada no Mapinha — base e janela coincidem, e a soma das rotas fecha com o fechamento.'})}>base: ${esc(rclRotuloBase('SC'))}${recuou?' ⟲':''}</span>`:'')
+        + (bs?`<span class="pill ${recuou?'am':'gn'}"${mem('Base do realizado',{selo:'MAPINHA',
+             fonte: movel
+               ? 'Série de meses FECHADOS no Mapinha de onde saem as médias de consumo e as taxas de custo. Cada natureza de custo recorta desta série a sua própria janela — doze meses para documentação e seguros, um mês para pessoal. Mês em rascunho nunca entra: falta nota, falta OS e falta o import de pedágio, e a média sairia por baixo sem que nada acusasse.'
+               : 'Competência de onde saem as médias de consumo e as taxas de custo. Só mês FECHADO no Mapinha entra — em rascunho falta nota, OS e o import de pedágio, e a média sairia por baixo.',
+             formula: movel
+               ? 'viagens, receita e km ← janela analisada (SZB, tempo real)\ntaxas ← Σ R$ da janela da linha ÷ Σ km ou viagens da MESMA janela'
+               : 'viagens, receita e km ← janela analisada (SZB, tempo real)\nR$/l, R$/km, R$/viagem e aderência ← mês-base fechado',
+             linhas: ['SC','PR','SP'].map(f=>{ const b=bs.porOp[f];
+                 if(!b) return null;
+                 const txt=b.meses.length
+                   ? (b.meses.length>3 ? b.meses[0]+' a '+b.meses[b.meses.length-1]+' · '+b.meses.length+' meses'
+                                       : b.meses.join(', '))
+                   : 'sem fechamento';
+                 return [f, txt+' · '+b.tipo+((b.mediaMovel&&!b.completa)?' · série curta':'')]; })
+               .concat(movel?[
+                 ['Janela por linha','doc '+jRot('doc')+' · peças '+jRot('pecas')+' · pneus '+jRot('pneus')+' · lubrif. '+jRot('lub')+' · pessoal '+jRot('pessoal'),
+                  'Cada natureza usa a janela que faz sentido para ela. Pessoal fica em um mês porque DERIVA com o dissídio; documentação usa doze porque IPVA e apólice são anuais.'],
+                 ['Regra da taxa','razão das somas',
+                  'Σ R$ da janela ÷ Σ km ou viagens da mesma janela — nunca a média das razões mensais, que não reconstrói o total.']
+               ]:[]),
+             obs: movel
+               ? 'A soma das rotas passa a fechar com a MÉDIA do período, não com o Mapinha de um mês específico. É o preço de uma taxa estável, e para precificar frete ele vale a pena. Desligar em ⚙ Premissas do resultado → Média móvel de meses fechados.'
+               : (recuou
+                 ? 'A base recuou porque a janela analisada ainda não fechou. As taxas do mês fechado são aplicadas ao quilômetro e às viagens da janela.'
+                 : 'A janela analisada já está fechada no Mapinha — base e janela coincidem, e a soma das rotas fecha com o fechamento.')})}>base: ${esc(rclRotuloBase('SC'))}${recuou?' ⟲':''}${movel?' ⌀':''}</span>`:'')
         + `<span>${num(RCL.clientes.length,0)} cliente(s) · ${num(RCL.rotas.length,0)} par(es) cliente–rota · ${num(d?d.usados:0,0)} CT-e(s)</span>`
         + (RT.szbMeta?`<span>SZB de ${esc(dtBR(RT.szbMeta.ts))}</span>`:'')
         + (RT.szyMeta?`<span>SZY de ${esc(dtBR(RT.szyMeta.ts))}</span>`:'')
@@ -16999,6 +17713,24 @@ function sbEhS10(r){
 }
 /* Mantido o nome antigo: é ele que as demais rotinas da aba chamam. */
 function sbEhDiesel(r){ return sbEhS10(r); }
+/* ══ ARLA 32 NA MESMA BASE ════════════════════════════════════════════════
+   A exportação do ShellBox traz o Arla nas mesmas linhas do diesel — foi
+   justamente por isso que o recorte do S-10 acima precisou excluí-lo. Agora
+   que a linha de Arla do custo por viagem passou a ser
+   `litros de diesel × 5% × R$/l do ARLA NA ROTA`, esse mesmo lançamento
+   deixa de ser ruído e vira a fonte do preço.
+   Grafias cobertas: "ARLA", "ARLA 32", "ARLA-32", "ARLA32". */
+const _SB_RE_ARLA = /\bARLA\s*-?\s*3?2?\b/i;
+function sbEhArla(r){ return _SB_RE_ARLA.test(String((r&&r.combustivel)||'')); }
+/* Seletor único por produto. 's10' é o padrão e mantém todo o comportamento
+   anterior; 'arla' é o produto novo. */
+function sbProdOk(r, prod){ return prod==='arla' ? sbEhArla(r) : sbEhS10(r); }
+/* A janela de litragem (50–1.200 l) é do DIESEL: abastecimento de Arla é de
+   dezenas de litros e a janela zeraria a amostra inteira. O corte de preço
+   fora da curva e a banda de ±20% continuam valendo nos dois produtos —
+   eles conferem PREÇO, não volume. */
+function sbUsaJanelaLitros(prod){ return prod!=='arla'; }
+function sbProdRotulo(prod){ return prod==='arla' ? 'Arla 32' : 'diesel S-10'; }
 function sbLancamentoValido(r){
   return !/CANCEL|REPROV|ESTORN|NEGAD|RECUSAD/i.test(String((r&&r.status)||''));
 }
@@ -17283,7 +18015,8 @@ function sbPostosPorChaves(chaves){
   chaves.forEach(k=>{ const p=ix.get(k); if(p) out.push(p); });
   return out;
 }
-function sbDieselDePostos(naRota){
+function sbPrecoDePostos(naRota, prod){
+  prod = prod==='arla' ? 'arla' : 's10';
   if(!Array.isArray(naRota) || !naRota.length) return null;
   if(!SB.rows.length) return null;
   const idx=new Map(naRota.map(p=>[p.chave,p]));
@@ -17294,25 +18027,31 @@ function sbDieselDePostos(naRota){
      referência aqui é a mediana dos abastecimentos nos postos DA ROTA. */
   const naRotaRows=[];
   for(const x of SB.rows){
-    if(!sbEhDiesel(x) || !(x.preco>0) || !(x.litros>0) || !sbLancamentoValido(x)) continue;
+    if(!sbProdOk(x,prod) || !(x.preco>0) || !(x.litros>0) || !sbLancamentoValido(x)) continue;
     if(!idx.has(sbChaveMemo(x))) continue;
     naRotaRows.push(x);
   }
-  const banda=precoBanda(naRotaRows, x=>x.preco, x=>x.litros,
-    naRotaRows.filter(x=>x.litros>=SB_LITROS_MIN && x.litros<=SB_LITROS_MAX));
+  const refBanda = sbUsaJanelaLitros(prod)
+    ? naRotaRows.filter(x=>x.litros>=SB_LITROS_MIN && x.litros<=SB_LITROS_MAX)
+    : naRotaRows;
+  const banda=precoBanda(naRotaRows, x=>x.preco, x=>x.litros, refBanda);
 
   let melhor=null, rejeitados=0;
   for(const x of SB.rows){
-    if(!sbEhDiesel(x) || !(x.preco>0) || !sbLancamentoValido(x)) continue;
+    if(!sbProdOk(x,prod) || !(x.preco>0) || !sbLancamentoValido(x)) continue;
     const p=idx.get(sbChaveMemo(x)); if(!p) continue;
     if(banda.ativa && !banda.ok(x)){ rejeitados++; continue; }
     if(!melhor || String(x.data)>String(melhor.linha.data)) melhor={linha:x, posto:p};
   }
   if(!melhor) return null;
-  return { valor:+Number(melhor.linha.preco).toFixed(3), fonte:'posto_rota',
+  return { valor:+Number(melhor.linha.preco).toFixed(3), fonte:'posto_rota', produto:prod,
            linha:melhor.linha, posto:melhor.posto, postos:naRota,
            foraDaBanda:rejeitados, bandaRef:banda.ativa?+banda.ref.toFixed(3):null };
 }
+/* Nome antigo preservado: é por ele que o Simulador entra. */
+function sbDieselDePostos(naRota){ return sbPrecoDePostos(naRota,'s10'); }
+/* O mesmo motor, para o Arla da rota. */
+function sbArlaDePostos(naRota){ return sbPrecoDePostos(naRota,'arla'); }
 function sbDieselDaRota(){
   const r=(typeof SIMR!=='undefined')?SIMR.atual:null;
   if(!r || !Array.isArray(r.rotaDetalhada) || !r.rotaDetalhada.length) return null;
@@ -17324,20 +18063,25 @@ function sbDieselDaRota(){
 /* A Rota clientes pede a média da unidade uma vez por rota; sem cache, cada
    chamada varre a base inteira de abastecimentos. O cache é invalidado por
    quantidade de linhas + carimbo da base, que é o que muda numa recarga. */
-function sbMediaUnidadeCache(filial){
+function sbMediaUnidadeCache(filial, prod){
+  const p = prod==='arla' ? 'arla' : 's10';
   const sel=String(filial||'').toUpperCase();
   const ver=(SB.rows?SB.rows.length:0)+'¦'+((SB.meta&&SB.meta.ts)||'');
   if(!SB._medCache || SB._medCacheVer!==ver){ SB._medCache=new Map(); SB._medCacheVer=ver; }
-  if(SB._medCache.has(sel)) return SB._medCache.get(sel);
-  const v=sbMediaUnidade(sel);
-  SB._medCache.set(sel, v);
+  const ck=p+'|'+sel;
+  if(SB._medCache.has(ck)) return SB._medCache.get(ck);
+  const v=sbMediaUnidadeProd(sel, p);
+  SB._medCache.set(ck, v);
   return v;
 }
-function sbMediaUnidade(filial){
+/* Nome antigo preservado (Simulador). */
+function sbMediaUnidade(filial){ return sbMediaUnidadeProd(filial,'s10'); }
+function sbMediaUnidadeProd(filial, prod){
+  prod = prod==='arla' ? 'arla' : 's10';
   const alvo=String(filial||'').toUpperCase();
   const cand=[];
   for(const x of SB.rows){
-    if(!sbEhDiesel(x) || !(x.preco>0) || !(x.litros>0) || !sbLancamentoValido(x)) continue;
+    if(!sbProdOk(x,prod) || !(x.preco>0) || !(x.litros>0) || !sbLancamentoValido(x)) continue;
     if(alvo && sbUnidade(x)!==alvo) continue;
     cand.push(x);
   }
@@ -17348,7 +18092,10 @@ function sbMediaUnidade(filial){
   const naJanelaMes=cand.filter(x=>x.data.slice(0,7)>=de);
   const periodo=naJanelaMes.length?naJanelaMes:cand;
 
-  const naJanelaL=periodo.filter(x=>x.litros>=SB_LITROS_MIN && x.litros<=SB_LITROS_MAX);
+  /* Janela de litragem só no diesel — ver sbUsaJanelaLitros(). */
+  const naJanelaL=sbUsaJanelaLitros(prod)
+    ? periodo.filter(x=>x.litros>=SB_LITROS_MIN && x.litros<=SB_LITROS_MAX)
+    : periodo;
   const usar=naJanelaL.length?naJanelaL:periodo;
 
   /* corte de preço fora da curva medido contra a média ponderada dos demais —
@@ -17369,6 +18116,7 @@ function sbMediaUnidade(filial){
   const V=limpa.reduce((a,x)=>a+x.preco*x.litros,0);
   if(!(L>0)) return null;
   return { valor:+(V/L).toFixed(3), fonte:'media_unidade', unidade:alvo||'consolidado',
+           produto:prod, janelaLitros:sbUsaJanelaLitros(prod),
            qtd:limpa.length, qtdBruta:periodo.length, litros:L,
            de, ate:max.slice(0,7), descartados:periodo.length-limpa.length,
            foraDaCurva:usar.length-semCurva.length, foraDaBanda:semCurva.length-limpa.length,
