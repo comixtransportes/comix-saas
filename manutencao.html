@@ -1216,7 +1216,7 @@ body.checklist-only .view-area{height:100%;}
 
               <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px">
                     <button class="btn">💾 Salvar rascunho</button>
-                <button class="btn btn-ac" onclick="salvarOS()">📤 Criar e enviar</button>
+                <button class="btn btn-ac" id="btn-criar-os" onclick="salvarOS()">📤 Criar e enviar</button>
               </div>
             </div>
           </div>
@@ -1970,8 +1970,94 @@ function dataInputParaDateLocal(valor) {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0);
 }
 
+// ══ NOVA OS — GUARDA ANTI-DUPLICIDADE ══
+/* [DUPLICIDADE] O botão "Criar e enviar" era reentrante: como salvarOS() é
+   assíncrona (gera número, grava no Firestore, sobe fotos/orçamento), cada
+   clique extra durante o salvamento disparava uma nova execução completa e
+   gerava outra O.S com número diferente e exatamente os mesmos dados.
+   Agora existem três travas:
+     1. _osSalvandoLock  → bloqueia reentrância + desabilita o botão;
+     2. assinaturaOS()   → impede gravar uma O.S idêntica a outra já existente;
+     3. resetFormularioOS() completo → zera TODOS os campos após criar. */
+let _osSalvandoLock = false;
+
+function _osTxtNorm(v) {
+  return String(v == null ? '' : v).trim().toUpperCase().replace(/\s+/g, ' ');
+}
+function _osItensNorm(arr) {
+  return (Array.isArray(arr) ? arr : []).map(i => [
+    _osTxtNorm(i && (i.descricao || i.desc || i.nome)),
+    (parseFloat(i && i.quantidade) || 0),
+    (parseFloat(i && (i.vlTotal != null ? i.vlTotal : i.valorTotal)) || 0).toFixed(2)
+  ].join('~')).sort().join('|');
+}
+/* Assinatura do conteúdo da O.S — dois formulários com os mesmos dados
+   produzem a mesma assinatura, independentemente do número gerado. */
+function assinaturaOS(d) {
+  return [
+    _osTxtNorm(d && d.unidade),
+    _osTxtNorm(d && d.veiculo),
+    _osTxtNorm(d && d.tipo),
+    _osTxtNorm(d && d.local),
+    _osTxtNorm(d && d.problema),
+    _osTxtNorm(d && d.motivo),
+    _osItensNorm(d && d.servicos),
+    _osItensNorm(d && d.pecas),
+    (parseFloat(d && d.valorTotal) || 0).toFixed(2)
+  ].join('\u00a7');
+}
+function _osStatusEncerrado(status) {
+  const s = _osTxtNorm(status)
+    .replace(/[ÁÀÃÂÄ]/g, 'A').replace(/[ÉÈÊË]/g, 'E').replace(/[ÍÌÎÏ]/g, 'I')
+    .replace(/[ÓÒÕÔÖ]/g, 'O').replace(/[ÚÙÛÜ]/g, 'U').replace(/Ç/g, 'C');
+  return /CONCLU|CANCEL|FINALIZ|REPROV/.test(s);
+}
+function _osDataMs(v) {
+  if (!v) return 0;
+  if (v instanceof Date) return v.getTime();
+  if (typeof v === 'object') {
+    if (typeof v.seconds === 'number') return v.seconds * 1000;
+    if (typeof v.toDate === 'function') { try { return v.toDate().getTime(); } catch(e) { return 0; } }
+  }
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : 0;
+}
+/* Considera duplicada a O.S com a MESMA assinatura que ainda esteja ativa
+   (não concluída/cancelada/reprovada) OU que tenha sido criada nas últimas
+   24h — este segundo caso é o que mata o duplo clique. */
+function encontrarOSDuplicada(assinatura) {
+  const lista = (typeof MNT_CACHE === 'object' && Array.isArray(MNT_CACHE.ordens)) ? MNT_CACHE.ordens : [];
+  const agora = Date.now();
+  for (const o of lista) {
+    if (!o) continue;
+    const assin = o.assinatura || assinaturaOS(o);
+    if (assin !== assinatura) continue;
+    const recente = (agora - _osDataMs(o.criadoEm || o.dataAbertura)) < 86400000;
+    if (recente || !_osStatusEncerrado(o.status)) return o;
+  }
+  return null;
+}
+function _osBotaoCriar(estado) {
+  const btn = document.getElementById('btn-criar-os');
+  if (!btn) return;
+  if (estado === 'enviando') {
+    btn._labelOriginal = btn._labelOriginal || btn.innerHTML;
+    btn.disabled = true;
+    btn.style.opacity = '.6';
+    btn.style.pointerEvents = 'none';
+    btn.innerHTML = '⏳ Enviando...';
+  } else {
+    btn.disabled = false;
+    btn.style.opacity = '';
+    btn.style.pointerEvents = '';
+    if (btn._labelOriginal) btn.innerHTML = btn._labelOriginal;
+  }
+}
+
 // ══ NOVA OS — SALVAR NO FIREBASE ══
 async function salvarOS() {
+  if (_osSalvandoLock) { toast('A O.S já está sendo criada. Aguarde a confirmação.', 'am'); return; }
+
   const unidade    = document.getElementById('mnt_nova_unidade')?.value || '';
   const veiculo    = (document.getElementById('mnt_nova_placa_input')?.value?.trim()
                   || document.getElementById('mnt_nova_veiculo')?.value?.trim()
@@ -2002,6 +2088,18 @@ async function salvarOS() {
 
   const db = window._mntDB;
   if (!db && !atlasHasParentBridge()) { toast('Firebase não disponível. Verifique a conexão.', 'rd'); return; }
+
+  // Assinatura do conteúdo + bloqueio de O.S repetida
+  const assinatura = assinaturaOS({ unidade, veiculo, tipo, local, problema, motivo, servicos, pecas, valorTotal: total });
+  const duplicada  = encontrarOSDuplicada(assinatura);
+  if (duplicada) {
+    toast('O.S repetida: já existe a ' + (duplicada.id || ('OS-' + duplicada.num)) + ' com exatamente os mesmos dados (' + (duplicada.status || 'Aberta') + '). Edite a O.S existente ou altere as informações.', 'rd');
+    return;
+  }
+
+  _osSalvandoLock = true;
+  _osBotaoCriar('enviando');
+  let _osIdOtimista = null;
 
   try {
     const num   = await gerarNumOS();
@@ -2039,6 +2137,7 @@ async function salvarOS() {
       aprovacaoEtapaAtual: fluxoInicial.etapaAtual || '',
       regrasAprovacaoAplicadas: fluxoInicial.regrasAplicadas || [],
       origem: 'manual',
+      assinatura,
       criadoEm: agora,
       atualizadoEm: agora,
       criadoPor: ATLAS_CURRENT_USER.email || '—',
@@ -2047,7 +2146,12 @@ async function salvarOS() {
       centroCusto,
     };
 
+    // Registra na memória local ANTES do await de rede: se algum clique
+    // escapar da trava, o encontrarOSDuplicada() já enxerga esta O.S.
+    if (Array.isArray(MNT_CACHE.ordens)) { MNT_CACHE.ordens.unshift({ ...payload }); _osIdOtimista = osId; }
+
     const saveRes = await atlasFsSetDoc('ordens_servico', osId, payload, { merge: true });
+    _osIdOtimista = null;
     registrarNumOS(num);
     await setPlacaEmManutencao(veiculo);
     const fotosMeta = [];
@@ -2082,7 +2186,7 @@ async function salvarOS() {
 
     toast(osId + (saveRes && saveRes.source === 'local' ? ' criada localmente. Firebase externo bloqueado por regras/permissões.' : ' criada e salva no Firebase.'), saveRes && saveRes.source === 'local' ? 'am' : 'gn');
     resetFormularioOS();
-    await loadOrdensServico();
+    await loadOrdensServico(true);
     goTo('gestao', null);
 
     const proxNum = await gerarNumOS();
@@ -2090,7 +2194,14 @@ async function salvarOS() {
     if (numEl) numEl.value = 'OS-' + proxNum;
   } catch(err) {
     console.error('[salvarOS] ERRO:', err);
+    // Falhou antes de gravar: desfaz o registro otimista para não travar a retentativa.
+    if (_osIdOtimista && Array.isArray(MNT_CACHE.ordens)) {
+      MNT_CACHE.ordens = MNT_CACHE.ordens.filter(o => !(o && o.id === _osIdOtimista));
+    }
     toast('Erro real ao salvar OS: ' + err.message, 'rd');
+  } finally {
+    _osSalvandoLock = false;
+    _osBotaoCriar('pronto');
   }
 }
 
@@ -3477,12 +3588,43 @@ function renderKanbanReais() {
     return `<div class="kol"><div class="kol-hdr"><span style="font-size:11px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.6px">${titulo}</span><span class="bdg ${bdg}" style="font-size:9px">${items.length}</span></div><div class="kol-body">${items.length ? items.map(o => `<div class="kcard" onclick="openPanel('${escapeHtml(o.id)}')"><div class="kcard-title"><span class="os-n">${escapeHtml(o.id)}</span><span class="bdg ${badgeClasseStatus(o.status)}" style="font-size:9px">${escapeHtml(o.status || 'Aberta')}</span></div><div class="kcard-sub">${escapeHtml(o.veiculo || '—')} · ${escapeHtml(servicoResumo(o))}</div><div class="kcard-foot"><span style="font-size:10px;color:var(--mu)">${escapeHtml(dataCurta(o.prazo || o.criadoEm))}</span><span style="font-size:10px;font-family:var(--m)">${moeda(o.valorTotal || 0)}</span></div></div>`).join('') : '<div style="font-size:11.5px;color:var(--mu);padding:12px">Nenhuma O.S real nesta coluna.</div>'}</div></div>`;
   }).join('');
 }
+/* [DUPLICIDADE] Reset COMPLETO do formulário de Nova O.S. Antes, placa, KM,
+   centro de custo, prestador e problema eram limpos, mas unidade, motorista,
+   equipamento, motivo da parada, prazo, prioridade e os radios de tipo/local
+   continuavam preenchidos — era o que fazia a próxima O.S nascer com os
+   mesmos dados da anterior. */
 function resetFormularioOS() {
-  document.getElementById('mnt_nova_placa_input') && (document.getElementById('mnt_nova_placa_input').value = '');
-  document.getElementById('mnt_nova_km') && (document.getElementById('mnt_nova_km').value = '');
-  document.getElementById('mnt_nova_centro_custo') && (document.getElementById('mnt_nova_centro_custo').value = '');
+  const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+
+  // Identificação
+  setVal('mnt_nova_placa_input', '');
+  setVal('mnt_nova_veiculo', '');
+  setVal('mnt_nova_km', '');
+  setVal('mnt_nova_centro_custo', '');
+  setVal('mnt_nova_motorista', '');
+  setVal('mnt_nova_unidade', '');
+  const tipoEl = document.getElementById('mnt_nova_tipo');
+  if (tipoEl) tipoEl.selectedIndex = 0;
+  const prioEl = document.querySelector('#view-nova-os select:not([id])');
+  if (prioEl) prioEl.selectedIndex = 0;
+  const sug = document.getElementById('mnt_placa_suggestions'); if (sug) sug.style.display = 'none';
+  const alertaMot = document.getElementById('motorista-alerta'); if (alertaMot) alertaMot.style.display = 'none';
+  if (typeof _motoristaDaFrota !== 'undefined') _motoristaDaFrota = '';
   document.getElementById('hodometro-alerta')?.classList.remove('on');
-  document.getElementById('mnt_nova_prestador') && (document.getElementById('mnt_nova_prestador').value = '');
+  const kmEl = document.getElementById('mnt_nova_km'); if (kmEl) kmEl.style.borderColor = '';
+
+  // Local / tipo de serviço — volta para a primeira opção de cada grupo
+  const l2 = document.querySelectorAll('#view-nova-os [name="l2"]');
+  l2.forEach((r, i) => { r.checked = (i === 0); });
+  const t2 = document.querySelectorAll('#view-nova-os [name="t2"]');
+  t2.forEach((r, i) => { r.checked = (i === 0); });
+
+  // Serviços e envio
+  setVal('mnt_nova_prestador', '');
+  setVal('mnt_motivo_parada', '');
+  setVal('mnt_motivo_parada_input', '');
+  const sugMot = document.getElementById('mnt_motivo_suggestions'); if (sugMot) sugMot.style.display = 'none';
+  setVal('nova-os-prazo', '');
   const txt = document.querySelector('#view-nova-os textarea'); if (txt) txt.value = '';
   document.querySelectorAll('#servicos-list .dynamic-row:not(:first-child), #pecas-list .dynamic-row:not(:first-child)').forEach(el => el.remove());
   document.querySelectorAll('#servicos-list .dynamic-row input, #pecas-list .dynamic-row input').forEach(inp => {
