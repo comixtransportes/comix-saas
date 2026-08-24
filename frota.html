@@ -420,6 +420,21 @@ html,body{background:var(--bg);font-family:'IBM Plex Sans',-apple-system,'Helvet
 .status-tag.vendida,.status-tag.vendido,.status-tag.baixado{background:#f3f4f6;color:#6b7280;text-decoration:line-through}
 .status-tag.inativo{background:#eceff3;color:#6b7280}
 
+/* Carimbo de unidade · SÓ no card da coluna "Em Manutenção".
+   Enquanto o cavalo está parado ele sai da coluna da filial e perde a
+   referência visual de origem — este carimbo diz para onde ele volta.
+   Nenhuma outra coluna recebe este elemento. */
+.unit-stamp{
+  display:inline-flex;align-items:center;gap:3px;
+  font-size:8.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;
+  padding:1px 5px;border-radius:3px;line-height:1.6;
+  border:1px solid currentColor;background:transparent;opacity:.7;
+}
+.unit-stamp .us-dot{width:4px;height:4px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.unit-stamp.sc{color:#0e7a7a}
+.unit-stamp.pr{color:#1a56db}
+.unit-stamp.sp{color:#6d28d9}
+
 /* Placa Mercosul */
 .plate-mercosul{
   display:inline-flex;flex-direction:column;align-items:stretch;
@@ -3061,6 +3076,18 @@ function renderCard(cavalo, searchTerm) {
                       vendida:'vendido', baixado:'baixado', inativo:'inativo' };
   const statusTag = '<span class="status-tag '+cavalo.disponibilidade+'">'+(dispLabel[cavalo.disponibilidade]||cavalo.disponibilidade)+'</span>';
 
+  /* ── CARIMBO DE UNIDADE · exclusivo da coluna "Em Manutenção" ──────────────
+     Só cavalos com disponibilidade === "manutencao" caem na coluna DISPONIVEL
+     (ver getCavalosPorColuna), então esta única condição já isola o carimbo:
+     nenhum card de SC/PR/SP, Reserva, Indisponível ou reforma é alterado.
+     A filial vem de unidade_slug, que o moveCavalo preserva ao mandar o
+     veículo para manutenção — é para lá que ele volta quando liberar. */
+  const emManutencao = cavalo.disponibilidade === "manutencao";
+  const unitSlug = emManutencao ? (cavalo.unidade_slug || "") : "";
+  const unitStamp = (emManutencao && ["SC","PR","SP"].includes(unitSlug))
+    ? `<span class="unit-stamp ${unitSlug.toLowerCase()}" title="Unidade de origem: ${escapeHtml(UNIT_LABEL[unitSlug] || unitSlug)}"><span class="us-dot"></span>Un. ${unitSlug}</span>`
+    : '';
+
   const canEdit = STATE.isAdmin;
   const editAttr = canEdit ? 'editable' : '';
 
@@ -3149,6 +3176,7 @@ function renderCard(cavalo, searchTerm) {
       ${compHtml}
       <div class="card-footer-meta">
         ${statusTag}
+        ${unitStamp}
         ${opsBadge}
       </div>
     </div>
