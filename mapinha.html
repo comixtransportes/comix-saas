@@ -151,6 +151,10 @@ tr.grp:hover td,tr.res:hover td{background:inherit}
 .tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:var(--rs);font-weight:600}
 .tag.man{background:var(--ac-bg);color:var(--ac)}
 .tag.os{background:var(--pu-bg);color:var(--pu);cursor:pointer}
+.tag.off{background:var(--am-bg);color:var(--am);border:1px dashed var(--am-bd);margin-left:4px}
+tr.sem-dre td{opacity:.55}
+tr.sem-dre td.num{text-decoration:line-through;text-decoration-thickness:1px}
+tr.sem-dre td:last-child,tr.sem-dre td:nth-last-child(2){opacity:1;text-decoration:none}
 
 /* Grid form */
 .frm{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;align-items:end}
@@ -310,6 +314,7 @@ td>.skel-line{vertical-align:middle}
       </div>
     </div>
     <div class="panel-b" style="overflow:auto;max-height:440px">
+      <div id="lancEscopoNota"></div>
       <table>
         <thead><tr>
           <th>Data</th><th>Fornecedor</th><th>N.F.</th><th>Placa</th><th>Centro de custo</th>
@@ -343,6 +348,7 @@ td>.skel-line{vertical-align:middle}
       <div id="dreBaseNote" style="margin-top:10px;font-size:11px;line-height:1.5;color:var(--mu);background:var(--sf);border:1px solid var(--bd2);border-left:3px solid var(--am,#b45309);border-radius:4px;padding:8px 11px">
         <b>Mudança de base (07/2026):</b> a margem % e a coluna AV% passaram a ser calculadas sobre o <b>Fat. Líquido</b>, não sobre o Bruto. O resultado em R$ não mudou — só o denominador. Séries anteriores a 07/2026 usam a base antiga e <b>não são comparáveis em %</b>.
       </div>
+      <div id="dreEscopoNote" style="margin-top:10px"></div>
       <div id="agregNote" style="margin-top:10px"></div>
     </div>
   </div>
@@ -1078,7 +1084,7 @@ function calcDieselDetalhado(){
   const sub={ internoFrota:0, internoAgreg:0, externoFrota:0, externoAgreg:0,
               arlaFrota:0, arlaAgreg:0, reembolso:0 };
   const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-  lancVisiveis().forEach(function(l){
+  lancCalculo().forEach(function(l){
     const cod=String(l.centroCusto||'').trim(); const v=+l.valor||0;
     if(DIESEL_CREDITO.has(cod)){ sub.reembolso += Math.abs(v); return; }   // 22.01 abate o total
     let cls=DIESEL_MAP[cod];
@@ -1805,7 +1811,31 @@ async function loadLancOS(){
   ST.lancOS = out;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   ESCOPO DE CÁLCULO DO DRE — decisão de 08/2026
+   Enquanto a conciliação do Custo Operacional contra o Protheus não
+   fecha, o DRE considera SOMENTE lançamentos MANUAIS (importados do
+   Mapinha / digitados). Os lançamentos derivados de OS concluídas
+   continuam sendo lidos, listados e filtráveis na aba Lançamentos —
+   só não entram em nenhuma soma.
+
+   Motivo: a OS entra no Atlas assim que é concluída; a NF só chega ao
+   Protheus depois. Isso fazia o C.O do Atlas ficar acima do Excel
+   (jul/26: SC +54.932,82 · PR +26.992,75 · SP +2.116,45) sem que a
+   diferença fosse erro de nenhum dos dois lados.
+
+   Para voltar a somar as OS, basta OS_NO_DRE = true. Nada mais muda.
+   ══════════════════════════════════════════════════════════════════ */
+const OS_NO_DRE = false;
+
+/* Lista completa — usada na TELA (listagem, filtros, busca, contagem). */
 function lancVisiveis(){ return [...ST.lancManuais, ...ST.lancOS]; }
+
+/* Base de CÁLCULO do DRE — respeita OS_NO_DRE. Todo somatório usa esta. */
+function lancCalculo(){ return OS_NO_DRE ? lancVisiveis() : [...ST.lancManuais]; }
+
+/* true = o lançamento aparece na tela mas não entra em nenhuma soma */
+function lancForaDoDre(l){ return !OS_NO_DRE && l && l.origem==='manutencao'; }
 
 function normalizaFiltroLanc(v){
   return String(v||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
@@ -1830,19 +1860,35 @@ function renderLancamentos(){
       return termos.every(t=>txt.includes(t));
     })
     .sort((a,b)=> String(a.data).localeCompare(String(b.data)));
+  renderEscopoNota();
   const tb=document.getElementById('lancTbody');
   if(!rows.length){ tb.innerHTML='<tr><td colspan="8" class="empty">Nenhum lançamento encontrado para os filtros aplicados.</td></tr>'; return; }
   tb.innerHTML = rows.map(l=>{
     const dt=dtFrom(l.data); const ds=dt?dt.toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}):'—';
+    const fora = lancForaDoDre(l);
     const origem = l.origem==='manutencao'
       ? `<span class="tag os" onclick="abrirOS('${l.osId}')">OS ${l.osId||''}</span>`
+        + (fora?`<span class="tag off" title="Lançamento de OS: aparece aqui, mas não entra em nenhuma soma do DRE enquanto a conciliação com o Protheus não fechar.">fora do DRE</span>`:'')
       : `<span class="tag man">manual</span>`;
     const acao = lancActionBtns(l);
     const neg = l.valor<0?'neg':'';
-    return `<tr><td>${ds}</td><td>${l.fornecedor||'—'}</td><td>${l.nf||'—'}</td><td>${l.placa||'—'}</td>
+    return `<tr class="${fora?'sem-dre':''}"><td>${ds}</td><td>${l.fornecedor||'—'}</td><td>${l.nf||'—'}</td><td>${l.placa||'—'}</td>
       <td>${l.centroCusto} ${l.centroCustoNome||''}</td>
       <td class="num ${neg}">${moeda(l.valor)}</td><td>${origem}</td><td>${acao}</td></tr>`;
   }).join('');
+}
+/* Aviso de escopo: deixa explícito que OS está listada mas fora das somas. */
+function renderEscopoNota(){
+  const el=document.getElementById('lancEscopoNota'); if(!el) return;
+  if(OS_NO_DRE){ el.innerHTML=''; return; }
+  const n=(ST.lancOS||[]).length, v=totalOSForaDoDre();
+  if(!n){ el.innerHTML=''; return; }
+  el.innerHTML = `<div class="lock-note">`
+    + `<b>DRE considera apenas lançamentos manuais.</b> `
+    + `${n} lançamento(s) de OS (${moeda(v)}) aparecem na lista, mas <b>não entram em nenhuma soma</b> `
+    + `do DRE — nem no Custo Operacional, nem no Diesel, nem no Resultado Financeiro. `
+    + `Medida temporária até a conciliação do C.O com o Protheus fechar.`
+    + `</div>`;
 }
 function abrirOS(osId){
   if(!osId) return;
@@ -1851,11 +1897,16 @@ function abrirOS(osId){
 }
 
 /* ══ DRE ══ */
-function somaGrupo(g){ return lancVisiveis().filter(l=>l.grupoDre===g).reduce((s,l)=>s+(+l.valor||0),0); }
-function somaCentro(cc){ return lancVisiveis().filter(l=>l.centroCusto===cc).reduce((s,l)=>s+(+l.valor||0),0); }
+function somaGrupo(g){ return lancCalculo().filter(l=>l.grupoDre===g).reduce((s,l)=>s+(+l.valor||0),0); }
+function somaCentro(cc){ return lancCalculo().filter(l=>l.centroCusto===cc).reduce((s,l)=>s+(+l.valor||0),0); }
 function somaGrupoExceto(g, codigos){
   const set=new Set(codigos||[]);
-  return lancVisiveis().filter(l=>l.grupoDre===g && !set.has(l.centroCusto)).reduce((s,l)=>s+(+l.valor||0),0);
+  return lancCalculo().filter(l=>l.grupoDre===g && !set.has(l.centroCusto)).reduce((s,l)=>s+(+l.valor||0),0);
+}
+/* Quanto de OS está fora do DRE hoje — só para exibir na tela, nunca soma. */
+function totalOSForaDoDre(){
+  if(OS_NO_DRE) return 0;
+  return (ST.lancOS||[]).reduce((s,l)=>s+(+l.valor||0),0);
 }
 function valPremissa(p, keys, def=0){
   for(const k of keys){ if(p && p[k]!==undefined && p[k]!==null && p[k]!=='') return +p[k]||0; }
@@ -1977,7 +2028,7 @@ function calcDRE(){
 function calcCOSubs(){
   const norm = s => String(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   let melhorias=0, agregEmp=0;
-  lancVisiveis().forEach(l=>{
+  lancCalculo().forEach(l=>{
     if(l.grupoDre!=='CO') return;
     const cod=String(l.centroCusto||'').trim(); const nome=norm(l.centroCustoNome||''); const v=+l.valor||0;
     if(cod==='03.01' || /melhoria|reforma/.test(nome)) melhorias+=v;
@@ -2084,6 +2135,16 @@ function renderDre(){
     linha('&nbsp;&nbsp;VA', ce.va, ce.va) +
     (ce.outros?linha('&nbsp;&nbsp;Outros CE', ce.outros, ce.outros):'') +
     `<tr class="res"><td>= Resultado Financeiro</td><td class="num">${moeda(d.rf)}</td><td class="num">${pct(d.margem)}</td><td class="num">${m.resultadoFinanceiro?moeda(m.resultadoFinanceiro):'—'}</td><td class="num">${m.resultadoFinanceiro?pct(m.resultadoFinanceiro?d.rf/m.resultadoFinanceiro:0):'—'}</td></tr>`;
+  // escopo de cálculo (OS fora do DRE)
+  const escNote=document.getElementById('dreEscopoNote');
+  if(escNote){
+    const nOS=(ST.lancOS||[]).length, vOS=totalOSForaDoDre();
+    escNote.innerHTML = (OS_NO_DRE || !nOS) ? '' :
+      `<div class="lock-note"><b>Escopo de cálculo: somente lançamentos manuais.</b> `
+      + `${nOS} lançamento(s) derivado(s) de OS concluída (<b>${moeda(vOS)}</b>) estão listados na aba Lançamentos `
+      + `mas <b>não entram em nenhuma linha deste DRE</b>. Medida temporária: a OS entra no Atlas ao ser concluída, `
+      + `a NF só chega ao Protheus depois — o Custo Operacional ficava acima do Mapinha sem que houvesse erro dos dois lados.</div>`;
+  }
   // composição do Fechamento de Agregados
   const ag=V.agreg||{};
   const note=document.getElementById('agregNote');
@@ -2142,7 +2203,7 @@ function renderLancCards(){
   c.innerHTML =
     card('Fat. Bruto', moeda(d.fat),'acc') +
     card('Fat. Líquido', moeda(d.fl)) +
-    card('Custo Operacional', moeda(d.co), '', 'Manutenção + manual') +
+    card('Custo Operacional', moeda(d.co), '', OS_NO_DRE?'Manutenção + manual':'somente manual — OS fora') +
     card('Result. Financeiro', moeda(d.rf), d.rf>=0?'good':'bad', pct(d.margem)+' margem');
 }
 function card(k,v,cls='',s=''){ return `<div class="card ${cls}"><div class="k">${k}</div><div class="v">${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`; }
@@ -2449,7 +2510,11 @@ async function fechar(){
   ST.cabecalho.status='fechado';
   ST.cabecalho.totais={ fatBruto:d.fat, producaoT:d.prod, precoMedio:d.pm, totalImpostos:d.imp, fatLiquido:d.fl,
     diesel:d.diesel, agregados:d.agreg, pedagio:d.pedagio, custoOperacional:d.co, custoPessoal:d.cp, custoEquip:d.ce,
-    resultadoFinanceiro:d.rf, margemPct:d.margem, aliqEfetiva:d.aliqEfetiva };
+    resultadoFinanceiro:d.rf, margemPct:d.margem, aliqEfetiva:d.aliqEfetiva,
+    /* Escopo usado no cálculo — sem isso, um mês fechado com OS fora não é
+       comparável com um mês fechado depois de reativar OS_NO_DRE. */
+    escopoCalculo: OS_NO_DRE ? 'manual+os' : 'somente-manual',
+    osForaDoDre: totalOSForaDoDre() };
   ST.cabecalho.fechadoPor=userMin(); ST.cabecalho.fechadoEm=new Date().toISOString();
   ST.cabecalho.historico=[...(ST.cabecalho.historico||[]),{acao:'fechado',por:userMin(),em:new Date().toISOString()}];
   await fsSetDoc('mapinha_mensal', mapId(), ST.cabecalho, {merge:true});
