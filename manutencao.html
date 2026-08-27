@@ -684,6 +684,12 @@ body.checklist-only .view-area{height:100%;}
 #sp-nf-readonly .nf-ro-obs{font-size:10.5px;color:var(--mu);margin-top:5px}
 #sp-nf-readonly .nf-ro-img{margin-top:7px}
 #sp-nf-readonly .nf-ro-img img{max-width:100%;max-height:110px;border-radius:var(--rs);border:1px solid var(--bd2)}
+#sp-nf-readonly .nf-ro-preview{height:250px;margin-top:8px;background:#f3f6fa;border:1px solid var(--bd2);border-radius:8px;overflow:hidden;display:flex;align-items:center;justify-content:center}
+#sp-nf-readonly .nf-ro-preview img{width:100%;height:100%;object-fit:contain}
+#sp-nf-readonly .nf-ro-preview iframe{width:100%;height:100%;border:0;background:#fff}
+#sp-nf-readonly .nf-ro-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:8px;flex-wrap:wrap}
+#sp-nf-readonly .nf-ro-tit{font-size:10.5px;font-weight:800;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
+@media(max-width:720px){#sp-nf-readonly .nf-ro-preview{height:190px}}
 
 
 /* Ajustes pontuais solicitados — impressão, Painel Geral, Kanban e Abrir O.S */
@@ -5154,10 +5160,16 @@ async function finalizarOS(osId) {
 
     // Persiste finalização no Firestore
     if (db) {
+      if (!nfUrl) { toast('A nota fiscal não pôde ser enviada ao Storage. A OS não foi finalizada — tente novamente.', 'rd'); return; }
+      // Grava também no formato lido pelo painel Ver (nf1_*), senão a NF
+      // ficava salva apenas em `nfUrl` e não aparecia na visualização.
       await atlasFsSetDoc('ordens_servico', osId, {
         status: 'Concluída',
         finalizadoEm: new Date().toISOString(),
-        nfUrl: nfUrl || null
+        nfUrl,
+        nf1_url: nfUrl,
+        nf1_nome: file?.name || 'Nota Fiscal',
+        nf1_enviadoEm: new Date()
       }, { merge: true });
       if (OS_DB[osId]) OS_DB[osId].status = 'Concluída';
     }
@@ -6403,49 +6415,81 @@ function onNFFile(num, input) {
 
 async function salvarNFs() {
   if (!_currentOsId) return;
+  const os = OS_DB[_currentOsId];
+  if (!os) { toast('O.S não encontrada.', 'am'); return; }
+  const statusNorm  = String(os.status || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const jaConcluida = /conclu|finalizad[ao]/.test(statusNorm);
   const btn = document.getElementById('sp-nf-salvar');
+  const rotulo = jaConcluida ? '💾 Salvar / anexar mais Notas Fiscais' : '💾 Salvar Notas Fiscais e Finalizar OS';
   if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
-  const agora = new Date();
+  const agora  = new Date();
   const nfData = {};
-  let erros = 0;
-  for (const num of [1,2,3]) {
-    const file = _nfFiles[num];
-    const obs = document.getElementById('sp-nf' + num + '-obs')?.value?.trim() || '';
-    if (!file) { if (obs) nfData['nf' + num + '_obs'] = obs; continue; }
-    try {
-      const url = await uploadNFNuvem(file, _currentOsId + '_nf' + num);
-      nfData['nf' + num + '_url'] = url || '';
-      nfData['nf' + num + '_nome'] = file.name;
-      nfData['nf' + num + '_obs'] = obs;
-    } catch(err) { console.error('Erro NF' + num, err); erros++; }
-  }
-  // Verifica se pelo menos 1 NF foi anexada
-  const temNF = [1,2,3].some(n => _nfFiles[n]);
-  if (!temNF) { toast('Anexe ao menos uma nota fiscal para finalizar.', 'am'); if(btn){btn.disabled=false;btn.textContent='💾 Salvar Notas Fiscais e Finalizar OS';} return; }
-  const finalizadoPor = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || 'Admin';
-  const updates = {
-    ...nfData,
-    status: 'Concluída',
-    finalizadoEm: agora,
-    finalizadoPor,
-    atualizadoEm: agora,
-  };
+  const falhas = [];
+  let novos = 0;
   try {
+    for (const num of [1,2,3]) {
+      const file = _nfFiles[num];
+      const obs  = document.getElementById('sp-nf' + num + '-obs')?.value?.trim() || '';
+      if (!file) { if (obs) nfData['nf' + num + '_obs'] = obs; continue; }
+      const url = await uploadNFNuvem(file, _currentOsId + '_nf' + num);
+      // uploadNFNuvem devolve null em caso de erro (não lança). Sem URL não se
+      // grava o campo: era isso que finalizava a OS com a NF "invisível".
+      if (!url) { falhas.push('NF ' + num + ' (' + file.name + ')'); continue; }
+      nfData['nf' + num + '_url']       = url;
+      nfData['nf' + num + '_nome']      = file.name;
+      nfData['nf' + num + '_obs']       = obs;
+      nfData['nf' + num + '_enviadoEm'] = agora;
+      novos++;
+    }
+
+    // Estado final considerando o que já estava salvo + o que subiu agora.
+    const totalComArquivo = mntNFsComArquivo(Object.assign({}, os, nfData)).length;
+    if (!totalComArquivo) {
+      toast(falhas.length
+        ? 'Nenhuma nota fiscal foi enviada ao Storage (' + falhas.join(', ') + '). A O.S não foi finalizada.'
+        : 'Anexe ao menos uma nota fiscal para finalizar.', falhas.length ? 'rd' : 'am');
+      return;
+    }
+    if (!novos && !Object.keys(nfData).length) {
+      toast('Nenhuma alteração para salvar nas notas fiscais.', 'am');
+      return;
+    }
+
+    const finalizar = !jaConcluida && !falhas.length;
+    const updates = Object.assign({}, nfData, { atualizadoEm: agora, nfQtd: totalComArquivo });
+    if (finalizar) {
+      updates.status        = 'Concluída';
+      updates.finalizadoEm  = agora;
+      updates.finalizadoPor = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || 'Admin';
+    }
+
     await atlasFsSetDoc('ordens_servico', _currentOsId, updates, { merge: true });
     Object.assign(OS_DB[_currentOsId], updates);
-    // Após finalizar: verifica se a placa tem outras OS abertas; se não, remove da manutenção
-    const placaFinalizada = OS_DB[_currentOsId]?.veiculo || OS_DB[_currentOsId]?.placa;
-    toast('OS ' + _currentOsId + ' finalizada com sucesso!', 'gn');
-    closePanel();
-    await loadOrdensServico();
+
+    // Painel permanece aberto e as NFs aparecem imediatamente após o anexo.
+    const badge = document.getElementById('sp-badge');
+    if (badge) { badge.textContent = OS_DB[_currentOsId].status || 'Aberta'; badge.className = 'bdg ' + badgeClasseStatus(OS_DB[_currentOsId].status); }
+    renderSecaoNFPainel(OS_DB[_currentOsId]);
+    document.getElementById('sp-nf-readonly')?.scrollIntoView({ behavior:'smooth', block:'nearest' });
+
+    if (falhas.length) {
+      toast('Salvo parcialmente: ' + falhas.join(', ') + ' não subiu ao Storage. Reanexe — a O.S não foi finalizada.', 'am');
+    } else if (finalizar) {
+      toast('OS ' + _currentOsId + ' finalizada. Notas fiscais anexadas e visíveis no painel.', 'gn');
+    } else {
+      toast('Notas fiscais atualizadas em ' + _currentOsId + '.', 'gn');
+    }
+
+    const placaFinalizada = finalizar ? (OS_DB[_currentOsId]?.veiculo || OS_DB[_currentOsId]?.placa) : null;
+    await loadOrdensServico(true);
+    if (OS_DB[_currentOsId]) renderSecaoNFPainel(OS_DB[_currentOsId]);
     if (placaFinalizada) await removeManutencaoPlacaSeNaoHaOSAberta(placaFinalizada);
   } catch(err) {
-    toast('Erro ao finalizar OS: ' + err.message, 'rd');
+    toast('Erro ao salvar notas fiscais: ' + err.message, 'rd');
   } finally {
-    if(btn){btn.disabled=false;btn.textContent='💾 Salvar Notas Fiscais e Finalizar OS';}
+    if (btn) { btn.disabled = false; btn.textContent = rotulo; }
   }
 }
-
 
 function osPrintItemDescricao(item) { return item?.descricao || item?.item || item?.nome || item?.servico || '—'; }
 function osPrintQtd(item) { return Number(item?.quantidade ?? item?.qtd ?? 1) || 1; }
@@ -6549,60 +6593,11 @@ function openPanel(osId) {
   renderOrcamentoOS(os);
   renderFotosOS(os);
 
-  // Seção NF:
-  //  • OS Concluída  → sempre mostra as NFs anexadas em modo somente leitura (visível a todos)
-  //  • Aguardando finalizar + criador → campos editáveis para anexar/finalizar
-  //  • Demais casos → aviso de bloqueio
-  const nfSection  = document.getElementById('sp-nf-section');
-  const nfFields   = document.getElementById('sp-nf-fields');
-  const nfLocked   = document.getElementById('sp-nf-locked');
-  const nfReadonly = document.getElementById('sp-nf-readonly');
-  // Status normalizado (sem acentos/caixa) — tolera variações gravadas no Firestore
-  // como 'aguardando finalizar', 'Aguardando Finalizar', 'Aprovada', 'Em execução'.
-  const statusNorm = String(os.status || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const nivelNorm  = String(os.nivel  || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const isConcluida = /conclu|finalizad[ao]/.test(statusNorm); // 'finalizada/o' sim; 'Aguardando finalizar' NÃO
-  const isReprovada = /reprov|cancel/.test(statusNorm);
-  // OS liberada para anexo de NF quando:
-  //  • status indica aprovação/execução (qualquer grafia), OU
-  //  • existe carimbo de aprovação (aprovadoEm), OU
-  //  • alçada é 'Automática' (< R$300 — não exige aprovação manual).
-  const isAprovada = !isReprovada && !isConcluida && (
-    /aguardando\s*finaliza/.test(statusNorm) ||
-    /aprovad/.test(statusNorm) ||
-    /em\s*execucao/.test(statusNorm) ||
-    !!os.aprovadoEm ||
-    /automatica/.test(nivelNorm)
-  );
-  // Comparação de e-mail tolerante a caixa/espaços.
-  const _emailUser    = String(ATLAS_CURRENT_USER.email || '').trim().toLowerCase();
-  const _emailCriador = String(os.criadoPor || '').trim().toLowerCase();
-  const isCriador = !_emailUser || (_emailCriador && _emailCriador === _emailUser) || isAprovador();
-
-  if (nfSection) {
-    nfSection.style.display = 'block';
-    if (isConcluida) {
-      // OS já finalizada: exibe as NFs anexadas para qualquer usuário
-      if (nfLocked)   nfLocked.style.display = 'none';
-      if (nfFields)   nfFields.style.display = 'none';
-      if (nfReadonly) { nfReadonly.style.display = 'block'; renderNFsReadOnly(os); }
-    } else if (isAprovada && isCriador) {
-      // OS aprovada/liberada: permite anexar e concluir
-      if (nfLocked)   nfLocked.style.display = 'none';
-      if (nfReadonly) nfReadonly.style.display = 'none';
-      if (nfFields)   { nfFields.style.display = 'block'; preencherNFsExistentes(os); }
-    } else {
-      if (nfReadonly) nfReadonly.style.display = 'none';
-      if (nfFields)   nfFields.style.display = 'none';
-      if (nfLocked) {
-        // Mensagem correta para cada bloqueio: falta de aprovação × falta de permissão.
-        nfLocked.innerHTML = (isAprovada && !isCriador)
-          ? '🔒 OS aprovada — somente o criador da O.S ou um aprovador pode anexar as notas fiscais.'
-          : '🔒 Aguardando aprovação para liberar anexo de notas fiscais.';
-        nfLocked.style.display = 'block';
-      }
-    }
-  }
+  // Seção NF — regra única em renderSecaoNFPainel():
+  //  • as NFs já anexadas ficam SEMPRE visíveis (qualquer status, qualquer usuário);
+  //  • os campos de anexo continuam liberados para quem pode anexar, inclusive
+  //    depois da OS concluída (anexo de NF complementar a qualquer momento).
+  renderSecaoNFPainel(os);
 
   // Botões aprovar/reprovar — visíveis só para o responsável da etapa atual.
   atualizarBotoesAprovacaoPainel(os);
@@ -6614,52 +6609,188 @@ function openPanel(osId) {
   document.getElementById('side-panel').classList.add('on');
 }
 
-// Exibe as notas fiscais anexadas em modo somente leitura (OS concluída).
+// ══════════════════════════════════════════════════════════
+// NOTAS FISCAIS — LEITURA (correção: NF sempre visível)
+// Coleta tolerante a TODOS os formatos já gravados na coleção:
+//   • nf1_url / nf1_nome / nf1_obs  → fluxo do painel lateral
+//   • nfUrl / nf_url / nfNome       → fluxo antigo da aba Aprovações
+//   • nfs[] / notasFiscais[] / nfsMeta[] → arrays (objetos ou strings)
+// Sem isso, uma OS finalizada por um fluxo aparecia como "sem NF" no outro.
+// ══════════════════════════════════════════════════════════
+function mntColetarNFs(os) {
+  const out = [];
+  const vistos = new Set();
+  const add = (url, nome, obs, slot) => {
+    const u = String(url || '').trim();
+    const n = String(nome || '').trim();
+    const o = String(obs  || '').trim();
+    if (!u && !n && !o) return;
+    const chave = u || (n + '|' + o);
+    if (vistos.has(chave)) return;
+    vistos.add(chave);
+    out.push({ slot: slot || 0, url: u, nome: n, obs: o });
+  };
+  if (!os) return out;
+  for (const num of [1,2,3]) add(os['nf'+num+'_url'], os['nf'+num+'_nome'], os['nf'+num+'_obs'], num);
+  add(os.nfUrl || os.nf_url, os.nfNome || os.nf_nome, os.nfObs || os.nf_obs, 0);
+  [os.nfs, os.notasFiscais, os.nfsMeta, os.nfMeta].forEach(arr => {
+    if (!Array.isArray(arr)) return;
+    arr.forEach(item => {
+      if (!item) return;
+      if (typeof item === 'string') add(item, '', '', 0);
+      else add(item.url || item.publicUrl || item.link, item.nome || item.name || item.arquivo, item.obs || item.observacao, 0);
+    });
+  });
+  return out;
+}
+function mntNFEhImagem(url, nome) {
+  const rx = /\.(png|jpe?g|webp|gif)(?:$|\?)/i;
+  return rx.test(String(nome || '')) || rx.test(String(url || ''));
+}
+function mntNFsComArquivo(os) { return mntColetarNFs(os).filter(n => n.url); }
+
+// Exibe as notas fiscais anexadas — preview grande (imagem ou PDF),
+// leitura ampliada no modal e link para nova guia, igual ao orçamento.
 function renderNFsReadOnly(os) {
   const el = document.getElementById('sp-nf-readonly');
-  if (!el) return;
-  const blocos = [];
-  for (const num of [1,2,3]) {
-    const url  = os['nf' + num + '_url'] || '';
-    const nome = os['nf' + num + '_nome'] || '';
-    const obs  = os['nf' + num + '_obs'] || '';
-    if (!url && !obs) continue; // NF não preenchida
-    const isImg = /\.(jpg|jpeg|png)$/i.test(nome);
-    blocos.push(`
-      <div class="nf-ro-item">
-        <div class="nf-ro-head">
-          <div class="nf-ro-name">📄 <span>${escapeHtml(nome || 'Nota Fiscal ' + num)}</span></div>
-          ${url ? `<a class="nf-ro-view" href="${escapeHtml(url)}" target="_blank" rel="noopener">Visualizar ↗</a>` : ''}
-        </div>
-        ${(url && isImg) ? `<div class="nf-ro-img"><img src="${escapeHtml(url)}" onerror="this.parentNode.style.display='none'"></div>` : ''}
-        ${obs ? `<div class="nf-ro-obs">${escapeHtml(obs)}</div>` : ''}
-      </div>`);
+  if (!el) return 0;
+  const lista = mntColetarNFs(os);
+  if (!lista.length) {
+    el.innerHTML = '<div class="sp-anexo-vazio">Nenhuma nota fiscal anexada a esta O.S.</div>';
+    return 0;
   }
-  el.innerHTML = blocos.length
-    ? blocos.join('')
-    : '<div style="font-size:11.5px;color:var(--mu);padding:8px 2px">Nenhuma nota fiscal anexada a esta O.S.</div>';
+  const comArquivo = lista.filter(n => n.url).length;
+  el.innerHTML = `<div class="nf-ro-tit">${comArquivo || lista.length} nota(s) fiscal(is) anexada(s)</div>` + lista.map((nf, i) => {
+    const nomeExib = nf.nome || ('Nota Fiscal ' + (nf.slot || (i + 1)));
+    if (!nf.url) {
+      return `<div class="nf-ro-item">
+        <div class="nf-ro-head">
+          <div class="nf-ro-name">📄 <span>${escapeHtml(nomeExib)}</span></div>
+          <span style="font-size:10px;color:var(--mu)">sem arquivo anexado</span>
+        </div>
+        ${nf.obs ? `<div class="nf-ro-obs">${escapeHtml(nf.obs)}</div>` : ''}
+      </div>`;
+    }
+    const img = mntNFEhImagem(nf.url, nf.nome);
+    const preview = img
+      ? `<img src="${escapeHtml(nf.url)}" alt="${escapeHtml(nomeExib)}" onerror="this.closest('.nf-ro-preview').innerHTML='<span style=\'font-size:11px;color:var(--mu)\'>Pré-visualização indisponível — use os botões abaixo.</span>'">`
+      : `<iframe src="${escapeHtml(nf.url)}#view=FitH" title="${escapeHtml(nomeExib)}"></iframe>`;
+    return `<div class="nf-ro-item">
+      <div class="nf-ro-head">
+        <div class="nf-ro-name">📄 <span>${escapeHtml(nomeExib)}</span></div>
+        <span class="bdg bdg-gn">Anexada</span>
+      </div>
+      <div class="nf-ro-preview">${preview}</div>
+      ${nf.obs ? `<div class="nf-ro-obs">${escapeHtml(nf.obs)}</div>` : ''}
+      <div class="nf-ro-actions">
+        <button class="btn btn-sm" data-url="${escapeHtml(nf.url)}" data-nome="${escapeHtml(nomeExib)}" data-tipo="${img ? 'imagem' : 'documento'}" onclick="abrirAnexoModal(this.dataset.url,this.dataset.nome,this.dataset.tipo)">🔍 Ampliar leitura</button>
+        <a class="btn btn-sm" href="${escapeHtml(nf.url)}" target="_blank" rel="noopener">Abrir em nova guia ↗</a>
+      </div>
+    </div>`;
+  }).join('');
+  return comArquivo;
 }
 
-function preencherNFsExistentes(os) {
-  for (const num of [1,2,3]) {
-    const url  = os['nf' + num + '_url'] || '';
-    const nome = os['nf' + num + '_nome'] || '';
-    const obs  = os['nf' + num + '_obs'] || '';
-    const drop = document.getElementById('sp-nf' + num + '-drop');
-    const prev = document.getElementById('sp-nf' + num + '-preview');
-    const obsEl = document.getElementById('sp-nf' + num + '-obs');
-    if (obsEl) obsEl.value = obs;
-    if (url && drop) {
-      drop.classList.add('filled');
-      drop.innerHTML = `<span style="font-size:18px">✅</span><span>${escapeHtml(nome||'NF '+num+' anexada')}</span><a href="${escapeHtml(url)}" target="_blank" style="font-size:10px;color:var(--ac)">Visualizar</a>`;
+// Monta a seção "Notas Fiscais" do painel Ver.
+// Regra: o que já foi anexado é SEMPRE exibido; o gate de permissão
+// controla apenas os campos de anexo, nunca a visualização.
+function renderSecaoNFPainel(os) {
+  const nfSection  = document.getElementById('sp-nf-section');
+  const nfFields   = document.getElementById('sp-nf-fields');
+  const nfLocked   = document.getElementById('sp-nf-locked');
+  const nfReadonly = document.getElementById('sp-nf-readonly');
+  if (!nfSection || !os) return;
+
+  const statusNorm = String(os.status || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const nivelNorm  = String(os.nivel  || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const isConcluida = /conclu|finalizad[ao]/.test(statusNorm);
+  const isReprovada = /reprov|cancel/.test(statusNorm);
+  const isAprovada  = !isReprovada && !isConcluida && (
+    /aguardando\s*finaliza/.test(statusNorm) ||
+    /aprovad/.test(statusNorm) ||
+    /em\s*execucao/.test(statusNorm) ||
+    !!os.aprovadoEm ||
+    /automatica/.test(nivelNorm)
+  );
+  const _emailUser    = String(ATLAS_CURRENT_USER.email || '').trim().toLowerCase();
+  const _emailCriador = String(os.criadoPor || '').trim().toLowerCase();
+  const isCriador = !_emailUser || (_emailCriador && _emailCriador === _emailUser) || isAprovador();
+
+  const anexadas = mntColetarNFs(os);
+  nfSection.style.display = 'block';
+
+  // 1) Visualização — sempre que houver NF, ou quando a OS estiver concluída
+  //    (aí o aviso "nenhuma NF anexada" é informação relevante).
+  if (nfReadonly) {
+    if (anexadas.length || isConcluida) {
+      nfReadonly.style.display = 'block';
+      renderNFsReadOnly(os);
+    } else {
+      nfReadonly.style.display = 'none';
+      nfReadonly.innerHTML = '';
     }
-    if (url && nome && prev) {
-      prev.style.display = 'block';
-      if (/\.(jpg|jpeg|png)$/i.test(nome)) {
-        prev.innerHTML = `<img src="${escapeHtml(url)}" style="max-width:100%;max-height:80px;border-radius:var(--rs);border:1px solid var(--bd2)">`;
+  }
+
+  // 2) Campos de anexo — liberados também na OS concluída, para anexar
+  //    NF complementar a qualquer momento (sem reabrir a O.S).
+  const podeAnexar = !isReprovada && (isAprovada || isConcluida) && isCriador;
+  const btnSalvar = document.getElementById('sp-nf-salvar');
+  if (podeAnexar) {
+    if (nfLocked) nfLocked.style.display = 'none';
+    if (nfFields) { nfFields.style.display = 'block'; preencherNFsExistentes(os); }
+    if (btnSalvar) btnSalvar.textContent = isConcluida
+      ? '💾 Salvar / anexar mais Notas Fiscais'
+      : '💾 Salvar Notas Fiscais e Finalizar OS';
+  } else {
+    if (nfFields) nfFields.style.display = 'none';
+    if (nfLocked) {
+      if (isReprovada) {
+        nfLocked.style.display = 'none';
+      } else if (isConcluida) {
+        // Concluída e sem permissão de anexo: nada a bloquear, a leitura já está visível.
+        nfLocked.style.display = 'none';
+      } else {
+        nfLocked.innerHTML = (isAprovada && !isCriador)
+          ? '🔒 OS aprovada — somente o criador da O.S ou um aprovador pode anexar as notas fiscais.'
+          : '🔒 Aguardando aprovação para liberar anexo de notas fiscais.';
+        nfLocked.style.display = 'block';
       }
     }
   }
+}
+
+// Preenche/reseta os campos de anexo com o que já está salvo na O.S.
+// O reset é obrigatório: sem ele, o estado da O.S anterior ficava colado
+// nas drop zones ao abrir outra O.S no mesmo painel.
+function preencherNFsExistentes(os) {
+  const lista = mntColetarNFs(os);
+  for (const num of [1,2,3]) {
+    const drop  = document.getElementById('sp-nf' + num + '-drop');
+    const prev  = document.getElementById('sp-nf' + num + '-preview');
+    const obsEl = document.getElementById('sp-nf' + num + '-obs');
+    const inp   = document.getElementById('sp-nf' + num + '-file');
+    if (inp)   inp.value = '';
+    if (obsEl) obsEl.value = '';
+    if (prev)  { prev.style.display = 'none'; prev.innerHTML = ''; }
+    if (drop)  {
+      drop.classList.remove('filled');
+      drop.innerHTML = `<span style="font-size:18px">📄</span><span>Clique para anexar NF ${num}</span><span style="font-size:10px;color:var(--mu)">PDF, JPG ou PNG — máx 10MB</span>`;
+    }
+    const nf = lista.find(x => x.slot === num);
+    if (!nf) continue;
+    if (obsEl) obsEl.value = nf.obs || '';
+    if (nf.url && drop) {
+      drop.classList.add('filled');
+      drop.innerHTML = `<span style="font-size:18px">✅</span><span>${escapeHtml(nf.nome || ('NF ' + num + ' anexada'))}</span><span style="font-size:10px;color:var(--ac)">clique para substituir</span>`;
+    }
+    if (nf.url && prev) {
+      prev.style.display = 'block';
+      prev.innerHTML = mntNFEhImagem(nf.url, nf.nome)
+        ? `<img src="${escapeHtml(nf.url)}" style="max-width:100%;max-height:80px;border-radius:var(--rs);border:1px solid var(--bd2)">`
+        : `<a href="${escapeHtml(nf.url)}" target="_blank" rel="noopener" style="font-size:11px;font-weight:700;color:var(--ac)">Visualizar arquivo anexado ↗</a>`;
+    }
+  }
+  _nfFiles[1] = _nfFiles[2] = _nfFiles[3] = null;
 }
 
 // ══════════════════════════════════════════════════════════
