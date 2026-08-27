@@ -688,6 +688,8 @@ body.checklist-only .view-area{height:100%;}
 #sp-nf-readonly .nf-ro-preview img{width:100%;height:100%;object-fit:contain}
 #sp-nf-readonly .nf-ro-preview iframe{width:100%;height:100%;border:0;background:#fff}
 #sp-nf-readonly .nf-ro-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:8px;flex-wrap:wrap}
+#sp-nf-readonly .nf-ro-item.orfa{border-color:var(--am-bd);background:var(--am-bg)}
+#sp-nf-readonly .nf-ro-aviso{font-size:10.5px;color:var(--am);margin-top:6px;line-height:1.5}
 #sp-nf-readonly .nf-ro-tit{font-size:10.5px;font-weight:800;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
 @media(max-width:720px){#sp-nf-readonly .nf-ro-preview{height:190px}}
 
@@ -5446,48 +5448,54 @@ async function uploadInspFotoNuvem(file, refId) {
 
 /* Upload de arquivos de NF para Supabase Storage (mesma base dos canhotos) */
 async function uploadNFNuvem(file, osId) {
+  const path = `nf-os/${osId}/${Date.now()}_${String(file.name || 'nf').replace(/[^a-zA-Z0-9._-]/g,'_')}`;
   try {
-    const SUPABASE_URL      = 'https://onomvgnudbgywvtgetfe.supabase.co';
-    const SUPABASE_ANON_KEY = 'sb_publishable_SpcPe4Fch43LIwK7ox-jIQ_YbbBf5_g';
-    const SUPABASE_BUCKET   = 'canhotos'; // mesmo bucket dos canhotos
-    // Usa supabase-js se disponível no parent, senão faz fetch direto
-    const path = `nf-os/${osId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
-    const res  = await fetch(`${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${path}`, {
+    const res = await fetch(`${MNT_SB.url}/storage/v1/object/${MNT_SB.bucket}/${path}`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        // O header `apikey` é exigido pelo Storage; sem ele a requisição era
+        // rejeitada e o erro morria no catch, devolvendo null em silêncio.
+        'apikey': MNT_SB.key,
+        'Authorization': `Bearer ${MNT_SB.key}`,
         'Content-Type': file.type || 'application/octet-stream',
+        'x-upsert': 'true',
       },
       body: file
     });
-    if (!res.ok) throw new Error('Upload NF falhou: ' + res.statusText);
-    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${path}`;
-    return publicUrl;
+    if (!res.ok) {
+      let detalhe = '';
+      try { detalhe = await res.text(); } catch(_) {}
+      throw new Error(`HTTP ${res.status} ${res.statusText} ${detalhe}`.trim());
+    }
+    return mntSbPublicUrl(path);
   } catch(err) {
-    console.error('[Manutenção] Erro upload NF:', err);
+    // Erro visível: antes a NF sumia sem qualquer sinal para o usuário.
+    console.error('[Manutenção] Erro upload NF:', path, err);
+    _mntUltimoErroUpload = String(err && err.message || err);
+    toast('Falha ao enviar a NF ao Storage: ' + _mntUltimoErroUpload.slice(0, 160), 'rd');
     return null;
   }
 }
+let _mntUltimoErroUpload = '';
 
 /* Upload de fotos da OS — mesmo Storage usado para os demais anexos */
 async function uploadOSFotoNuvem(file, osId) {
   try {
-    const SUPABASE_URL      = 'https://onomvgnudbgywvtgetfe.supabase.co';
-    const SUPABASE_ANON_KEY = 'sb_publishable_SpcPe4Fch43LIwK7ox-jIQ_YbbBf5_g';
-    const SUPABASE_BUCKET   = 'canhotos';
     const seguro = String(file.name || 'foto').replace(/[^a-zA-Z0-9._-]/g,'_');
     const unico  = Date.now() + '_' + Math.random().toString(36).slice(2,8);
     const path   = `fotos-os/${osId}/${unico}_${seguro}`;
-    const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${path}`, {
+    const res = await fetch(`${MNT_SB.url}/storage/v1/object/${MNT_SB.bucket}/${path}`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'apikey': MNT_SB.key,
+        'Authorization': `Bearer ${MNT_SB.key}`,
         'Content-Type': file.type || 'image/jpeg',
+        'x-upsert': 'true',
       },
       body: file
     });
-    if (!res.ok) throw new Error('Upload foto falhou: ' + res.statusText);
-    return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${path}`;
+    if (!res.ok) { let d=''; try { d = await res.text(); } catch(_) {} throw new Error(`HTTP ${res.status} ${res.statusText} ${d}`.trim()); }
+    return mntSbPublicUrl(path);
   } catch(err) {
     console.error('[Manutenção] Erro upload foto OS:', err);
     return null;
@@ -5497,20 +5505,19 @@ async function uploadOSFotoNuvem(file, osId) {
 /* Upload de orçamento da OS — mesmo Storage usado para os demais documentos (NF/canhotos) */
 async function uploadOrcamentoNuvem(file, osId) {
   try {
-    const SUPABASE_URL      = 'https://onomvgnudbgywvtgetfe.supabase.co';
-    const SUPABASE_ANON_KEY = 'sb_publishable_SpcPe4Fch43LIwK7ox-jIQ_YbbBf5_g';
-    const SUPABASE_BUCKET   = 'canhotos'; // mesmo bucket dos demais documentos
-    const path = `orcamento-os/${osId}/${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
-    const res  = await fetch(`${SUPABASE_URL}/storage/v1/object/${SUPABASE_BUCKET}/${path}`, {
+    const path = `orcamento-os/${osId}/${Date.now()}_${String(file.name || 'orcamento').replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+    const res  = await fetch(`${MNT_SB.url}/storage/v1/object/${MNT_SB.bucket}/${path}`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+        'apikey': MNT_SB.key,
+        'Authorization': `Bearer ${MNT_SB.key}`,
         'Content-Type': file.type || 'application/octet-stream',
+        'x-upsert': 'true',
       },
       body: file
     });
-    if (!res.ok) throw new Error('Upload orçamento falhou: ' + res.statusText);
-    return `${SUPABASE_URL}/storage/v1/object/public/${SUPABASE_BUCKET}/${path}`;
+    if (!res.ok) { let d=''; try { d = await res.text(); } catch(_) {} throw new Error(`HTTP ${res.status} ${res.statusText} ${d}`.trim()); }
+    return mntSbPublicUrl(path);
   } catch(err) {
     console.error('[Manutenção] Erro upload orçamento:', err);
     return null;
@@ -6643,6 +6650,85 @@ function mntColetarNFs(os) {
   });
   return out;
 }
+/* Config única do Storage — as funções de upload repetiam estes literais. */
+const MNT_SB = {
+  url:    'https://onomvgnudbgywvtgetfe.supabase.co',
+  key:    'sb_publishable_SpcPe4Fch43LIwK7ox-jIQ_YbbBf5_g',
+  bucket: 'canhotos'
+};
+function mntSbPublicUrl(path) {
+  return `${MNT_SB.url}/storage/v1/object/public/${MNT_SB.bucket}/${String(path).split('/').map(encodeURIComponent).join('/')}`;
+}
+
+/* Lista os arquivos de uma pasta do bucket. Devolve [] em qualquer erro. */
+async function mntSbListar(prefix) {
+  try {
+    const res = await fetch(`${MNT_SB.url}/storage/v1/object/list/${MNT_SB.bucket}`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', 'apikey': MNT_SB.key, 'Authorization': `Bearer ${MNT_SB.key}` },
+      body: JSON.stringify({ prefix, limit: 100, offset: 0, sortBy: { column:'created_at', order:'desc' } })
+    });
+    if (!res.ok) { console.warn('[Manutenção] list Storage', prefix, res.status, await res.text()); return []; }
+    const arr = await res.json();
+    return Array.isArray(arr) ? arr : [];
+  } catch(err) { console.warn('[Manutenção] list Storage falhou:', err); return []; }
+}
+
+/* Procura o arquivo de uma NF nas pastas usadas pelos dois fluxos de upload:
+     nf-os/OS-0000_nf1/...  (painel lateral)  e  nf-os/OS-0000/...  (aba Aprovações) */
+async function mntBuscarNFNoStorage(osId, slot, nome) {
+  const prefixos = [];
+  if (slot) prefixos.push(`nf-os/${osId}_nf${slot}`);
+  prefixos.push(`nf-os/${osId}`);
+  [1,2,3].forEach(n => { const p = `nf-os/${osId}_nf${n}`; if (!prefixos.includes(p)) prefixos.push(p); });
+  const alvo = String(nome || '').replace(/[^a-zA-Z0-9._-]/g,'_').toLowerCase();
+  for (const prefix of prefixos) {
+    const itens = (await mntSbListar(prefix)).filter(it => it && it.id && it.name);
+    if (!itens.length) continue;
+    const match = alvo ? itens.find(it => String(it.name).toLowerCase().includes(alvo)) : null;
+    const escolhido = match || itens[0];
+    return { url: mntSbPublicUrl(prefix + '/' + escolhido.name), nome: escolhido.name, prefix };
+  }
+  return null;
+}
+
+/* Religa NFs órfãs (nome salvo, URL vazia) ao arquivo real do Storage e
+   grava o endereço de volta na O.S, para que a visualização pare de depender
+   de uma nova finalização. `silencioso` = tentativa automática ao abrir o painel. */
+const _nfRecuperacaoTentada = new Set();
+async function mntRecuperarNFsDoStorage(osId, silencioso) {
+  osId = osId || _currentOsId;
+  const os = OS_DB[osId];
+  if (!os) return 0;
+  const orfas = mntColetarNFs(os).filter(n => !n.url && n.slot);
+  if (!orfas.length) return 0;
+  if (!silencioso) toast('Procurando os arquivos das notas fiscais no Storage...', 'ac');
+  const updates = {};
+  let achados = 0;
+  for (const nf of orfas) {
+    const found = await mntBuscarNFNoStorage(osId, nf.slot, nf.nome);
+    if (!found) continue;
+    updates['nf' + nf.slot + '_url']  = found.url;
+    if (!nf.nome) updates['nf' + nf.slot + '_nome'] = found.nome;
+    updates['nf' + nf.slot + '_recuperadoEm'] = new Date();
+    achados++;
+  }
+  if (!achados) {
+    if (!silencioso) toast('O arquivo não está no Storage — o upload original não chegou a ser concluído. Reanexe a NF nos campos abaixo.', 'am');
+    return 0;
+  }
+  Object.assign(OS_DB[osId], updates);
+  try {
+    await atlasFsSetDoc('ordens_servico', osId, updates, { merge: true });
+  } catch(err) {
+    console.warn('[Manutenção] não foi possível gravar o link recuperado:', err);
+    if (!silencioso) toast('Arquivo localizado, mas sem permissão para gravar o link na O.S. A visualização vale só nesta sessão.', 'am');
+  }
+  if (_currentOsId === osId) renderSecaoNFPainel(OS_DB[osId]);
+  if (!silencioso) toast(achados + ' nota(s) fiscal(is) religada(s) ao arquivo do Storage.', 'gn');
+  return achados;
+}
+
 function mntNFEhImagem(url, nome) {
   const rx = /\.(png|jpe?g|webp|gif)(?:$|\?)/i;
   return rx.test(String(nome || '')) || rx.test(String(url || ''));
@@ -6663,12 +6749,18 @@ function renderNFsReadOnly(os) {
   el.innerHTML = `<div class="nf-ro-tit">${comArquivo || lista.length} nota(s) fiscal(is) anexada(s)</div>` + lista.map((nf, i) => {
     const nomeExib = nf.nome || ('Nota Fiscal ' + (nf.slot || (i + 1)));
     if (!nf.url) {
-      return `<div class="nf-ro-item">
+      // Nome gravado sem URL = o upload falhou em silêncio na finalização antiga.
+      // O arquivo PODE estar no Storage — daí o botão de religar o link.
+      return `<div class="nf-ro-item orfa">
         <div class="nf-ro-head">
-          <div class="nf-ro-name">📄 <span>${escapeHtml(nomeExib)}</span></div>
-          <span style="font-size:10px;color:var(--mu)">sem arquivo anexado</span>
+          <div class="nf-ro-name">⚠️ <span>${escapeHtml(nomeExib)}</span></div>
+          <span class="bdg bdg-am">Link ausente</span>
         </div>
         ${nf.obs ? `<div class="nf-ro-obs">${escapeHtml(nf.obs)}</div>` : ''}
+        <div class="nf-ro-aviso">O nome do arquivo está gravado na O.S, mas o endereço de leitura não. Tente localizar o arquivo no Storage; se ele não estiver lá, reanexe a NF abaixo.</div>
+        <div class="nf-ro-actions">
+          <button class="btn btn-sm" onclick="mntRecuperarNFsDoStorage(_currentOsId)">🔄 Localizar arquivo no Storage</button>
+        </div>
       </div>`;
     }
     const img = mntNFEhImagem(nf.url, nf.nome);
@@ -6729,6 +6821,15 @@ function renderSecaoNFPainel(os) {
       nfReadonly.style.display = 'none';
       nfReadonly.innerHTML = '';
     }
+  }
+
+  // NF com nome gravado e URL vazia: tenta religar ao arquivo do Storage uma
+  // vez por O.S, sem pedir nada ao usuário. Se o arquivo existir, ele aparece.
+  const orfas = anexadas.filter(n => !n.url && n.slot).length;
+  const chaveOS = os.id || _currentOsId;
+  if (orfas && chaveOS && !_nfRecuperacaoTentada.has(chaveOS)) {
+    _nfRecuperacaoTentada.add(chaveOS);
+    setTimeout(() => { mntRecuperarNFsDoStorage(chaveOS, true); }, 0);
   }
 
   // 2) Campos de anexo — liberados também na OS concluída, para anexar
