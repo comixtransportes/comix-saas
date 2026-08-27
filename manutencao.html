@@ -1290,6 +1290,7 @@ body.checklist-only .view-area{height:100%;}
                   <th class="gestao-th" onclick="sortGestao('os')">OS<span class="sort-arrow" data-k="os"></span></th>
                   <th class="gestao-th" onclick="sortGestao('frota')">Frota<span class="sort-arrow" data-k="frota"></span></th>
                   <th class="gestao-th" onclick="sortGestao('abertura')">Abertura<span class="sort-arrow" data-k="abertura"></span></th>
+                  <th class="gestao-th" onclick="sortGestao('criador')">Aberta por<span class="sort-arrow" data-k="criador"></span></th>
                   <th class="gestao-th" onclick="sortGestao('tipo')">Tipo<span class="sort-arrow" data-k="tipo"></span></th>
                   <th class="gestao-th" onclick="sortGestao('servico')">Serviço<span class="sort-arrow" data-k="servico"></span></th>
                   <th class="gestao-th" onclick="sortGestao('local')">Local<span class="sort-arrow" data-k="local"></span></th>
@@ -1302,7 +1303,7 @@ body.checklist-only .view-area{height:100%;}
                   <th style="width:82px"></th>
                 </tr></thead>
                 <tbody id="gestao-tbody">
-                  <tr><td colspan="13" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Carregando O.S reais...</td></tr>
+                  <tr><td colspan="14" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Carregando O.S reais...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -3137,7 +3138,7 @@ async function loadOrdensServico(force) {
     return;
   }
   const tbody = document.getElementById('gestao-tbody');
-  if (tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Carregando O.S reais...</td></tr>';
+  if (tbody) tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Carregando O.S reais...</td></tr>';
   try {
     let docs;
     try {
@@ -3170,7 +3171,7 @@ async function loadOrdensServico(force) {
     renderDashboardOSReais();
     renderPreventivaReais();
     renderAprovacoesReais();
-    if (tbody) tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--rd);padding:18px;font-size:11.5px">Não foi possível carregar as O.S reais. Verifique login/permissões do Firebase e tente novamente.</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:var(--rd);padding:18px;font-size:11.5px">Não foi possível carregar as O.S reais. Verifique login/permissões do Firebase e tente novamente.</td></tr>';
     toast('Falha ao carregar O.S reais: ' + err.message, 'rd');
   }
 }
@@ -3325,6 +3326,15 @@ function mntNomeCurto(v) {
   if (partes.length === 1 || partes[0].includes('@')) return partes[0];
   return partes[0] + ' ' + partes[partes.length - 1];
 }
+/* Rótulo da coluna "Aberta por" do Painel Geral.
+   Fonte: criadoPorNome (nome gravado na criação da OS); sem ele, resolve o
+   email de criadoPor contra o cadastro de usuários (mntUsuarioNome). */
+function criadorLabelOS(os) {
+  if (!os) return '—';
+  const bruto = os.criadoPorNome || mntUsuarioNome(os.criadoPor || os.criadoPorEmail || '') || os.criadoPor || '';
+  const nome = mntNomeCurto(bruto);
+  return nome || '—';
+}
 function aprovadoresLabelOS(os) {
   if (!os) return '—';
   if (os.aprovadoPor) return mntUsuarioNome(os.aprovadoPor);
@@ -3399,6 +3409,7 @@ const GESTAO_SORT_KEYS = {
   os:        { type: 'str', get: o => o.id || '' },
   frota:     { type: 'str', get: o => o.veiculo || '' },
   abertura:  { type: 'num', get: o => { const d = dtFrom(o.dataAbertura || o.criadoEm); return d ? d.getTime() : 0; } },
+  criador:   { type: 'str', get: o => criadorLabelOS(o) || '' },
   tipo:      { type: 'str', get: o => o.tipo || o.tipoEquipamento || '' },
   servico:   { type: 'str', get: o => servicoResumo(o) || '' },
   local:     { type: 'str', get: o => o.local || '' },
@@ -3445,7 +3456,7 @@ function renderPainelGeral() {
   if (typeof atualizarSinoNotificacoes === 'function') atualizarSinoNotificacoes();
   let ordens = filtrarOrdensGestao();
   if (!ordens.length) {
-    tbody.innerHTML = '<tr><td colspan="13" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhuma O.S real encontrada.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="14" style="text-align:center;color:var(--mu);padding:18px;font-size:11.5px">Nenhuma O.S real encontrada.</td></tr>';
     return;
   }
   ordens = aplicarOrdenacaoGestao(ordens);
@@ -3453,10 +3464,12 @@ function renderPainelGeral() {
     const atraso = atrasoOS(os.prazo, os.status);
     const serv = servicoResumo(os);
     const aprovador = aprovadoresLabelOS(os);
+    const criador = criadorLabelOS(os);
     return `<tr onclick="openPanel('${escapeHtml(os.id)}')">
       <td><span class="os-n">${escapeHtml(os.id)}</span></td>
       <td>${escapeHtml(os.veiculo || '—')}</td>
       <td>${(os.dataAbertura || os.criadoEm) ? escapeHtml(dataCompleta(os.dataAbertura || os.criadoEm)) : '—'}</td>
+      <td><span class="os-aprovadores ${criador === '—' ? 'muted' : ''}" title="${escapeHtml(os.criadoPorNome || os.criadoPor || '—')}">${escapeHtml(criador)}</span></td>
       <td>${escapeHtml(os.tipo || os.tipoEquipamento || '—')}</td>
       <td>${escapeHtml(serv)}</td>
       <td>${escapeHtml(os.local || '—')}</td>
