@@ -434,6 +434,19 @@ tbody tr:last-child{border-bottom:none}
 .dynamic-row .remove-btn{width:22px;height:22px;border-radius:var(--rs);border:1px solid var(--rd-bd);background:var(--rd-bg);color:var(--rd);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s}
 .dynamic-row .remove-btn:hover{background:var(--rd);color:#fff}
 .add-line-btn{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;color:var(--ac);cursor:pointer;padding:4px 0;background:none;border:none;font-family:var(--f)}
+/* Compra — frete e desconto por área (Serviços / Peças). Só aparecem no tipo "Compra". */
+.compra-extra{display:none;margin-top:7px;padding-top:7px;border-top:1px dashed var(--bd2)}
+.compra-extra.on{display:block}
+.compra-extra-row{display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap}
+.compra-extra-fld{display:flex;flex-direction:column;gap:3px;min-width:104px}
+.compra-extra-fld label{font-size:9px;font-weight:700;color:var(--mu);text-transform:uppercase;letter-spacing:.4px}
+.compra-extra-fld input{width:104px;font-family:var(--m);font-size:11px;padding:5px 7px;border:1px solid var(--bd2);border-radius:var(--rs);background:var(--wh);color:var(--tx)}
+.compra-extra-sub{margin-left:auto;font-size:10.5px;color:var(--mu);font-family:var(--m);white-space:nowrap;align-self:center}
+/* Documentos anexados na ABERTURA da O.S (NF, recibo, boleto, etc.) */
+.os-doc-item{display:flex;align-items:center;gap:8px;padding:6px 9px;background:var(--wh);border:1px solid var(--bd2);border-radius:var(--rs);margin-bottom:5px;font-size:11.5px}
+.os-doc-item .nm{flex:1;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.os-doc-item .sz{color:var(--mu);font-size:10px;font-family:var(--m)}
+.os-doc-item button{background:var(--rd-bg);border:1px solid var(--rd-bd);color:var(--rd);border-radius:6px;width:22px;height:22px;cursor:pointer;font-weight:700;line-height:1}
 .add-line-btn:hover{color:var(--ac-h)}
 
 
@@ -1178,6 +1191,14 @@ body.checklist-only .view-area{height:100%;}
                   </div>
                 </div>
                 <button class="add-line-btn" onclick="addServico()">＋ Adicionar serviço</button>
+                <!-- COMPRA: frete e desconto dos SERVIÇOS — visível apenas no tipo "Compra" -->
+                <div class="compra-extra" id="compra-extra-servicos">
+                  <div class="compra-extra-row">
+                    <div class="compra-extra-fld"><label>Frete (R$)</label><input type="number" min="0" step="0.01" value="0" id="os-frete-servicos" oninput="calcValorGeral()" title="Frete cobrado sobre os serviços desta compra"></div>
+                    <div class="compra-extra-fld"><label>Desconto (R$)</label><input type="number" min="0" step="0.01" value="0" id="os-desconto-servicos" oninput="calcValorGeral()" title="Desconto concedido sobre os serviços desta compra"></div>
+                    <span class="compra-extra-sub" id="os-sub-servicos">Subtotal serviços: R$ 0,00</span>
+                  </div>
+                </div>
               </div>
 
               <!-- TASK 6: Área dinâmica de Peças -->
@@ -1203,6 +1224,14 @@ body.checklist-only .view-area{height:100%;}
                   </div>
                 </div>
                 <button class="add-line-btn" onclick="addPeca()">＋ Adicionar peça</button>
+                <!-- COMPRA: frete e desconto das PEÇAS — visível apenas no tipo "Compra" -->
+                <div class="compra-extra" id="compra-extra-pecas">
+                  <div class="compra-extra-row">
+                    <div class="compra-extra-fld"><label>Frete (R$)</label><input type="number" min="0" step="0.01" value="0" id="os-frete-pecas" oninput="calcValorGeral()" title="Frete cobrado sobre as peças desta compra"></div>
+                    <div class="compra-extra-fld"><label>Desconto (R$)</label><input type="number" min="0" step="0.01" value="0" id="os-desconto-pecas" oninput="calcValorGeral()" title="Desconto concedido sobre as peças desta compra"></div>
+                    <span class="compra-extra-sub" id="os-sub-pecas">Subtotal peças: R$ 0,00</span>
+                  </div>
+                </div>
               </div>
 
               <!-- Anexar Orçamento — documento único, salvo no Firebase/Storage como os demais documentos -->
@@ -1219,6 +1248,28 @@ body.checklist-only .view-area{height:100%;}
                     <input type="file" accept="application/pdf,image/*" style="display:none" onchange="osAnexarOrcamento(this.files)">
                   </label>
                   <span id="os-orcamento-nome" style="font-size:11px;color:var(--mu)">Nenhum orçamento anexado</span>
+                </div>
+              </div>
+
+              <!-- Notas fiscais / recibos anexados JÁ NA ABERTURA da O.S.
+                   O anexo não altera o fluxo: a O.S continua exigindo aprovação
+                   para seguir até a finalização. -->
+              <div class="dynamic-area">
+                <div class="dynamic-area-title">
+                  <span>Notas fiscais e recibos</span>
+                  <span style="font-size:10px;color:var(--mu);font-weight:400">Opcional — a O.S continua exigindo aprovação</span>
+                </div>
+                <div id="os-docs-lista"></div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  <label style="display:inline-flex;align-items:center;gap:6px;padding:7px 12px;background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--rs);font-size:11.5px;font-weight:600;color:var(--tx);cursor:pointer;transition:border-color .15s">
+                    <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Anexar NF / recibo
+                    <input type="file" accept="application/pdf,image/*,.xml" multiple style="display:none" onchange="osAdicionarDocs(this.files); this.value='';">
+                  </label>
+                  <span id="os-docs-count" style="font-size:11px;color:var(--mu)">Nenhum documento anexado</span>
+                </div>
+                <div style="font-size:10px;color:var(--mu);margin-top:6px;line-height:1.45">
+                  ℹ️ Os documentos anexados aqui ficam visíveis no painel da O.S desde a abertura. A aprovação continua obrigatória — o anexo não aprova nem finaliza a O.S.
                 </div>
               </div>
 
@@ -2089,6 +2140,7 @@ async function salvarOS() {
   const servicos   = coletarServicos();
   const pecas      = coletarPecas();
   const motivo     = document.getElementById('mnt_motivo_parada')?.value || '';
+  const extras     = mntExtrasCompra();
 
   if (!unidade)  { toast('Selecione a unidade.', 'am'); return; }
   if (!veiculo)  { toast('Selecione ou digite a placa do veículo.', 'am'); return; }
@@ -2146,6 +2198,11 @@ async function salvarOS() {
       aprovacaoEtapaAtual: fluxoInicial.etapaAtual || '',
       regrasAprovacaoAplicadas: fluxoInicial.regrasAplicadas || [],
       origem: 'manual',
+      // Compra: frete e desconto informados nas áreas de Serviços e Peças.
+      // Fora do tipo "Compra" os campos ficam zerados e não afetam o total.
+      frete: extras.freteTotal,
+      desconto: extras.descontoTotal,
+      compraExtras: extras,
       assinatura,
       criadoEm: agora,
       atualizadoEm: agora,
@@ -2181,6 +2238,37 @@ async function salvarOS() {
       if (fotosFalharam) toast(`${fotosFalharam} foto(s) não puderam ser enviadas ao Storage. A OS foi salva normalmente.`, 'am');
     }
 
+    /* Notas fiscais / recibos anexados na ABERTURA.
+       Vão para o mesmo bucket das NFs e são gravados em `nfsMeta`, o array que
+       mntColetarNFs() já lê — assim aparecem no painel "Ver" desde a abertura.
+       Não mexem em status nem em aprovação: a O.S segue no fluxo normal. */
+    if (_osDocs.length) {
+      const docsMeta = [];
+      let docsFalharam = 0;
+      for (const d of _osDocs) {
+        const urlDoc = d.file ? await uploadNFNuvem(d.file, osId) : '';
+        if (!urlDoc) { docsFalharam++; continue; }
+        docsMeta.push({
+          url: urlDoc,
+          nome: d.name || 'documento',
+          obs: 'Anexado na abertura da O.S',
+          origem: 'abertura',
+          size: d.file && d.file.size ? d.file.size : 0,
+          type: d.file && d.file.type ? d.file.type : '',
+          enviadoEm: new Date()
+        });
+      }
+      if (docsMeta.length) {
+        await atlasFsSetDoc('ordens_servico', osId, {
+          nfsMeta: docsMeta,
+          docsAbertura: docsMeta,
+          docsAberturaQtd: docsMeta.length,
+          atualizadoEm: new Date()
+        }, { merge: true });
+      }
+      if (docsFalharam) toast(docsFalharam + ' documento(s) não puderam ser enviados ao Storage. A O.S foi salva normalmente — reanexe pelo painel da O.S.', 'am');
+    }
+
     // Upload do orçamento anexado (documento salvo no Storage + referência no Firestore)
     if (_osOrcamento && _osOrcamento.file) {
       const orcUrl = await uploadOrcamentoNuvem(_osOrcamento.file, osId);
@@ -2194,7 +2282,9 @@ async function salvarOS() {
     }
 
     toast(osId + (saveRes && saveRes.source === 'local' ? ' criada localmente. Firebase externo bloqueado por regras/permissões.' : ' criada e salva no Firebase.'), saveRes && saveRes.source === 'local' ? 'am' : 'gn');
-    resetFormularioOS();
+    /* O reset roda em try próprio: mesmo que o recarregamento ou a navegação
+       falhem, o formulário NUNCA fica com os anexos da O.S recém-criada. */
+    try { resetFormularioOS(); } catch(errReset) { console.error('[salvarOS] reset falhou:', errReset); }
     await loadOrdensServico(true);
     goTo('gestao', null);
 
@@ -2263,16 +2353,85 @@ function calcRowTotal(input) {
   calcValorGeral();
 }
 
+// ══ TIPO DE SERVIÇO SELECIONADO / CAMPOS EXCLUSIVOS DE "COMPRA" ══
+function mntTipoServicoSelecionado() {
+  const el = document.querySelector('#view-nova-os [name="t2"]:checked');
+  if (!el) return '';
+  const lbl = el.closest('label') || el.parentElement;
+  const txt = (lbl && lbl.querySelector('strong') ? lbl.querySelector('strong').textContent : (lbl ? lbl.textContent : '')) || '';
+  return txt.replace(/\s+/g, ' ').trim();
+}
+function mntEhCompra() { return /^compra$/i.test(mntTipoServicoSelecionado()); }
+function mntNumCampo(id) {
+  const el = document.getElementById(id);
+  const v = parseFloat(el && el.value);
+  return Number.isFinite(v) ? v : 0;
+}
+/* Mostra/esconde os campos de Frete e Desconto nas áreas de Serviços e Peças.
+   Fora do tipo "Compra" os valores voltam a zero para não entrarem no total. */
+function atualizarCamposCompra() {
+  const compra = mntEhCompra();
+  ['compra-extra-servicos', 'compra-extra-pecas'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('on', compra);
+  });
+  if (!compra) {
+    ['os-frete-servicos', 'os-desconto-servicos', 'os-frete-pecas', 'os-desconto-pecas']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.value = '0'; });
+  }
+  calcValorGeral();
+}
+function mntExtrasCompra() {
+  const compra = mntEhCompra();
+  const freteServ = compra ? mntNumCampo('os-frete-servicos')    : 0;
+  const descServ  = compra ? mntNumCampo('os-desconto-servicos') : 0;
+  const fretePeca = compra ? mntNumCampo('os-frete-pecas')       : 0;
+  const descPeca  = compra ? mntNumCampo('os-desconto-pecas')    : 0;
+  return {
+    aplicavel: compra,
+    freteServicos: freteServ, descontoServicos: descServ,
+    fretePecas: fretePeca,    descontoPecas: descPeca,
+    freteTotal: freteServ + fretePeca,
+    descontoTotal: descServ + descPeca
+  };
+}
+
 // ══ VALOR GERAL TOTAL (item 11) ══
 function calcValorGeral() {
-  let total = 0;
-  document.querySelectorAll('#servicos-list .vl-total, #pecas-list .vl-total').forEach(el => {
-    total += parseFloat(el.value) || 0;
-  });
+  let totalServ = 0, totalPeca = 0;
+  document.querySelectorAll('#servicos-list .vl-total').forEach(el => { totalServ += parseFloat(el.value) || 0; });
+  document.querySelectorAll('#pecas-list .vl-total').forEach(el => { totalPeca += parseFloat(el.value) || 0; });
+
+  const ex = mntExtrasCompra();
+  const subServ = totalServ + ex.freteServicos - ex.descontoServicos;
+  const subPeca = totalPeca + ex.fretePecas    - ex.descontoPecas;
+  let total = subServ + subPeca;
+  if (!(total > 0)) total = 0;
+
+  const sServ = document.getElementById('os-sub-servicos');
+  if (sServ) sServ.textContent = 'Subtotal serviços: ' + moeda(subServ);
+  const sPeca = document.getElementById('os-sub-pecas');
+  if (sPeca) sPeca.textContent = 'Subtotal peças: ' + moeda(subPeca);
+
   const custoEl = document.getElementById('nova-os-custo');
   if (custoEl) custoEl.value = total.toFixed(2);
   calcNivel(total);
 }
+
+/* Liga a troca do tipo de serviço aos campos de Compra. Feito por listener e
+   não por onchange no HTML para não mexer nos radios já existentes. */
+(function ligarTipoServicoCompra() {
+  const ligar = () => {
+    document.querySelectorAll('#view-nova-os [name="t2"]').forEach(r => {
+      if (r.dataset.compraBind === '1') return;
+      r.dataset.compraBind = '1';
+      r.addEventListener('change', atualizarCamposCompra);
+    });
+    atualizarCamposCompra();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', ligar);
+  else ligar();
+})();
 
 // ══ ÁREAS DINÂMICAS ══
 function addServico() {
@@ -2378,12 +2537,35 @@ const MNT_CACHE = {
   centrosCusto: [],   // { id, codigo, nome, ativo }
 };
 
-/* Usuário atual (populado via Auth ou postMessage do index.html) */
+/* Usuário atual (populado exclusivamente pelo postMessage ATLAS_USER do shell).
+   [BUG USUÁRIOS] O default era `perfil:'admin'`. Enquanto a identidade não
+   chegava (ou quando NUNCA chegava, porque o iframe já estava carregado de uma
+   sessão anterior), qualquer pessoa navegava com visão de administrador e via
+   dados de quem tinha usado o portal antes. O default agora é vazio: sem
+   identidade confirmada, nenhum privilégio é assumido. */
 let ATLAS_CURRENT_USER = {
-  email: '', uid: '', perfil: 'admin',
+  email: '', uid: '', perfil: '',
+  identificado: false,
   placa: '',    // placa do cavalo alocado a este motorista
   carretas: []  // placas de carretas alocadas
 };
+
+/* Limpa TODO estado derivado do usuário anterior. Chamado quando a identidade
+   recebida do shell é diferente da que estava em memória (troca de conta na
+   mesma aba, sem reload do iframe). */
+function mntLimparEstadoDoUsuario() {
+  try { _ckRawDocs = null; _ckTs = 0; _ckFetchInflight = null; } catch(_) {}
+  try { _nfRecuperacaoTentada.clear(); } catch(_) {}
+  try { MNT_BUTTON_PERMS = null; } catch(_) {}
+  /* Ordens de serviço são dado compartilhado, não do usuário: em vez de apagar
+     o cache (o que deixaria o Painel Geral vazio), força uma releitura limpa. */
+  try { _osDirty = true; _osTs = 0; } catch(_) {}
+  try { if (typeof loadOrdensServico === 'function') loadOrdensServico(true); } catch(_) {}
+  try { _currentOsId = null; } catch(_) {}
+  try { if (typeof closeFloatingPanels === 'function') closeFloatingPanels(); } catch(_) {}
+  try { if (typeof resetFormularioOS === 'function') resetFormularioOS(); } catch(_) {}
+  try { _motoristaDaFrota = ''; } catch(_) {}
+}
 
 /* Motorista cadastrado para a placa selecionada na OS (para alerta de divergência) */
 let _motoristaDaFrota = '';
@@ -2728,47 +2910,108 @@ function onMotoristaChange(motorista) {
    Depois que o ATLAS_CURRENT_USER chega via postMessage (com email/uid),
    busca em alocacao_frota qual cavalo e carretas este motorista está alocado. */
 async function resolveAlocacaoUsuario() {
+  /* [BUG USUÁRIOS] Sempre zera antes de resolver. Antes, quando o usuário novo
+     não batia com nenhuma alocação, a placa e as carretas do usuário ANTERIOR
+     continuavam em ATLAS_CURRENT_USER e o módulo filtrava checklists e frota
+     pelo veículo de outra pessoa. */
+  ATLAS_CURRENT_USER.placa    = '';
+  ATLAS_CURRENT_USER.carretas = [];
   if (!ATLAS_CURRENT_USER.email && !ATLAS_CURRENT_USER.uid) return;
 
-  // Identifica a placa do cavalo alocado a este motorista
+  const emailUser = mntNormalizarIdentidade(ATLAS_CURRENT_USER.email);
+  const loginUser = emailUser.split('@')[0];          // parte antes do @
+  const nomeUser  = mntNormalizarIdentidade(ATLAS_CURRENT_USER.nome || '');
+
   let placaCavalo = '';
-  let carretas    = [];
+  const carretas  = [];
 
   Object.values(MNT_CACHE.alocacoes).forEach(aloc => {
-    const nomeAloc = mntUpper(aloc.motorista || '');
-    const emailUser = mntUpper(ATLAS_CURRENT_USER.email);
-    const nomeUser  = mntUpper(ATLAS_CURRENT_USER.nome || '');
+    const nomeAloc = mntNormalizarIdentidade(aloc.motorista || '');
+    if (!nomeAloc) return;
 
-    const match = nomeAloc && (nomeAloc === emailUser || nomeAloc === nomeUser ||
-      emailUser.startsWith(nomeAloc.split(' ')[0]));
+    /* [BUG USUÁRIOS] A regra antiga incluía
+         emailUser.startsWith(nomeAloc.split(' ')[0])
+       ou seja: bastava o PRIMEIRO NOME do motorista alocado ser o começo do
+       e-mail do usuário logado. "JOSE SILVA" casava com jose.pereira@...,
+       e o usuário herdava a placa de outro motorista. Agora a comparação é
+       exata contra e-mail, login (antes do @) ou nome completo. */
+    const match = (nomeAloc === emailUser)
+               || (!!loginUser && nomeAloc === loginUser)
+               || (!!nomeUser  && nomeAloc === nomeUser);
+    if (!match) return;
 
-    if (match) {
-      placaCavalo = mntUpper(aloc.cavalo_id || '');
-      if (aloc.carreta1_id) carretas.push(mntUpper(aloc.carreta1_id));
-      if (aloc.carreta2_id) carretas.push(mntUpper(aloc.carreta2_id));
-    }
+    if (!placaCavalo) placaCavalo = mntUpper(aloc.cavalo_id || '');
+    if (aloc.carreta1_id) carretas.push(mntUpper(aloc.carreta1_id));
+    if (aloc.carreta2_id) carretas.push(mntUpper(aloc.carreta2_id));
   });
 
   if (placaCavalo) {
     ATLAS_CURRENT_USER.placa    = placaCavalo;
-    ATLAS_CURRENT_USER.carretas = carretas;
-    loadChecklists(); // recarrega com dados de alocação corretos
+    ATLAS_CURRENT_USER.carretas = carretas.filter(Boolean);
   }
+  loadChecklists(); // recarrega SEMPRE — inclusive quando não há alocação
 }
+
+/* [BUG USUÁRIOS] O shell só enviava ATLAS_USER no evento `load` do iframe.
+   Se o iframe já estava carregado de uma sessão anterior (logout + login na
+   mesma aba não recarrega os iframes), a mensagem NUNCA chegava e o módulo
+   continuava operando com o usuário antigo. O módulo agora PEDE a identidade
+   ativamente ao subir e insiste até ser identificado. */
+(function mntPedirIdentidadeAoShell() {
+  let tentativas = 0;
+  const pedir = () => {
+    if (ATLAS_CURRENT_USER.identificado) return;
+    if (++tentativas > 12) return; // ~12s e desiste
+    try { window.parent && window.parent.postMessage({ type: 'ATLAS_REQUEST_USER' }, '*'); } catch(_) {}
+    setTimeout(pedir, 1000);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', pedir);
+  else pedir();
+  // Ao voltar o foco para a aba, revalida a identidade com o shell.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    try { window.parent && window.parent.postMessage({ type: 'ATLAS_REQUEST_USER' }, '*'); } catch(_) {}
+  });
+})();
 
 // ══ CHECKLIST DIÁRIO — carregamento com controle de usuário ══
 window.addEventListener('message', function(ev) {
   if (!ev.data || typeof ev.data !== 'object') return;
   if (ev.data.type === 'ATLAS_USER') {
-    const recebido = mntObjetoUsuario(ev.data);
+    /* [BUG USUÁRIOS] Só o shell (janela pai) pode declarar quem está logado.
+       Sem esta checagem qualquer outro frame conseguiria injetar identidade. */
+    if (ev.source !== window.parent) return;
+
+    const recebido  = mntObjetoUsuario(ev.data);
+    const novoUid   = String(recebido.uid || recebido.userId || recebido.usuarioId || '').trim();
+    const novoEmail = String(recebido.email || recebido.emailUsuario || '').trim().toLowerCase();
+    if (!novoUid && !novoEmail) return; // mensagem sem identidade não zera nem substitui nada
+
+    const uidAtual   = String(ATLAS_CURRENT_USER.uid || '').trim();
+    const emailAtual = String(ATLAS_CURRENT_USER.email || '').trim().toLowerCase();
+    const trocouUsuario = ATLAS_CURRENT_USER.identificado && (
+      (novoUid   && uidAtual   && novoUid   !== uidAtual) ||
+      (novoEmail && emailAtual && novoEmail !== emailAtual)
+    );
+    if (trocouUsuario) {
+      console.warn('[Manutenção] Troca de usuário detectada — limpando estado de', emailAtual, '→', novoEmail);
+      mntLimparEstadoDoUsuario();
+    }
+
+    /* [BUG USUÁRIOS] A identidade é SUBSTITUÍDA, nunca mesclada. O código antigo
+       espalhava `...ATLAS_CURRENT_USER` por cima do objeto novo: qualquer campo
+       ausente na mensagem (nome, perfil, placa, carretas) sobrevivia do usuário
+       anterior — era assim que o login de um aparecia dentro do outro. */
     ATLAS_CURRENT_USER = {
-      ...ATLAS_CURRENT_USER,
       ...recebido,
-      uid: recebido.uid || recebido.userId || recebido.usuarioId || ATLAS_CURRENT_USER.uid || '',
-      id: recebido.id || recebido.usuarioId || ATLAS_CURRENT_USER.id || '',
-      email: recebido.email || recebido.emailUsuario || ATLAS_CURRENT_USER.email || '',
-      nome: recebido.nome || recebido.nomeUsuario || recebido.displayName || ATLAS_CURRENT_USER.nome || '',
-      perfil: recebido.perfil || recebido.role || recebido.papel || ATLAS_CURRENT_USER.perfil || ''
+      uid:    novoUid,
+      id:     String(recebido.id || recebido.usuarioId || '').trim(),
+      email:  novoEmail,
+      nome:   recebido.nome || recebido.nomeUsuario || recebido.displayName || '',
+      perfil: recebido.perfil || recebido.role || recebido.papel || '',
+      identificado: true,
+      placa: '',     // resolvido do zero em resolveAlocacaoUsuario()
+      carretas: []
     };
     applyMntButtonPerms();
     // Com o usuário identificado, resolve a alocação dele
@@ -3652,13 +3895,35 @@ function resetFormularioOS() {
     if (inp.classList.contains('qty-input') && !inp.classList.contains('vl-unit') && !inp.classList.contains('vl-total')) inp.value = '1';
     else inp.value = inp.classList.contains('vl-total') || inp.classList.contains('vl-unit') ? '0' : '';
   });
-  _osFotos = [];
-  const prev = document.getElementById('os-fotos-preview'); if (prev) prev.innerHTML = '';
-  const cnt = document.getElementById('os-fotos-count'); if (cnt) cnt.textContent = 'Nenhuma foto adicionada';
-  _osOrcamento = null;
-  if (typeof renderOsOrcamento === 'function') renderOsOrcamento();
-  setDataAberturaHoje(true);
-  calcValorGeral();
+  // Campos exclusivos de "Compra" — zerados e escondidos junto com o resto.
+  ['os-frete-servicos','os-desconto-servicos','os-frete-pecas','os-desconto-pecas']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = '0'; });
+
+  /* [BUG ANEXOS] Cada limpeza de anexo vai no seu próprio try: se uma falhar,
+     as outras ainda rodam. Era exatamente o efeito dominó que fazia os arquivos
+     da O.S anterior reaparecerem na O.S seguinte. */
+  try {
+    // Libera os object URLs das miniaturas antes de descartar a lista.
+    _osFotos.forEach(f => { try { if (f && f.url) URL.revokeObjectURL(f.url); } catch(_) {} });
+  } catch(_) {}
+  try { _osFotos = []; } catch(_) {}
+  try { _osDocs = []; } catch(_) {}
+  try { _osOrcamento = null; } catch(_) {}
+
+  // Zera também os <input type="file">: sem isso o navegador não dispara
+  // change ao reselecionar o MESMO arquivo, e o anexo parecia "grudado".
+  try {
+    document.querySelectorAll('#view-nova-os input[type="file"]').forEach(inp => { inp.value = ''; });
+  } catch(_) {}
+
+  try {
+    const prev = document.getElementById('os-fotos-preview'); if (prev) prev.innerHTML = '';
+    const cnt = document.getElementById('os-fotos-count'); if (cnt) cnt.textContent = 'Nenhuma foto adicionada';
+  } catch(_) {}
+  try { if (typeof renderOsDocs === 'function') renderOsDocs(); } catch(_) {}
+  try { if (typeof renderOsOrcamento === 'function') renderOsOrcamento(); } catch(_) {}
+  try { setDataAberturaHoje(true); } catch(_) {}
+  try { if (typeof atualizarCamposCompra === 'function') atualizarCamposCompra(); else calcValorGeral(); } catch(_) {}
 }
 
 /* ══ LOAD CHECKLISTS DO FIREBASE ══
@@ -4905,7 +5170,13 @@ function popularFiltroFrotaGestao() {
 }
 
 // ══ FOTOS DA OS (item 2) ══
-const _osFotos = []; // lista de { url, name }
+/* [BUG ANEXOS] Era `const _osFotos = []`, mas resetFormularioOS() fazia
+   `_osFotos = []`. Atribuir a um `const` lança TypeError SEMPRE (inclusive
+   fora de strict mode), o reset morria naquela linha e nada depois dela
+   rodava — nem a limpeza do orçamento, nem a do preview. Resultado: as
+   fotos/orçamento da O.S anterior continuavam na memória e subiam junto com
+   a O.S seguinte. Agora é `let` e o reset é blindado. */
+let _osFotos = []; // lista de { url, name, file }
 
 function osAdicionarFotos(files, origem) {
   if (!files || !files.length) return;
@@ -4932,6 +5203,49 @@ function renderOsFotos() {
 function removerOsFoto(idx) {
   _osFotos.splice(idx, 1);
   renderOsFotos();
+}
+
+// ══ NOTAS FISCAIS / RECIBOS ANEXADOS NA ABERTURA DA O.S ══
+/* Os arquivos ficam só em memória até a O.S existir; o upload acontece dentro
+   de salvarOS(), depois do número da O.S ser gerado. O anexo NÃO altera o
+   fluxo de aprovação: statusInicial continua vindo de construirFluxoAprovacao(). */
+let _osDocs = []; // lista de { file, name }
+
+function osAdicionarDocs(files) {
+  if (!files || !files.length) return;
+  let ignorados = 0;
+  Array.from(files).forEach(file => {
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) { ignorados++; return; }
+    if (_osDocs.length >= 10) { ignorados++; return; }
+    _osDocs.push({ file, name: file.name || 'documento' });
+  });
+  if (ignorados) toast(ignorados + ' arquivo(s) ignorado(s): máximo de 10 documentos e 10MB por arquivo.', 'am');
+  renderOsDocs();
+}
+
+function renderOsDocs() {
+  const lista = document.getElementById('os-docs-lista');
+  const count = document.getElementById('os-docs-count');
+  if (!lista) return;
+  lista.innerHTML = _osDocs.map((d, i) => {
+    const kb = d.file && d.file.size ? (d.file.size / 1024).toFixed(0) + ' KB' : '';
+    const img = !!(d.file && d.file.type && d.file.type.startsWith('image/'));
+    return '<div class="os-doc-item">'
+      + '<span style="font-size:15px">' + (img ? '🖼️' : '📄') + '</span>'
+      + '<span class="nm">' + escapeHtml(d.name) + '</span>'
+      + (kb ? '<span class="sz">' + kb + '</span>' : '')
+      + '<button onclick="removerOsDoc(' + i + ')" title="Remover documento">×</button>'
+      + '</div>';
+  }).join('');
+  if (count) count.textContent = _osDocs.length
+    ? _osDocs.length + ' documento(s) anexado(s) ✓'
+    : 'Nenhum documento anexado';
+}
+
+function removerOsDoc(idx) {
+  _osDocs.splice(idx, 1);
+  renderOsDocs();
 }
 
 // ══ ANEXAR ORÇAMENTO DA OS (documento único) ══
@@ -6640,7 +6954,7 @@ function openPanel(osId) {
 function mntColetarNFs(os) {
   const out = [];
   const vistos = new Set();
-  const add = (url, nome, obs, slot) => {
+  const add = (url, nome, obs, slot, origem) => {
     const u = String(url || '').trim();
     const n = String(nome || '').trim();
     const o = String(obs  || '').trim();
@@ -6648,7 +6962,7 @@ function mntColetarNFs(os) {
     const chave = u || (n + '|' + o);
     if (vistos.has(chave)) return;
     vistos.add(chave);
-    out.push({ slot: slot || 0, url: u, nome: n, obs: o });
+    out.push({ slot: slot || 0, url: u, nome: n, obs: o, origem: String(origem || '') });
   };
   if (!os) return out;
   for (const num of [1,2,3]) add(os['nf'+num+'_url'], os['nf'+num+'_nome'], os['nf'+num+'_obs'], num);
@@ -6657,8 +6971,8 @@ function mntColetarNFs(os) {
     if (!Array.isArray(arr)) return;
     arr.forEach(item => {
       if (!item) return;
-      if (typeof item === 'string') add(item, '', '', 0);
-      else add(item.url || item.publicUrl || item.link, item.nome || item.name || item.arquivo, item.obs || item.observacao, 0);
+      if (typeof item === 'string') add(item, '', '', 0, '');
+      else add(item.url || item.publicUrl || item.link, item.nome || item.name || item.arquivo, item.obs || item.observacao, 0, item.origem);
     });
   });
   return out;
@@ -6783,7 +7097,7 @@ function renderNFsReadOnly(os) {
     return `<div class="nf-ro-item">
       <div class="nf-ro-head">
         <div class="nf-ro-name">📄 <span>${escapeHtml(nomeExib)}</span></div>
-        <span class="bdg bdg-gn">Anexada</span>
+        <span class="bdg ${nf.origem === 'abertura' ? 'bdg-ac' : 'bdg-gn'}">${nf.origem === 'abertura' ? 'Anexada na abertura' : 'Anexada'}</span>
       </div>
       <div class="nf-ro-preview">${preview}</div>
       ${nf.obs ? `<div class="nf-ro-obs">${escapeHtml(nf.obs)}</div>` : ''}
