@@ -901,8 +901,53 @@ function atlasNormalizeProfile(raw, userDoc) {
 }
 
 /* ══ AUTH ══ */
+/* [BUG USUÁRIOS] Logout + login na mesma aba NÃO recarregava os iframes:
+   frFlags[view] continuava 'done', o evento `load` não disparava de novo e o
+   ATLAS_USER nunca era reenviado. Cada módulo seguia com a identidade do
+   usuário anterior — foi isso que fez "um usuário aparecer dentro do outro".
+   Passamos a rastrear o uid e a derrubar todos os iframes quando ele muda. */
+let __atlasUidSessao = null;
+
+function atlasDerrubarFrames(motivo) {
+  try { console.warn('[Atlas] Reiniciando módulos:', motivo); } catch(_) {}
+  Object.keys(VIEWS).forEach(id => {
+    const fr = document.getElementById('fr-' + id);
+    if (fr && fr.src && fr.src !== 'about:blank') {
+      try { fr.removeAttribute('src'); fr.src = 'about:blank'; } catch(_) {}
+    }
+    frFlags[id] = null;
+  });
+  window.__atlasMru = [];
+}
+
+/* Reenvia identidade + permissões para TODOS os módulos já carregados. */
+function atlasBroadcastUser() {
+  Object.keys(VIEWS).forEach(id => {
+    if (frFlags[id] !== 'done') return;
+    const fr = document.getElementById('fr-' + id);
+    if (!fr || !fr.contentWindow) return;
+    try {
+      fr.contentWindow.postMessage({
+        type:   'ATLAS_USER',
+        email:  curUser?.email  || '',
+        uid:    curUser?.uid    || '',
+        perfil: curPerfil       || 'motorista',
+        nome:   curNome || curUser?.displayName || '',
+        scope:  atlasPermissionContext(),
+        permissoes: JSON.parse(JSON.stringify(ATLAS_PERMS || {}))
+      }, '*');
+      sendTabPermsToFrame('fr-' + id);
+    } catch(_) {}
+  });
+}
+
 auth.onAuthStateChanged(async user => {
   if (user) {
+    const uidNovo = user.uid || '';
+    if (__atlasUidSessao && __atlasUidSessao !== uidNovo) {
+      atlasDerrubarFrames('troca de usuário (' + __atlasUidSessao + ' → ' + uidNovo + ')');
+    }
+    __atlasUidSessao = uidNovo;
     curUser = user;
     try {
       let snap = await db.collection('usuarios').doc(user.uid).get();
@@ -934,6 +979,10 @@ auth.onAuthStateChanged(async user => {
          onAuthStateChanged (ramo user) restaura o app normalmente. */
       setTimeout(() => {
         if (auth.currentUser) return; // sessão restaurada — nada a fazer
+        /* Logout CONFIRMADO: derruba os iframes para que nenhum módulo fique
+           com dados do usuário que acabou de sair. */
+        __atlasUidSessao = null;
+        atlasDerrubarFrames('logout confirmado');
         showLogin();
       }, 2500);
     }
@@ -958,6 +1007,9 @@ async function showApp() {
   const _initHash = location.hash.replace('#','');
   const _initView = _initHash && VIEWS[_initHash] ? _initHash : 'inicio';
   go(_initView);
+
+  /* Reforça a identidade nos módulos que porventura já estejam carregados. */
+  try{ atlasBroadcastUser(); }catch(_){}
 
   try{ atlasPreloadAllBases(); }catch(_){}
   try{ atlasWatchAllBases(); }catch(_){}
