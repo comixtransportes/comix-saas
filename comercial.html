@@ -1495,7 +1495,7 @@ details.cfg-det>.card{margin-top:10px}
        A aba foi eliminada; o que era operacional dela vive aqui, recolhido,
        porque é configuração de bastidor e não trabalho do dia a dia. -->
   <details class="cfg-det" id="audCfg">
-    <summary>Configurações &amp; integrações <em>— HERE Routing v8, teste manual de rota e base de praças de pedágio</em></summary>
+    <summary>Configurações &amp; integrações <em>— HERE Routing v8, fundo do mapa, teste manual de rota e base de praças de pedágio</em></summary>
 
   <div class="card">
     <h3>Integração HERE Routing v8</h3>
@@ -1514,6 +1514,24 @@ details.cfg-det>.card{margin-top:10px}
       </label>
     </div>
     <div class="muted">Free tier ~30k transações/mês. A chave fica no Firestore (<span class="mono">comercial_config</span>) — nunca no código. Consumo estimado do mês: <b id="apiConsumo" class="mono">—</b> chamadas registradas pelo módulo.</div>
+  </div>
+  <div class="card">
+    <h3>Fundo do mapa (tiles)</h3>
+    <div class="fields" style="margin-bottom:10px">
+      <label class="fld">API key (CARTO) — opcional
+        <input type="text" id="apiCartoKey" placeholder="deixe em branco para usar OSM/Esri" autocomplete="off">
+      </label>
+      <label class="fld">Status
+        <span id="cartoStatus" class="pill mu" style="align-self:flex-start;margin-top:4px">sem chave · usando OSM/Esri</span>
+      </label>
+      <label class="fld">&nbsp;
+        <span style="display:flex;gap:8px">
+          <button class="btn sm pri" id="btnSalvarCarto">Salvar chave</button>
+          <button class="btn sm" id="btnLimparCarto">Remover</button>
+        </span>
+      </label>
+    </div>
+    <div class="muted">Em <b>26/08/2026</b> a CARTO passou a exigir chave nos tiles raster e carimba <span class="mono">API KEY REQUIRED</span> em toda requisição anônima — era essa a marca d'água no mapa do Simulador. O módulo passou a rodar em <b>OSM padrão → OSM Alemanha → Esri Ruas → Esri Topográfico</b>, todos sem chave. Com uma chave gratuita da CARTO (<span class="mono">carto.com/basemaps/apikey</span>, 5 milhões de tiles/mês) o Voyager volta como primeira opção e os demais viram reserva. A chave fica no Firestore (<span class="mono">comercial_config</span>), nunca no código.</div>
   </div>
   <div class="card">
     <h3>Teste manual de rota (resposta bruta)</h3>
@@ -1830,6 +1848,7 @@ const ST = {
   clientesDocs:[],      // cadastros feitos no Atlas (comercial_rotas tipo:'cliente')
   sa1:[], sa1Meta:null, sa1Carregada:false, // base SA1 do Protheus (bases_cloud/sa1) + metadados da carga
   hereKey:'', hereChamadasMes:0,
+  cartoKey:'',          // chave opcional do fundo do mapa (CARTO) — sem ela o mapa roda em OSM/Esri
   pracas:[],  // base local de praças de pedágio (comercial_config/pracas)
   sim:null   // última simulação calculada (snapshot pronto p/ gravar)
 };
@@ -1907,10 +1926,21 @@ function bindSubTabs(){
 /* ══ Carregadores ══ */
 async function carregarConfig(){
   const doc = await fsGetDoc(COL.config,'geral');
-  if(doc){ ST.hereKey = doc.data.hereKey||''; ST.hereChamadasMes = doc.data['chamadas_'+hoje().slice(0,7)]||0; }
+  if(doc){ ST.hereKey = doc.data.hereKey||''; ST.hereChamadasMes = doc.data['chamadas_'+hoje().slice(0,7)]||0;
+           ST.cartoKey = doc.data.cartoKey||''; }
   $('apiHereKey').value = ST.hereKey ? '••••'+ST.hereKey.slice(-4) : '';
   $('apiConsumo').textContent = ST.hereChamadasMes;
   if(ST.hereKey){ $('apiStatus').textContent='chave carregada'; $('apiStatus').className='pill ac'; }
+  /* Fundo do mapa: a CARTO só volta à fila de provedores quando há chave salva.
+     Sem chave o mapa segue em OSM/Esri, sem a marca d'água de 08/2026. */
+  const cKey=$('apiCartoKey');
+  if(cKey) cKey.value = ST.cartoKey ? '••••'+ST.cartoKey.slice(-4) : '';
+  const cSt=$('cartoStatus');
+  if(cSt){
+    cSt.textContent = ST.cartoKey ? 'chave carregada · CARTO Voyager' : 'sem chave · usando OSM/Esri';
+    cSt.className   = ST.cartoKey ? 'pill ac' : 'pill mu';
+  }
+  try{ tileAplicarCartoKey(ST.cartoKey); }catch(e){ console.warn('[mapa] chave CARTO', e && e.message); }
 }
 async function carregarPracas(){
   const doc = await fsGetDoc(COL.config,'pracas');
@@ -2897,25 +2927,67 @@ let _simMap=null,_simLayer=null,_simRenderer=null,_simTiles=null;
    ══════════════════════════════════════════════════════════════════ */
 /* SEM crossOrigin: os CDNs de tile nem sempre devolvem Access-Control-Allow-Origin,
    e marcar a <img> como crossorigin faz o navegador baixar e rejeitar o tile. */
-const _TILE_PROVS=[
-  /* CARTO sem subdomínio: a/b/c/d.basemaps são legado e sujeitos a corte; o
-     host único é o que a CARTO documenta hoje e responde por HTTP/2. */
-  {nome:'CARTO Voyager', url:'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-   opt:{attribution:'&copy; OpenStreetMap &copy; CARTO'}},
-  {nome:'CARTO (subdomínios)', url:'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-   opt:{subdomains:'abcd',attribution:'&copy; OpenStreetMap &copy; CARTO'}},
+/* ── MARCA D'ÁGUA "API KEY REQUIRED" (corrigido em 09/2026) ────────────────
+   Sintoma: o fundo do mapa carregava normalmente, mas coberto de "API KEY
+   REQUIRED · carto.com/basemaps/apikey" na diagonal.
+
+   Causa: em 26/08/2026 a CARTO passou a exigir chave nos tiles RASTER de
+   basemaps.cartocdn.com e a carimbar a marca d'água em toda requisição
+   anônima — o serviço raster está sendo aposentado em favor do vetorial.
+   O tile continua vindo com HTTP 200, então NADA disso passava pelo motor
+   resiliente abaixo: não há tileerror, o cão de guarda vê tile carregado em
+   tela e o contador de falhas nunca chega no gatilho de troca. Defeito
+   invisível para o código, visível só para quem olha a tela.
+
+   Correção: os dois provedores CARTO saíram do padrão. A lista base agora só
+   tem provedores SEM chave, e a CARTO volta para a frente da fila apenas
+   quando existe uma chave salva no Firestore (aba Auditoria → Configurações),
+   que é o caminho suportado hoje — chave gratuita, 5 milhões de tiles/mês.
+   Enquanto não houver chave, o mapa roda em OSM/Esri, sem marca d'água. */
+const _TILE_KEYLESS=[
+  {nome:'OSM padrão', url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+   opt:{attribution:'&copy; OpenStreetMap'}},
   {nome:'OSM Alemanha', url:'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
    opt:{attribution:'&copy; OpenStreetMap'}},
-  {nome:'OSM', url:'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-   opt:{attribution:'&copy; OpenStreetMap'}}
+  /* Esri: infraestrutura completamente diferente do OSM — se o problema for do
+     lado do OSM (bloqueio, 429, DNS), este ainda responde. Ordem {z}/{y}/{x}. */
+  {nome:'Esri Ruas', url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+   opt:{attribution:'Esri, HERE, Garmin, &copy; OpenStreetMap'}},
+  {nome:'Esri Topográfico', url:'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+   opt:{attribution:'Esri, HERE, Garmin, &copy; OpenStreetMap'}}
 ];
+/* CARTO só entra com chave. Host único primeiro (é o que a CARTO documenta e
+   responde por HTTP/2); a/b/c/d.basemaps ficam como redundância. */
+function _cartoProvs(k){
+  const at='&copy; OpenStreetMap &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  const q='?key='+encodeURIComponent(k);
+  return [
+    {nome:'CARTO Voyager', url:'https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'+q,
+     opt:{attribution:at}},
+    {nome:'CARTO (subdomínios)', url:'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'+q,
+     opt:{subdomains:'abcd',attribution:at}}
+  ];
+}
+let _TILE_PROVS=_TILE_KEYLESS.slice();
+/* Chamado pelo carregarConfig e pelo botão de salvar a chave CARTO. Sem chave,
+   volta à lista sem chave — nunca deixa a CARTO anônima na fila. */
+function tileAplicarCartoKey(k){
+  k=String(k||'').trim();
+  const nova = k ? _cartoProvs(k).concat(_TILE_KEYLESS) : _TILE_KEYLESS.slice();
+  const trocou = nova[0].nome !== (_TILE_PROVS[0]||{}).nome;
+  _TILE_PROVS = nova;
+  if(!trocou) return;
+  _tpi=0; _tileRotacoes=0; _tileWdFalhas=0;
+  if(_simMap){ _montarTiles('provedor de fundo atualizado'); _tileVigiar(); }
+}
 const _TILE_BASE={maxZoom:19, maxNativeZoom:18, minZoom:0,
                   keepBuffer:4, updateWhenIdle:false, updateWhenZooming:false, crossOrigin:false};
 const _TILE_RETRIES=3;          /* tentativas por tile antes de contar como falha real */
 const _TILE_FALHAS_TROCA=8;     /* falhas reais na janela para rodar o provedor */
 
 let _tpi=0, _tileCamada=null, _tileFalhas=0, _tileOk=0, _tileWd=null, _tileWdFalhas=0, _tileRotacoes=0;
-const _TILE_ROTACOES_MAX=_TILE_PROVS.length;     /* deu a volta na lista inteira = é a rede, não o CDN */
+/* virou função: a lista muda de tamanho quando a chave CARTO entra ou sai */
+function _tileRotMax(){ return _TILE_PROVS.length; }   /* deu a volta na lista inteira = é a rede, não o CDN */
 
 function _tileAviso(txt){
   const el=$('simMapAviso'); if(!el) return;
@@ -2955,7 +3027,7 @@ function _montarTiles(motivo){
 function _rodarProvedor(motivo){
   /* Se já rodou a lista inteira duas vezes sem carregar um tile sequer, o
      problema não é o provedor: é a rede/proxy. Para de martelar e avisa. */
-  if(++_tileRotacoes>_TILE_ROTACOES_MAX){
+  if(++_tileRotacoes>_tileRotMax()){
     clearTimeout(_tileWd); _tileWd=null;
     console.warn('[mapa] nenhum provedor de tiles respondeu — desistindo até a próxima interação');
     _tileAviso('Sem conexão com o servidor de mapas. <a href="#" onclick="simTentarMapa();return false;">Tentar de novo</a>');
@@ -2980,7 +3052,7 @@ window.addEventListener('online', ()=>{ if(_simMap) simTentarMapa(); });
 
 function _tileVigiar(){
   clearTimeout(_tileWd);
-  if(_tileRotacoes>_TILE_ROTACOES_MAX) return;
+  if(_tileRotacoes>_tileRotMax()) return;
   _tileWd=setTimeout(()=>{
     if(!_simMap || !_tileCamada) return;
     const cont=_simMap.getContainer();
@@ -7442,6 +7514,31 @@ $('btnSalvarKey').onclick = async ()=>{
     toast('Não foi possível salvar a chave: '+(e.message||e),'rd');
   }finally{ btn.disabled=false; btn.textContent=txt; }
 };
+/* — Fundo do mapa (chave CARTO, opcional) — */
+async function _cartoGravar(k, btn){
+  const txt=btn.textContent; btn.disabled=true; btn.textContent='Salvando…';
+  try{
+    await fsSetDoc(COL.config,'geral',{cartoKey:k, cartoKey_atualizada_em:agoraISO(), cartoKey_por:ATLAS_CURRENT_USER.email},true);
+    const chk=await fsGetDoc(COL.config,'geral');
+    if(!chk || (chk.data.cartoKey||'')!==k) throw new Error('a chave não persistiu no banco — verifique permissões do Firestore.');
+    ST.cartoKey=k;
+    $('apiCartoKey').value = k ? '••••'+k.slice(-4) : '';
+    $('cartoStatus').textContent = k ? 'chave salva · CARTO Voyager' : 'sem chave · usando OSM/Esri';
+    $('cartoStatus').className   = k ? 'pill gn' : 'pill mu';
+    tileAplicarCartoKey(k);
+    toast(k ? 'Chave CARTO salva — o fundo do mapa passa a usar o Voyager.' : 'Chave CARTO removida — o mapa volta para OSM/Esri.','gn');
+  }catch(e){
+    $('cartoStatus').textContent='falha ao salvar'; $('cartoStatus').className='pill rd';
+    toast('Não foi possível salvar a chave: '+(e.message||e),'rd');
+  }finally{ btn.disabled=false; btn.textContent=txt; }
+}
+$('btnSalvarCarto').onclick = ()=>{
+  const k=$('apiCartoKey').value.trim();
+  if(!k||k.startsWith('••••')){ toast('Cole a chave completa da CARTO.','am'); return; }
+  _cartoGravar(k, $('btnSalvarCarto'));
+};
+$('btnLimparCarto').onclick = ()=>{ $('apiCartoKey').value=''; _cartoGravar('', $('btnLimparCarto')); };
+
 $('btnTestarApi').onclick = async ()=>{
   try{ const g=await hereGeocode('Itajaí, SC'); $('apiStatus').textContent='OK ('+g.label.slice(0,30)+'…)'; $('apiStatus').className='pill gn'; toast('API respondendo.','gn'); }
   catch(e){ $('apiStatus').textContent='falha'; $('apiStatus').className='pill rd'; toast(e.message,'rd'); }
