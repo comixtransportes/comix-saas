@@ -1701,7 +1701,9 @@ window.atlasLoadFrotaTemplate = function () {
     /* Atualiza apenas o campo tipo_vinculo de um veículo (auto-classificação CP/CA) */
     salvarTipoVeiculo: async function(placa, tipoVinculo) {
       if (!currentUser) throw new Error("Não autenticado");
-      await db.collection("veiculos").doc(placa).set({
+      const docId = frotaDocIdVeiculo(placa);
+      if (!docId) throw new Error("Veículo " + placa + " não encontrado no cadastro — gravação ignorada");
+      await db.collection("veiculos").doc(docId).set({
         tipo_vinculo: tipoVinculo,
         updatedAt: firebase.firestore.Timestamp.now(),
       }, { merge: true });
@@ -1710,7 +1712,9 @@ window.atlasLoadFrotaTemplate = function () {
     /* Atualiza campos do veículo (admin) */
     atualizarVeiculo: async function(placa, dados) {
       if (currentPerfil !== "admin") throw new Error("Apenas admin");
-      await db.collection("veiculos").doc(placa).set({
+      const docId = frotaDocIdVeiculo(placa);
+      if (!docId) throw new Error("Veículo " + placa + " não encontrado no cadastro — gravação ignorada");
+      await db.collection("veiculos").doc(docId).set({
         ...dados,
         updatedAt: firebase.firestore.Timestamp.now(),
         updatedBy: currentUser.email,
@@ -1921,6 +1925,24 @@ const STATE = {
 
 /* ─── Normalização ─── */
 /* Veículos do Firestore: { tipo: "Cavalo|Carreta|Carro de apoio", placa, frota, modelo, ano, filial, subtipo } */
+/* [CORREÇÃO SUMIÇO DE VEÍCULO] A Frota gravava em `veiculos` usando a PLACA
+   como ID do documento. Só que o ID real é o que o Cadastros criou — e ele NÃO
+   muda quando a placa é corrigida depois. Com `set(..., {merge:true})` o
+   Firestore CRIA o documento inexistente: nascia um registro paralelo só com
+   status/tipo_vinculo, sem frota e sem modelo. Esse fantasma entrava nas
+   contagens e no board da Frota e sumia da busca do Cadastros (que procura por
+   número de frota). Agora resolvemos o ID real antes de gravar; sem match, não
+   grava — nunca mais nasce documento novo a partir da Frota. */
+function frotaDocIdVeiculo(chave) {
+  const alvo = String(chave || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!alvo) return null;
+  const lista = (typeof STATE !== "undefined" && STATE.veiculos) ? STATE.veiculos : [];
+  const norm = x => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const achado = lista.find(v => norm(v.placa) === alvo)
+              || lista.find(v => norm(v.id) === alvo)
+              || lista.find(v => norm(v.frota) === alvo);
+  return achado ? (achado.id || achado.placa || null) : null;
+}
 function normalizeVeiculo(v) {
   const tipo = String(v.tipo || "Cavalo").trim();
   let categoria;
