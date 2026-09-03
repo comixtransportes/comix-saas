@@ -549,6 +549,8 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
 @media(max-width:980px){.cfg-notif-layout{grid-template-columns:1fr;--cfg-notif-card-h:min(520px,calc(100vh - 220px))}.cfg-notif-dest-card{height:var(--cfg-notif-card-h);max-height:var(--cfg-notif-card-h)}.cfg-notif-dest-tools{grid-template-columns:1fr}.cfg-notif-dest-tools .cfg-small{width:100%}.cfg-notif-event-list{display:flex;flex-direction:column}.cfg-notif-event-users{grid-template-columns:repeat(2,minmax(0,1fr));max-height:99px}}
 .cfg-accordion{border:1px solid var(--line);border-radius:16px;background:#fff;margin-bottom:10px;overflow:hidden;box-shadow:0 8px 22px rgba(15,59,104,.06)}
 .cfg-accordion summary{padding:13px 15px;font-size:14px;font-weight:850;color:var(--primary);cursor:pointer;background:linear-gradient(180deg,#fff,#f8fafc)}
+.cfg-count{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;background:#eef2f7;color:var(--muted);font-size:11px;font-weight:800;vertical-align:middle}
+.cfg-count-filtrado{background:var(--blue-l);color:var(--blue)}
 .cfg-accordion-body{padding:12px;border-top:1px solid var(--line)}
 .cfg-hidden{display:none!important}
 @media(max-width:720px){
@@ -675,13 +677,15 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
               <button class="cfg-save" type="submit">Salvar veículo</button>
               <button class="cfg-clear" type="button" onclick="cfgResetVeiculo()">Limpar</button>
               <button class="cfg-small" type="button" onclick="cfgImportarVeiculosAnexo()">Importar lista anexada</button>
+              <button class="cfg-small" type="button" onclick="cfgMostrarDiagnosticoVeiculos()" title="Lista documentos sem frota, sem placa, duplicados ou com ID diferente da placa — a causa clássica de veículo que existe na Frota e some daqui">Diagnóstico</button>
             </div>
           </form>
           <div class="cfg-note cfg-hidden" id="cfg_veic_import_result" style="white-space:pre-wrap;margin-top:12px"></div>
+          <div class="cfg-note cfg-hidden" id="cfg_veic_diag" style="white-space:pre-wrap;margin-top:12px"></div>
         </div>
       </div>
       <details class="cfg-accordion" open="">
-        <summary>Cavalos</summary>
+        <summary>Cavalos <span class="cfg-count" id="cfg_veic_count_cavalos">—</span></summary>
         <div class="cfg-accordion-body">
           <div class="fr">
             <div class="f"><label>Pesquisar cavalo</label><input id="cfg_veic_search_cavalos" placeholder="Digite placa, frota, modelo ou unidade" oninput="cfgRenderVeiculos()"></div>
@@ -690,7 +694,7 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         </div>
       </details>
       <details class="cfg-accordion" open="">
-        <summary>Carretas</summary>
+        <summary>Carretas <span class="cfg-count" id="cfg_veic_count_carretas">—</span></summary>
         <div class="cfg-accordion-body">
           <div class="fr">
             <div class="f"><label>Pesquisar carreta</label><input id="cfg_veic_search_carretas" placeholder="Digite placa, frota, modelo ou unidade" oninput="cfgRenderVeiculos()"></div>
@@ -699,8 +703,13 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         </div>
       </details>
       <details class="cfg-accordion" open="">
-        <summary>Carro de apoio</summary>
-        <div class="cfg-accordion-body"><div class="cfg-list" id="cfg_veic_apoio"><div class="loading-state">Carregando...</div></div></div>
+        <summary>Carro de apoio <span class="cfg-count" id="cfg_veic_count_apoio">—</span></summary>
+        <div class="cfg-accordion-body">
+          <div class="fr">
+            <div class="f"><label>Pesquisar carro de apoio</label><input id="cfg_veic_search_apoio" placeholder="Digite placa, frota, modelo ou unidade" oninput="cfgRenderVeiculos()"></div>
+          </div>
+          <div class="cfg-list" id="cfg_veic_apoio"><div class="loading-state">Carregando...</div></div>
+        </div>
       </details>
     </section>
 
@@ -1639,11 +1648,23 @@ function upperText(value) {
   return String(value || "").trim().toLocaleUpperCase("pt-BR");
 }
 
+/* [CORREÇÃO SUMIÇO DE VEÍCULO] A classificação aqui era ANCORADA (/^carreta$/)
+   enquanto a Frota classifica por CONTÉM (tipo.includes("carreta")). Resultado:
+   um registro gravado como "CARRETA GRANELEIRA" ou "CARRO APOIO" caía num
+   accordion no Cadastros e em outra categoria na Frota — mesma coleção, duas
+   verdades. Agora as duas telas usam a mesma regra. */
 function normalizeTipoVeiculo(tipo) {
-  const t = String(tipo || "Cavalo").trim();
-  if (/^carro\s+de\s+apoio$/i.test(t)) return "Carro de apoio";
-  if (/^carreta$/i.test(t)) return "Carreta";
+  const t = String(tipo || "Cavalo").trim().toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (t.includes("apoio")) return "Carro de apoio";
+  if (t.includes("carreta")) return "Carreta";
   return "Cavalo";
+}
+/* Texto comparável para busca: sem acento, sem espaço/traço/ponto/barra.
+   Assim "ca18" encontra "CA-185", "CA 185" e "ca185". */
+function cfgTextoBusca(value) {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 function sortByField(a, b, field) {
@@ -6220,27 +6241,98 @@ async function cfgRefreshVeiculos() {
   cfgVehicleFrotaAutoFill(false);
 }
 function cfgRenderVeiculos() {
-  const buscaCavalos = cfgUpper(cfgVal("cfg_veic_search_cavalos"));
-  const buscaCarretas = cfgUpper(cfgVal("cfg_veic_search_carretas"));
-  const correspondeBusca = (v, busca) => !busca || cfgUpper([
-    v.frota,
-    v.placa,
-    v.modelo,
-    v.subtipo,
-    v.ano,
-    v.renavam,
-    v.chassi,
-    v.tipo_vinculo,
-    v.filial,
-    statusAtivoLabel(normalizeStatusAtivo(v.status_ativo))
-  ].filter(Boolean).join(" ")).includes(busca);
+  const buscaCavalos = cfgTextoBusca(cfgVal("cfg_veic_search_cavalos"));
+  const buscaCarretas = cfgTextoBusca(cfgVal("cfg_veic_search_carretas"));
+  const buscaApoio = cfgTextoBusca(cfgVal("cfg_veic_search_apoio"));
+  /* [CORREÇÃO SUMIÇO DE VEÍCULO] Antes os campos eram concatenados num texto só
+     e comparados crus. Um registro com frota "CA-185" ou sem frota nenhuma
+     (documento criado fora do Cadastros) nunca aparecia na busca por "ca18" —
+     ficava no banco, aparecia na Frota e sumia daqui. Agora cada campo é
+     comparado já normalizado e o ID do documento entra na busca. */
+  const correspondeBusca = (v, busca) => {
+    if (!busca) return true;
+    return [
+      v.id,
+      v.frota,
+      v.placa,
+      v.modelo,
+      v.subtipo,
+      v.ano,
+      v.renavam,
+      v.chassi,
+      v.tipo_vinculo,
+      v.filial,
+      statusAtivoLabel(normalizeStatusAtivo(v.status_ativo))
+    ].some(campo => campo && cfgTextoBusca(campo).includes(busca));
+  };
 
-  const cavalos = cfgCache.veiculos.filter(v => (v.tipo || "Cavalo") === "Cavalo" && correspondeBusca(v, buscaCavalos));
-  const carretas = cfgCache.veiculos.filter(v => v.tipo === "Carreta" && correspondeBusca(v, buscaCarretas));
-  const apoio = cfgCache.veiculos.filter(v => v.tipo === "Carro de apoio");
+  const todosCavalos = cfgCache.veiculos.filter(v => (v.tipo || "Cavalo") === "Cavalo");
+  const todasCarretas = cfgCache.veiculos.filter(v => v.tipo === "Carreta");
+  const todoApoio = cfgCache.veiculos.filter(v => v.tipo === "Carro de apoio");
+  const cavalos = todosCavalos.filter(v => correspondeBusca(v, buscaCavalos));
+  const carretas = todasCarretas.filter(v => correspondeBusca(v, buscaCarretas));
+  const apoio = todoApoio.filter(v => correspondeBusca(v, buscaApoio));
   cfgRenderVeiculoList("cfg_veic_cavalos", cavalos);
   cfgRenderVeiculoList("cfg_veic_carretas", carretas);
   cfgRenderVeiculoList("cfg_veic_apoio", apoio);
+  /* Contador visível: se "mostrando 7 de 8" o registro sumido está na lista,
+     não no banco — o diagnóstico abaixo diz qual é. */
+  cfgSetContador("cfg_veic_count_cavalos", cavalos.length, todosCavalos.length);
+  cfgSetContador("cfg_veic_count_carretas", carretas.length, todasCarretas.length);
+  cfgSetContador("cfg_veic_count_apoio", apoio.length, todoApoio.length);
+}
+function cfgSetContador(id, mostrados, total) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = mostrados === total ? `${total}` : `${mostrados} de ${total}`;
+  el.classList.toggle("cfg-count-filtrado", mostrados !== total);
+}
+/* ── Diagnóstico de veículos ────────────────────────────────────────────────
+   Existe porque a Frota grava em `veiculos` usando a PLACA como ID do
+   documento (atualizarVeiculo / salvarTipoVeiculo), enquanto o Cadastros grava
+   no ID original do registro. Quando a placa é corrigida depois do cadastro,
+   a Frota cria um documento paralelo — um "fantasma" só com status/vínculo,
+   sem frota e sem modelo. Ele conta na Frota e some da busca aqui.
+   Esta auditoria lista esses casos e todo registro incompleto ou duplicado. */
+function cfgAuditarVeiculos() {
+  const lista = cfgCache.veiculos || [];
+  const achados = [];
+  const porPlaca = {};
+  const porFrota = {};
+  lista.forEach(v => {
+    const placa = cfgTextoBusca(v.placa);
+    const frota = cfgTextoBusca(v.frota);
+    if (placa) (porPlaca[placa] = porPlaca[placa] || []).push(v);
+    if (frota) (porFrota[frota] = porFrota[frota] || []).push(v);
+  });
+  lista.forEach(v => {
+    const rotulo = `${v.frota || "SEM FROTA"} · ${v.placa || v.id || "SEM PLACA"} (doc: ${v.id})`;
+    if (!v.frota) achados.push(["fantasma", `${rotulo} — sem número de frota; provável documento criado fora do Cadastros`]);
+    if (!v.placa) achados.push(["fantasma", `${rotulo} — sem placa`]);
+    if (!v.modelo && !v.ano) achados.push(["incompleto", `${rotulo} — sem modelo e sem ano`]);
+    if (v.placa && cfgTextoBusca(v.id) !== cfgTextoBusca(v.placa))
+      achados.push(["id", `${rotulo} — ID do documento diferente da placa; qualquer gravação da Frota por placa cria um documento paralelo`]);
+  });
+  Object.entries(porPlaca).forEach(([placa, arr]) => {
+    if (arr.length > 1) achados.push(["duplicado", `Placa ${placa} em ${arr.length} documentos: ${arr.map(x => x.frota || x.id).join(", ")}`]);
+  });
+  Object.entries(porFrota).forEach(([frota, arr]) => {
+    if (arr.length > 1) achados.push(["duplicado", `Frota ${frota} em ${arr.length} documentos: ${arr.map(x => x.placa || x.id).join(", ")}`]);
+  });
+  return achados;
+}
+function cfgMostrarDiagnosticoVeiculos() {
+  const box = document.getElementById("cfg_veic_diag");
+  if (!box) return;
+  const achados = cfgAuditarVeiculos();
+  box.classList.remove("cfg-hidden");
+  if (!achados.length) {
+    box.textContent = `Nenhuma inconsistência encontrada em ${(cfgCache.veiculos || []).length} veículos.`;
+    return;
+  }
+  const linhas = achados.map(([tipo, texto]) => `• [${tipo}] ${texto}`).join("\n");
+  box.textContent = `${achados.length} ponto(s) de atenção em ${(cfgCache.veiculos || []).length} veículos:\n\n` + linhas;
+  console.table(achados.map(([tipo, texto]) => ({ tipo, detalhe: texto })));
 }
 function cfgRenderVeiculoList(id, arr) {
   const list = document.getElementById(id);
