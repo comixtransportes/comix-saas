@@ -1361,7 +1361,7 @@ details.cfg-det>.card{margin-top:10px}
     <div class="rt-wrap">
       <table class="tb rt-tb rcl-tb" id="rclTb">
         <thead><tr id="rclTh"></tr></thead>
-        <tbody id="rclTbody"><tr><td colspan="12" class="rt-empty">Carregando…</td></tr></tbody>
+        <tbody id="rclTbody"><tr><td colspan="14" class="rt-empty">Carregando…</td></tr></tbody>
       </table>
     </div>
     <div class="muted" style="font-size:10.5px;margin-top:8px" id="rclRodape"></div>
@@ -11465,7 +11465,7 @@ const RCL_CFG = {
      É a mesma regra da média ponderada por litros do rtPrecoMedio.        */
   janelaTeto: 12,                        /* teto absoluto, em meses         */
   janelaPadrao: { pneus:6, lub:3, pecas:6, doc:12, pessoal:1,
-                  deprec:1, pedagio:3, diesel:3, arla:3, aderencia:3 },
+                  deprec:1, pedagio:3, diesel:3, arla:3, aderencia:3, adm:6 },
   /* Rótulo e explicação de cada natureza, para a tela não precisar repetir. */
   janelaInfo: {
     pneus:    ['Pneus',                  'compra em lote concentra o gasto num mês'],
@@ -11477,7 +11477,8 @@ const RCL_CFG = {
     pedagio:  ['Pedágio (reserva R$/km)','acompanha o rodado'],
     diesel:   ['Diesel — preço efetivo', 'ruído de estoque no fim do mês'],
     arla:     ['Arla — preço efetivo',   'compra esparsa, amostra pequena'],
-    aderencia:['Aderência do consumo',   'tanque cheio no dia 30 é diesel do mês seguinte']
+    aderencia:['Aderência do consumo',   'tanque cheio no dia 30 é diesel do mês seguinte'],
+    adm:      ['Administrativo e demais C.O','despesa de estrutura tem mês forte e mês fraco']
   },
   /* Coeficiente de variação das taxas mensais acima do qual a tela chama a
      linha de dispersa. Não é erro: é o aviso de que aquela natureza é
@@ -11584,6 +11585,16 @@ const RCL_PADRAO = {
   fontePecas:       'realizado',   /* realizado · modelo                    */
   fonteDocSeguros:  'realizado',   /* realizado · modelo                    */
   fontePessoal:     'cpk',         /* cpk · modelo                          */
+  /* ══ ADMINISTRATIVO E DEMAIS C.O ═══════════════════════════════════════
+     Tudo que o Mapinha lança no grupo C.O e que não é pneu, lubrificante,
+     peça ou documentação caía num balde (`coOutrosRS`) que era somado e
+     NUNCA virava custo de rota. O caso caro é o 09.01 (despesas
+     administrativas), que o cpk.html leva a 82% pelo RATEIO_ADM e que aqui
+     não entrava por nada. Decisão do comercial (set/2026): entra como taxa
+     por VIAGEM, na mesma mecânica das demais linhas do realizado.
+       'realizado' → Σ C.O não classificado da janela ÷ viagens da janela
+       'nao'       → fica fora, e o valor aparece declarado na tela        */
+  fonteAdm:         'realizado',   /* realizado · nao                       */
   /* Depreciação: a referência deixa de ser o rateio da frota inteira e passa
      a ser UM equipamento — o cavalo mais novo e a carreta mais nova da base
      de depreciação do CPK. É a leitura de reposição: quanto custa hoje pôr
@@ -11622,6 +11633,38 @@ const RCL_PADRAO = {
      quando a SZY não tem, e sempre que o percurso for porta a porta.      */
   distPreferida:    'szy',         /* szy · here                            */
   distAlertaPct:    0.10,          /* discrepância SZY × HERE que vira aviso */
+  /* ══ ESCOPO DO DENOMINADOR DAS TAXAS ═══════════════════════════════════
+     O numerador do realizado é o R$ do Mapinha da FROTA PRÓPRIA: o diesel de
+     agregado (01.02/02.02/04.02) é descartado e o C.O de agregado
+     (10.01/11.01/12.01) fica de fora. O denominador, até set/2026, era o km
+     e as viagens de TODAS as placas do SZB, agregado incluído — e a divisão
+     de um universo pelo outro entregava uma taxa diluída na proporção do
+     agregado no rodado. Com metade do movimento em agregado, pneu, peças,
+     documentação e pessoal saíam perto da METADE do que custa um conjunto
+     próprio, e era essa taxa que o módulo aplicava a todas as rotas.
+
+     Decisão do comercial (set/2026): a rota de agregado continua modelada
+     como se fosse frota própria (a pergunta é "quanto me custaria com um
+     conjunto meu"), e por isso a TAXA tem de ser de frota própria. O
+     denominador passa a contar só as viagens e o km de placa própria.
+
+     Custo assumido, e declarado na tela: a soma das rotas deixa de fechar
+     com o Mapinha no total. Ela fecha no subconjunto das rotas rodadas por
+     placa própria; a rota de agregado carrega um custo equivalente ao de um
+     conjunto próprio, que não existiu no DRE.
+
+     Placa sem cadastro em `veiculos` NÃO conta como própria — na dúvida, o
+     denominador menor, que é o custo maior. A tela mostra quanto do rodado
+     ficou nessa situação.                                                 */
+  denominadorProprio: true,
+  /* ══ ALÍQUOTA DOS IMPOSTOS ═════════════════════════════════════════════
+     'mapinha'  → alíquota efetiva do fechamento da unidade
+                  (mapinha_mensal → cabecalho.aliqEfetiva), a mesma que o
+                  cpk.html consome. PADRÃO desde set/2026.
+     'padrao'   → o número redondo de trabalho (10%), comportamento anterior.
+     O valor digitado na linha Impostos da rota vence os dois: número posto
+     por gente é decisão, não erro.                                        */
+  fonteAliq:        'mapinha',     /* mapinha · padrao                      */
   /* ══ NIVELAMENTO PELO REALIZADO ════════════════════════════════════════
      'medido' distribui o total do Mapinha sobre exatamente o km/viagens que
      este módulo mediu no período — a soma das rotas fecha com o Mapinha por
@@ -11663,7 +11706,7 @@ const RCL_PADRAO = {
   ovDieselRS: null, ovArlaRS: null, ovPedagioKm: null, ovPneusKm: null,
   ovLubKm: null, ovPecasViagem: null, ovDocViagem: null, ovPessoalViagem: null,
   ovDeprecCavaloViagem: null, ovDeprecCarretaViagem: null,
-  ovAlimentacaoViagem: null, ovTempoHora: null,
+  ovAlimentacaoViagem: null, ovTempoHora: null, ovAdmViagem: null,
   /* Roda a HERE sozinha nas rotas da janela que ainda não têm percurso
      medido (ou que estão em cache antigo, sem pedágio medido e sem os
      postos do trecho). Desligar volta ao comportamento manual, pelo botão. */
@@ -12077,6 +12120,14 @@ async function rclCarregarFechamentos(mesesCand){
     lote.forEach(([f,m,k],j)=>{
       const d=res[j];
       RCL.fech.set(k, d&&d.data ? String(d.data.status||'rascunho') : 'inexistente');
+      /* Alíquota efetiva do fechamento — ICMS + PIS/COFINS + IR/CS + ISS
+         sobre o faturamento da unidade no mês. É a mesma que o cpk.html usa
+         para descer a receita ao líquido; ler daqui garante que os dois
+         módulos falem do mesmo imposto. */
+      if(!RCL.aliqFech) RCL.aliqFech=new Map();
+      const cab = d&&d.data&&d.data.cabecalho ? d.data.cabecalho : null;
+      const aq  = cab ? Number(cab.aliqEfetiva) : NaN;
+      if(isFinite(aq) && aq>0 && aq<1) RCL.aliqFech.set(k, aq);
     });
   }
   return RCL.fech;
@@ -12252,6 +12303,10 @@ async function rclRealCarregar(base){
       const v=d.data||{}; const p=rclPlaca(v.placa||d.id); if(p) mapaVeic.set(p,v);
     });
   }catch(e){ falta.push('cadastro de veículos'); }
+  /* O mapa fica visível para a varredura do SZB: é ele que diz se a viagem
+     foi de placa própria, e é essa contagem que vira o denominador das
+     taxas (ver rclrTaxas → escopo do denominador). */
+  RCL.veicMapa = mapaVeic;
   const filialDaPlaca=p=>{
     const v=mapaVeic.get(rclPlaca(p)); if(!v) return '';
     return String(v.unidade||v.filial||v.sigla||'').toUpperCase().slice(0,2);
@@ -12706,10 +12761,13 @@ function rclrSomaJanela(serie, k){
   const set=new Set(jan);
   const usados=serie.filter(x=>set.has(x.mes));
   const o={ meses:usados.map(x=>x.mes), n:usados.length, km:0, viagens:0, litros:0,
+            kmProp:0, viagensProp:0, viagensSemCad:0,
             resolvidas:0, orfaos:0, ambiguos:0, bk:null };
   const acc=rclrBucket('janela');
   usados.forEach(x=>{
     o.km+=x.km||0; o.viagens+=x.viagens||0; o.litros+=x.litros||0;
+    o.kmProp+=x.kmProp||0; o.viagensProp+=x.viagensProp||0;
+    o.viagensSemCad+=x.viagensSemCad||0;
     o.resolvidas+=x.resolvidas||0; o.orfaos+=x.orfaos||0; o.ambiguos+=x.ambiguos||0;
     if(x.bk) Object.keys(x.bk).forEach(kk=>{ if(typeof x.bk[kk]==='number') acc[kk]=(acc[kk]||0)+x.bk[kk]; });
   });
@@ -12743,10 +12801,24 @@ function rclrTaxas(serie, P, opRotulo){
   const manual={}, det={};
   /* Uma natureza por vez: soma da janela dela, denominador da mesma janela,
      correção por cobertura quando o nivelamento é 'taxa'. */
+  /* Escopo do denominador. O R$ que está no numerador é de FROTA PRÓPRIA;
+     dividir por km e viagens de todas as placas entregaria uma taxa diluída
+     pela participação do agregado no rodado. Sem denominador próprio na
+     janela (unidade que só roda com agregado, ou cadastro de veículos que
+     não carregou), cai no total e registra o motivo — taxa aproximada é
+     melhor que linha zerada, desde que a tela diga qual das duas é. */
+  const usaProp = !(P && P.denominadorProprio===false);
+  const escolherDen=(j, chave)=>{
+    const prop = chave==='km' ? j.kmProp : j.viagensProp;
+    const tot  = chave==='km' ? j.km     : j.viagens;
+    if(usaProp && prop>0) return {den:prop, escopo:'propria', prop, tot};
+    return {den:tot, escopo: usaProp?'todas·semPropria':'todas', prop, tot};
+  };
   const taxa=(nat, nome, ov, campo, chave)=>{
     const j=jan(nat);
     const corrigir=(P && P.nivelamento==='taxa') ? (j.cobertura>0.05 && j.cobertura<=1 ? j.cobertura : 1) : 1;
-    const denBruto = chave==='km' ? j.km : j.viagens;
+    const esc0=escolherDen(j, chave);
+    const denBruto = esc0.den;
     const den = denBruto>0 ? denBruto/corrigir : 0;
     const rs  = Number(j.bk[campo])||0;
     let v=null, ehManual=false;
@@ -12755,6 +12827,8 @@ function rclrTaxas(serie, P, opRotulo){
     const disp=rclrDispersao(serie.filter(x=>j.meses.indexOf(x.mes)>-1), campo, chave);
     det[nome]={ natureza:nat, janela:rclJanelaDe(nat,P), meses:j.meses, n:j.n,
                 rs, km:j.km, viagens:j.viagens, chave, den, denBruto,
+                escopoDen:esc0.escopo, denProprio:esc0.prop, denTotal:esc0.tot,
+                viagensSemCad:j.viagensSemCad||0,
                 cobertura:j.cobertura, corrigidoPorCobertura:corrigir!==1,
                 manual:ehManual, valor:v,
                 dispersao:disp.cv, dispMin:disp.min, dispMax:disp.max, dispPts:disp.pts,
@@ -12769,13 +12843,16 @@ function rclrTaxas(serie, P, opRotulo){
       ? (Number(jPes.bk.pessoalFrota35)||0)
       : ((Number(jPes.bk.pessoalFrota35)||0) + (Number(jPes.bk.pessoalAgregado65)||0));
   const corrPes=(P && P.nivelamento==='taxa') ? (jPes.cobertura>0.05&&jPes.cobertura<=1?jPes.cobertura:1) : 1;
-  const denPes = jPes.viagens>0 ? jPes.viagens/corrPes : 0;
+  const escPes = escolherDen(jPes,'viagem');
+  const denPes = escPes.den>0 ? escPes.den/corrPes : 0;
   let pessoalVg=null;
   if(P.ovPessoalViagem!=null && P.ovPessoalViagem>=0){ pessoalVg=P.ovPessoalViagem; manual.pessoalVg=true; }
   else if(denPes>0) pessoalVg=pessoalRS/denPes;
   det.pessoalVg={ natureza:'pessoal', janela:rclJanelaDe('pessoal',P), meses:jPes.meses, n:jPes.n,
                   rs:pessoalRS, km:jPes.km, viagens:jPes.viagens, chave:'viagem',
-                  den:denPes, denBruto:jPes.viagens, cobertura:jPes.cobertura,
+                  escopoDen:escPes.escopo, denProprio:escPes.prop, denTotal:escPes.tot,
+                  viagensSemCad:jPes.viagensSemCad||0,
+                  den:denPes, denBruto:escPes.den, cobertura:jPes.cobertura,
                   corrigidoPorCobertura:corrPes!==1, manual:!!manual.pessoalVg, valor:pessoalVg,
                   dispersao:null, disperso:false };
 
@@ -12785,6 +12862,10 @@ function rclrTaxas(serie, P, opRotulo){
   const out={
     /* compatibilidade: km e viagens "do rateio" continuam existindo */
     km:jRef.km, viagens:jRef.viagens, kmMedido:jRef.km, viagensMedidas:jRef.viagens,
+    kmProprio:jRef.kmProp, viagensProprias:jRef.viagensProp,
+    viagensSemCad:jRef.viagensSemCad||0,
+    escopoDenominador: usaProp ? (jRef.viagensProp>0?'propria':'todas·semPropria') : 'todas',
+    fracaoPropria: jRef.viagens>0 ? jRef.viagensProp/jRef.viagens : null,
     cobertura:jRef.cobertura, corrigidoPorCobertura:(P&&P.nivelamento==='taxa'&&jRef.cobertura<1),
     manual, det, serie, opRotulo:opRotulo||'',
     semDenominador: !(jRef.km>0) || !(jRef.viagens>0),
@@ -12795,7 +12876,9 @@ function rclrTaxas(serie, P, opRotulo){
     docVg:      taxa('doc',    'docVg',     P.ovDocViagem,  'docRS',     'viagem'),
     pessoalVg, pessoalRS,
     depCavVg:   taxa('deprec', 'depCavVg',  P.ovDeprecCavaloViagem,  'deprecCavaloRS',  'viagem'),
-    depCarVg:   taxa('deprec', 'depCarVg',  P.ovDeprecCarretaViagem, 'deprecCarretaRS', 'viagem')
+    depCarVg:   taxa('deprec', 'depCarVg',  P.ovDeprecCarretaViagem, 'deprecCarretaRS', 'viagem'),
+    /* Administrativo e demais C.O: o balde que era somado e morria ali. */
+    admVg:      taxa('adm',    'admVg',     P.ovAdmViagem,           'coOutrosRS',      'viagem')
   };
   /* Janelas do diesel e do Arla: quem consome não é uma taxa por km, é o
      preço efetivo (R$ do fechamento ÷ litros da SZC), montado fora daqui. */
@@ -12849,10 +12932,11 @@ function rclVarrer(meses, modoCliente){
     if(!bk){
       bk={ rota:r, viagens:0, ton:0, receita:0, cfcQtd:0, cfcValor:0,
            clientes:new Map(), placas:new Map(), retornoOk:0, ctes:[],
-           viagensMes:{} };
+           viagensMes:{}, viagensProp:0, viagensSemCad:0, viagensMesProp:{} };
       porRota.set(r.k3, bk);
     }
     if(!bk.viagensMes) bk.viagensMes={};
+    if(!bk.viagensMesProp) bk.viagensMesProp={};
 
     /* A célula do cálculo é CLIENTE × REMETENTE × DESTINATÁRIO × ROTA. O
        cliente continua sendo o que o seletor "Cliente é" diz; remetente e
@@ -12879,6 +12963,18 @@ function rclVarrer(meses, modoCliente){
       cb.viagens++; cb.ton+=ton; cb.receita+=valor;
       const p=rclPlaca(placa);
       if(p){ const pv=bk.placas.get(p)||0; bk.placas.set(p,pv+1); }
+      /* Viagem de placa PRÓPRIA: é ela que entra no denominador das taxas do
+         realizado, cujo numerador também é só de frota própria. Placa sem
+         cadastro fica num balde à parte — não vira própria em silêncio. */
+      if(p){
+        const vmap = (RCL.veicMapa instanceof Map) ? RCL.veicMapa : null;
+        if(vmap && vmap.has(p)){
+          if(rclrPlacaProp(p, vmap)){
+            bk.viagensProp++;
+            bk.viagensMesProp[mesCTE]=(bk.viagensMesProp[mesCTE]||0)+1;
+          }
+        } else bk.viagensSemCad++;
+      } else bk.viagensSemCad++;
       if(ledger.length<RCL_CFG.maxLedger)
         ledger.push({placa:p, iso, o:res.o, d:res.d, k3:r.k3, idx:ledger.length});
     }
@@ -13473,6 +13569,17 @@ function rclCustoBucket(bk, ctx){
   troca('pecas',        P.fontePecas,        (T&&T.pecasVg!=null)? T.pecasVg          : null, 'mapinha', {taxa:'pecasVg'});
   troca('docSeguros',   P.fonteDocSeguros,   (T&&T.docVg!=null)  ? T.docVg            : null, 'mapinha', {taxa:'docVg'});
   troca('pessoal',      P.fontePessoal==='cpk'?'cpk':'modelo', (T&&T.pessoalVg!=null)? T.pessoalVg : null, 'cpk', {taxa:'pessoalVg'});
+  /* ── Administrativo e demais C.O ──────────────────────────────────────
+     Não existe linha correspondente no núcleo de custo (o modelo nunca
+     precificou estrutura), então esta linha não tem modelado com que ser
+     comparada: entra sem banda, ou não entra. Quando a taxa não é apurável
+     ela simplesmente não aparece — nunca vira zero silencioso, porque a
+     ressalva fica registrada e a tela mostra o motivo. */
+  if(P.fonteAdm!=='nao'){
+    troca('administrativo','realizado', (T&&T.admVg!=null)? T.admVg : null, 'mapinha',
+          {taxa:'admVg', semBanda:true,
+           motivoSemTaxa:'sem lançamento de C.O administrativo apurável na competência-base'});
+  } else fontes.administrativo='desligado';
   /* ── Depreciação ──────────────────────────────────────────────────────
      'cpk_novo' (padrão): parcela mensal do cavalo mais novo e da carreta
      mais nova da base do CPK ÷ viagens que ESTA rota faz no mês. A carreta
@@ -13536,7 +13643,7 @@ function rclCustoBucket(bk, ctx){
   /* Total recomposto das linhas — não pode mais vir de cFull.total, que
      ainda carrega os valores modelados que acabamos de trocar. */
   const ORDEM_VAR = ['diesel','arla','pedagio','pneus','lubrificante','compressor'];
-  const ORDEM_FIX = ['pecas','docSeguros','pessoal','deprecCavalo','deprecCarreta','alimentacao','limpeza','tempo'];
+  const ORDEM_FIX = ['pecas','docSeguros','pessoal','deprecCavalo','deprecCarreta','alimentacao','limpeza','tempo','administrativo'];
   const varia = ORDEM_VAR.reduce((a,k)=>a+(typeof linhas[k]==='number'?linhas[k]:0),0);
   const fixo  = ORDEM_FIX.reduce((a,k)=>a+(typeof linhas[k]==='number'?linhas[k]:0),0);
   const custoViagem = varia+fixo;
@@ -13586,6 +13693,29 @@ function rclCustoBucket(bk, ctx){
    lucro". Margem de contribuição responde a primeira: receita líquida menos
    o custo que só existe porque o caminhão saiu. Resultado responde a
    segunda: depois de comissão e da estrutura que a rota tem de sustentar. */
+/* Alíquota efetiva do fechamento da unidade — a mesma que o cpk.html usa
+   para descer a receita ao líquido. Vem do cabeçalho do mapinha_mensal,
+   colhida junto com o status em rclCarregarFechamentos. Usa o mês mais
+   recente da base daquela unidade; sem ele, o mais recente de qualquer
+   unidade, para que uma filial sem fechamento não caia num imposto que não
+   é o dela sem que a tela diga.                                          */
+function rclAliqMapinha(op){
+  const M=RCL.aliqFech; if(!(M instanceof Map) || !M.size) return null;
+  const fil=String(op||'').toUpperCase().slice(0,2);
+  const meses=(RCL.base && RCL.base.porOp && RCL.base.porOp[fil] && RCL.base.porOp[fil].meses)
+            ? RCL.base.porOp[fil].meses.slice().sort() : [];
+  for(let i=meses.length-1;i>=0;i--){
+    const v=M.get(fil+'|'+meses[i]);
+    if(v>0) return {aliq:v, filial:fil, mes:meses[i], herdada:false};
+  }
+  /* Sem alíquota na base desta unidade: a mais recente que existir. */
+  let melhor=null;
+  M.forEach((v,k)=>{ const [f,m]=String(k).split('|');
+    if(!(v>0)) return;
+    if(!melhor || String(m)>String(melhor.mes)) melhor={aliq:v, filial:f, mes:m, herdada:true};
+  });
+  return melhor;
+}
 function rclResultado(receita, cfcValor, custoOp, custoVar, custoFixo, kmTot, op, P, aliqRota){
   const prem = premissasEfetivas(null, op, null) || {};
   /* Alíquota da filial — continua sendo calculada mesmo quando não é a
@@ -13597,12 +13727,15 @@ function rclResultado(receita, cfcValor, custoOp, custoVar, custoFixo, kmTot, op
        3. o padrão do módulo (10%)
      A alíquota da filial só entra se os impostos estiverem desligados —
      aí não entra nada, e a linha vale zero.                              */
+  const aliqMap = (P.fonteAliq!=='padrao') ? rclAliqMapinha(op) : null;
   const aliqOrigem = (aliqRota!=null && aliqRota>=0) ? 'rota'
                    : (P.aliqManual!=null && P.aliqManual>=0) ? 'manual'
-                   : (P.usarImpostos ? 'padrao' : 'desligado');
-  const aliq = aliqOrigem==='rota'   ? aliqRota
-             : aliqOrigem==='manual' ? P.aliqManual
-             : aliqOrigem==='padrao' ? RCL_ALIQ_PADRAO : 0;
+                   : !P.usarImpostos ? 'desligado'
+                   : (aliqMap && aliqMap.aliq>0) ? 'mapinha' : 'padrao';
+  const aliq = aliqOrigem==='rota'    ? aliqRota
+             : aliqOrigem==='manual'  ? P.aliqManual
+             : aliqOrigem==='mapinha' ? aliqMap.aliq
+             : aliqOrigem==='padrao'  ? RCL_ALIQ_PADRAO : 0;
   const receitaTotal = receita + (P.cfcSeparado?0:cfcValor);
   const impostos = receitaTotal*aliq;
   const rl = receitaTotal - impostos;
@@ -13614,6 +13747,7 @@ function rclResultado(receita, cfcValor, custoOp, custoVar, custoFixo, kmTot, op
   const margemContrib = rl - custoVar;
   const resultado = rl - custoOp - comissao - overhead;
   return { aliq, aliqOrigem, aliqFilial, aliqPadrao:RCL_ALIQ_PADRAO,
+           aliqMapinha: aliqMap?aliqMap.aliq:null, aliqMapinhaDet: aliqMap||null,
            impostos, receitaBruta:receitaTotal, receitaLiquida:rl,
            comisPct, comissao, overhead, custoOp, custoVar, custoFixo,
            margemContrib, resultado,
@@ -13680,7 +13814,8 @@ function rclCalcular(){
   const repartirPorMes=(bks, cobPorMes, opsAlvo)=>{
     const out={};                       /* mes → op → {km,viagens,litros}   */
     const toca=(m,op)=>{ if(!out[m]) out[m]={};
-      if(!out[m][op]) out[m][op]={km:0, viagens:0, litros:0};
+      if(!out[m][op]) out[m][op]={km:0, viagens:0, litros:0,
+                                  kmProp:0, viagensProp:0, viagensSemCad:0};
       return out[m][op]; };
     bks.forEach(b=>{
       const vg=b.viagens||0; if(!(vg>0)) return;
@@ -13692,6 +13827,25 @@ function rclCalcular(){
         [op,'_geral'].forEach(o=>{ const a=toca(m,o);
           a.km+=kmV*n; a.viagens+=n; a.litros+=ltV*n; });
       });
+      /* Mesma rota, só a fatia rodada por placa própria. O km por viagem é o
+         mesmo (a rota não muda de tamanho por causa de quem a roda); o que
+         muda é quantas viagens entram. */
+      const vmp=b.viagensMesProp||{};
+      Object.keys(vmp).forEach(m=>{
+        const n=vmp[m]||0; if(!(n>0)) return;
+        [op,'_geral'].forEach(o=>{ const a=toca(m,o);
+          a.kmProp+=kmV*n; a.viagensProp+=n; });
+      });
+      /* Viagens sem placa cadastrada: não entram no denominador próprio e
+         precisam aparecer, senão a taxa sobe sem que ninguém saiba por quê. */
+      const semCad=b.viagensSemCad||0;
+      if(semCad>0){
+        const tot=Object.keys(vm).reduce((a,m)=>a+(vm[m]||0),0)||1;
+        Object.keys(vm).forEach(m=>{
+          const fr=(vm[m]||0)/tot; if(!(fr>0)) return;
+          [op,'_geral'].forEach(o=>{ toca(m,o).viagensSemCad += semCad*fr; });
+        });
+      }
     });
     /* cobertura da competência, para o denominador honesto das taxas */
     Object.keys(cobPorMes||{}).forEach(m=>{
@@ -13746,6 +13900,8 @@ function rclCalcular(){
         }
       }
       return { mes:m, bk, km:md.km||0, viagens:md.viagens||0, litros:md.litros||0,
+               kmProp:md.kmProp||0, viagensProp:md.viagensProp||0,
+               viagensSemCad:md.viagensSemCad||0,
                resolvidas:md.resolvidas||0, orfaos:md.orfaos||0, ambiguos:md.ambiguos||0 };
     });
   };
@@ -13891,7 +14047,12 @@ function rclCalcular(){
           + `. O módulo usou o preço de bomba. Costuma indicar SZC incompleta no período ou R$ do fechamento de competência diferente dos litros.`);
       if(t.semDenominador)
         RCL.aviso.push(`Sem km e viagens medidos na competência-base de ${op||'consolidado'} (${t.base.join(', ')}): nenhuma taxa de R$/km ou R$/viagem foi apurada e todas as linhas do custo caíram no modelado.`);
-      else if(t.cobertura<0.85)
+      if(!t.semDenominador && t.escopoDenominador!=='propria')
+        RCL.aviso.push(`Nenhuma viagem de placa PRÓPRIA identificada na competência-base de ${op||'consolidado'}: as taxas do Mapinha foram divididas pelo rodado inteiro (frota + agregado) e saem diluídas na proporção do agregado. Confira o vínculo das placas no cadastro de veículos.`);
+      else if(t.fracaoPropria!=null && t.fracaoPropria<0.995 && !op)
+        RCL.aviso.push(`Denominador de frota própria: ${num(t.viagensProprias,0)} de ${num(t.viagens,0)} viagens medidas (${pct(t.fracaoPropria,0)}) e ${num(t.kmProprio,0)} de ${num(t.km,0)} km. O R$ do Mapinha é só de frota própria, então o divisor também é — a rota rodada por agregado recebe o custo equivalente ao de um conjunto próprio e, por isso, a soma das rotas NÃO fecha mais com o Mapinha no total: ela fecha no subconjunto das rotas próprias.`
+          + (t.viagensSemCad>0?` ${num(t.viagensSemCad,0)} viagem(ns) ficaram de fora do divisor por a placa não estar no cadastro de veículos.`:''));
+      if(!t.semDenominador && t.cobertura<0.85)
         RCL.aviso.push(`Cobertura de ${pct(t.cobertura,0)} na competência-base de ${op||'consolidado'}: ${num((1-t.cobertura)*100,0)}% dos CT-e não foram amarrados a uma rota. Como o R$ do Mapinha é da frota inteira, cada R$/viagem está `+(P.nivelamento==='taxa'?'corrigido pela cobertura (nivelamento por taxa).':'inflado por 1/cobertura — é o preço de fechar com o Mapinha (nivelamento medido).'));
       /* Linhas dispersas: não são erro, são o motivo de a média móvel
          existir. Aviso uma vez por natureza, na operação consolidada. */
@@ -13997,6 +14158,10 @@ function rclCalcular(){
         kmlC:cu.kmlC, kmlV:cu.kmlV, aprov:cu.aprov, fator:cu.fator,
         tarifaTon: cb.ton>0 ? cb.receita/cb.ton : null,
         vpk: kmTot>0 ? cb.receita/kmTot : null,
+        /* VPK líquido: o mesmo quilômetro, agora com a receita depois do
+           imposto. A diferença entre os dois é exatamente o imposto por km —
+           mesma leitura da aba VPK do cpk.html. */
+        vpkLiq: kmTot>0 ? res.receitaLiquida/kmTot : null,
         completude: rclCompletude(bk, P),
         ...res
       };
@@ -14036,6 +14201,7 @@ function rclCalcular(){
     o.custoTon  = o.ton>0 ? o.custoOp/o.ton : null;
     o.cpk       = o.kmTot>0 ? o.custoOp/o.kmTot : null;
     o.vpk       = o.kmTot>0 ? o.receitaBruta/o.kmTot : null;
+    o.vpkLiq    = o.kmTot>0 ? o.receitaLiquida/o.kmTot : null;
     o.completude= o.rotas.length ? o.rotas.reduce((a,x)=>a+x.completude.pct,0)/o.rotas.length : 0;
     return o;
   };
@@ -14049,7 +14215,74 @@ function rclCalcular(){
 
   RCL.porRota=V.porRota; RCL.rotas=rotas; RCL.clientes=[...clientes.values()];
   RCL.ref=ref; RCL.precos=precos; RCL.calculado=true; RCL.norm=nrm;
-  RCL.diag={ ader, ref, precos, ops, norm:nrm, meses:RCL.meses.slice(),
+  /* ══ CONCILIAÇÃO EM DOIS BLOCOS ═══════════════════════════════════════════
+     Com o divisor das taxas restrito à frota própria, a soma das rotas deixa
+     de fechar com o Mapinha no TOTAL — e passa a fechar no subconjunto das
+     rotas rodadas por placa própria. A rota de agregado é modelada como se
+     fosse conjunto próprio (decisão do comercial, set/2026) e carrega um
+     custo que não existiu no DRE: ela fica no segundo bloco, declarada, em
+     vez de sumir na diferença.
+
+     Só entram as linhas cujo NÍVEL vem do realizado. Pedágio da HERE,
+     alimentação, tempo, limpeza e compressor não têm contrapartida no
+     Mapinha e não são conciliáveis por construção.                       */
+  const conc = (()=>{
+    const NAT={ diesel:'dieselRS', arla:'arlaRS', pedagio:'pedagioRS', pneus:'pneusRS',
+                lubrificante:'lubRS', pecas:'pecasRS', docSeguros:'docRS',
+                deprecCavalo:'deprecCavaloRS', deprecCarreta:'deprecCarretaRS',
+                administrativo:'coOutrosRS', pessoal:'_pessoal' };
+    const ROT={ diesel:'Diesel', arla:'Arla', pedagio:'Pedágio', pneus:'Pneus',
+                lubrificante:'Lubrificante', pecas:'Peças e serviços',
+                docSeguros:'Documentação e seguros', pessoal:'Pessoal (CPK)',
+                deprecCavalo:'Depreciação do cavalo', deprecCarreta:'Depreciação da carreta',
+                administrativo:'Administrativo e demais C.O' };
+    const RB = realBk ? (realBk._geral||null) : null;
+    let vProp=0, vAgr=0, vSemCad=0, kmProp=0, kmAgr=0, cProp=0, cAgr=0;
+    const linhas={};
+    buckets.forEach(bk=>{
+      const cu=bk.custo; if(!cu) return;
+      const vp=Math.min(bk.viagensProp||0, bk.viagens||0);
+      const va=Math.max((bk.viagens||0)-vp, 0);
+      vProp+=vp; vAgr+=va; vSemCad+=bk.viagensSemCad||0;
+      kmProp+=cu.kmViagem*vp; kmAgr+=cu.kmViagem*va;
+      cProp+=cu.custoViagem*vp; cAgr+=cu.custoViagem*va;
+      Object.keys(NAT).forEach(k=>{
+        const v=cu.linhas[k]; if(typeof v!=='number') return;
+        const f=(cu.fontes&&cu.fontes[k])||'modelo';
+        if(!linhas[k]) linhas[k]={chave:k, rotulo:ROT[k], propria:0, agregado:0,
+                                  modelado:0, fontes:new Set()};
+        linhas[k].fontes.add(f);
+        if(f==='modelo'||f==='desligado'){ linhas[k].modelado += Math.abs(v)*(vp+va); return; }
+        linhas[k].propria  += Math.abs(v)*vp;
+        linhas[k].agregado += Math.abs(v)*va;
+      });
+    });
+    const lista=Object.keys(NAT).filter(k=>linhas[k]).map(k=>{
+      const L=linhas[k];
+      const campo=NAT[k];
+      let real = null;
+      if(RB){
+        real = campo==='_pessoal'
+          ? ((Number(RB.pessoalFrota35)||0) + (P.pessoalCpkBase==='frota'?0:(Number(RB.pessoalAgregado65)||0)))
+          : (Number(RB[campo])||0);
+      }
+      /* Pedágio medido pela HERE não tem por que fechar com o import do
+         Mapinha: são medições diferentes do mesmo fato. */
+      const conciliavel = !(k==='pedagio' && L.fontes.has('here'));
+      return { ...L, fontes:[...L.fontes].join(' · '), realizado:real, conciliavel,
+               dif: (real!=null && conciliavel) ? L.propria-real : null,
+               difPct: (real>0 && conciliavel) ? (L.propria-real)/real : null };
+    });
+    const tot=(c)=>lista.reduce((a,x)=>a+(x.conciliavel?(Number(x[c])||0):0),0);
+    return { linhas:lista, vProp, vAgr, vSemCad, kmProp, kmAgr, cProp, cAgr,
+             fracVg: (vProp+vAgr)>0 ? vProp/(vProp+vAgr) : null,
+             fracKm: (kmProp+kmAgr)>0 ? kmProp/(kmProp+kmAgr) : null,
+             totPropria:tot('propria'), totAgregado:tot('agregado'),
+             totRealizado:lista.reduce((a,x)=>a+(x.conciliavel&&x.realizado!=null?x.realizado:0),0),
+             temReal:!!RB };
+  })();
+
+  RCL.diag={ conc, ader, ref, precos, ops, norm:nrm, meses:RCL.meses.slice(),
              real, taxas:real?taxas:null, realBk:real?realBk:null,
              base:baseR, medOp, cobOp, series, medPorMes,
              orfaos:V.orfaos, ambiguos:V.ambiguos, usados:V.usados,
@@ -14259,7 +14492,12 @@ const RCL_COLS=[
   {l:'Receita bruta', cls:'num'}, {l:'R$/t', cls:'num'},
   {l:'Custo total', cls:'num'}, {l:'Custo/t', cls:'num'},
   {l:'Margem contrib.', cls:'num'}, {l:'Resultado', cls:'num'},
-  {l:'Margem', cls:'num'}, {l:'CPK', cls:'num'}, {l:'Compl.', cls:'num'}
+  {l:'Margem', cls:'num'},
+  /* VPK bruto e líquido lado a lado, na mesma leitura da aba VPK do
+     cpk.html: a diferença entre os dois é o imposto por quilômetro, e é
+     contra o líquido que o CPK precisa ser comparado. */
+  {l:'VPK', cls:'num'}, {l:'VPK líq.', cls:'num'},
+  {l:'CPK', cls:'num'}, {l:'Compl.', cls:'num'}
 ];
 
 function rclRender(){
@@ -14267,12 +14505,12 @@ function rclRender(){
   const th=$('rclTh'); if(th) th.innerHTML=RCL_COLS.map(c=>`<th class="${c.cls||''}">${c.l}</th>`).join('');
   const tb=$('rclTbody'); if(!tb) return;
 
-  if(!RCL.calculado){ tb.innerHTML=`<tr><td colspan="12" class="rt-empty">Carregando…</td></tr>`; return; }
+  if(!RCL.calculado){ tb.innerHTML=`<tr><td colspan="14" class="rt-empty">Carregando…</td></tr>`; return; }
   const lista=rclFiltradas();
   const cnt=$('rclCnt'); if(cnt) cnt.textContent=num(lista.length,0);
 
   if(!lista.length){
-    tb.innerHTML=`<tr><td colspan="12" class="rt-empty">Nenhum cliente com faturamento em ${esc(rclRotuloJanela())} nos filtros atuais.</td></tr>`;
+    tb.innerHTML=`<tr><td colspan="14" class="rt-empty">Nenhum cliente com faturamento em ${esc(rclRotuloJanela())} nos filtros atuais.</td></tr>`;
     rclRenderKpis([]); rclRodape(); return;
   }
   const tudo=!!($('rclExpTudo')&&$('rclExpTudo').checked);
@@ -14298,6 +14536,8 @@ function rclRender(){
       <td class="num ${sg(cl.margemContrib)}"${mem('Margem de contribuição',{selo:'CASCATA',formula:`receita líquida − custo variável\n${brl(cl.receitaLiquida)} − ${brl(cl.custoVar)} = ${brl(cl.margemContrib)}`,linhas:[['% da receita', pct(cl.mcPct,2)]]})}>${brl(cl.margemContrib)}</td>
       <td class="num ${sg(cl.resultado)}"${mem('Resultado do cliente',{selo:'CASCATA',formula:`receita líquida − custo total − comissão − estrutura\n${brl(cl.receitaLiquida)} − ${brl(cl.custoOp)} − ${brl(cl.comissao)} − ${brl(cl.overhead)} = ${brl(cl.resultado)}`,linhas:[['Por viagem', brl(cl.viagens>0?cl.resultado/cl.viagens:null)],['Por tonelada', brl(cl.ton>0?cl.resultado/cl.ton:null)]]})}>${brl(cl.resultado)}</td>
       <td class="num ${sg(cl.margemPct)}"${mem('Margem',{selo:'DERIVADO',formula:`resultado ÷ receita bruta\n${brl(cl.resultado)} ÷ ${brl(cl.receitaBruta)} = ${pct(cl.margemPct,2)}`})}>${pct(cl.margemPct,1)}</td>
+      <td class="num"${mem('VPK do cliente — receita bruta por km',{selo:'DERIVADO',formula:`receita bruta ÷ km atribuído\n${brl(cl.receitaBruta)} ÷ ${num(cl.kmTot,0)} km = ${brl(cl.vpk)}`,linhas:[['VPK líquido', brl(cl.vpkLiq)],['CPK', brl(cl.cpk)],['VPK líq. − CPK', brl((cl.vpkLiq||0)-(cl.cpk||0))+'/km']]})}>${brl(cl.vpk)}</td>
+      <td class="num"${mem('VPK líquido do cliente',{selo:'DERIVADO',fonte:'Receita depois dos impostos, sobre o MESMO quilômetro. É a régua certa contra o CPK: o custo não paga imposto.',formula:`receita líquida ÷ km atribuído\n${brl(cl.receitaLiquida)} ÷ ${num(cl.kmTot,0)} km = ${brl(cl.vpkLiq)}`,linhas:[['VPK bruto', brl(cl.vpk)],['Imposto por km', brl((cl.vpk||0)-(cl.vpkLiq||0))],['CPK', brl(cl.cpk)],['Resultado por km', brl((cl.vpkLiq||0)-(cl.cpk||0))]]})}>${brl(cl.vpkLiq)}</td>
       <td class="num"${mem('CPK do cliente',{selo:'FECHAMENTO',fonte:'Custo total ÷ km atribuído. É o número que todos os cálculos desta tela perseguem.',formula:`${brl(cl.custoOp)} ÷ ${num(cl.kmTot,0)} km = ${brl(cl.cpk)}`,linhas:[['VPK', brl(cl.vpk)],['VPK − CPK', brl((cl.vpk||0)-(cl.cpk||0))+'/km']],obs:'Abra uma rota para a cadeia completa de como se chega até aqui.'})}>${brl(cl.cpk)}</td>
       <td class="num"${mem('Completude',{selo:'QUALIDADE',fonte:'Fração do cálculo sustentada por dado medido, não por premissa.',formula:'HERE 25% + elevação 20% + pedágio 20% + placa 15% + SZC 10% + peso 10%',obs:'É o que separa "a rota dá 12%" de "a rota parece dar 12%".'})}>${rclPillCompl(cl.completude)}</td>
     </tr>`);
@@ -14320,6 +14560,8 @@ function rclRender(){
         <td class="num ${sg(r.margemContrib)}"${mem('Margem de contribuição',{selo:'CASCATA',formula:`${brl(r.receitaLiquida)} − ${brl(r.custoVar)} = ${brl(r.margemContrib)}`,linhas:[['% da receita', pct(r.mcPct,2)]]})}>${brl(r.margemContrib)}</td>
         <td class="num ${sg(r.resultado)}"${mem('Resultado da rota',{selo:'CASCATA',formula:`${brl(r.receitaLiquida)} − ${brl(r.custoOp)} − ${brl(r.comissao)} − ${brl(r.overhead)} = ${brl(r.resultado)}`})}>${brl(r.resultado)}</td>
         <td class="num ${sg(r.margemPct)}"${mem('Margem',{selo:'DERIVADO',formula:`${brl(r.resultado)} ÷ ${brl(r.receitaBruta)} = ${pct(r.margemPct,2)}`})}>${pct(r.margemPct,1)}</td>
+        <td class="num"${mem('VPK da rota — receita bruta por km',{selo:'DERIVADO',formula:`receita bruta ÷ km atribuído\n${brl(r.receitaBruta)} ÷ ${num(r.kmTot,0)} km = ${brl(r.vpk)}`,linhas:[['VPK líquido', brl(r.vpkLiq)],['CPK', brl(r.cpk)]]})}>${brl(r.vpk)}</td>
+        <td class="num"${mem('VPK líquido da rota',{selo:'DERIVADO',fonte:'Receita depois dos impostos, sobre o MESMO quilômetro do CPK. Bruto contra CPK superestima a margem pelo valor do imposto.',formula:`receita líquida ÷ km atribuído\n${brl(r.receitaLiquida)} ÷ ${num(r.kmTot,0)} km = ${brl(r.vpkLiq)}`,linhas:[['VPK bruto', brl(r.vpk)],['Imposto por km', brl((r.vpk||0)-(r.vpkLiq||0))],['CPK', brl(r.cpk)],['Resultado por km', brl((r.vpkLiq||0)-(r.cpk||0))]]})}>${brl(r.vpkLiq)}</td>
         <td class="num"${mem('CPK da rota',{selo:'FECHAMENTO',formula:`custo total ÷ km atribuído\n${brl(r.custoOp)} ÷ ${num(r.kmTot,0)} km = ${brl(r.cpk)}`,linhas:[['VPK', brl(r.vpk)],['VPK − CPK', brl((r.vpk||0)-(r.cpk||0))+'/km'],['Consumo adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l'],['Distância', (r.bucket&&r.bucket.custo?r.bucket.custo.fonteDist:'').toUpperCase()]],obs:'Clique na linha para a cadeia de sete etapas que produz este número.'})}>${brl(r.cpk)}</td>
         <td class="num"${mem('Completude da rota',{selo:'QUALIDADE',formula:'HERE 25% + elevação 20% + pedágio 20% + placa 15% + SZC 10% + peso 10%',linhas:(r.completude.itens||[]).map(i=>[i.l, i.ok?'sim':'não']),obs:r.completude.falta.length?('Falta: '+r.completude.falta.join(' · ')):'Base completa.'})}>${rclPillCompl(r.completude.pct)}</td>
       </tr>`);
@@ -14472,6 +14714,16 @@ function rclRodape(){
        obs:'A HERE nunca é descartada: vira o controle da SZY. Divergência grande quase nunca é erro da HERE — é rota cadastrada com o km de outro trecho.'})}>${num(d.comSZY,0)} pela SZY · ${num(d.comHere,0)} medida(s) na HERE${d.distDivergente?` · <b class="pill rd">${num(d.distDivergente,0)} divergente(s)</b>`:''}</span>`,
     `${num(d.comPedagio,0)} com pedágio`,
     `${num(d.comPlaca,0)} com placa`,
+    /* Escopo do divisor das taxas — o número mudou de patamar em set/2026 e
+       não pode ficar implícito no rodapé. */
+    d.conc?`<span${mem('Escopo do denominador das taxas',{selo:'MAPINHA ÷ FROTA PRÓPRIA',
+       fonte:'O R$ que vem do Mapinha é de frota própria (diesel e C.O de agregado ficam fora). Desde set/2026 o divisor conta só viagem e km de PLACA PRÓPRIA — dividir pelo rodado inteiro entregava uma taxa diluída na proporção do agregado.',
+       formula:`taxa = Σ R$ da janela ÷ Σ ${'km ou viagens'} de placa própria`,
+       linhas:[['Viagens de placa própria', num(d.conc.vProp,0)+' de '+num(d.conc.vProp+d.conc.vAgr,0)],
+               ['Km de placa própria', num(d.conc.kmProp,0)+' de '+num(d.conc.kmProp+d.conc.kmAgr,0)+' km'],
+               d.conc.vSemCad?['Viagens sem placa cadastrada', num(d.conc.vSemCad,0)+' — fora do divisor']:null,
+               ['Rotas rodadas por agregado', num(d.conc.vAgr,0)+' viagem(ns) com custo equivalente ao de conjunto próprio']],
+       obs:'Decisão do comercial (set/2026): a rota de agregado é modelada como frota própria. Por isso a soma das rotas fecha com o Mapinha no subconjunto PRÓPRIO, não no total.'})}>divisor: <b>${pct(d.conc.fracVg,0)}</b> de placa própria</span>`:'',
     d.base?`<span${mem('Mês-base do realizado',{selo:'MAPINHA',
        fonte:'De onde saem as médias de consumo e as taxas de custo — sempre um mês FECHADO.',
        linhas:['SC','PR','SP'].map(f=>{ const b=d.base.porOp[f]; return b?[f, b.meses.length?b.meses.join(', '):'sem fechamento']:null; })
@@ -14534,6 +14786,19 @@ function rclPainel(chaveCli, k3, semScroll){
        d.disperso
          ? `A taxa mensal foi de ${brl(d.dispMin)} a ${brl(d.dispMax)} por ${d.chave==='km'?'km':'viagem'} dentro da janela. Isso não é erro: é a sazonalidade desta natureza de custo — e é a prova de que um mês-base único entregaria um número que não se repete no mês seguinte.`
          : `A taxa mensal variou pouco dentro da janela (de ${brl(d.dispMin)} a ${brl(d.dispMax)}). Linha estável: a média móvel aqui muda pouco o resultado, e é isso mesmo que se espera dela.`]:null,
+      /* Escopo do denominador: o R$ do Mapinha é de frota própria, então o
+         divisor conta só viagem e km de placa própria. Sem isto escrito, a
+         linha parecia simplesmente ter subido de valor. */
+      d.escopoDen?['Denominador',
+        d.escopoDen==='propria'
+          ? num(d.chave==='km'?d.denProprio:d.denProprio,0)+(d.chave==='km'?' km':' viagens')+' de placa própria'
+          : num(d.denTotal,0)+(d.chave==='km'?' km':' viagens')+' — todas as placas',
+        d.escopoDen==='propria'
+          ? `O R$ desta linha é da FROTA PRÓPRIA (o Mapinha descarta diesel e C.O de agregado), então o divisor também é só de placa própria: ${num(d.denProprio,0)} de ${num(d.denTotal,0)} ${d.chave==='km'?'km':'viagens'} medidos. Dividir pelo rodado inteiro entregaria uma taxa diluída pela participação do agregado.`
+          : 'Sem denominador de frota própria nesta janela — o divisor caiu no rodado inteiro, o que subestima a taxa na proporção do agregado. Confira o cadastro de veículos (vínculo da placa).'
+      ]:null,
+      (d.viagensSemCad>0)?['Viagens sem placa cadastrada', num(d.viagensSemCad,0),
+        'CT-e cuja placa não está no cadastro de veículos. Não entram no denominador próprio — na dúvida o divisor menor, que é o custo maior. Cadastrar essas placas derruba a taxa para o valor certo.']:null,
       d.manual?['Origem','digitada nas ⚙ Premissas do resultado — a janela não se aplica']:null
     ].filter(Boolean); };
   const dm= cu&&cu.distMeta ? cu.distMeta : null;
@@ -14547,10 +14812,11 @@ function rclPainel(chaveCli, k3, semScroll){
   const selo=(k)=>({mapinha:'MAPINHA','mapinha+here':'MAPINHA × HERE',cpk:'CPK',simulador:'SIMULADOR',
                     modelo:'MODELO',here:'HERE',shellbox:'POSTO NA ROTA',
                     'shellbox·unidade':'SHELLBOX · UNIDADE','cpk·novo':'CPK · ATIVO NOVO',
-                    diesel5:'% DO DIESEL'}[fon(k)]||'MODELO');
+                    diesel5:'% DO DIESEL',desligado:'DESLIGADO'}[fon(k)]||'MODELO');
   const tag=(k)=>{const f=fon(k);
     const c={mapinha:'map','mapinha+here':'map',cpk:'cpk','cpk·novo':'cpk',simulador:'sim',
-             modelo:'prem',here:'here',shellbox:'here','shellbox·unidade':'map',diesel5:'here'}[f]||'prem';
+             modelo:'prem',here:'here',shellbox:'here','shellbox·unidade':'map',diesel5:'here',
+             desligado:'prem'}[f]||'prem';
     return `<span class="src-tag ${c}">${selo(k)}</span>`;};
 
   /* L(rótulo, valor, nota, memória) — a memória viaja no rótulo E no valor,
@@ -15212,6 +15478,36 @@ function rclPainel(chaveCli, k3, semScroll){
       mem('Limpeza',{selo:'MODELO',fonte:'Premissa limpezaViagem da rota (Premissas de custo da Análise de Rotas).',
         obs:'Valor por viagem informado à mão; zero quando não cadastrado.'}));
 
+  /* ══ ADMINISTRATIVO E DEMAIS C.O ══════════════════════════════════════════
+     Entrou em set/2026. Até então, todo lançamento do grupo C.O que não fosse
+     pneu, lubrificante, peça ou documentação — 09.01 despesas administrativas
+     à frente — era somado num balde e não chegava a rota nenhuma. O CPK do
+     cpk.html leva 82% dessas despesas pelo RATEIO_ADM; aqui não entrava nada,
+     e por isso os dois números nunca podiam bater.                          */
+  add('Administrativo e demais C.O','administrativo',li.administrativo,
+      T&&T.admVg!=null?`${brl(RB?RB.coOutrosRS:null)} ÷ ${num(janVg('admVg'),0)} viagens`:'',
+      mem('Administrativo e demais C.O',{selo:selo('administrativo'),
+        fonte:'Mapinha — lançamentos do grupo C.O que não caem em pneus, lubrificante, peças ou documentação. É onde mora o 09.01 (despesas administrativas) e todo centro de custo cujo nome o classificador não reconhece.',
+        formula:`Σ C.O não classificado da janela ÷ viagens da MESMA janela\n${brl(RB?RB.coOutrosRS:null)} ÷ ${num(janVg('admVg'),0)} = ${brl(T?T.admVg:null)}`,
+        insumos:[
+          ['C.O não classificado no período', brl(RB?RB.coOutrosRS:null),
+           'Soma dos lançamentos do grupo C.O da unidade que não foram reconhecidos como pneus, lubrificante, peças ou documentação. Abra o Mapinha e filtre por centro de custo para ver a composição.'],
+          ['Viagens no denominador', num(janVg('admVg'),0),
+           'Viagens de placa própria amarradas a uma rota nos meses da janela desta linha.'],
+          ['= R$ por viagem', brl(T?T.admVg:null),
+           'O quociente. É a fatia de estrutura que cada viagem sustenta.']
+        ],
+        linhas:[
+          ...janLinhas('admVg'),
+          RB?['C.O de agregado (fora)', brl(RB.coAgregadoRS),
+              'Lubrificante, peças e pneus de agregado (10.01/11.01/12.01). Continuam fora do numerador, porque o denominador conta só viagem de placa própria.']:null,
+          ['Como o CPK trata', 'rateio de 82% do 09.01',
+           'O cpk.html aplica um rateio administrativo de 82% (RATEIO_ADM) sobre as despesas compartilhadas. Aqui entra o valor cheio do que não foi classificado — se a comparação entre os dois módulos precisar ser exata, é este o parâmetro a alinhar.']
+        ].filter(Boolean),
+        obs:'Decisão do comercial (set/2026): entra como taxa por VIAGEM. Antes desta rodada a linha não existia e o valor sumia sem aviso — o CPK da rota saía estruturalmente abaixo do custo real.',
+        alerta: (fon('administrativo')==='desligado')
+          ? 'Linha desligada nas premissas: o C.O não classificado está fora do custo desta rota.' : null}));
+
   const totCusto=cst.reduce((a,x)=>a+x[1],0);
   const bar=(v,cor)=>`<i style="width:${Math.max(0,Math.min(100,(v/Math.max(r.receitaBruta,1))*100))}%;background:${cor}"></i>`;
 
@@ -15530,7 +15826,7 @@ function rclPainel(chaveCli, k3, semScroll){
                 linhas:[insLinha('Peças e serviços','pecas'), insLinha('Documentação e seguros','docSeguros'),
                         insLinha('Pessoal','pessoal'), insLinha('Depreciação cavalo','deprecCavalo'),
                         insLinha('Depreciação carreta','deprecCarreta'), insLinha('Alimentação','alimentacao'),
-                        insLinha('Tempo parado','tempo')],
+                        insLinha('Tempo parado','tempo'), insLinha('Administrativo e demais C.O','administrativo')],
                 obs:'"Rateado" porque o custo é da frota e do mês; o que chega à rota é a fatia proporcional às viagens que ela consumiu. Duas coisas mudam este bloco inteiro: o mês-base (de onde vem o R$) e a cobertura (quantas viagens dividem esse R$).'}))}
           ${L('Comissão ('+pct(r.comisPct,1)+')', '− '+brl(r.comissao), undefined,
               mem('Comissão',{selo:'PREMISSAS',
@@ -15578,6 +15874,16 @@ function rclPainel(chaveCli, k3, semScroll){
                         ['Tarifa − custo', brl((r.tarifaTon||0)-(r.custoTon||0))+'/t', 'A diferença bruta por tonelada, ANTES de imposto, comissão e estrutura — não é margem.'],
                         ['t por viagem', num(r.viagens>0?r.ton/r.viagens:0,2)+' t', 'Carga média do período. É ela que alimenta a massa do modelo de consumo.']]}))}
           ${L('<b>CPK — custo por km</b>', '<b>'+brl(r.cpk)+'</b>', 'o número que tudo persegue', memCPK)}
+          ${L('VPK líquido — receita por km', brl(r.vpkLiq), undefined,
+              mem('VPK líquido — valor por quilômetro',{selo:'DERIVADO',
+                fonte:'Receita depois dos impostos, sobre o MESMO quilômetro que produz o CPK. É esta a régua certa: o custo não paga imposto, então comparar o CPK com a receita bruta superestima a margem exatamente pelo valor do tributo.',
+                formula:`receita líquida ÷ km atribuído\n${brl(r.receitaLiquida)} ÷ ${num(r.kmTot,0)} km = ${brl(r.vpkLiq)}`,
+                linhas:[['VPK bruto', brl(r.vpk)],
+                        ['Imposto por km', brl((r.vpk||0)-(r.vpkLiq||0))],
+                        ['CPK', brl(r.cpk)],
+                        ['Resultado por km', brl((r.vpkLiq||0)-(r.cpk||0))+'/km'],
+                        ['Alíquota adotada', pct(r.aliq,2)+' · '+(r.aliqOrigem==='mapinha'?'alíquota efetiva do Mapinha':r.aliqOrigem==='rota'?'digitada nesta rota':r.aliqOrigem==='manual'?'premissa manual':r.aliqOrigem==='desligado'?'impostos desligados':'padrão do módulo')]],
+                obs:'Mesma leitura da aba VPK do cpk.html: bruto e líquido lado a lado, e a diferença entre os dois é o imposto por quilômetro.'}))}
           ${L('VPK — receita por km', brl(r.vpk), undefined,
               mem('VPK — valor por quilômetro',{selo:'DERIVADO',
                 formula:`receita bruta ÷ km atribuído\n${brl(r.receitaBruta)} ÷ ${num(r.kmTot,0)} km = ${brl(r.vpk)}`,
@@ -15959,6 +16265,51 @@ function rclRenderDiag(){
       "de quando é a folha". Cada linha de custo tem o seu próprio denominador, na tabela de janelas abaixo.
     </div>`:''}
 
+    ${d.conc && d.conc.temReal ? `
+    <h3 style="font-size:12px;margin-top:16px">Conciliação com o Mapinha — em dois blocos</h3>
+    <div class="muted" style="margin-bottom:9px;line-height:1.7">
+      Desde set/2026 o divisor das taxas conta só <b>viagem e km de placa própria</b>, porque o R$ que vem do Mapinha
+      também é só de frota própria. A consequência é que a soma das rotas <b>não fecha mais com o Mapinha no total</b>:
+      ela fecha no <b>bloco próprio</b>. A rota rodada por agregado continua sendo modelada como se fosse um conjunto
+      nosso — foi a decisão do comercial — e o custo dela é um <b>custo equivalente</b>, que não existiu no DRE. Por
+      isso ele aparece numa coluna à parte, em vez de sumir dentro de uma diferença.<br><br>
+      <b>Como ler:</b> a coluna Diferença é a prova do nivelamento. Perto de zero, a repartição fecha com o
+      fechamento. Longe de zero, o problema quase nunca é a taxa — é o denominador (placa sem cadastro, cobertura
+      baixa de CT-e) ou a base em outra competência. Pedágio medido pela HERE não é conciliável por construção:
+      são duas medições diferentes do mesmo fato.
+    </div>
+    <table class="tb">
+      <thead><tr><th>Linha</th><th>Fonte</th><th class="num">Mapinha (R$)</th>
+        <th class="num">Rotas próprias (R$)</th><th class="num">Diferença</th>
+        <th class="num">Rotas de agregado (R$)</th></tr></thead>
+      <tbody>
+        ${d.conc.linhas.map(L=>`<tr>
+          <td>${esc(L.rotulo||L.chave)}</td>
+          <td class="muted" style="font-size:10.5px">${esc(L.fontes)}</td>
+          <td class="num">${L.conciliavel&&L.realizado!=null?brl(L.realizado):'<span class="muted">—</span>'}</td>
+          <td class="num">${brl(L.propria)}</td>
+          <td class="num ${L.difPct==null?'':(Math.abs(L.difPct)<=0.02?'pos':(Math.abs(L.difPct)<=0.10?'':'neg'))}">
+            ${L.dif==null?'<span class="muted">n/a</span>':brl(L.dif)+(L.difPct!=null?` <span class="muted" style="font-size:10px">${pct(L.difPct,1)}</span>`:'')}</td>
+          <td class="num muted">${brl(L.agregado)}</td>
+        </tr>`).join('')}
+        <tr style="background:var(--sf)">
+          <td colspan="2"><b>Total conciliável</b></td>
+          <td class="num"><b>${brl(d.conc.totRealizado)}</b></td>
+          <td class="num"><b>${brl(d.conc.totPropria)}</b></td>
+          <td class="num"><b>${brl(d.conc.totPropria-d.conc.totRealizado)}</b>
+            ${d.conc.totRealizado>0?`<span class="muted" style="font-size:10px">${pct((d.conc.totPropria-d.conc.totRealizado)/d.conc.totRealizado,1)}</span>`:''}</td>
+          <td class="num muted"><b>${brl(d.conc.totAgregado)}</b></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="muted" style="font-size:10.5px;margin-top:6px;line-height:1.7">
+      Escopo medido: <b>${num(d.conc.vProp,0)}</b> viagem(ns) de placa própria e <b>${num(d.conc.vAgr,0)}</b> de
+      agregado${d.conc.vSemCad?`, mais <b>${num(d.conc.vSemCad,0)}</b> sem placa no cadastro de veículos (fora do divisor)`:''}
+      · <b>${num(d.conc.kmProp,0)}</b> km próprios de <b>${num(d.conc.kmProp+d.conc.kmAgr,0)}</b> km medidos.
+      Custo total atribuído: <b>${brl(d.conc.cProp)}</b> nas rotas próprias e <b>${brl(d.conc.cAgr)}</b> nas de agregado.
+      ${d.conc.vSemCad?'<br><b>Cadastrar as placas que faltam derruba as taxas para o valor certo:</b> hoje elas engordam a taxa porque saem do divisor sem sair do numerador.':''}
+    </div>`:''}
+
     ${(txT&&txT.det&&txT.mediaMovel)?`
     <h3 style="font-size:12px;margin-top:16px">Janela de cada linha — por que não é o mesmo número de meses</h3>
     <div class="muted" style="margin-bottom:9px;line-height:1.7">
@@ -16066,10 +16417,18 @@ function rclRenderDiag(){
         <tr><td>Depreciação da carreta</td><td><span class="src-tag cpk">CPK</span></td><td class="num">${brl(rlT.deprecCarretaRS)}</td><td>por viagem</td><td class="num">${brl(txT?txT.depCarVg:null)}</td></tr>
         <tr><td>Alimentação</td><td><span class="src-tag sim">SIMULADOR</span></td><td class="num">—</td><td>E32 ÷ viagens do mês</td><td class="num">—</td></tr>
         <tr><td>Tempo parado</td><td><span class="src-tag sim">SIMULADOR</span></td><td class="num">—</td><td>(carga + espera) × R$/hora</td><td class="num">—</td></tr>
-        <tr style="background:var(--sf)"><td colspan="2"><b>Base do rateio</b></td>
-          <td class="num"><b>${num(txT?txT.km:0,0)} km</b></td>
+        <tr><td>Administrativo e demais C.O</td>
+          <td>${P.fonteAdm==='nao'?'<span class="src-tag prem">DESLIGADO</span>':'<span class="src-tag map">MAPINHA</span>'}</td>
+          <td class="num">${brl(rlT.coOutrosRS)}</td>
+          <td>C.O não classificado (09.01 e afins), por viagem</td>
+          <td class="num">${P.fonteAdm==='nao'?'—':brl(txT?txT.admVg:null)}</td></tr>
+        <tr style="background:var(--sf)"><td colspan="2"><b>Base do rateio</b>
+          <div class="muted" style="font-size:10px">${txT&&txT.escopoDenominador==='propria'
+            ? 'denominador de FROTA PRÓPRIA: '+num(txT.viagensProprias||0,0)+' de '+num(txT.viagens||0,0)+' viagens medidas'
+            : 'denominador com TODAS as placas — sem viagem de placa própria identificada nesta janela'}</div></td>
+          <td class="num"><b>${num(txT&&txT.escopoDenominador==='propria'?txT.kmProprio:txT?txT.km:0,0)} km</b></td>
           <td><b>km e viagens medidos em ${esc(txT&&txT.base?txT.base.join(', '):'—')}</b>${txT&&!txT.baseMesma?` <span class="pill am">a janela analisada tem ${num(txT.kmJanela,0)} km em ${num(txT.viagensJanela,0)} viagens</span>`:''}</td>
-          <td class="num"><b>${num(txT?txT.viagens:0,0)} viagens</b></td></tr>
+          <td class="num"><b>${num(txT&&txT.escopoDenominador==='propria'?txT.viagensProprias:txT?txT.viagens:0,0)} viagens</b></td></tr>
       </tbody>
     </table>
     <div class="alerta am" style="margin-top:10px"><div style="font-size:10.5px">
@@ -16205,7 +16564,25 @@ function rclPremModal(){
       ${s('deprecRefParcela','Parcela do ativo de referência', P.deprecRefParcela, [['base','Parcela mensal do plano'],['vigente','Parcela da competência (contábil)']], 'a do plano não zera quando o plano acaba')}
       ${s('fonteAlimentacao','Alimentação', P.fonteAlimentacao, [['simulador','Simulador (E32)'],['modelo','Dentro do pessoal']])}
       ${s('fonteTempo','Tempo parado', P.fonteTempo, [['simulador','Simulador'],['modelo','Premissa da rota']])}
+      ${s('fonteAdm','Administrativo e demais C.O', P.fonteAdm, [['realizado','Mapinha (R$/viagem)'],['nao','Fora do custo']], 'C.O não classificado — 09.01 e afins')}
       ${s('nivelamento','Nivelamento do realizado', P.nivelamento, [['medido','Fechar com o Mapinha'],['taxa','Taxa sem fechamento']])}
+    </div>
+
+    <h3 style="font-size:12px;margin-top:12px">Escopo do denominador e imposto</h3>
+    <div class="muted" style="font-size:10.5px;margin-bottom:6px">
+      O R$ que vem do Mapinha é de <b>frota própria</b>: o diesel de agregado (01.02/02.02/04.02) é descartado e o
+      C.O de agregado (10.01/11.01/12.01) fica fora. Dividir esse numerador pelo quilômetro de <b>todas</b> as placas
+      entrega uma taxa diluída na proporção do agregado no rodado — com metade do movimento em agregado, cada linha
+      sai perto da metade do que custa um conjunto próprio. Por isso o divisor conta só <b>viagem e km de placa
+      própria</b>.<br><br>
+      <b>O que se perde, e está declarado:</b> a soma das rotas deixa de fechar com o Mapinha no total. Ela fecha no
+      subconjunto das rotas rodadas por placa própria; a rota de agregado passa a carregar o custo equivalente ao de
+      um conjunto próprio, que não existiu no DRE. Foi essa a decisão do comercial (set/2026): a rota de agregado é
+      modelada como se fosse frota própria, e a pergunta que ela responde é <i>quanto me custaria com um caminhão meu</i>.
+    </div>
+    <div class="rt-fields grid3">
+      ${c('denominadorProprio','Denominador só de placa própria', P.denominadorProprio!==false, 'desligar volta a dividir pelo rodado inteiro')}
+      ${s('fonteAliq','Alíquota dos impostos', P.fonteAliq, [['mapinha','Efetiva do Mapinha, por filial'],['padrao','Padrão do módulo ('+pct(RCL_ALIQ_PADRAO,0)+')']], 'a digitada na rota vence as duas')}
     </div>
 
     <h3 style="font-size:12px;margin-top:12px">Percurso e pedágio (HERE)</h3>
@@ -16253,6 +16630,7 @@ function rclPremModal(){
       ${n('ovDeprecCavaloViagem','Depr. cavalo (R$/viagem)', P.ovDeprecCavaloViagem, '0.01')}
       ${n('ovDeprecCarretaViagem','Depr. carreta (R$/viagem)', P.ovDeprecCarretaViagem, '0.01')}
       ${n('ovAlimentacaoViagem','Alimentação (R$/viagem)', P.ovAlimentacaoViagem, '0.01')}
+      ${n('ovAdmViagem','Administrativo (R$/viagem)', P.ovAdmViagem, '0.01', 'vazio = calcula do Mapinha')}
       ${n('ovTempoHora','Custo da hora parada (R$/h)', P.ovTempoHora, '0.5')}
     </div>`,
    ed ? `<button class="btn" onclick="mdFechar()">Cancelar</button>
@@ -16301,12 +16679,15 @@ function rclPremModal(){
       deprecRefCriterio:gS('deprecRefCriterio'), deprecRefParcela:gS('deprecRefParcela'),
       hereAuto:gB('hereAuto'),
       fonteAlimentacao:gS('fonteAlimentacao'), fonteTempo:gS('fonteTempo'),
+      fonteAdm:gS('fonteAdm'), denominadorProprio:gB('denominadorProprio'),
+      fonteAliq:gS('fonteAliq'),
       nivelamento:gS('nivelamento'),
       ovDieselRS:gN('ovDieselRS'), ovArlaRS:gN('ovArlaRS'), ovPedagioKm:gN('ovPedagioKm'),
       ovPneusKm:gN('ovPneusKm'), ovLubKm:gN('ovLubKm'), ovPecasViagem:gN('ovPecasViagem'),
       ovDocViagem:gN('ovDocViagem'), ovPessoalViagem:gN('ovPessoalViagem'),
       ovDeprecCavaloViagem:gN('ovDeprecCavaloViagem'), ovDeprecCarretaViagem:gN('ovDeprecCarretaViagem'),
       ovAlimentacaoViagem:gN('ovAlimentacaoViagem'), ovTempoHora:gN('ovTempoHora'),
+      ovAdmViagem:gN('ovAdmViagem'),
       hereAutoTeto:gN('hereAutoTeto')||400
     };
     const ok=await rclGravarPrem(novo);
@@ -16339,6 +16720,8 @@ async function rclExportar(){
       'Margem %':c.margemPct==null?'':+(c.margemPct*100).toFixed(2),
       'R$/t':c.tarifaTon==null?'':+c.tarifaTon.toFixed(2), 'Custo/t':c.custoTon==null?'':+c.custoTon.toFixed(2),
       CPK:c.cpk==null?'':+c.cpk.toFixed(3), VPK:c.vpk==null?'':+c.vpk.toFixed(3),
+      'VPK líquido':c.vpkLiq==null?'':+c.vpkLiq.toFixed(3),
+      'Resultado por km':(c.vpkLiq==null||c.cpk==null)?'':+(c.vpkLiq-c.cpk).toFixed(3),
       'Completude %':+(c.completude*100).toFixed(0)
     })));
 
@@ -16367,6 +16750,11 @@ async function rclExportar(){
       'Margem %':r.margemPct==null?'':+(r.margemPct*100).toFixed(2),
       'R$/t':r.tarifaTon==null?'':+r.tarifaTon.toFixed(2), 'Custo/t':r.custoTon==null?'':+r.custoTon.toFixed(2),
       CPK:r.cpk==null?'':+r.cpk.toFixed(3), VPK:r.vpk==null?'':+r.vpk.toFixed(3),
+      'VPK líquido':r.vpkLiq==null?'':+r.vpkLiq.toFixed(3),
+      'Imposto por km':(r.vpk==null||r.vpkLiq==null)?'':+(r.vpk-r.vpkLiq).toFixed(3),
+      'Resultado por km':(r.vpkLiq==null||r.cpk==null)?'':+(r.vpkLiq-r.cpk).toFixed(3),
+      'Alíquota %':r.aliq==null?'':+(r.aliq*100).toFixed(2),
+      'Origem da alíquota':r.aliqOrigem||'',
       'km/l carregado':+r.kmlC.toFixed(2), 'km/l vazio':+r.kmlV.toFixed(2),
       'Retorno aproveitado %':+(r.aprov*100).toFixed(0),
       'Calibração':r.fator===1?'':+(r.fator).toFixed(3),
@@ -16399,6 +16787,37 @@ async function rclExportar(){
       });
     }));
     add('Custo linha a linha', li);
+
+    /* Conciliação em dois blocos: o que fecha com o Mapinha (rotas de placa
+       própria) e o que é custo equivalente (rotas de agregado). */
+    if(RCL.diag && RCL.diag.conc && RCL.diag.conc.temReal){
+      const C=RCL.diag.conc;
+      add('Conciliação Mapinha', C.linhas.map(L=>({
+        Linha:L.rotulo||L.chave, Fonte:L.fontes,
+        'Mapinha R$': (L.conciliavel&&L.realizado!=null)?+L.realizado.toFixed(2):'',
+        'Rotas próprias R$':+L.propria.toFixed(2),
+        'Diferença R$':L.dif==null?'':+L.dif.toFixed(2),
+        'Diferença %':L.difPct==null?'':+(L.difPct*100).toFixed(2),
+        'Rotas de agregado R$':+L.agregado.toFixed(2),
+        'Modelado (fora do nivelamento) R$':+L.modelado.toFixed(2),
+        'Conciliável':L.conciliavel?'sim':'não — medição independente'
+      })).concat([{
+        Linha:'TOTAL CONCILIÁVEL', Fonte:'',
+        'Mapinha R$':+C.totRealizado.toFixed(2),
+        'Rotas próprias R$':+C.totPropria.toFixed(2),
+        'Diferença R$':+(C.totPropria-C.totRealizado).toFixed(2),
+        'Diferença %':C.totRealizado>0?+(((C.totPropria-C.totRealizado)/C.totRealizado)*100).toFixed(2):'',
+        'Rotas de agregado R$':+C.totAgregado.toFixed(2),
+        'Modelado (fora do nivelamento) R$':'', 'Conciliável':''
+      },{
+        Linha:'ESCOPO MEDIDO', Fonte:'viagens e km',
+        'Mapinha R$':'', 'Rotas próprias R$':+C.vProp.toFixed(0),
+        'Diferença R$':'', 'Diferença %':'',
+        'Rotas de agregado R$':+C.vAgr.toFixed(0),
+        'Modelado (fora do nivelamento) R$':'',
+        'Conciliável':`${C.kmProp.toFixed(0)} km próprios de ${(C.kmProp+C.kmAgr).toFixed(0)} km · ${C.vSemCad.toFixed(0)} viagem(ns) sem placa cadastrada`
+      }]));
+    }
 
     if(RCL.diag){
       const d=RCL.diag;
