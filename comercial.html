@@ -283,6 +283,20 @@ select.rcl-eixos:disabled{ opacity:.6; cursor:default; }
 .src-tag.prem{color:#475569;background:#f1f5f9;border-color:#cbd5e1}
 .src-tag.alerta{color:#b91c1c;background:#fee2e2;border-color:#fca5a5}
 
+/* Visão de desembolso: bloco RECOLHIDO por padrão. A tela oficial não muda —
+   quem não abrir, não vê. Sem cor de destaque, sem borda grossa: é uma
+   segunda leitura do mesmo custo, não um alerta. */
+.rcl-des{margin-top:12px;border:1px solid var(--bd2);border-radius:var(--r);background:var(--sf)}
+.rcl-des>summary{padding:8px 11px;font-size:11.5px;color:var(--mu);cursor:pointer;
+  list-style:none;user-select:none}
+.rcl-des>summary::-webkit-details-marker{display:none}
+.rcl-des>summary::before{content:'▸';margin-right:6px;font-size:10px;color:var(--mu)}
+.rcl-des[open]>summary::before{content:'▾'}
+.rcl-des>summary:hover{color:var(--tx)}
+.rcl-des[open]>summary{border-bottom:1px solid var(--bd2)}
+.rcl-des>div,.rcl-des>table{padding:0 11px}
+.rcl-des>table{width:calc(100% - 22px);margin:0 11px 10px}
+
 /* Buttons */
 .btn{font-family:var(--f);font-size:12.5px;font-weight:600;padding:8px 14px;border-radius:var(--r);border:1px solid var(--bd);background:var(--wh);color:var(--tx);cursor:pointer;transition:.12s}
 .btn:hover{background:var(--ht)}
@@ -8126,7 +8140,12 @@ const RT_ALIAS_SZB = {
   cnpjDest:    {req:0, lbl:'CNPJ do destinatário',a:['CNPJDESTINA','CNPJDESTINATARIO','CGCDESTINATARIO','CNPJCPFDESTINATARIO','CNPJDEST']},
   codRemet:    {req:0, lbl:'Código do remetente', a:['CODREMETENT','CODREMETENTE','CLIREMETENTE','CODCLIENTE']},
   frete:       {req:0, lbl:'Valor do frete',      a:['VALORFRETE','VLRFRETE','FRETE']},
-  fatura:      {req:0, lbl:'Valor da fatura',     a:['VALORFATURA','VLRFATURA','FATURA']}
+  fatura:      {req:0, lbl:'Valor da fatura',     a:['VALORFATURA','VLRFATURA','FATURA']},
+  /* Comissão paga ao proprietário do veículo. Na frota própria é a comissão
+     do motorista; na placa de agregado é o PREÇO DA TRAÇÃO TERCEIRIZADA —
+     o mesmo campo que o agregados.html usa como base do fechamento. É ele
+     que sustenta a visão de desembolso da sub-aba Rota clientes. */
+  comissaoMot: {req:0, lbl:'Comissão do motorista/agregado', a:['COMISSAOMOT','COMISSAOMOTORISTA','COMISSAO','VLRCOMISSAO','VALORCOMISSAO']}
 };
 
 /* ══ Helpers locais ══ */
@@ -10946,7 +10965,8 @@ const RCLMEM_SELO = {
   'CASCATA':  ['Degrau da cascata', 'Etapa da cascata de resultado: receita bruta → impostos → receita líquida → custo → comissão → estrutura → resultado. Cada degrau só subtrai o que o degrau anterior já não subtraiu.'],
   'FECHAMENTO':['Amarra com o fechamento', 'Número que existe para bater com outro módulo. Quando ele fecha com o CPK por placa do mesmo período, as premissas estão validadas.'],
   'QUALIDADE':['Indicador de qualidade', 'Não é dinheiro: mede quanto do cálculo está apoiado em dado medido e quanto em premissa.'],
-  'PREMISSA': ['Premissa editável', 'Valor definido em "⚙ Premissas do resultado". Muda aqui, muda em toda a tela.']
+  'PREMISSA': ['Premissa editável', 'Valor definido em "⚙ Premissas do resultado". Muda aqui, muda em toda a tela.'],
+  'DESEMBOLSO':['Visão de desembolso', 'Segunda leitura do mesmo custo: taxas divididas pelo rodado inteiro (frota própria + agregado) e a comissão paga ao agregado somada. Responde "quanto sai do caixa nesta rota", enquanto a visão oficial responde "quanto me custa um caminhão meu fazer esta rota".']
 };
 const RCLMEM_GLOSS = [
   [/(^|\b)(viagens?|ct-?e|ctrc)\b/, 'Viagens', 'Contagem de CT-e não cancelados do SZB emitidos dentro da janela e resolvidos para uma rota da SZY. Carta-frete complementar (placa FSC/FSP/FPR-0000) NÃO conta como viagem: é pagamento suplementar sobre uma viagem que já existe.'],
@@ -11465,7 +11485,8 @@ const RCL_CFG = {
      É a mesma regra da média ponderada por litros do rtPrecoMedio.        */
   janelaTeto: 12,                        /* teto absoluto, em meses         */
   janelaPadrao: { pneus:6, lub:3, pecas:6, doc:12, pessoal:1,
-                  deprec:1, pedagio:3, diesel:3, arla:3, aderencia:3, adm:6 },
+                  deprec:1, pedagio:3, diesel:3, arla:3, aderencia:3, adm:6,
+                  agreg:3 },
   /* Rótulo e explicação de cada natureza, para a tela não precisar repetir. */
   janelaInfo: {
     pneus:    ['Pneus',                  'compra em lote concentra o gasto num mês'],
@@ -11478,7 +11499,8 @@ const RCL_CFG = {
     diesel:   ['Diesel — preço efetivo', 'ruído de estoque no fim do mês'],
     arla:     ['Arla — preço efetivo',   'compra esparsa, amostra pequena'],
     aderencia:['Aderência do consumo',   'tanque cheio no dia 30 é diesel do mês seguinte'],
-    adm:      ['Administrativo e demais C.O','despesa de estrutura tem mês forte e mês fraco']
+    adm:      ['Administrativo e demais C.O','despesa de estrutura tem mês forte e mês fraco'],
+    agreg:    ['Tração agregada',        'comissão paga ao agregado acompanha o faturamento']
   },
   /* Coeficiente de variação das taxas mensais acima do qual a tela chama a
      linha de dispersa. Não é erro: é o aviso de que aquela natureza é
@@ -11707,6 +11729,31 @@ const RCL_PADRAO = {
   ovLubKm: null, ovPecasViagem: null, ovDocViagem: null, ovPessoalViagem: null,
   ovDeprecCavaloViagem: null, ovDeprecCarretaViagem: null,
   ovAlimentacaoViagem: null, ovTempoHora: null, ovAdmViagem: null,
+  /* ══ VISÃO DE DESEMBOLSO — O AGREGADO DENTRO DA CONTA ═══════════════════
+     A visão oficial da sub-aba (e o CPK que ela publica) responde "quanto
+     custa um caminhão NOSSO fazer esta rota": numerador de frota própria,
+     denominador de frota própria, e a rota de agregado recebendo o mesmo
+     custo, como se o conjunto fosse nosso. Foi a decisão do comercial e
+     continua sendo o número que sustenta preço na mesa de negociação — o
+     cliente não paga menos porque o frete saiu com agregado.
+
+     A segunda visão responde a outra pergunta, igualmente legítima:
+     "quanto a COMIX DESEMBOLSA nesta rota". Aí o denominador é o rodado
+     inteiro (própria + agregado) e o numerador ganha o que se paga ao
+     agregado — a comissão do SZB, que é o preço da tração terceirizada e
+     é exatamente a base do fechamento do agregados.html.
+
+     Por que a comissão SOZINHA já é o custo do agregado: no fechamento,
+     saldo = comissão − abastecimentos − débitos + créditos. Tudo que a
+     COMIX adianta ao agregado (diesel, peça, pneu) volta como desconto no
+     acerto. O desembolso bruto da COMIX com aquela placa é, portanto, a
+     COMISSÃO. Somar de novo o C.O de agregado (10.01/11.01/12.01) e o
+     diesel .02 contaria a mesma conta duas vezes — por isso a chave abaixo
+     nasce DESLIGADA, e o número que ela somaria fica visível na tela para
+     poder ser conferido antes de ser ligado.                              */
+  visaoDesembolso:  true,          /* calcula e mostra a segunda visão      */
+  agregIncluirCO:   false,         /* soma 10.01/11.01/12.01 e diesel .02   */
+  ovTracaoViagem:   null,          /* R$/viagem manual da tração agregada   */
   /* Roda a HERE sozinha nas rotas da janela que ainda não têm percurso
      medido (ou que estão em cache antigo, sem pedágio medido e sem os
      postos do trecho). Desligar volta ao comportamento manual, pelo botão. */
@@ -12068,6 +12115,11 @@ function rclrTipoVeic(v){
 function rclrBucket(filial){
   return { filial, mesesLidos:[], mesesSem:[],
     dieselRS:0, dieselInterno:0, dieselExterno:0, dieselReembolso:0, arlaRS:0,
+    /* Diesel e Arla lançados nos códigos .02 (agregado). Ficam FORA do custo
+       de frota própria como sempre estiveram; existem aqui só para a visão
+       de desembolso poder somá-los quando a premissa mandar, e para a tela
+       poder mostrar de quanto se está falando antes de alguém ligar a chave. */
+    dieselAgregRS:0,
     pedagioRS:0, pedagioPlacasProp:0, pedagioSemCadastro:0,
     pneusRS:0, lubRS:0, pecasRS:0, docRS:0, coOutrosRS:0, coAgregadoRS:0,
     pessoalFrota35:0, pessoalAgregado65:0, pessoalBaseFinal:0, pessoalRS:0,
@@ -12346,7 +12398,8 @@ async function rclRealCarregar(base){
         if(cls==='interno') bk.dieselInterno+=v;
         else if(cls==='externo') bk.dieselExterno+=v;
         else if(cls==='arla')    bk.arlaRS+=v;
-        return;                                     /* .02 = agregado → fora */
+        else bk.dieselAgregRS+=v;   /* .02 = agregado: fora do custo próprio */
+        return;
       }
       const grp=String(l.grupoDre||'').toUpperCase();
       if(grp!=='CO') return;                        /* CP, CE e CAPEX à parte */
@@ -12762,11 +12815,14 @@ function rclrSomaJanela(serie, k){
   const usados=serie.filter(x=>set.has(x.mes));
   const o={ meses:usados.map(x=>x.mes), n:usados.length, km:0, viagens:0, litros:0,
             kmProp:0, viagensProp:0, viagensSemCad:0,
+            kmAgreg:0, viagensAgreg:0, comAgreg:0,
             resolvidas:0, orfaos:0, ambiguos:0, bk:null };
   const acc=rclrBucket('janela');
   usados.forEach(x=>{
     o.km+=x.km||0; o.viagens+=x.viagens||0; o.litros+=x.litros||0;
     o.kmProp+=x.kmProp||0; o.viagensProp+=x.viagensProp||0;
+    o.kmAgreg+=x.kmAgreg||0; o.viagensAgreg+=x.viagensAgreg||0;
+    o.comAgreg+=x.comAgreg||0;
     o.viagensSemCad+=x.viagensSemCad||0;
     o.resolvidas+=x.resolvidas||0; o.orfaos+=x.orfaos||0; o.ambiguos+=x.ambiguos||0;
     if(x.bk) Object.keys(x.bk).forEach(kk=>{ if(typeof x.bk[kk]==='number') acc[kk]=(acc[kk]||0)+x.bk[kk]; });
@@ -12880,6 +12936,64 @@ function rclrTaxas(serie, P, opRotulo){
     /* Administrativo e demais C.O: o balde que era somado e morria ali. */
     admVg:      taxa('adm',    'admVg',     P.ovAdmViagem,           'coOutrosRS',      'viagem')
   };
+  /* ══ SEGUNDA VISÃO: DESEMBOLSO DA COMIX ═══════════════════════════════
+     Mesmíssimos numeradores do Mapinha e do CPK, com DUAS diferenças:
+
+       1. o denominador é o rodado INTEIRO (própria + agregado), não só o
+          próprio — o quilômetro do agregado entra;
+       2. entra uma linha que não existe na visão própria: a TRAÇÃO
+          AGREGADA, que é a comissão paga ao agregado no SZB ÷ viagens
+          totais da janela.
+
+     Sem o item 2, o item 1 sozinho seria o erro clássico: dividir custo de
+     frota própria por quilômetro de todo mundo derruba a taxa na proporção
+     do agregado no rodado e faz a rota parecer mais barata sem que nada
+     tenha ficado mais barato. Os dois andam juntos ou nenhum anda.
+
+     Nada aqui altera a visão oficial: é um objeto à parte, consumido só
+     por quem pede a leitura de desembolso.                              */
+  const totDe=(nat, campo, chave, valorProprio)=>{
+    const j=jan(nat);
+    const den = chave==='km' ? j.km : j.viagens;
+    const rs  = Number(j.bk[campo])||0;
+    /* Sobrescrita manual é decisão de gente: vale nas duas visões. */
+    if(valorProprio!=null && manual[valorProprio]) return { v:det[valorProprio]?det[valorProprio].valor:null, manual:true, rs, den };
+    return { v: den>0 ? rs/den : null, manual:false, rs, den, meses:j.meses.slice(), n:j.n };
+  };
+  const jAg=jan('agreg');
+  const coAgreg   = Number(jAg.bk.coAgregadoRS)||0;
+  const dieselAg  = Number(jAg.bk.dieselAgregRS)||0;
+  const extrasAg  = P.agregIncluirCO ? (coAgreg+dieselAg) : 0;
+  const tracaoRS  = (jAg.comAgreg||0) + extrasAg;
+  const denAgVg   = jAg.viagens||0;
+  let tracaoVg = (P.ovTracaoViagem!=null && P.ovTracaoViagem>=0) ? P.ovTracaoViagem
+               : (denAgVg>0 ? tracaoRS/denAgVg : null);
+  const pesTot=(()=>{ const j=jan('pessoal');
+    const rs = P.pessoalCpkBase==='frota' ? (Number(j.bk.pessoalFrota35)||0)
+             : ((Number(j.bk.pessoalFrota35)||0)+(Number(j.bk.pessoalAgregado65)||0));
+    return { v: j.viagens>0 ? rs/j.viagens : null, rs, den:j.viagens }; })();
+  out.tot = {
+    pedagioKm: totDe('pedagio','pedagioRS','km','pedagioKm').v,
+    pneusKm:   totDe('pneus',  'pneusRS',  'km','pneusKm').v,
+    lubKm:     totDe('lub',    'lubRS',    'km','lubKm').v,
+    pecasVg:   totDe('pecas',  'pecasRS',  'viagem','pecasVg').v,
+    docVg:     totDe('doc',    'docRS',    'viagem','docVg').v,
+    pessoalVg: (P.ovPessoalViagem!=null && P.ovPessoalViagem>=0) ? P.ovPessoalViagem : pesTot.v,
+    depCavVg:  totDe('deprec', 'deprecCavaloRS', 'viagem','depCavVg').v,
+    depCarVg:  totDe('deprec', 'deprecCarretaRS','viagem','depCarVg').v,
+    admVg:     totDe('adm',    'coOutrosRS','viagem','admVg').v,
+    tracaoVg,
+    det:{ janela:rclJanelaDe('agreg',P), meses:jAg.meses.slice(),
+          comissao:jAg.comAgreg||0, coAgregado:coAgreg, dieselAgregado:dieselAg,
+          incluiCO:!!P.agregIncluirCO, tracaoRS,
+          viagensTot:jAg.viagens||0, viagensAgreg:jAg.viagensAgreg||0,
+          viagensProp:jAg.viagensProp||0,
+          kmTot:jAg.km||0, kmAgreg:jAg.kmAgreg||0, kmProp:jAg.kmProp||0,
+          fracVgAgreg: jAg.viagens>0 ? (jAg.viagensAgreg||0)/jAg.viagens : null,
+          fracKmAgreg: jAg.km>0 ? (jAg.kmAgreg||0)/jAg.km : null,
+          semComissao: !(jAg.comAgreg>0) && (jAg.viagensAgreg||0)>0,
+          manualTracao: (P.ovTracaoViagem!=null && P.ovTracaoViagem>=0) }
+  };
   /* Janelas do diesel e do Arla: quem consome não é uma taxa por km, é o
      preço efetivo (R$ do fechamento ÷ litros da SZC), montado fora daqui. */
   out.janDiesel = jan('diesel');
@@ -12932,7 +13046,11 @@ function rclVarrer(meses, modoCliente){
     if(!bk){
       bk={ rota:r, viagens:0, ton:0, receita:0, cfcQtd:0, cfcValor:0,
            clientes:new Map(), placas:new Map(), retornoOk:0, ctes:[],
-           viagensMes:{}, viagensProp:0, viagensSemCad:0, viagensMesProp:{} };
+           viagensMes:{}, viagensProp:0, viagensSemCad:0, viagensMesProp:{},
+           /* Fatia rodada por AGREGADO e o que se pagou por ela. A comissão
+              do CT-e é o preço da tração terceirizada; ela só alimenta a
+              visão de desembolso e não toca em nada do custo próprio. */
+           viagensAgreg:0, viagensMesAgreg:{}, comAgreg:0, comAgregMes:{} };
       porRota.set(r.k3, bk);
     }
     if(!bk.viagensMes) bk.viagensMes={};
@@ -12972,6 +13090,14 @@ function rclVarrer(meses, modoCliente){
           if(rclrPlacaProp(p, vmap)){
             bk.viagensProp++;
             bk.viagensMesProp[mesCTE]=(bk.viagensMesProp[mesCTE]||0)+1;
+          } else {
+            /* Placa cadastrada e NÃO própria = agregado. A comissão deste
+               CT-e é o que a COMIX pagou pela tração — mesma leitura do
+               fechamento do agregados.html, que parte de Comissao Mot. */
+            bk.viagensAgreg++;
+            bk.viagensMesAgreg[mesCTE]=(bk.viagensMesAgreg[mesCTE]||0)+1;
+            const cm=rtGetN(b,mB,'comissaoMot');
+            if(cm>0){ bk.comAgreg+=cm; bk.comAgregMes[mesCTE]=(bk.comAgregMes[mesCTE]||0)+cm; }
           }
         } else bk.viagensSemCad++;
       } else bk.viagensSemCad++;
@@ -13451,6 +13577,7 @@ function rclCustoBucket(bk, ctx){
      O que ela pega é ordem de grandeza — que é exatamente o defeito. */
   const BANDA_MIN=0.25, BANDA_MAX=4.0;
   const ressalvas=[];
+  const usouTaxa={};
   const troca=(chave, fonteDesejada, valor, selo, opc)=>{
     const o=opc||{};
     if(fonteDesejada==='modelo'){ fontes[chave]='modelo'; return; }
@@ -13474,6 +13601,13 @@ function rclCustoBucket(bk, ctx){
     }
     linhas[chave]=v;
     fontes[chave]=selo;
+    /* Quais linhas de fato consumiram uma TAXA DA UNIDADE (R$/km ou
+       R$/viagem). Só elas mudam de valor quando o denominador muda — a
+       depreciação por ativo de referência, por exemplo, é parcela ÷ viagens
+       DESTA rota e não se move. É esta lista que a visão de desembolso
+       recalcula; sem ela seria preciso adivinhar, e adivinhar aqui é
+       trocar número certo por número parecido. */
+    if(o.taxa && !(T&&T.manual&&T.manual[o.taxa])) usouTaxa[chave]=o.taxa;
   };
 
   /* ── Diesel: litros do modelo × preço efetivo do Mapinha ──────────────
@@ -13552,6 +13686,7 @@ function rclCustoBucket(bk, ctx){
       linhas.pedagio=Math.abs(pedagioHere); fontes.pedagio='here';
     }else if(T && T.pedagioKm>0){
       linhas.pedagio=Math.abs(T.pedagioKm*kmViagem); fontes.pedagio='mapinha';
+      usouTaxa.pedagio='pedagioKm';
       ressalvas.push({linha:'pedagio', motivo:'HERE não mediu praça nesta rota — usado o R$/km do Mapinha'});
     }else fontes.pedagio='modelo';
   } else if(P.fontePedagio==='realizado' && T){
@@ -13640,6 +13775,52 @@ function rclCustoBucket(bk, ctx){
     bk._tempoDet = { tCarga:isNaN(tCarga)?1.5:tCarga, tEspera:isNaN(tEspera)?1.0:tEspera, custoH:custoH||0, tParado };
   } else fontes.tempo='modelo';
 
+  /* ══ SEGUNDA VISÃO: QUANTO A COMIX DESEMBOLSA NESTA ROTA ═══════════════
+     A visão oficial acima responde "quanto custa um caminhão nosso fazer
+     esta rota". Esta responde "quanto sai do caixa por causa dela": as
+     mesmas linhas, com as taxas divididas pelo rodado INTEIRO, mais a
+     comissão paga ao agregado.
+
+     Nenhuma fórmula de custo é reescrita e nenhuma chamada de motor é
+     refeita: as linhas que consumiram taxa da unidade são lineares na
+     taxa, então trocar a taxa é uma multiplicação. As demais (diesel ao
+     preço do posto, pedágio medido praça a praça, compressor, alimentação,
+     tempo, depreciação por ativo de referência) são idênticas nas duas
+     visões, por construção — e é por isso que a diferença entre os dois
+     números é legível: ela é só o efeito do agregado.                    */
+  const desemb=(()=>{
+    if(!P.visaoDesembolso || !T || !T.tot) return null;
+    const TT=T.tot;
+    const CHAVE={ pneusKm:'km', lubKm:'km', pedagioKm:'km',
+                  pecasVg:'vg', docVg:'vg', pessoalVg:'vg', admVg:'vg',
+                  depCavVg:'vg', depCarVg:'vg' };
+    const lin={}, trocadas=[];
+    Object.keys(linhas).forEach(k=>{ if(typeof linhas[k]==='number') lin[k]=linhas[k]; });
+    Object.keys(usouTaxa).forEach(k=>{
+      const nomeTaxa=usouTaxa[k];
+      const nova=TT[nomeTaxa];
+      if(nova==null || !isFinite(nova)) return;
+      const mult = CHAVE[nomeTaxa]==='km' ? kmViagem : 1;
+      const antes=lin[k], depois=Math.abs(nova*mult);
+      lin[k]=depois;
+      trocadas.push({linha:k, taxa:nomeTaxa, antes, depois});
+    });
+    /* A linha que só existe aqui. Sem placa de agregado na janela ela não
+       aparece — e não vira zero, simplesmente não existe. */
+    const tr = (TT.tracaoVg!=null && isFinite(TT.tracaoVg) && TT.tracaoVg>0) ? TT.tracaoVg : null;
+    if(tr!=null) lin.tracao=tr;
+    const soma=(ks)=>ks.reduce((a,k)=>a+(typeof lin[k]==='number'?lin[k]:0),0);
+    const vv=soma(['diesel','arla','pedagio','pneus','lubrificante','compressor']);
+    const ff=soma(['pecas','docSeguros','pessoal','deprecCavalo','deprecCarreta',
+                   'alimentacao','limpeza','tempo','administrativo','tracao']);
+    const tot=vv+ff;
+    return { linhas:lin, trocadas, tracaoViagem:tr, variavel:vv, fixo:ff,
+             custoViagem:tot,
+             cpk: kmViagem>0 ? tot/kmViagem : null,
+             custoTon: tonViagem>0 ? tot/tonViagem : null,
+             det:TT.det };
+  })();
+
   /* Total recomposto das linhas — não pode mais vir de cFull.total, que
      ainda carrega os valores modelados que acabamos de trocar. */
   const ORDEM_VAR = ['diesel','arla','pedagio','pneus','lubrificante','compressor'];
@@ -13675,6 +13856,7 @@ function rclCustoBucket(bk, ctx){
     kmlMedio:    litrosViagem>0 ? kmViagem/litrosViagem : null,
     pedagioHere,
     linhas, linhasModelo, memModelo, viagensMesModelo:cFull.viagensMes,
+    desemb, usouTaxa,
     fontes, ressalvas, taxas:T, realBk:rb, tempoDet:bk._tempoDet||null,
     variavel:varia, fixo, custoViagem, custoModelado,
     desvioModelo: custoModelado>0 ? custoViagem/custoModelado-1 : null,
@@ -13815,7 +13997,8 @@ function rclCalcular(){
     const out={};                       /* mes → op → {km,viagens,litros}   */
     const toca=(m,op)=>{ if(!out[m]) out[m]={};
       if(!out[m][op]) out[m][op]={km:0, viagens:0, litros:0,
-                                  kmProp:0, viagensProp:0, viagensSemCad:0};
+                                  kmProp:0, viagensProp:0, viagensSemCad:0,
+                                  kmAgreg:0, viagensAgreg:0, comAgreg:0};
       return out[m][op]; };
     bks.forEach(b=>{
       const vg=b.viagens||0; if(!(vg>0)) return;
@@ -13835,6 +14018,18 @@ function rclCalcular(){
         const n=vmp[m]||0; if(!(n>0)) return;
         [op,'_geral'].forEach(o=>{ const a=toca(m,o);
           a.kmProp+=kmV*n; a.viagensProp+=n; });
+      });
+      /* Mesma repartição para a fatia de agregado. O km por viagem é o
+         mesmo — a rota não muda de tamanho por causa de quem a roda. */
+      const vma=b.viagensMesAgreg||{}, cma=b.comAgregMes||{};
+      Object.keys(vma).forEach(m=>{
+        const n=vma[m]||0; if(!(n>0)) return;
+        [op,'_geral'].forEach(o=>{ const a=toca(m,o);
+          a.kmAgreg+=kmV*n; a.viagensAgreg+=n; });
+      });
+      Object.keys(cma).forEach(m=>{
+        const v=cma[m]||0; if(!(v>0)) return;
+        [op,'_geral'].forEach(o=>{ toca(m,o).comAgreg+=v; });
       });
       /* Viagens sem placa cadastrada: não entram no denominador próprio e
          precisam aparecer, senão a taxa sobe sem que ninguém saiba por quê. */
@@ -13901,6 +14096,8 @@ function rclCalcular(){
       }
       return { mes:m, bk, km:md.km||0, viagens:md.viagens||0, litros:md.litros||0,
                kmProp:md.kmProp||0, viagensProp:md.viagensProp||0,
+               kmAgreg:md.kmAgreg||0, viagensAgreg:md.viagensAgreg||0,
+               comAgreg:md.comAgreg||0,
                viagensSemCad:md.viagensSemCad||0,
                resolvidas:md.resolvidas||0, orfaos:md.orfaos||0, ambiguos:md.ambiguos||0 };
     });
@@ -14155,6 +14352,14 @@ function rclCalcular(){
            exatamente como o cálculo original a recebeu. */
         _receitaCTE:cb.receita,
         custoViagem:cu.custoViagem, cpk:cu.cpk, custoTon:cu.custoTon,
+        /* Segunda visão — desembolso da COMIX, com o agregado dentro. Só o
+           custo muda: receita, impostos e comissão comercial são os mesmos,
+           então o resultado sai da mesma cascata com outro custo. */
+        custoViagemDes: cu.desemb ? cu.desemb.custoViagem : null,
+        cpkDes:         cu.desemb ? cu.desemb.cpk         : null,
+        custoTonDes:    cu.desemb ? cu.desemb.custoTon    : null,
+        custoOpDes:     cu.desemb ? cu.desemb.custoViagem*cb.viagens : null,
+        tracaoViagem:   cu.desemb ? cu.desemb.tracaoViagem : null,
         kmlC:cu.kmlC, kmlV:cu.kmlV, aprov:cu.aprov, fator:cu.fator,
         tarifaTon: cb.ton>0 ? cb.receita/cb.ton : null,
         vpk: kmTot>0 ? cb.receita/kmTot : null,
@@ -14172,7 +14377,8 @@ function rclCalcular(){
                    rems:[], dests:[], _remIx:new Map(), _destIx:new Map(),
                    viagens:0, ton:0, kmTot:0, receitaBruta:0, receitaLiquida:0,
                    impostos:0, custoOp:0, custoVar:0, custoFixo:0, comissao:0,
-                   overhead:0, margemContrib:0, resultado:0, cfcValor:0, cfcQtd:0};
+                   overhead:0, margemContrib:0, resultado:0, cfcValor:0, cfcQtd:0,
+                   custoOpDes:0};
              clientes.set(cb.chave, cl); }
       cl.rotas.push(linha);
       /* Remetente e destinatário NÃO são mais níveis da árvore: são atributos
@@ -14189,7 +14395,7 @@ function rclCalcular(){
       anota(cl._destIx, cl.dests, cb.destChave, cb.destNome, cb.destCnpj);
       ['viagens','ton','kmTot','receitaBruta','receitaLiquida','impostos','custoOp',
        'custoVar','custoFixo','comissao','overhead','margemContrib','resultado',
-       'cfcValor','cfcQtd'].forEach(k=>{ cl[k]+=(Number(linha[k])||0); });
+       'cfcValor','cfcQtd','custoOpDes'].forEach(k=>{ cl[k]+=(Number(linha[k])||0); });
     });
   });
   /* Derivados de um agregado: sempre recalculados dos totais, nunca somados —
@@ -14200,6 +14406,7 @@ function rclCalcular(){
     o.tarifaTon = o.ton>0 ? o.receitaBruta/o.ton : null;
     o.custoTon  = o.ton>0 ? o.custoOp/o.ton : null;
     o.cpk       = o.kmTot>0 ? o.custoOp/o.kmTot : null;
+    o.cpkDes    = (o.kmTot>0 && o.custoOpDes>0) ? o.custoOpDes/o.kmTot : null;
     o.vpk       = o.kmTot>0 ? o.receitaBruta/o.kmTot : null;
     o.vpkLiq    = o.kmTot>0 ? o.receitaLiquida/o.kmTot : null;
     o.completude= o.rotas.length ? o.rotas.reduce((a,x)=>a+x.completude.pct,0)/o.rotas.length : 0;
@@ -14483,7 +14690,8 @@ const RCL_LINHA_ROTULO={
   pecas:'Peças e serviços', docSeguros:'Documentação e seguros',
   pessoal:'Pessoal (sem comissão)', deprecCavalo:'Depreciação do cavalo',
   deprecCarreta:'Depreciação da carreta', alimentacao:'Alimentação',
-  limpeza:'Limpeza', tempo:'Tempo parado'
+  limpeza:'Limpeza', tempo:'Tempo parado',
+  administrativo:'Administrativo e demais C.O', tracao:'Tração agregada'
 };
 
 const RCL_COLS=[
@@ -15874,6 +16082,37 @@ function rclPainel(chaveCli, k3, semScroll){
                         ['Tarifa − custo', brl((r.tarifaTon||0)-(r.custoTon||0))+'/t', 'A diferença bruta por tonelada, ANTES de imposto, comissão e estrutura — não é margem.'],
                         ['t por viagem', num(r.viagens>0?r.ton/r.viagens:0,2)+' t', 'Carga média do período. É ela que alimenta a massa do modelo de consumo.']]}))}
           ${L('<b>CPK — custo por km</b>', '<b>'+brl(r.cpk)+'</b>', 'o número que tudo persegue', memCPK)}
+          ${(cu&&cu.desemb)?L('CPK — desembolso COMIX', brl(cu.desemb.cpk),
+              'com o agregado dentro'+(cu.desemb.cpk!=null&&r.cpk>0?' · '+(cu.desemb.cpk>=r.cpk?'+':'')+pct(cu.desemb.cpk/r.cpk-1,1)+' vs. CPK':''),
+              mem('CPK de desembolso — a segunda visão',{selo:'DESEMBOLSO',
+                fonte:'As MESMAS linhas do custo ao lado, com duas diferenças: as taxas do Mapinha e do CPK são divididas pelo rodado inteiro (frota própria + agregado), e entra a comissão paga ao agregado no SZB — o preço da tração terceirizada, que é a base do fechamento do agregados.html.',
+                formula:`custo de desembolso por viagem ÷ km da viagem\n${brl(cu.desemb.custoViagem)} ÷ ${num(kmV,1)} km = ${brl(cu.desemb.cpk)}/km`,
+                insumos:[
+                  ['Qual pergunta cada um responde', 'duas, diferentes',
+                   'O CPK oficial responde "quanto me custa um caminhão MEU fazer esta rota" — é ele que sustenta preço na mesa, porque o cliente não paga menos quando o frete sai com agregado. Este responde "quanto sai do caixa por causa desta rota" — é ele que concilia com o desembolso.'],
+                  ['Denominador', num(cu.desemb.det.kmTot,0)+' km · '+num(cu.desemb.det.viagensTot,0)+' viagens',
+                   'Rodado inteiro da janela, contra '+num(cu.desemb.det.kmProp,0)+' km de placa própria que o CPK oficial usa. O agregado é '+pct(cu.desemb.det.fracKmAgreg,0)+' do quilômetro medido.'],
+                  ['Tração agregada', cu.desemb.tracaoViagem!=null?brl(cu.desemb.tracaoViagem)+'/viagem':'sem placa de agregado na janela',
+                   'Comissão paga aos agregados na janela ('+brl(cu.desemb.det.comissao)+') ÷ '+num(cu.desemb.det.viagensTot,0)+' viagens totais. É a linha que não existe na visão oficial — e sem ela, dividir custo de frota própria pelo km de todo mundo faria a rota parecer mais barata sem nada ter ficado mais barato.'],
+                  ['= CPK de desembolso', brl(cu.desemb.cpk),
+                   'Compare com o CPK oficial ('+brl(r.cpk)+'). Os dois maiores efeitos se cancelam parcialmente: a diluição empurra para baixo, a comissão empurra para cima.']
+                ],
+                linhas:[
+                  ['Custo por viagem — desembolso', brl(cu.desemb.custoViagem),
+                   'Contra '+brl(cu.custoViagem)+' da visão oficial.'],
+                  ['Custo por tonelada — desembolso', brl(cu.desemb.custoTon)],
+                  ['Linhas recalculadas', String(cu.desemb.trocadas.length),
+                   'Só as que consumiram taxa da unidade mudam. Diesel ao preço do posto, pedágio medido praça a praça, compressor, alimentação e depreciação por ativo de referência são idênticos nas duas visões.'],
+                  ['Viagens de agregado na janela', num(cu.desemb.det.viagensAgreg,0)+' de '+num(cu.desemb.det.viagensTot,0),
+                   'Placa cadastrada e não própria. Placa fora do cadastro de veículos não entra em nenhum dos dois lados.'],
+                  cu.desemb.det.incluiCO?['C.O de agregado somado', brl(cu.desemb.det.coAgregado+cu.desemb.det.dieselAgregado),
+                   'A premissa "Somar C.O e diesel de agregado" está LIGADA. Atenção ao risco de dupla contagem: no fechamento do agregado esses adiantamentos voltam como desconto no acerto.']
+                   :['C.O de agregado (fora)', brl(cu.desemb.det.coAgregado+cu.desemb.det.dieselAgregado),
+                   'Lubrificante, peças e pneus de agregado (10.01/11.01/12.01) e diesel .02 na janela. Ficam FORA por padrão: no fechamento, saldo = comissão − abastecimentos − débitos + créditos, ou seja, o que a COMIX adianta volta como desconto e o desembolso bruto com a placa já É a comissão. Somar os dois contaria a mesma conta duas vezes.']
+                ],
+                obs:'As duas visões convivem de propósito. Divergência grande entre elas não é erro: é a medida de quanto a operação depende de agregado naquela rota.',
+                alerta: cu.desemb.det.semComissao
+                  ? 'Há viagem de agregado na janela, mas o SZB não trouxe comissão para elas — a linha de tração ficou vazia e este CPK está SUBESTIMADO. Confira o mapeamento da coluna Comissao Mot em ⚙ Bases.' : null})):''}
           ${L('VPK líquido — receita por km', brl(r.vpkLiq), undefined,
               mem('VPK líquido — valor por quilômetro',{selo:'DERIVADO',
                 fonte:'Receita depois dos impostos, sobre o MESMO quilômetro que produz o CPK. É esta a régua certa: o custo não paga imposto, então comparar o CPK com a receita bruta superestima a margem exatamente pelo valor do tributo.',
@@ -15978,6 +16217,79 @@ function rclPainel(chaveCli, k3, semScroll){
           <span class="src-tag here">HERE</span> percurso medido ·
           <span class="src-tag prem">MODELO</span> fórmula do núcleo de custo
         </div>
+
+        ${(cu&&cu.desemb)?`<details class="rcl-des">
+          <summary>Visão de desembolso da COMIX — o agregado dentro da conta ·
+            <b>${brl(cu.desemb.custoViagem)}</b>/viagem · CPK <b>${brl(cu.desemb.cpk)}</b>
+            ${cu.desemb.cpk!=null&&cu.desemb.cpk>0&&cu&&cu.cpk>0?`<span class="muted">(${cu.desemb.cpk>=cu.cpk?'+':''}${pct(cu.desemb.cpk/cu.cpk-1,1)} vs. o CPK acima)</span>`:''}
+          </summary>
+          <div class="muted" style="font-size:10.5px;line-height:1.7;margin:8px 0">
+            A tabela acima responde <b>quanto custa um caminhão nosso fazer esta rota</b> — taxas de frota própria
+            aplicadas a todo o quilômetro, inclusive ao que o agregado rodou. É o número que sustenta preço:
+            o cliente não paga menos porque o frete saiu com agregado.<br>
+            Aqui a pergunta é outra — <b>quanto sai do caixa por causa desta rota</b>. As mesmas taxas passam a ser
+            divididas pelo rodado inteiro e entra a <b>comissão paga ao agregado</b>, que é o preço da tração
+            terceirizada. As duas coisas andam juntas: diluir o denominador sem somar a comissão faria a rota
+            parecer mais barata sem nada ter ficado mais barato.
+          </div>
+          <table class="tb">
+            <thead><tr><th>Linha</th><th class="num">Oficial</th><th class="num">Desembolso</th><th class="num">Δ</th></tr></thead>
+            <tbody>
+              ${cu.desemb.trocadas.map(t=>`<tr>
+                <td class="muted">${esc(RCL_LINHA_ROTULO[t.linha]||t.linha)}</td>
+                <td class="num muted">${brl(Math.abs(t.antes))}</td>
+                <td class="num">${brl(Math.abs(t.depois))}</td>
+                <td class="num ${Math.abs(t.depois)>Math.abs(t.antes)?'neg':'pos'}">${brl(Math.abs(t.depois)-Math.abs(t.antes))}</td></tr>`).join('')}
+              ${cu.desemb.tracaoViagem!=null?`<tr>
+                <td${mem('Tração agregada',{selo:'DESEMBOLSO',
+                  fonte:'Comissão paga ao agregado no SZB (campo Comissao Mot) — o mesmo campo que abre o fechamento do agregados.html. É o preço da tração terceirizada.',
+                  formula:`Σ comissão de agregado da janela ÷ viagens totais da janela\\n${brl(cu.desemb.det.comissao)} ÷ ${num(cu.desemb.det.viagensTot,0)} = ${brl(cu.desemb.tracaoViagem)}`,
+                  insumos:[
+                    ['Comissão paga na janela', brl(cu.desemb.det.comissao),
+                     'Soma da comissão dos CT-e rodados por placa cadastrada como não própria, nos '+cu.desemb.det.janela+' mês(es) da janela desta linha.'],
+                    ['Viagens no denominador', num(cu.desemb.det.viagensTot,0),
+                     'Todas as viagens da janela — próprias e de agregado. A comissão é diluída por todo o movimento, como qualquer outra linha desta visão.'],
+                    ['= R$ por viagem', brl(cu.desemb.tracaoViagem),
+                     'O que cada viagem carrega de tração terceirizada. Cresce com a participação do agregado no movimento.']
+                  ],
+                  linhas:[
+                    ['Viagens de agregado', num(cu.desemb.det.viagensAgreg,0)+' de '+num(cu.desemb.det.viagensTot,0)+' ('+pct(cu.desemb.det.fracVgAgreg,0)+')'],
+                    ['Km de agregado', num(cu.desemb.det.kmAgreg,0)+' de '+num(cu.desemb.det.kmTot,0)+' km'],
+                    ['C.O de agregado na janela', brl(cu.desemb.det.coAgregado)+' + diesel .02 '+brl(cu.desemb.det.dieselAgregado),
+                     cu.desemb.det.incluiCO?'Somados a esta linha porque a premissa está ligada.':'FORA desta linha por padrão: no acerto do agregado esses adiantamentos voltam como desconto, então já estão dentro da comissão.']
+                  ],
+                  obs:'Por que a comissão sozinha basta: no fechamento, saldo = comissão − abastecimentos − débitos + créditos. Tudo que a COMIX adianta é recuperado no acerto, então o desembolso bruto com aquela placa é a comissão.'})}><b>Tração agregada</b>
+                  <i style="font-style:normal;opacity:.7;display:block;font-size:10px">comissão paga ao agregado ÷ viagens totais</i></td>
+                <td class="num muted">—</td>
+                <td class="num"><b>${brl(cu.desemb.tracaoViagem)}</b></td>
+                <td class="num neg">${brl(cu.desemb.tracaoViagem)}</td></tr>`:''}
+              <tr style="background:var(--sf)">
+                <td><b>Total por viagem</b></td>
+                <td class="num"><b>${brl(cu.custoViagem)}</b></td>
+                <td class="num"><b>${brl(cu.desemb.custoViagem)}</b></td>
+                <td class="num ${cu.desemb.custoViagem>cu.custoViagem?'neg':'pos'}"><b>${brl(cu.desemb.custoViagem-cu.custoViagem)}</b></td></tr>
+              <tr>
+                <td class="muted">CPK</td>
+                <td class="num muted">${brl(cu.cpk)}</td>
+                <td class="num">${brl(cu.desemb.cpk)}</td>
+                <td class="num ${(cu.desemb.cpk||0)>(cu.cpk||0)?'neg':'pos'}">${brl((cu.desemb.cpk||0)-(cu.cpk||0))}</td></tr>
+              <tr>
+                <td class="muted">Custo por tonelada</td>
+                <td class="num muted">${brl(cu.custoTon)}</td>
+                <td class="num">${brl(cu.desemb.custoTon)}</td>
+                <td class="num ${(cu.desemb.custoTon||0)>(cu.custoTon||0)?'neg':'pos'}">${brl((cu.desemb.custoTon||0)-(cu.custoTon||0))}</td></tr>
+            </tbody>
+          </table>
+          <div class="muted" style="font-size:10.5px;margin-top:6px;line-height:1.7">
+            Só aparecem acima as linhas que <b>mudam</b>: as que consumiram taxa da unidade, porque só elas sentem a
+            troca do denominador. Diesel ao preço do posto, pedágio medido praça a praça, compressor, alimentação,
+            tempo parado e depreciação por ativo de referência são <b>idênticos</b> nas duas visões — e é por isso que
+            a diferença do total é legível: ela é só o efeito do agregado.
+            ${cu.desemb.det.semComissao?`<br><span style="color:var(--rd)"><b>Atenção:</b> há viagem de agregado na janela e o SZB não trouxe comissão para elas.
+            A linha de tração ficou vazia e este total está subestimado — confira o mapeamento da coluna
+            <b>Comissao Mot</b> em ⚙ Bases.</span>`:''}
+          </div>
+        </details>`:''}
 
         ${r.completude.falta.length?`<div class="alerta am" style="margin-top:10px"><div><b>O que ainda não é dado medido:</b> ${esc(r.completude.falta.join(' · '))}.</div></div>`:''}
         ${dm&&dm.alerta?`<div class="alerta rd" style="margin-top:10px"><div><b>Divergência de distância.</b>
@@ -16308,7 +16620,57 @@ function rclRenderDiag(){
       · <b>${num(d.conc.kmProp,0)}</b> km próprios de <b>${num(d.conc.kmProp+d.conc.kmAgr,0)}</b> km medidos.
       Custo total atribuído: <b>${brl(d.conc.cProp)}</b> nas rotas próprias e <b>${brl(d.conc.cAgr)}</b> nas de agregado.
       ${d.conc.vSemCad?'<br><b>Cadastrar as placas que faltam derruba as taxas para o valor certo:</b> hoje elas engordam a taxa porque saem do divisor sem sair do numerador.':''}
-    </div>`:''}
+    </div>
+
+    ${(txT&&txT.tot&&txT.tot.det)?`
+    <h3 style="font-size:12px;margin-top:16px">A segunda visão — quanto a COMIX desembolsa</h3>
+    <div class="muted" style="margin-bottom:9px;line-height:1.7">
+      O bloco acima fecha com o Mapinha porque só olha frota própria dos dois lados. Esta visão responde a outra
+      pergunta: <b>quanto sai do caixa</b>. Ela divide as mesmas taxas pelo <b>rodado inteiro</b> e soma a
+      <b>comissão paga ao agregado</b> — o campo <i>Comissao Mot</i> do SZB, que é o mesmo que abre o fechamento do
+      módulo Agregados. Uma coisa não vai sem a outra: diluir o denominador sem somar a comissão derruba a taxa na
+      proporção do agregado e faz a rota parecer mais barata sem nada ter ficado mais barato.
+    </div>
+    <table class="tb">
+      <thead><tr><th>Linha</th><th class="num">Taxa oficial</th><th class="num">Taxa de desembolso</th><th class="num">Δ</th><th>Denominador</th></tr></thead>
+      <tbody>
+        ${[['pneusKm','Pneus','km'],['lubKm','Lubrificante','km'],['pecasVg','Peças e serviços','vg'],
+           ['docVg','Documentação e seguros','vg'],['pessoalVg','Pessoal (sem comissão)','vg'],
+           ['admVg','Administrativo e demais C.O','vg'],['depCavVg','Depreciação do cavalo','vg'],
+           ['depCarVg','Depreciação da carreta','vg']]
+          .map(([k,rot,ch])=>{ const a=txT[k], b=txT.tot[k];
+            if(a==null && b==null) return '';
+            const suf = ch==='km'?'/km':'/vg';
+            return `<tr><td class="muted">${rot}</td>
+              <td class="num">${a==null?'—':brl(a)+suf}</td>
+              <td class="num">${b==null?'—':brl(b)+suf}</td>
+              <td class="num ${(b!=null&&a!=null)?(b>a?'neg':'pos'):''}">${(b!=null&&a!=null)?brl(b-a)+suf:'—'}</td>
+              <td class="muted" style="font-size:10.5px">${ch==='km'
+                ? num(txT.tot.det.kmProp,0)+' km próprios → '+num(txT.tot.det.kmTot,0)+' km totais'
+                : num(txT.tot.det.viagensProp,0)+' vg próprias → '+num(txT.tot.det.viagensTot,0)+' vg totais'}</td></tr>`;
+          }).join('')}
+        <tr style="background:var(--sf)">
+          <td><b>Tração agregada</b> <span class="muted" style="font-size:10.5px">— só existe nesta visão</span></td>
+          <td class="num muted">—</td>
+          <td class="num"><b>${txT.tot.tracaoVg==null?'—':brl(txT.tot.tracaoVg)+'/vg'}</b></td>
+          <td class="num neg">${txT.tot.tracaoVg==null?'—':brl(txT.tot.tracaoVg)+'/vg'}</td>
+          <td class="muted" style="font-size:10.5px">${brl(txT.tot.det.comissao)} de comissão ÷ ${num(txT.tot.det.viagensTot,0)} vg</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="muted" style="font-size:10.5px;margin-top:6px;line-height:1.7">
+      Janela desta linha: <b>${txT.tot.det.janela} mês(es)</b> (${esc((txT.tot.det.meses||[]).join(', '))}).
+      Participação do agregado no período: <b>${pct(txT.tot.det.fracVgAgreg,0)}</b> das viagens e
+      <b>${pct(txT.tot.det.fracKmAgreg,0)}</b> do quilômetro.<br>
+      <b>C.O de agregado no período:</b> ${brl(txT.tot.det.coAgregado)} (10.01/11.01/12.01) e
+      ${brl(txT.tot.det.dieselAgregado)} de diesel .02 —
+      ${txT.tot.det.incluiCO
+        ? '<b>somados</b> à tração agregada porque a premissa está ligada. Confira o risco de dupla contagem: no acerto do agregado esses adiantamentos voltam como desconto.'
+        : '<b>fora</b> por padrão. No fechamento do agregado, saldo = comissão − abastecimentos − débitos + créditos: o que a COMIX adianta volta como desconto, então o desembolso bruto com a placa já é a comissão. Somar os dois contaria a mesma conta duas vezes. Ligar em <b>Premissas do resultado → Visão de desembolso</b>.'}
+      ${txT.tot.det.semComissao?`<br><span style="color:var(--rd)"><b>Há viagem de agregado sem comissão no SZB.</b>
+      A linha de tração ficou vazia e a visão de desembolso está subestimada — confira o mapeamento da coluna
+      <b>Comissao Mot</b> em ⚙ Bases.</span>`:''}
+    </div>`:''}`:''}
 
     ${(txT&&txT.det&&txT.mediaMovel)?`
     <h3 style="font-size:12px;margin-top:16px">Janela de cada linha — por que não é o mesmo número de meses</h3>
@@ -16585,6 +16947,24 @@ function rclPremModal(){
       ${s('fonteAliq','Alíquota dos impostos', P.fonteAliq, [['mapinha','Efetiva do Mapinha, por filial'],['padrao','Padrão do módulo ('+pct(RCL_ALIQ_PADRAO,0)+')']], 'a digitada na rota vence as duas')}
     </div>
 
+    <h3 style="font-size:12px;margin-top:12px">Visão de desembolso (o agregado dentro da conta)</h3>
+    <div class="muted" style="font-size:10.5px;margin-bottom:6px">
+      Segunda leitura do MESMO custo, calculada em paralelo e sem alterar nada da visão oficial: as taxas passam a ser
+      divididas pelo <b>rodado inteiro</b> e entra a <b>comissão paga ao agregado</b> (campo <i>Comissao Mot</i> do SZB,
+      o mesmo que abre o fechamento do módulo Agregados). Ela aparece recolhida no painel da rota, no card de
+      conciliação e no Excel — a tabela principal não muda.<br><br>
+      <b>Por que a comissão sozinha já é o custo do agregado:</b> no fechamento,
+      saldo = comissão − abastecimentos − débitos + créditos. Tudo que a COMIX adianta (diesel, peça, pneu) volta como
+      desconto no acerto, então o desembolso bruto com aquela placa <b>é</b> a comissão. Somar de novo o C.O de agregado
+      (10.01/11.01/12.01) e o diesel .02 conta a mesma despesa duas vezes — por isso a chave nasce desligada, com o
+      valor visível na tela para conferir antes de ligar.
+    </div>
+    <div class="rt-fields grid3">
+      ${c('visaoDesembolso','Calcular a visão de desembolso', P.visaoDesembolso!==false, 'desligar remove o bloco da tela e do Excel')}
+      ${c('agregIncluirCO','Somar C.O e diesel de agregado', P.agregIncluirCO, 'risco de dupla contagem — veja a nota acima')}
+      ${n('ovTracaoViagem','Tração agregada (R$/viagem)', P.ovTracaoViagem, '0.01', 'vazio = comissão do SZB ÷ viagens')}
+    </div>
+
     <h3 style="font-size:12px;margin-top:12px">Percurso e pedágio (HERE)</h3>
     <div class="muted" style="font-size:10.5px;margin-bottom:6px">
       O pedágio desta sub-aba é sempre o <b>real do percurso calculado pela HERE</b>: praça a praça, tarifa por eixo,
@@ -16680,6 +17060,8 @@ function rclPremModal(){
       hereAuto:gB('hereAuto'),
       fonteAlimentacao:gS('fonteAlimentacao'), fonteTempo:gS('fonteTempo'),
       fonteAdm:gS('fonteAdm'), denominadorProprio:gB('denominadorProprio'),
+      visaoDesembolso:gB('visaoDesembolso'), agregIncluirCO:gB('agregIncluirCO'),
+      ovTracaoViagem:gN('ovTracaoViagem'),
       fonteAliq:gS('fonteAliq'),
       nivelamento:gS('nivelamento'),
       ovDieselRS:gN('ovDieselRS'), ovArlaRS:gN('ovArlaRS'), ovPedagioKm:gN('ovPedagioKm'),
@@ -16750,6 +17132,9 @@ async function rclExportar(){
       'Margem %':r.margemPct==null?'':+(r.margemPct*100).toFixed(2),
       'R$/t':r.tarifaTon==null?'':+r.tarifaTon.toFixed(2), 'Custo/t':r.custoTon==null?'':+r.custoTon.toFixed(2),
       CPK:r.cpk==null?'':+r.cpk.toFixed(3), VPK:r.vpk==null?'':+r.vpk.toFixed(3),
+      'CPK desembolso':r.cpkDes==null?'':+r.cpkDes.toFixed(3),
+      'Custo/viagem desembolso':r.custoViagemDes==null?'':+r.custoViagemDes.toFixed(2),
+      'Tração agregada/viagem':r.tracaoViagem==null?'':+r.tracaoViagem.toFixed(2),
       'VPK líquido':r.vpkLiq==null?'':+r.vpkLiq.toFixed(3),
       'Imposto por km':(r.vpk==null||r.vpkLiq==null)?'':+(r.vpk-r.vpkLiq).toFixed(3),
       'Resultado por km':(r.vpkLiq==null||r.cpk==null)?'':+(r.vpkLiq-r.cpk).toFixed(3),
@@ -16787,6 +17172,63 @@ async function rclExportar(){
       });
     }));
     add('Custo linha a linha', li);
+
+    /* Visão de desembolso: uma linha por rota, com o que muda e por quê.
+       Fica em aba própria para não misturar duas perguntas na mesma tabela. */
+    if(RCL.diag && RCL.diag.taxas){
+      const des=[];
+      lista.forEach(c=>c.rotas.forEach(r=>{
+        const cu=r.bucket.custo; if(!cu||!cu.desemb) return;
+        const D=cu.desemb;
+        des.push({Cliente:c.nome, Rota:`${r.op} ${r.codigo}`, Trecho:`${r.origem} → ${r.destino}`,
+          Viagens:r.viagens, 'Km/viagem':+cu.kmViagem.toFixed(1),
+          'Custo/viagem oficial':+cu.custoViagem.toFixed(2),
+          'Custo/viagem desembolso':+D.custoViagem.toFixed(2),
+          'Diferença R$':+(D.custoViagem-cu.custoViagem).toFixed(2),
+          'CPK oficial':cu.cpk==null?'':+cu.cpk.toFixed(3),
+          'CPK desembolso':D.cpk==null?'':+D.cpk.toFixed(3),
+          'Custo/t oficial':cu.custoTon==null?'':+cu.custoTon.toFixed(2),
+          'Custo/t desembolso':D.custoTon==null?'':+D.custoTon.toFixed(2),
+          'Tração agregada/viagem':D.tracaoViagem==null?'':+D.tracaoViagem.toFixed(2),
+          'Linhas recalculadas':D.trocadas.map(t=>RCL_LINHA_ROTULO[t.linha]||t.linha).join('; '),
+          'Custo total oficial':+(cu.custoViagem*r.viagens).toFixed(2),
+          'Custo total desembolso':+(D.custoViagem*r.viagens).toFixed(2)});
+      }));
+      if(des.length) add('Visão desembolso', des);
+
+      const TX=RCL.diag.taxas._geral||RCL.diag.taxas[Object.keys(RCL.diag.taxas)[0]];
+      if(TX && TX.tot && TX.tot.det){
+        const D=TX.tot.det;
+        const par=(k,rot,ch)=>({Linha:rot,
+          'Taxa oficial':TX[k]==null?'':+TX[k].toFixed(4),
+          'Taxa desembolso':TX.tot[k]==null?'':+TX.tot[k].toFixed(4),
+          Unidade:ch==='km'?'R$/km':'R$/viagem',
+          'Denominador oficial':ch==='km'?+D.kmProp.toFixed(0):+D.viagensProp.toFixed(0),
+          'Denominador desembolso':ch==='km'?+D.kmTot.toFixed(0):+D.viagensTot.toFixed(0)});
+        add('Taxas — duas visões', [
+          par('pneusKm','Pneus','km'), par('lubKm','Lubrificante','km'),
+          par('pecasVg','Peças e serviços','vg'), par('docVg','Documentação e seguros','vg'),
+          par('pessoalVg','Pessoal (sem comissão)','vg'), par('admVg','Administrativo e demais C.O','vg'),
+          par('depCavVg','Depreciação do cavalo','vg'), par('depCarVg','Depreciação da carreta','vg'),
+          {Linha:'Tração agregada (só na visão de desembolso)', 'Taxa oficial':'',
+           'Taxa desembolso':TX.tot.tracaoVg==null?'':+TX.tot.tracaoVg.toFixed(2),
+           Unidade:'R$/viagem', 'Denominador oficial':'', 'Denominador desembolso':+D.viagensTot.toFixed(0)},
+          {Linha:'— comissão paga ao agregado na janela', 'Taxa oficial':'',
+           'Taxa desembolso':+D.comissao.toFixed(2), Unidade:'R$ no período',
+           'Denominador oficial':'', 'Denominador desembolso':''},
+          {Linha:'— C.O de agregado 10.01/11.01/12.01 ('+(D.incluiCO?'SOMADO':'fora')+')', 'Taxa oficial':'',
+           'Taxa desembolso':+D.coAgregado.toFixed(2), Unidade:'R$ no período',
+           'Denominador oficial':'', 'Denominador desembolso':''},
+          {Linha:'— diesel .02 de agregado ('+(D.incluiCO?'SOMADO':'fora')+')', 'Taxa oficial':'',
+           'Taxa desembolso':+D.dieselAgregado.toFixed(2), Unidade:'R$ no período',
+           'Denominador oficial':'', 'Denominador desembolso':''},
+          {Linha:'ESCOPO', 'Taxa oficial':'', 'Taxa desembolso':'',
+           Unidade:'janela de '+D.janela+' mês(es): '+(D.meses||[]).join(' '),
+           'Denominador oficial':+D.viagensAgreg.toFixed(0)+' viagens de agregado',
+           'Denominador desembolso':+(D.fracKmAgreg!=null?D.fracKmAgreg*100:0).toFixed(1)+'% do km é agregado'}
+        ]);
+      }
+    }
 
     /* Conciliação em dois blocos: o que fecha com o Mapinha (rotas de placa
        própria) e o que é custo equivalente (rotas de agregado). */
