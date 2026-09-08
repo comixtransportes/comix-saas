@@ -875,6 +875,7 @@ html{ -webkit-text-size-adjust:100%; }
             <div class="ct-legend">
               <div class="ct-leg-item"><div class="ct-leg-dot" style="background:rgba(5,122,85,.75)"></div>≥ Fat/Dia PA</div>
               <div class="ct-leg-item"><div class="ct-leg-dot" style="background:rgba(200,30,30,.65)"></div>&lt; Fat/Dia PA</div>
+              <div class="ct-leg-item"><div class="ct-leg-dot" style="background:rgba(120,131,151,.65)"></div>Feriado</div>
             </div>
           </div>
           <div id="cfd-h"><canvas id="c-fd"></canvas></div>
@@ -2281,6 +2282,13 @@ function isFeriado(iso, uid){
   return false;
 }
 
+// Feriados marcados nos parâmetros não acrescentam dia ao divisor, mesmo com receita.
+// Mantém a regra de sábado útil e de domingo trabalhado; o realizado não é filtrado.
+// Os chamadores passam somente as datas da base fechada.
+function pdDiasTrabalhados(datas, uid){
+  return [...new Set(datas)].filter(d=>d && !isFeriado(d, uid)).length;
+}
+
 function diasOpMes(ano, mes, uid) {
   const ultimo = new Date(ano, mes, 0).getDate();
   let count = 0;
@@ -3330,11 +3338,9 @@ function recalc(){
   // Usados por calcProj em todas as tabelas (igual à célula "Dias trabalhados" da planilha)
   const dmGlobal=filterByOp(uid).filter(r=>r.mes===mes);
   const cutISO=pdCutoffISO();
-  // [REGRA SZB][DIA EM ABERTO] Dias trabalhados = dias distintos FECHADOS com registro
-  // (inclui domingo/feriado trabalhado; exclui o dia em aberto — último dia com dados —
-  // e nulos) — espelha a célula "Dias trabalhados" da planilha SZB. Contagem invariante
-  // a remanejamento de faturamento de fim de semana.
-  window._DIAS_TRAB_GLOBAL = [...new Set(dmGlobal.map(r=>r.data))].filter(d=>d && d<cutISO).length;
+  // Dias trabalhados = datas fechadas com registro, sem os feriados dos parâmetros.
+  // O faturamento/produção do feriado permanece na base realizada das projeções.
+  window._DIAS_TRAB_GLOBAL = pdDiasTrabalhados(dmGlobal.map(r=>r.data).filter(d=>d && d<cutISO), uid);
   window._MES_ATUAL_GLOBAL = mes;
   // [REGRA SZB] Fator global de projeção (fat/prod) — mantém Clientes/Rotas/Frota e o Top 10
   // consistentes com a "Projeção de Fechamento" da Visão Geral. Fórmula oficial da planilha:
@@ -3359,7 +3365,7 @@ function recalc(){
     const factors = {};
     unidsF.forEach(u=>{
       const dmU = dmGlobal.filter(r=>r.op===u);
-      const dtU = [...new Set(dmU.map(r=>r.data))].filter(d=>d && d<cutISO).length;
+      const dtU = pdDiasTrabalhados(dmU.map(r=>r.data).filter(d=>d && d<cutISO), u);
       const opU = diasOpMes(gA,gM,u);
       factors[u] = dtU>0 ? opU/dtU : 1;
     });
@@ -3448,13 +3454,8 @@ function buildVG(uid, mes){
   const prodFech=dmFech.reduce((a,r)=>a+r.peso_t,0);
   const viagFech=dmFech.length;
   const datasFech=[...new Set(dmFech.map(r=>r.data))];
-  // Dias trabalhados = dias distintos FECHADOS com registro — INCLUI domingo/feriado
-  // trabalhado (= célula "Dias trabalhados" da planilha SZB).
-  // Nota: esta contagem é invariante a remanejamento de faturamento no fim de semana:
-  // se o faturamento de sábado for emitido no domingo, a contagem de dias distintos e o
-  // total realizado não mudam — a projeção fica idêntica. Nenhum tratamento especial é
-  // necessário para esses casos.
-  const diasTrabFech=datasFech.length;
+  // Feriados não contam no divisor; seus lançamentos continuam no realizado fechado.
+  const diasTrabFech=pdDiasTrabalhados(datasFech, uid);
   const tmFech=prodFech>0?fatFech/prodFech:0;
   // ═══ [FIX CONSOLIDADO] Base por filial para projeção e Fat/Dia Útil ═══
   // Na visão "Todas", a regra SZB aplicada sobre o AGREGADO não é equivalente à
@@ -3468,7 +3469,7 @@ function buildVG(uid, mes){
     const dmUF=dmFech.filter(r=>r.op===u);
     const fatU=dmUF.reduce((a,r)=>a+r.fat,0);
     const prodU=dmUF.reduce((a,r)=>a+r.peso_t,0);
-    const dtU=[...new Set(dmUF.map(r=>r.data))].length;
+    const dtU=pdDiasTrabalhados(dmUF.map(r=>r.data), u);
     const opU=diasOpMes(ano,mesN,u);
     return {u,fatU,prodU,dtU,opU};
   }):null;
@@ -3476,7 +3477,7 @@ function buildVG(uid, mes){
   const _semOp=(uid==='all')?dmFech.filter(r=>!(r.op!=null && pdOpsForAll().includes(r.op))):[];
   const _semOpFat=_semOp.reduce((a,r)=>a+r.fat,0);
   const _semOpProd=_semOp.reduce((a,r)=>a+r.peso_t,0);
-  const _semOpDt=[...new Set(_semOp.map(r=>r.data))].length;
+  const _semOpDt=pdDiasTrabalhados(_semOp.map(r=>r.data), uid);
   // Fat/Dia Útil (realizado):
   //  - filial única: Realizado fechado ÷ dias trabalhados (regra SZB da planilha)
   //  - Todas: Σ dos ritmos diários por filial — o ritmo diário da EMPRESA é a soma
@@ -3507,8 +3508,8 @@ function buildVG(uid, mes){
     proj       += _semOpDt>0?Math.max(_semOpFat /_semOpDt*diasOp, _semOpFat ):_semOpFat;
     prodProjSZB+= _semOpDt>0?Math.max(_semOpProd/_semOpDt*diasOp, _semOpProd):_semOpProd;
   }else{
-    proj       =diasTrabFech>0?Math.max(fatFech /diasTrabFech*diasOp, fatFech ):0;
-    prodProjSZB=diasTrabFech>0?Math.max(prodFech/diasTrabFech*diasOp, prodFech):0;
+    proj       =diasTrabFech>0?Math.max(fatFech /diasTrabFech*diasOp, fatFech ):fatFech;
+    prodProjSZB=diasTrabFech>0?Math.max(prodFech/diasTrabFech*diasOp, prodFech):prodFech;
   }
   const pf    =paFat ?fatFech/paFat*100 :0;
   const pp    =paProd?prodFech/paProd*100:0;
@@ -3553,16 +3554,17 @@ function buildVG(uid, mes){
   const dADate = diaA ? new Date(parseInt(dAano),parseInt(dAm)-1,parseInt(dAd)) : null;
   const dADow  = dADate ? dADate.toLocaleDateString('pt-BR',{weekday:'short'}).toUpperCase().replace('.','') : '';
   const dALabel= diaA ? `${dAd}/${dAm}` : '—';
+  const diaAFeriado=!!diaA && isFeriado(diaA, uid);
   // Produção Diária (painel esquerdo) = dia mais recente
   document.getElementById('ph-dia').innerHTML=diaA
-    ? `${dALabel} <span style="font-size:8px;opacity:.7;font-weight:400">${dADow}</span>`
+    ? `${dALabel} <span style="font-size:8px;opacity:.7;font-weight:400">${diaAFeriado?'FERIADO':dADow}</span>`
     : '—';
   document.getElementById('dia-b').innerHTML=[
     ['Faturamento',  R(fatA)],
     ['Produção (t)', D1(prodA)+' t'],
     ['Viagens',      N(da.length)],
     ['Tarifa Média', D2(tmA)+' R$/t'],
-    ['Fat/Dia Útil', R(fatA>0&&diasOp>0?fatA:medD)],
+    ['Fat/Dia Útil', diaAFeriado?'—':R(fatA>0&&diasOp>0?fatA:medD)],
   ].map(([l,v])=>`<div class="dr"><span class="dl3">${l}</span><span class="dv2">${v}</span></div>`).join('');
 
   // Mês Recorde — buscar no histórico de todos os meses
@@ -3603,7 +3605,7 @@ function buildVG(uid, mes){
     </div>
   </div>`).join('');
 
-  // Charts — barras verdes se fat >= paFatDia, vermelhas se abaixo
+  // Charts — feriado em cinza; demais barras verdes se fat >= paFatDia, vermelhas se abaixo
   const byd=grp(dm,r=>r.data);
   const dias=Object.keys(byd).sort();
   const fds=dias.map(d=>byd[d].reduce((a,r)=>a+r.fat,0));
@@ -3613,12 +3615,12 @@ function buildVG(uid, mes){
     const[a,m,di]=d.split('-');
     const dt=new Date(parseInt(a),parseInt(m)-1,parseInt(di));
     const dow=dt.toLocaleDateString('pt-BR',{weekday:'short'}).replace('.','').toUpperCase();
-    return[`${di}/${m}`,dow];
+    return[`${di}/${m}`,isFeriado(d,uid)?'FERIADO':dow];
   });
 
   // Cores baseadas em paFatDia (se filial única e PA definida); senão usa média
   const threshold=uid!=='all'&&paFatDia>0 ? paFatDia : fds.reduce((a,b)=>a+b,0)/(fds.length||1);
-  const barColors=fds.map(v=>v>=threshold?'rgba(5,122,85,.75)':'rgba(200,30,30,.65)');
+  const barColors=fds.map((v,i)=>isFeriado(dias[i],uid)?'rgba(120,131,151,.65)':v>=threshold?'rgba(5,122,85,.75)':'rgba(200,30,30,.65)');
 
   document.getElementById('cfd-h').style.height='190px';
 
@@ -3879,7 +3881,7 @@ function buildVG(uid, mes){
   // diagnosticáveis na hora, sem abrir o console.
   const _br=s=>s?`${s.slice(8,10)}/${s.slice(5,7)}`:'—';
   const _cardDias=(_elDias.closest && _elDias.closest('.pc'))||_elDias;
-  _cardDias.title=`Base fechada: dias com registro ANTES de ${_br(cutISO)}.`
+  _cardDias.title=`Base fechada: dias com registro ANTES de ${_br(cutISO)}, excluindo feriados marcados nos parâmetros da contagem.`
     +` Dia em aberto: ${_br(cutISO)} (pode estar parcial).`
     +(_PD_MAXEMISSAO?` Última emissão da base (todas as filiais): ${_br(_PD_MAXEMISSAO)}.`:'')
     +` ${diasOp} dias operacionais no mês.`;
@@ -5370,14 +5372,14 @@ function buildDataSummary(uid, mes) {
   const diasRest=Math.max(diasOp-diasAp_uteis_AI,0);
   // [REGRA SZB] Projeção dos insights alinhada à Visão Geral (fórmula oficial da planilha):
   //   Projetado = Realizado_fechado ÷ dias_trabalhados × dias_úteis_mês; piso = fechado.
-  // Dias trabalhados = dias distintos fechados (inclui domingo/feriado trabalhado).
+  // Dias trabalhados = datas fechadas sem feriados; receita do feriado permanece na base.
   const _hjAI=pdCutoffISO();
   let aiFatFech=0; const aiDatasFech=new Set();
   dias.forEach((d,i)=>{
     if(d>=_hjAI) return;                    // ignora o dia em aberto e futuro na base
     aiFatFech+=fds[i]; aiDatasFech.add(d);
   });
-  const aiDiasTrab=aiDatasFech.size;
+  const aiDiasTrab=pdDiasTrabalhados([...aiDatasFech], uid);
   // [FIX CONSOLIDADO] Mesma regra da Visão Geral: em "Todas", projeta por filial
   // (dias trabalhados e dias úteis próprios) e soma; senão, fórmula SZB direta.
   let proj;
@@ -5388,13 +5390,13 @@ function buildDataSummary(uid, mes) {
     opsAI.forEach(u=>{
       const dmU=dmFechAI.filter(r=>r.op===u);
       const fatU=dmU.reduce((a,r)=>a+r.fat,0);
-      const dtU=[...new Set(dmU.map(r=>r.data))].length;
+      const dtU=pdDiasTrabalhados(dmU.map(r=>r.data), u);
       const opU=diasOpMes(ano,mesN,u);
       proj+=dtU>0?Math.max(fatU/dtU*opU, fatU):fatU;
     });
     const semOp=dmFechAI.filter(r=>!(r.op!=null && opsAI.includes(r.op)));
     const soF=semOp.reduce((a,r)=>a+r.fat,0);
-    const soDt=[...new Set(semOp.map(r=>r.data))].length;
+    const soDt=pdDiasTrabalhados(semOp.map(r=>r.data), uid);
     proj+=soDt>0?Math.max(soF/soDt*diasOp, soF):soF;
   }else{
     proj=aiDiasTrab>0?Math.max(aiFatFech/aiDiasTrab*diasOp, aiFatFech):aiFatFech;
