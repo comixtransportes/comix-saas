@@ -3538,18 +3538,41 @@ function recalc(){
 // ═══════════════════════════════════════════════════════
 // VISÃO GERAL
 // ═══════════════════════════════════════════════════════
+// [REGRA PD][DOMINGO] Na Visão Geral, qualquer CTE emitido no domingo
+// pertence operacionalmente ao sábado imediatamente anterior. A data original
+// da SZB permanece intacta nas demais abas; somente a visão gerencial abaixo
+// usa a data ajustada. Isso também cobre virada de mês/ano (ex.: 01/03 domingo
+// passa a compor 28/02 ou 29/02, conforme o calendário).
+function pdVGDataOperacional(iso){
+  if(!iso || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso||'';
+  const [a,m,d]=iso.split('-').map(Number);
+  const dt=new Date(a,m-1,d,12,0,0,0);
+  if(isNaN(dt.getTime()) || dt.getDay()!==0) return iso;
+  dt.setDate(dt.getDate()-1);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+}
+function pdVGRows(uid){
+  return filterByOp(uid).map(r=>{
+    const dataOp=pdVGDataOperacional(r.data);
+    if(!dataOp || dataOp===r.data) return r;
+    return {...r, data:dataOp, mes:dataOp.slice(0,7), _dataEmissaoOriginal:r.data};
+  });
+}
+
 function buildVG(uid, mes){
-  const dm   =filterByOp(uid).filter(r=>r.mes===mes);
+  // Base exclusiva da Visão Geral com domingos incorporados ao sábado anterior.
+  const vgAll=pdVGRows(uid);
+  const dm   =vgAll.filter(r=>r.mes===mes);
   const datas=[...new Set(dm.map(r=>r.data))].sort();
   // Dia anterior = último dia com dados em TODO o histórico (não só mês atual)
   // Dia anterior = último dia com dados ANTES de hoje
   const hoje = new Date();
   const hojeISO = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}-${String(hoje.getDate()).padStart(2,'0')}`;
   // Pegar todas as datas com dados em todo o histórico, filtrar as anteriores a hoje
-  const todasDatasHist = [...new Set(filterByOp(uid).map(r=>r.data))].filter(Boolean).sort();
+  const todasDatasHist = [...new Set(vgAll.map(r=>r.data))].filter(Boolean).sort();
   const datasAntesHoje = todasDatasHist.filter(d=>d<hojeISO);
   const diaA = datasAntesHoje[datasAntesHoje.length-1] || datas[datas.length-1] || '';
-  const da   = filterByOp(uid).filter(r=>r.data===diaA);
+  const da   = vgAll.filter(r=>r.data===diaA);
 
   const fat =dm.reduce((a,r)=>a+r.fat,0);
   const prod=dm.reduce((a,r)=>a+r.peso_t,0);
@@ -3710,10 +3733,10 @@ function buildVG(uid, mes){
   ].map(([l,v])=>`<div class="dr"><span class="dl3">${l}</span><span class="dv2">${v}</span></div>`).join('');
 
   // Mês Recorde — buscar no histórico de todos os meses
-  const allMeses=[...new Set(filterByOp(uid).map(r=>r.mes))].filter(Boolean).sort();
+  const allMeses=[...new Set(vgAll.map(r=>r.mes))].filter(Boolean).sort();
   let recMes='—', recFat=0, recProd=0, recTM=0, recFatDia=0;
   allMeses.forEach(m=>{
-    const arr=filterByOp(uid).filter(r=>r.mes===m);
+    const arr=vgAll.filter(r=>r.mes===m);
     const mFat=arr.reduce((a,r)=>a+r.fat,0);
     if(mFat>recFat){
       recFat=mFat;
@@ -3874,7 +3897,7 @@ function buildVG(uid, mes){
   }
 
   // Comparativo Histórico 12 meses: projetado mês atual vs realizado mesmo mês ano anterior
-  const allMesesHist=[...new Set(filterByOp(uid).map(r=>r.mes))].filter(Boolean).sort();
+  const allMesesHist=[...new Set(vgAll.map(r=>r.mes))].filter(Boolean).sort();
   const ult12Hist=allMesesHist.slice(-12);
   // Label principal do eixo X = mês atual (ex: 05/26)
   const comp12Labels=ult12Hist.map(m=>{ const[a,mo]=m.split('-'); return `${mo}/${a.slice(2)}`; });
@@ -3885,12 +3908,12 @@ function buildVG(uid, mes){
   });
   const comp12LabelsAtual=comp12Labels;
   const comp12Real=ult12Hist.map(m=>{
-    return filterByOp(uid).filter(r=>r.mes===m).reduce((a,r)=>a+r.fat,0);
+    return vgAll.filter(r=>r.mes===m).reduce((a,r)=>a+r.fat,0);
   });
   const comp12AnoAnt=ult12Hist.map(m=>{
     const[a,mo]=m.split('-');
     const mesAnt=`${parseInt(a)-1}-${mo}`;
-    return filterByOp(uid).filter(r=>r.mes===mesAnt).reduce((a,r)=>a+r.fat,0);
+    return vgAll.filter(r=>r.mes===mesAnt).reduce((a,r)=>a+r.fat,0);
   });
 
   if(CHS['c-comp12']) CHS['c-comp12'].destroy();
