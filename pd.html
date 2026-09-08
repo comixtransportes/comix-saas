@@ -701,6 +701,7 @@ html{ -webkit-text-size-adjust:100%; }
     <button class="tab"    onclick="showTab('hi')">Histórico</button>
     <div class="bar-r">
       <div class="h-ts" id="h-ts" title="Última atualização da tabela SZB">🕐 Última atualização SZB: <span class="h-ts-v" id="h-ts-v">—</span></div>
+      <span id="pd-cutoff-status" role="status" style="display:none;color:var(--am);font-size:10px;white-space:nowrap"></span>
       <button class="btn-sec" id="btn-pd-parametros" onclick="openParams()">⚙ Parâmetros</button>
       <select class="sel" id="sm" onchange="recalc()" style="display:none"><option value="">—</option></select>
       <div class="mes-field" id="pd-mes-field">
@@ -1948,7 +1949,7 @@ async function apiPost(path, data) {
 // ═══════════════════════════════════════════════════════
 let _pdFb = null;
 function pdGetFirebase() {
-  if (_pdFb !== null) return _pdFb;
+  if (_pdFb) return _pdFb; // a sessão do parent pode ficar disponível após o boot
   try {
     if (window.self !== window.top && window.parent.firebase) {
       _pdFb = window.parent.firebase;
@@ -2015,15 +2016,22 @@ async function loadSZBFromFirestore() {
       for (let i=start; i<end; i++) batch.push(colRef.doc(String(i)).get());
       const snaps = await Promise.all(batch);
       for (const s of snaps) {
-        if (s.exists) { const r = s.data().rows; if (Array.isArray(r)) rows.push(...r); }
+        const r=s.exists?s.data().rows:null;
+        if(!Array.isArray(r)) throw new Error('Parte da SZB indisponível');
+        rows.push(...r);
       }
       // Atualiza a barra de progresso de 20% → 60% conforme baixa os lotes
       ldSet(20 + Math.floor(40 * end / n), 'Baixando dados (' + end + '/' + n + ')…');
     }
     ldSet(65, 'Montando registros…');
     if (!rows.length) return null;
+    // Não combina chunks de versões diferentes durante uma atualização da SZB.
+    const afterSnap = await db.collection('bases_szb').doc('meta').get();
+    const after = afterSnap.exists ? afterSnap.data() : {};
+    if (!pdSZBVersion(meta.ts) || pdSZBVersion(after.ts) !== pdSZBVersion(meta.ts) || Number(after.numChunks) !== Number(n)) return null;
     return {
       rows,
+      __pdGlobalComplete: true,
       file: meta.file || 'SZB_CONTROLE_FRETE.xlsm',
       ts: meta.ts || new Date().toISOString(),
       count: rows.length,
@@ -2201,8 +2209,8 @@ async function loadDataFromCloud() {
       if (fs && Array.isArray(fs.rows) && fs.rows.length > 0) {
         ldSet(78, 'Enriquecendo registros…');
         // [VIRADA GLOBAL] base completa (todas as filiais) antes do recorte
-        pdResetMaxEmissao(); pdCaptureMaxEmissao(fs.rows);
-        RAW = atlasFilterRowsForScope(fs.rows, 'szb');
+        pdBeginSZBSnapshot(fs.rows, fs.ts, true);
+        RAW = atlasFilterRowsForScope(normalizeAtlasSZBRows(fs.rows), 'szb');
         const dzH = document.getElementById('dz-h');
         if (dzH) dzH.textContent = '✓ Nuvem (Firestore) — ' + RAW.length + ' registros';
         const dz = document.getElementById('dz');
@@ -2235,8 +2243,8 @@ async function loadDataFromCloud() {
     if (data && Array.isArray(data) && data.length > 0) {
       ldSet(85, 'Montando dashboard…');
       // [VIRADA GLOBAL] base completa (todas as filiais) antes do recorte
-      pdResetMaxEmissao(); pdCaptureMaxEmissao(data);
-      RAW = atlasFilterRowsForScope(data, 'szb');
+      pdBeginSZBSnapshot(data, '', true);
+      RAW = atlasFilterRowsForScope(normalizeAtlasSZBRows(data), 'szb');
       const dzH = document.getElementById('dz-h');
       if (dzH) dzH.textContent = '✓ Nuvem (legacy) — ' + RAW.length + ' registros';
       const dz = document.getElementById('dz');
@@ -2688,6 +2696,112 @@ function pdHojeISO(){const h=new Date();return `${h.getFullYear()}-${String(h.ge
 // Agora o corte lê _PD_MAXEMISSAO: a última data de emissão da base COMPLETA,
 // capturada ANTES do recorte de perfil. Todos os perfis viram o dia juntos.
 var _PD_MAXEMISSAO = '';
+var _PD_GLOBAL_SNAPSHOT = null;
+var _PD_GLOBAL_VERSIONS = new Map();
+// O timestamp identifica a versão; nunca é usado como data de fechamento.
+function pdSZBVersion(value){
+  if(value && typeof value.toDate==='function') value=value.toDate();
+  else if(value && typeof value==='object' && Number.isFinite(value.seconds)) value=new Date(value.seconds*1000+(value.nanoseconds||0)/1e6);
+  if(value instanceof Date) return isNaN(value.getTime())?'':value.toISOString();
+  if(value===null || value===undefined || value==='') return '';
+  const parsed=new Date(value);
+  return isNaN(parsed.getTime())?String(value):parsed.toISOString();
+}
+function pdEmissionISO(value){
+  const iso=atlasExcelDateToISO(value);
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return '';
+  const d=new Date(iso+'T12:00:00Z');
+  return !isNaN(d.getTime()) && d.toISOString().slice(0,10)===iso?iso:'';
+}
+function pdMaxEmissaoRows(rows){
+  let max=''; const hoje=pdHojeISO();
+  (rows||[]).forEach(row=>{
+    const kEmi=pdColKey(row,'Dt. Emissao'), kCan=pdColKey(row,'Dt Cancel');
+    if(!kEmi || (kCan && row[kCan] && String(row[kCan]).trim())) return;
+    const iso=pdEmissionISO(row[kEmi]);
+    if(iso && iso<=hoje && iso>max) max=iso;
+  });
+  return max;
+}
+function pdUpdateCutoffStatus(){
+  const el=document.getElementById('pd-cutoff-status'); if(!el) return;
+  const state=_PD_GLOBAL_SNAPSHOT;
+  const pending=state && state.status==='pending';
+  const unconfirmed=state && state.status==='unconfirmed';
+  el.style.display=pending||unconfirmed?'':'none';
+  el.textContent=pending?'Fechamento em validação':unconfirmed?'Fechamento global não confirmado':'';
+  el.title=pending||unconfirmed?'As projeções usam provisoriamente a última emissão disponível neste perfil. A data global da mesma versão da SZB ainda não foi confirmada.':'';
+}
+async function pdReadGlobalMaxEmissao(version){
+  const fb=pdGetFirebase();
+  if(!fb) throw new Error('Sessão da fonte SZB indisponível');
+  const ref=fb.firestore().collection('bases_szb').doc('meta');
+  const beforeSnap=await ref.get();
+  const before=beforeSnap.exists?beforeSnap.data():{};
+  const n=Number(before.numChunks);
+  if(pdSZBVersion(before.ts)!==version || !Number.isInteger(n) || n<1) throw new Error('Versão da SZB não corresponde à tela');
+  let max='';
+  // Apenas a data escalar é retida. Linhas de outras filiais não entram no PD.
+  for(let start=0; start<n; start+=5){
+    const requests=[];
+    for(let i=start;i<Math.min(start+5,n);i++) requests.push(ref.collection('chunks').doc(String(i)).get());
+    const snaps=await Promise.all(requests);
+    for(const snap of snaps){
+      const rows=snap.exists?snap.data().rows:null;
+      if(!Array.isArray(rows)) throw new Error('Parte da SZB indisponível');
+      const found=pdMaxEmissaoRows(rows); if(found>max) max=found;
+    }
+  }
+  const afterSnap=await ref.get();
+  const after=afterSnap.exists?afterSnap.data():{};
+  if(pdSZBVersion(after.ts)!==version || Number(after.numChunks)!==n) throw new Error('SZB atualizada durante a validação');
+  return max;
+}
+function pdBeginSZBSnapshot(rows, timestamp, complete, autoRetryUsed, completeMax){
+  const version=pdSZBVersion(timestamp);
+  const previous=_PD_GLOBAL_SNAPSHOT;
+  // Um novo recorte da mesma versão não pode apagar o máximo global já validado.
+  if(!complete && version && previous && previous.version===version && (previous.status!=='unconfirmed' || Date.now()-previous.attemptAt<5000)){
+    if(previous.status!=='confirmed') pdCaptureMaxEmissao(rows);
+    pdUpdateCutoffStatus();
+    return;
+  }
+  pdResetMaxEmissao(); pdCaptureMaxEmissao(rows);
+  if(complete && completeMax!==undefined) _PD_MAXEMISSAO=completeMax;
+  const state={version,status:complete?'confirmed':version?'pending':'unconfirmed',attemptAt:Date.now(),autoRetryUsed:!!autoRetryUsed};
+  _PD_GLOBAL_SNAPSHOT=state;
+  if(complete){
+    if(version) _PD_GLOBAL_VERSIONS.set(version,Promise.resolve({status:'confirmed',max:_PD_MAXEMISSAO}));
+    pdUpdateCutoffStatus(); return;
+  }
+  if(!version){ pdUpdateCutoffStatus(); return; }
+  let request=_PD_GLOBAL_VERSIONS.get(version);
+  if(!request){
+    request=pdReadGlobalMaxEmissao(version).then(max=>({status:'confirmed',max}),()=>({status:'unconfirmed'}));
+    _PD_GLOBAL_VERSIONS.set(version,request);
+  }
+  pdUpdateCutoffStatus();
+  request.then(result=>{
+    // Falha de sessão/rede não é uma confirmação cacheável: uma nova entrega
+    // da mesma versão pode tentar novamente após cinco segundos.
+    if(result.status==='unconfirmed' && _PD_GLOBAL_VERSIONS.get(version)===request) _PD_GLOBAL_VERSIONS.delete(version);
+    if(_PD_GLOBAL_SNAPSHOT!==state) return; // resposta de outra versão/carga
+    state.status=result.status;
+    if(result.status==='confirmed'){
+      _PD_MAXEMISSAO=result.max;
+      window._PD_CUTOFF=null;
+    }else if(!state.autoRetryUsed){
+      state.autoRetryUsed=true;
+      setTimeout(()=>{
+        if(_PD_GLOBAL_SNAPSHOT!==state || state.status!=='unconfirmed') return;
+        state.attemptAt=0;
+        pdBeginSZBSnapshot(rows,timestamp,false,true);
+      },5000); // uma recuperação automática para sessão/rede ainda em preparação
+    }
+    pdUpdateCutoffStatus();
+    if(DATA.length) recalc();
+  });
+}
 // Resolve o nome real da coluna (a carga do parent normaliza espaços nas chaves,
 // a do Firestore não — 'Dt.  Emissao' e 'Dt. Emissao' têm que casar igual).
 function pdColKey(row, alvo){
@@ -2705,20 +2819,8 @@ function pdResetMaxEmissao(){ _PD_MAXEMISSAO=''; window._PD_CUTOFF=null; }
 // vira o dia. Mantém o máximo já visto: chamadas com base já recortada (ex.:
 // fullRebuild após uma carga da nuvem) não conseguem baixar o corte.
 function pdCaptureMaxEmissao(rows){
-  if(!Array.isArray(rows) || !rows.length) return _PD_MAXEMISSAO;
-  // Data futura (erro de digitação) NÃO vira o dia: com a virada global, uma
-  // única linha datada de 25/08 fecharia o dia anterior para as três filiais.
-  var hj=pdHojeISO(), ISO=/^\d{4}-\d{2}-\d{2}$/;
-  var kEmi=null, kCan=null, achouKey=false, mx=_PD_MAXEMISSAO||'';
-  for(var i=0;i<rows.length;i++){
-    var r=rows[i]; if(!r) continue;
-    if(!achouKey){ kEmi=pdColKey(r,'Dt. Emissao'); kCan=pdColKey(r,'Dt Cancel'); if(kEmi) achouKey=true; else continue; }
-    if(kCan && r[kCan]) continue;
-    var d=r[kEmi]; if(!d) continue;
-    d=String(d).slice(0,10);
-    if(ISO.test(d) && d<=hj && d>mx) mx=d;
-  }
-  if(mx!==_PD_MAXEMISSAO){ _PD_MAXEMISSAO=mx; window._PD_CUTOFF=null; }
+  const max=pdMaxEmissaoRows(rows);
+  if(max>_PD_MAXEMISSAO){ _PD_MAXEMISSAO=max; window._PD_CUTOFF=null; }
   return _PD_MAXEMISSAO;
 }
 function pdCutoffISO(){
@@ -3172,6 +3274,8 @@ async function loadF(file){
       const text=await file.text();
       RAW=parseXML(text);
     }
+    RAW=normalizeAtlasSZBRows(RAW);
+    pdBeginSZBSnapshot(RAW, '', true);
     ldSet(45,'Enriquecendo registros…');
     await new Promise(r=>setTimeout(r,30));
     const dzH=document.getElementById('dz-h');
@@ -3883,7 +3987,7 @@ function buildVG(uid, mes){
   const _cardDias=(_elDias.closest && _elDias.closest('.pc'))||_elDias;
   _cardDias.title=`Base fechada: dias com registro ANTES de ${_br(cutISO)}, excluindo feriados marcados nos parâmetros da contagem.`
     +` Dia em aberto: ${_br(cutISO)} (pode estar parcial).`
-    +(_PD_MAXEMISSAO?` Última emissão da base (todas as filiais): ${_br(_PD_MAXEMISSAO)}.`:'')
+    +(_PD_MAXEMISSAO?` Última emissão ${_PD_GLOBAL_SNAPSHOT && _PD_GLOBAL_SNAPSHOT.status==='confirmed'?'global confirmada':'disponível (global não confirmado)'}: ${_br(_PD_MAXEMISSAO)}.`:'')
     +` ${diasOp} dias operacionais no mês.`;
   document.getElementById('pv-proj').style.color=proj>=paFat?'var(--gn)':'var(--am)';
   document.getElementById('pv-proj').textContent=R(proj);
@@ -4480,6 +4584,7 @@ function buildFr(uid,mes){
   const atPct  = PARAMS.frAtencao || 15;
   const base   = PARAMS.frBase    || 'ritmo';
   const limAt  = meta*(1+atPct/100); // limiar atenção
+  const mesEmCurso = mes >= pdHojeISO().slice(0,7);
 
   const rows=Object.entries(g).map(([k,arr])=>{
     const[pl,tp]=k.split('§'); const s=agg(arr);
@@ -4488,16 +4593,20 @@ function buildFr(uid,mes){
     const mt=arrOrd[0]?arrOrd[0].mot:'';
     const sF=aggFechado(arr);
     const {fatProj,prodProj}=calcProj(mes,s.f,s.p,sF.f,sF.p,uid,arr);
+    // Sem viagem fechada, zero é ausência de base para projetar, não previsão
+    // de receita zero. Mantém o realizado e a regra de fechamento das demais abas.
+    const projPendente = mesEmCurso && sF.v===0;
     // Valor comparado depende do modo: ritmo=projetado, pontual=realizado
     const valComp = base==='ritmo' ? fatProj : s.f;
     const atingPct= meta>0 ? Math.min(valComp/meta*100,100) : 0;
     const gap     = valComp - meta;
     // Status: OK = acima da meta, Atenção = entre meta e limAt abaixo, Crítico = abaixo
     let status;
-    if(valComp>=meta)              status='ok';
+    if(base==='ritmo' && projPendente) status='pend';
+    else if(valComp>=meta)         status='ok';
     else if(valComp>=meta-meta*atPct/100) status='at';
     else                           status='cr';
-    return{pl,mt,tp,...s,fatProj,prodProj,atingPct,gap,status};
+    return{pl,mt,tp,...s,fatProj,prodProj,projPendente,atingPct,gap,status};
   }).sort((a,b)=>b.f-a.f);
 
   document.getElementById('cnt-fr').textContent=' — '+rows.length+' veículos';
@@ -4508,17 +4617,20 @@ function buildFr(uid,mes){
   mkC('c-fa','bar',ag.map(r=>r.pl),[{data:ag.map(r=>r.f),backgroundColor:'rgba(5,122,85,.65)',borderRadius:2}],{ytk});
 
   const barColor=s=>s==='ok'?'#057a55':s==='at'?'#d97706':'#e02424';
+  const pendTitle='As viagens desta placa ainda estão no dia em aberto. A projeção será calculada quando houver viagem na base fechada.';
   const gapHtml=(r)=>{
+    if(r.status==='pend') return `<span title="${pendTitle}">—</span>`;
     const cls=r.status==='ok'?'fr-gap-ok':r.status==='at'?'fr-gap-at':'fr-gap-cr';
     const sign=r.gap>=0?'+':'';
     return `<span class="${cls}">${sign}R$\u00a0${Math.round(r.gap).toLocaleString('pt-BR')}</span>`;
   };
   const statusHtml=(r)=>{
+    if(r.status==='pend') return `<span title="${pendTitle}">Aguardando fechamento</span>`;
     if(r.status==='ok')  return `<span class="fr-status-ok">● OK</span>`;
     if(r.status==='at')  return `<span class="fr-status-at">● Atenção</span>`;
     return `<span class="fr-status-cr">▲ Crítico</span>`;
   };
-  const atingHtml=(r)=>`<div class="fr-bar-wrap"><div class="fr-bar-bg"><div class="fr-bar-fill" style="width:${r.atingPct.toFixed(1)}%;background:${barColor(r.status)}"></div></div><span class="fr-bar-pct">${r.atingPct.toFixed(0)}%</span></div>`;
+  const atingHtml=(r)=>r.status==='pend' ? `<span title="${pendTitle}">—</span>` : `<div class="fr-bar-wrap"><div class="fr-bar-bg"><div class="fr-bar-fill" style="width:${r.atingPct.toFixed(1)}%;background:${barColor(r.status)}"></div></div><span class="fr-bar-pct">${r.atingPct.toFixed(0)}%</span></div>`;
 
   bldT('tbl-fr',rows,[
     {h:'Placa',              fn:r=>r.pl},
@@ -4527,7 +4639,7 @@ function buildFr(uid,mes){
     {h:'Viagens',            fn:r=>N(r.v),        n:true},
     {h:'Prod.(T) Real.',     fn:r=>D1(r.p),        n:true},
     {h:'Fat.(R$) Real.',     fn:r=>R(r.f),          n:true},
-    {h:'Fat.(R$) Proj.',     fn:r=>`<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
+    {h:'Fat.(R$) Proj.',     fn:r=>r.projPendente ? `<span title="${pendTitle}">Em aberto</span>` : `<span style="color:var(--ac);font-weight:500">${R(r.fatProj)}</span>`,   n:true},
     {h:'Atingimento Meta',   fn:r=>atingHtml(r),   n:true},
     {h:'GAP p/ Meta',        fn:r=>gapHtml(r),     n:true},
     {h:'Status',             fn:r=>statusHtml(r),  n:true},
@@ -5204,6 +5316,7 @@ function demo(){
     });
   }
   RAW=recs;
+  pdBeginSZBSnapshot(RAW, '', true);
   dzel.classList.add('ok');
   document.getElementById('dz-h').textContent='✓ Demonstração — '+RAW.length+' registros';
   buildDash();
@@ -6064,22 +6177,28 @@ function setAtlasSyncMsg(txt, ok) {
 function applyAtlasSZB(parentData, origem) {
   if (!parentData || !Array.isArray(parentData.rows) || !parentData.rows.length) return false;
   if (parentData.scope) setAtlasPDScope(parentData.scope);
+  const complete=parentData.__pdGlobalComplete===true || ATLAS_PD_SCOPE.isAdmin===true;
   // [PERF][PD] Saída ANTES da normalização: mesma versão (ts) + mesma contagem
   // bruta + mesmo escopo ⇒ payload idêntico ao já aplicado. O guard antigo só
   // rodava depois de normalizar+filtrar a base inteira — cada resposta duplicada
   // do parent custava uma varredura completa das linhas no mobile.
   var __pre = (parentData.ts || '') + '|' + parentData.rows.length + '|' + __pdScopeKey();
   if (__pre === __PD_PRE_SIG.szb && DATA.length) {
+    const oldMax=_PD_MAXEMISSAO, oldStatus=_PD_GLOBAL_SNAPSHOT && _PD_GLOBAL_SNAPSHOT.status;
+    pdBeginSZBSnapshot(RAW, parentData.ts, complete, false, complete?pdMaxEmissaoRows(parentData.rows):undefined);
+    if(oldMax!==_PD_MAXEMISSAO || oldStatus!==_PD_GLOBAL_SNAPSHOT.status) recalc();
     console.log('[PERF][PD] SZB ignorado antes da normalização (versão já carregada) ' + (origem||''));
     try { parentData.rows = null; } catch(_) {}
     return true;
   }
   var rows = normalizeAtlasSZBRows(parentData.__atlasSharedRef ? parentData.rows.slice() : parentData.rows);
-  // [VIRADA GLOBAL] A última emissão tem que sair da base COMPLETA — depois da
-  // linha de baixo as filiais fora do perfil já foram descartadas.
-  pdResetMaxEmissao(); pdCaptureMaxEmissao(rows);
+  const maxBeforeScope=complete?pdMaxEmissaoRows(rows):undefined;
+  // O parent pode entregar um recorte pronto. Nesse caso a data global é
+  // confirmada separadamente na mesma versão canônica, com a sessão existente.
   rows = atlasFilterRowsForScope(rows, 'szb');
   if (!rows.length) return false;
+  const oldMax=_PD_MAXEMISSAO, oldStatus=_PD_GLOBAL_SNAPSHOT && _PD_GLOBAL_SNAPSHOT.status;
+  pdBeginSZBSnapshot(rows, parentData.ts, complete, false, maxBeforeScope);
 
   // [PERF][PD] Idempotência por versão+escopo. Os múltiplos caminhos de boot
   // (timers do DOMContentLoaded, IIFE, handlers de ATLAS_DATA_READY/RESPONSE,
@@ -6088,6 +6207,7 @@ function applyAtlasSZB(parentData, origem) {
   // os dados/resultados seriam byte-a-byte iguais: pulamos o fullRebuild redundante.
   var __sig = (parentData.ts || '') + '|' + rows.length + '|' + __pdScopeKey();
   if (__sig === __PD_SZB_SIG && DATA.length) {
+    if(oldMax!==_PD_MAXEMISSAO || oldStatus!==_PD_GLOBAL_SNAPSHOT.status) recalc();
     console.log('[PERF][PD] SZB ignorado (versão já carregada) ' + (origem||''));
     return true;
   }
