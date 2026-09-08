@@ -2743,21 +2743,56 @@ async function pdReadGlobalMaxEmissao(version){
   const before=beforeSnap.exists?beforeSnap.data():{};
   const n=Number(before.numChunks);
   if(pdSZBVersion(before.ts)!==version || !Number.isInteger(n) || n<1) throw new Error('Versão da SZB não corresponde à tela');
+
+  // [FIX PERFIL RESTRITO] O admin recebe a base completa e conhece o corte global
+  // imediatamente. Perfis de uma única filial recebem a SZB já recortada e antes
+  // precisavam varrer TODOS os chunks em lotes de 5, um lote após o outro; nesse
+  // intervalo a Visão Geral podia renderizar uma projeção provisória e só depois
+  // corrigir o faturamento/projetado. Mantemos a regra global, mas validamos muito
+  // mais rápido e reaproveitamos o resultado confirmado da MESMA versão.
+  const cacheKey='COMIX_PD_GLOBAL_MAX|'+version;
+  try{
+    const c=JSON.parse(sessionStorage.getItem(cacheKey)||'null');
+    if(c && Number(c.n)===n && /^\d{4}-\d{2}-\d{2}$/.test(c.max||'')) return c.max;
+  }catch(_){}
+
+  // Compatibilidade futura: se o Download Base publicar a última emissão no meta,
+  // basta 1 leitura de documento; versões antigas seguem pelo fallback abaixo.
+  const metaMax=pdEmissionISO(before.maxEmissao||before.max_emissao||'');
+  if(metaMax){
+    const afterSnap=await ref.get();
+    const after=afterSnap.exists?afterSnap.data():{};
+    if(pdSZBVersion(after.ts)!==version || Number(after.numChunks)!==n) throw new Error('SZB atualizada durante a validação');
+    try{ sessionStorage.setItem(cacheKey,JSON.stringify({n,max:metaMax})); }catch(_){}
+    return metaMax;
+  }
+
   let max='';
-  // Apenas a data escalar é retida. Linhas de outras filiais não entram no PD.
-  for(let start=0; start<n; start+=5){
+  const hoje=pdHojeISO();
+  let isMobile=false;
+  try{ isMobile=/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||(window.matchMedia&&window.matchMedia('(max-width:820px)').matches); }catch(_){}
+  const BATCH=isMobile?8:25;
+  const chunks=ref.collection('chunks');
+
+  // Lê do fim para o início. Não depende da ordenação para a correção: só há
+  // saída antecipada quando encontramos HOJE, que já é matematicamente o maior
+  // corte possível (pdMaxEmissaoRows ignora datas futuras).
+  for(let end=n; end>0 && max!==hoje; end-=BATCH){
+    const start=Math.max(0,end-BATCH);
     const requests=[];
-    for(let i=start;i<Math.min(start+5,n);i++) requests.push(ref.collection('chunks').doc(String(i)).get());
+    for(let i=end-1;i>=start;i--) requests.push(chunks.doc(String(i)).get());
     const snaps=await Promise.all(requests);
     for(const snap of snaps){
       const rows=snap.exists?snap.data().rows:null;
       if(!Array.isArray(rows)) throw new Error('Parte da SZB indisponível');
       const found=pdMaxEmissaoRows(rows); if(found>max) max=found;
+      if(max===hoje) break;
     }
   }
   const afterSnap=await ref.get();
   const after=afterSnap.exists?afterSnap.data():{};
   if(pdSZBVersion(after.ts)!==version || Number(after.numChunks)!==n) throw new Error('SZB atualizada durante a validação');
+  try{ sessionStorage.setItem(cacheKey,JSON.stringify({n,max})); }catch(_){}
   return max;
 }
 function pdBeginSZBSnapshot(rows, timestamp, complete, autoRetryUsed, completeMax){
@@ -4605,13 +4640,15 @@ function buildFr(uid,mes){
     const valComp = base==='ritmo' ? fatProjExib : s.f;
     const atingPct= meta>0 ? Math.min(valComp/meta*100,100) : 0;
     const gap     = valComp - meta;
-    // Placa ainda em aberto mantém status neutro (ampulheta azul), sem classificar OK/Atenção/Crítico.
-    let status;
-    if(projPendente)                 status='pend';
-    else if(valComp>=meta)           status='ok';
-    else if(valComp>=meta-meta*atPct/100) status='at';
-    else                             status='cr';
-    return{pl,mt,tp,...s,fatProj:fatProjExib,prodProj,projPendente,atingPct,gap,status};
+    // [AJUSTE VISUAL] Dia em aberto é sinalizado SOMENTE pela ampulheta azul.
+    // Atingimento e GAP continuam usando as cores das premissas anteriores
+    // (OK / Atenção / Crítico), sem transformar o restante da linha em azul.
+    let perfStatus;
+    if(valComp>=meta)                     perfStatus='ok';
+    else if(valComp>=meta-meta*atPct/100) perfStatus='at';
+    else                                  perfStatus='cr';
+    const status=projPendente?'pend':perfStatus;
+    return{pl,mt,tp,...s,fatProj:fatProjExib,prodProj,projPendente,atingPct,gap,status,perfStatus};
   }).sort((a,b)=>b.f-a.f);
 
   document.getElementById('cnt-fr').textContent=' — '+rows.length+' veículos';
@@ -4621,10 +4658,11 @@ function buildFr(uid,mes){
   mkC('c-fp','bar',pr.map(r=>r.pl),[{data:pr.map(r=>r.f),backgroundColor:'rgba(26,86,219,.65)',borderRadius:2}],{ytk});
   mkC('c-fa','bar',ag.map(r=>r.pl),[{data:ag.map(r=>r.f),backgroundColor:'rgba(5,122,85,.65)',borderRadius:2}],{ytk});
 
-  const barColor=s=>s==='pend'?'#1a56db':s==='ok'?'#057a55':s==='at'?'#d97706':'#e02424';
+  const barColor=s=>s==='ok'?'#057a55':s==='at'?'#d97706':'#e02424';
   const pendTitle='Viagens desta placa ainda estão no dia em aberto. Até o fechamento, Projetado, Atingimento e GAP acompanham o realizado acumulado.';
   const gapHtml=(r)=>{
-    const cls=r.status==='pend'?'fr-gap-pend':r.status==='ok'?'fr-gap-ok':r.status==='at'?'fr-gap-at':'fr-gap-cr';
+    const visualStatus=r.perfStatus||r.status;
+    const cls=visualStatus==='ok'?'fr-gap-ok':visualStatus==='at'?'fr-gap-at':'fr-gap-cr';
     const sign=r.gap>=0?'+':'';
     return `<span class="${cls}"${r.status==='pend'?` title="${pendTitle}"`:''}>${sign}R$\u00a0${Math.round(r.gap).toLocaleString('pt-BR')}</span>`;
   };
@@ -4634,7 +4672,7 @@ function buildFr(uid,mes){
     if(r.status==='at')  return `<span class="fr-status-at">● Atenção</span>`;
     return `<span class="fr-status-cr">▲ Crítico</span>`;
   };
-  const atingHtml=(r)=>`<div class="fr-bar-wrap"${r.status==='pend'?` title="${pendTitle}"`:''}><div class="fr-bar-bg"><div class="fr-bar-fill" style="width:${r.atingPct.toFixed(1)}%;background:${barColor(r.status)}"></div></div><span class="fr-bar-pct">${r.atingPct.toFixed(0)}%</span></div>`;
+  const atingHtml=(r)=>`<div class="fr-bar-wrap"${r.status==='pend'?` title="${pendTitle}"`:''}><div class="fr-bar-bg"><div class="fr-bar-fill" style="width:${r.atingPct.toFixed(1)}%;background:${barColor(r.perfStatus||r.status)}"></div></div><span class="fr-bar-pct">${r.atingPct.toFixed(0)}%</span></div>`;
 
   bldT('tbl-fr',rows,[
     {h:'Placa',              fn:r=>r.pl},
