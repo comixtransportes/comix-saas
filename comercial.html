@@ -15155,8 +15155,22 @@ function rclPainel(chaveCli, k3, semScroll){
      que é exatamente o erro que a média móvel veio corrigir. Estes helpers
      entregam, por taxa, o numerador, o denominador e a janela usada.    */
   const dT   = (k)=> (T && T.det && T.det[k]) ? T.det[k] : null;
-  const janKm= (k)=>{ const d=dT(k); return d ? d.km : (T?T.km:0); };
-  const janVg= (k)=>{ const d=dT(k); return d ? d.viagens : (T?T.viagens:0); };
+  /* ── O divisor da tela é o divisor da conta ───────────────────────────
+     Bug encontrado em 09/09/2026, com a tela na mão: estes dois helpers
+     devolviam `d.km` e `d.viagens` — o rodado MEDIDO, de todas as placas —
+     enquanto a divisão de verdade usava `d.den`, que é só o de placa
+     própria (e ainda corrigido pela cobertura quando o nivelamento é por
+     taxa). Resultado: a fórmula impressa na memória de cálculo não fechava.
+     Em Administrativo, a tela dizia R$ 292.913,78 ÷ 7.139 viagens = R$
+     136,37 — uma conta que dá R$ 41,03. O número exibido no custo estava
+     certo; o divisor exibido é que era outro, e a única forma de perceber
+     era fazendo a conta na mão.
+     Agora janKm/janVg entregam o denominador REAL, e janTot fica disponível
+     para quem quiser mostrar o rodado inteiro como referência.          */
+  const janKm= (k)=>{ const d=dT(k); return d ? d.den : (T?T.km:0); };
+  const janVg= (k)=>{ const d=dT(k); return d ? d.den : (T?T.viagens:0); };
+  const janTot=(k)=>{ const d=dT(k); if(!d) return T?(T.km||0):0;
+                      return d.chave==='km' ? d.denTotal : d.denTotal; };
   const mesRot=(m)=>{ try{ return dtSimplesBR(m+'-01').slice(3); }catch(_){ return m; } };
   const janRot=(k)=>{ const d=dT(k); if(!d||!d.meses||!d.meses.length) return '—';
     return d.n>1 ? `${d.n} meses fechados · ${mesRot(d.meses[0])} a ${mesRot(d.meses[d.meses.length-1])}`
@@ -15538,11 +15552,11 @@ function rclPainel(chaveCli, k3, semScroll){
       memFonte('Pneus','pneus',
       mem('Pneus',{selo:selo('pneus'),
         fonte:'Mapinha — lançamentos do grupo C.O classificados como pneus (nome do centro de custo contendo pneu / recapagem / borracharia; código 07.01 como rede de segurança). Agregados (12.01) ficam fora.',
-        formula:`R$ de pneus na janela ÷ km medido na MESMA janela × km da viagem\n${brl(RB?RB.pneusRS:null)} ÷ ${num(janKm('pneusKm'),0)} km = ${brl(T?T.pneusKm:null)}/km × ${num(kmV,1)} km = ${brl(li.pneus)}`,
+        formula:`R$ de pneus na janela ÷ km de PLACA PRÓPRIA na MESMA janela × km da viagem\n${brl(RB?RB.pneusRS:null)} ÷ ${num(janKm('pneusKm'),0)} km = ${brl(T?T.pneusKm:null)}/km × ${num(kmV,1)} km = ${brl(li.pneus)}`,
         insumos:[
           ['R$ de pneus na janela', brl(RB?RB.pneusRS:null),
            'Lançamentos do Mapinha classificados como pneu, recapagem ou borracharia (código 07.01 como rede de segurança), da unidade inteira, somados em '+janRot('pneusKm')+'. Pneu de agregado (12.01) fica de fora. A janela é de mais de um mês porque pneu se compra em LOTE: um mês só entrega a compra inteira ou nenhuma.'],
-          ['km medido na mesma janela', num(janKm('pneusKm'),0)+' km',
+          ['km de placa própria na mesma janela', num(janKm('pneusKm'),0)+' km',
            'Quilômetro que o módulo atribuiu a rotas NAQUELES MESMOS meses: distância adotada × viagens, já descontado o retorno aproveitado. Numerador e denominador precisam ser do mesmo período, senão a taxa só troca o erro de lugar.'],
           ['= R$ por km', brl(T?T.pneusKm:null),
            'A divisão dos dois acima. É a taxa que vale para qualquer rota da unidade.'],
@@ -15551,7 +15565,7 @@ function rclPainel(chaveCli, k3, semScroll){
         ],
         linhas:[
           RB?['Pneus na janela (Mapinha)', brl(RB.pneusRS), 'Numerador: o gasto de pneu da unidade nos meses da janela.']:null,
-          T?['km medido pelo módulo', num(janKm('pneusKm'),0)+' km', 'Denominador: o quilômetro atribuído a rotas nos mesmos meses.']:null,
+          T?['km no denominador', num(janKm('pneusKm'),0)+' km', 'O quilômetro de PLACA PRÓPRIA atribuído a rotas nos mesmos meses — '+num(janKm('pneusKm'),0)+' de '+num(janTot('pneusKm'),0)+' km medidos. O R$ de pneu do Mapinha exclui o agregado (12.01), então o divisor exclui também.']:null,
           T?['R$/km de pneu', brl(T.pneusKm)+(T.manual&&T.manual.pneusKm?' (manual)':''),
              'O quociente. Marcado como (manual) quando foi digitado nas ⚙ Premissas do resultado em vez de calculado.']:null,
           ['km desta viagem', num(kmV,1)+' km', 'O multiplicador que converte a taxa da frota no custo desta rota.'],
@@ -15566,17 +15580,17 @@ function rclPainel(chaveCli, k3, semScroll){
       memFonte('Lubrificante','lubrificante',
       mem('Lubrificante',{selo:selo('lubrificante'),
         fonte:'Mapinha — C.O classificado como lubrificante (nome com lubrificante / óleo / graxa / aditivo; código 05.01 de reserva).',
-        formula:`R$ de lubrificante na janela ÷ km medido na MESMA janela × km da viagem\n${brl(RB?RB.lubRS:null)} ÷ ${num(janKm('lubKm'),0)} = ${brl(T?T.lubKm:null)}/km × ${num(kmV,1)} = ${brl(li.lubrificante)}`,
+        formula:`R$ de lubrificante na janela ÷ km de PLACA PRÓPRIA na MESMA janela × km da viagem\n${brl(RB?RB.lubRS:null)} ÷ ${num(janKm('lubKm'),0)} = ${brl(T?T.lubKm:null)}/km × ${num(kmV,1)} = ${brl(li.lubrificante)}`,
         insumos:[
           ['R$ de lubrificante na janela', brl(RB?RB.lubRS:null),
            'Óleo de motor, câmbio e diferencial, graxa e aditivos lançados no Mapinha da unidade inteira, somados em '+janRot('lubKm')+'. Janela curta: é gasto regular, com pouco ruído mês a mês.'],
-          ['km medido na mesma janela', num(janKm('lubKm'),0)+' km', 'O quilômetro atribuído a rotas nos mesmos meses.'],
+          ['km de placa própria na mesma janela', num(janKm('lubKm'),0)+' km', 'O quilômetro de placa própria atribuído a rotas nos mesmos meses — '+num(janKm('lubKm'),0)+' de '+num(janTot('lubKm'),0)+' km medidos.'],
           ['= R$ por km', brl(T?T.lubKm:null), 'A taxa da unidade.'],
           ['km desta viagem', num(kmV,1)+' km', 'O multiplicador desta rota.']
         ],
         linhas:[
           RB?['Lubrificante na janela', brl(RB.lubRS), 'Numerador da taxa.']:null,
-          T?['km medido pelo módulo', num(janKm('lubKm'),0)+' km', 'Denominador da taxa.']:null,
+          T?['km no denominador', num(janKm('lubKm'),0)+' km', 'Denominador da taxa: só placa própria.']:null,
           T?['R$/km', brl(T.lubKm), 'O quociente.']:null,
           ['km desta viagem', num(kmV,1)+' km', 'O multiplicador que dá o valor da linha.'],
           ...janLinhas('lubKm')
@@ -15594,11 +15608,11 @@ function rclPainel(chaveCli, k3, semScroll){
       memFonte('Peças e serviços','pecas',
       mem('Peças e serviços',{selo:selo('pecas'),
         fonte:'Mapinha — C.O classificado como peças/serviços/manutenção (nome com peç / serv / manuten / oficina / revis / reforma; códigos 06.01, 03.01 e 23.01 de reserva). Empréstimos e custos de placa agregada (11.01) ficam fora.',
-        formula:`R$ de peças na janela ÷ viagens medidas na MESMA janela\n${brl(RB?RB.pecasRS:null)} ÷ ${num(janVg('pecasVg'),0)} viagens = ${brl(li.pecas)}`,
+        formula:`R$ de peças na janela ÷ viagens de PLACA PRÓPRIA na MESMA janela\n${brl(RB?RB.pecasRS:null)} ÷ ${num(janVg('pecasVg'),0)} viagens = ${brl(li.pecas)}`,
         insumos:[
           ['R$ de peças na janela', brl(RB?RB.pecasRS:null),
            'Soma dos lançamentos do Mapinha classificados como peças/serviços/manutenção, da unidade INTEIRA — não desta rota — em '+janRot('pecasVg')+'. Agregado (11.01) fica de fora. A janela existe porque manutenção é "lumpy": uma reforma de motor cai num mês só e deslocaria a linha da unidade inteira.'],
-          ['Viagens medidas na mesma janela', num(janVg('pecasVg'),0),
+          ['Viagens de placa própria na janela', num(janVg('pecasVg'),0),
            'CT-e dos mesmos meses que o módulo conseguiu amarrar a uma rota da SZY. É este número que reparte o R$ da frota entre as viagens.'],
           ['= R$ por viagem', brl(T?T.pecasVg:null),
            'A divisão dos dois acima. Este é o valor que a linha exibe, igual para toda rota da mesma unidade — peças não escalam com o trecho.']
@@ -15606,7 +15620,7 @@ function rclPainel(chaveCli, k3, semScroll){
         linhas:[
           RB?['Peças e serviços no período', brl(RB.pecasRS),
               'Numerador da conta: o gasto de oficina da unidade inteira na competência-base, lido da coleção mapinha_lancamentos.']:null,
-          T?['Viagens medidas na janela', num(janVg('pecasVg'),0),
+          T?['Viagens no denominador', num(janVg('pecasVg'),0),
              'Denominador da conta: viagens dos meses da janela amarradas a uma rota. Se a cobertura for baixa, este número é menor que o real e o R$/viagem sai inflado.']:null,
           T?['R$/viagem', brl(T.pecasVg), 'O quociente — exatamente o valor desta linha.']:null,
           T?['Cobertura do mês-base', pct(T.cobertura,0),
@@ -15622,11 +15636,11 @@ function rclPainel(chaveCli, k3, semScroll){
       memFonte('Documentação e seguros','docSeguros',
       mem('Documentação e seguros',{selo:selo('docSeguros'),
         fonte:'Mapinha — C.O classificado como documentação/seguros (nome com licenciamento / seguro / IPVA / DPVAT / laudo / CRLV / ANTT / RNTRC; código 08.01 de reserva).',
-        formula:`R$ da janela ÷ viagens medidas na MESMA janela\n${brl(RB?RB.docRS:null)} ÷ ${num(janVg('docVg'),0)} = ${brl(li.docSeguros)}`,
+        formula:`R$ da janela ÷ viagens de PLACA PRÓPRIA na MESMA janela\n${brl(RB?RB.docRS:null)} ÷ ${num(janVg('docVg'),0)} = ${brl(li.docSeguros)}`,
         insumos:[
           ['R$ de documentação e seguros na janela', brl(RB?RB.docRS:null),
            'Licenciamento, IPVA, DPVAT, seguros de casco e RCTR-C, laudos, ANTT/RNTRC — da unidade inteira, somados em '+janRot('docVg')+'. Esta é a linha com a JANELA MAIS LONGA do módulo, e por um motivo simples: IPVA, licenciamento e apólice de casco são anuais. Com mês-base único, a mesma rota vale uma coisa em fevereiro e outra em agosto sem que nada tenha mudado na operação.'],
-          ['Viagens medidas na mesma janela', num(janVg('docVg'),0),
+          ['Viagens de placa própria na janela', num(janVg('docVg'),0),
            'Mesmo denominador de peças, na janela desta linha: CT-e amarrados a uma rota.'],
           ['= R$ por viagem', brl(T?T.docVg:null),
            'O quociente. Custo de posse diluído entre as viagens que o conjunto fez no mês.']
@@ -15634,7 +15648,7 @@ function rclPainel(chaveCli, k3, semScroll){
         linhas:[
           RB?['Documentação e seguros no período', brl(RB.docRS),
               'Numerador: o que a unidade pagou de documentação e seguro na competência-base.']:null,
-          T?['Viagens medidas na janela', num(janVg('docVg'),0), 'Denominador da divisão.']:null,
+          T?['Viagens no denominador', num(janVg('docVg'),0), 'Denominador da divisão: só placa própria, '+num(janVg('docVg'),0)+' de '+num(janTot('docVg'),0)+' viagens medidas.']:null,
           T?['R$/viagem', brl(T.docVg), 'O quociente — o valor desta linha.']:null
         ],
         obs:'Custo de posse, não de rodagem: existe com o caminhão parado. Por isso viagem, não km.'}),
@@ -15647,14 +15661,14 @@ function rclPainel(chaveCli, k3, semScroll){
       mem('Pessoal',{selo:selo('pessoal'),
         fonte:'Premissa (CPK) do fechamento do Mapinha — a mesma memória de folha com AE diluído que o módulo CPK usa. Não vem dos lançamentos 13/14/15.01 do DRE, que pertencem ao card "Custo de Pessoal — Realizado".',
         formula: P.pessoalCpkBase==='ambos'
-          ? `(Custo Frota 35% + Custo Agregado 65%) ÷ viagens medidas no MESMO mês\n(${brl(RB?RB.pessoalFrota35:null)} + ${brl(RB?RB.pessoalAgregado65:null)}) ÷ ${num(janVg('pessoalVg'),0)} = ${brl(li.pessoal)}`
-          : `Custo Frota 35% ÷ viagens medidas no MESMO mês\n${brl(RB?RB.pessoalFrota35:null)} ÷ ${num(janVg('pessoalVg'),0)} = ${brl(li.pessoal)}`,
+          ? `(Custo Frota 35% + Custo Agregado 65%) ÷ viagens de PLACA PRÓPRIA no MESMO mês\n(${brl(RB?RB.pessoalFrota35:null)} + ${brl(RB?RB.pessoalAgregado65:null)}) ÷ ${num(janVg('pessoalVg'),0)} = ${brl(li.pessoal)}`
+          : `Custo Frota 35% ÷ viagens de PLACA PRÓPRIA no MESMO mês\n${brl(RB?RB.pessoalFrota35:null)} ÷ ${num(janVg('pessoalVg'),0)} = ${brl(li.pessoal)}`,
         insumos:[
           ['Custo Frota 35%', brl(RB?RB.pessoalFrota35:null),
            'Campo "Custo Frota 35%" da Premissa (CPK) da competência-base: a folha de motoristas da frota própria já com encargos e com o adicional de estadia diluído, exatamente como o módulo CPK a lê. NÃO são os lançamentos 13/14/15.01 do DRE.'],
           P.pessoalCpkBase==='ambos'?['Custo Agregado 65%', brl(RB?RB.pessoalAgregado65:null),
            'A fatia da folha que sustenta a operação de agregados. Está somando aqui porque a premissa "Base do pessoal" está em "os dois valores" — o CPK por placa usa só os 35%.']:null,
-          ['Viagens medidas no mesmo mês', num(janVg('pessoalVg'),0),
+          ['Viagens de placa própria no mesmo mês', num(janVg('pessoalVg'),0),
            'O divisor: CT-e do mês-base amarrados a uma rota da SZY.'],
           ['= R$ por viagem', brl(T?T.pessoalVg:null),
            'A folha do mês dividida pelas viagens do mês. Comissão não entra aqui — ela é função da tarifa e aparece depois, na cascata.']
@@ -15669,7 +15683,7 @@ function rclPainel(chaveCli, k3, semScroll){
           ['Base escolhida', P.pessoalCpkBase==='ambos'?'os dois valores':'só a fatia da frota',
            'Premissa "Base do pessoal (CPK)" das ⚙ Premissas do resultado. Trocar para "só a fatia da frota" reproduz o CPK por placa.'],
           T?['Pessoal considerado no período', brl(T.pessoalRS), 'O numerador efetivamente usado, já conforme a base escolhida.']:null,
-          T?['Viagens medidas', num(janVg('pessoalVg'),0), 'O denominador.']:null,
+          T?['Viagens no denominador', num(janVg('pessoalVg'),0), 'Só placa própria: '+num(janVg('pessoalVg'),0)+' de '+num(janTot('pessoalVg'),0)+' viagens medidas.']:null,
           ...janLinhas('pessoalVg')
         ],
         obs:'Esta é a ÚNICA linha do Mapinha que continua em janela de UM mês, e a decisão é deliberada (comercial, ago/2026): pessoal não tem ruído, tem DERIVA. Dissídio, admissão e desligamento mudam o patamar e não voltam — uma média de seis ou doze meses entregaria uma folha que não existe mais. Média longa serve contra ruído; contra deriva, ela atrasa. As demais linhas do Mapinha usam média móvel justamente por serem o caso oposto.',
@@ -15750,21 +15764,21 @@ function rclPainel(chaveCli, k3, semScroll){
         alerta: depPulados(dCav) ? ('Registros mais novos que ficaram de fora: '+depPulados(dCav)+'.') : null})
       : mem('Depreciação do cavalo',{selo:selo('deprecCavalo'),
         fonte:'Base de depreciação do CPK (cpk_lancamentos/DEPRECIACAO), placa a placa, com a MESMA fórmula do módulo CPK: linear sobre o valor depreciável, percentual anual ou valor manual, respeitando data de compra, prazo, residual e status.',
-        formula:`Σ depreciação mensal das placas ÷ viagens medidas no MESMO mês\n${brl(RB?RB.deprecCavaloRS:null)} ÷ ${num(janVg('depCavVg'),0)} = ${brl(li.deprecCavalo)}`,
+        formula:`Σ depreciação mensal das placas ÷ viagens de PLACA PRÓPRIA no MESMO mês\n${brl(RB?RB.deprecCavaloRS:null)} ÷ ${num(janVg('depCavVg'),0)} = ${brl(li.deprecCavalo)}`,
         insumos:[
           ['Depreciação de cavalos no período', brl(RB?RB.deprecCavaloRS:null),
            'Soma da depreciação MENSAL de cada cavalo cadastrado em cpk_lancamentos/DEPRECIACAO, multiplicada pelos meses da janela. Placa sem cadastro entra com zero — não é estimada.'],
           ['Placas com depreciação cadastrada', num(RB?RB.nPlacasDep:0,0),
            'Quantas placas têm base de capital cadastrada. Se for muito menor que a frota que roda a rota, o custo de capital está subdimensionado.'],
           ['Meses da janela', num(nMes,0), 'Quantos meses a janela analisada cobre — a depreciação é mensal e precisa ser multiplicada por eles.'],
-          ['Viagens medidas no mesmo mês', num(janVg('depCavVg'),0), 'O divisor: viagens do mês-base amarradas a uma rota.'],
+          ['Viagens de placa própria no mês', num(janVg('depCavVg'),0), 'O divisor: viagens de placa própria do mês-base amarradas a uma rota — '+num(janVg('depCavVg'),0)+' de '+num(janTot('depCavVg'),0)+' medidas.'],
           ['= R$ por viagem', brl(T?T.depCavVg:null), 'O quociente, que é o valor exibido nesta linha.']
         ],
         linhas:[
           RB?['Depreciação de cavalos no período', brl(RB.deprecCavaloRS), 'Numerador: custo de capital dos cavalos da unidade no período.']:null,
           RB?['Placas com depreciação cadastrada', num(RB.nPlacasDep,0), 'Cobertura da base de capital. Placa sem cadastro não gera custo.']:null,
           ['Meses da janela', num(nMes,0), 'Multiplicador do numerador mensal.'],
-          T?['Viagens medidas', num(janVg('depCavVg'),0), 'Denominador da divisão.']:null,
+          T?['Viagens no denominador', num(janVg('depCavVg'),0), 'Denominador da divisão: só placa própria.']:null,
           ...janLinhas('depCavVg'),
           T?['R$/viagem', brl(T.depCavVg), 'O quociente.']:null
         ],
@@ -15798,7 +15812,7 @@ function rclPainel(chaveCli, k3, semScroll){
         alerta: depPulados(dCar) ? ('Registros mais novos que ficaram de fora: '+depPulados(dCar)+'.') : null})
       : mem('Depreciação da carreta',{selo:selo('deprecCarreta'),
         fonte:'Mesma base do CPK, filtrando os registros classificados como carreta (semirreboque, silo, tanque, bitrem, rodotrem, vanderleia).',
-        formula:`Σ depreciação mensal das carretas ÷ viagens medidas no MESMO mês\n${brl(RB?RB.deprecCarretaRS:null)} ÷ ${num(janVg('depCarVg'),0)} = ${brl(li.deprecCarreta)}`,
+        formula:`Σ depreciação mensal das carretas ÷ viagens de PLACA PRÓPRIA no MESMO mês\n${brl(RB?RB.deprecCarretaRS:null)} ÷ ${num(janVg('depCarVg'),0)} = ${brl(li.deprecCarreta)}`,
         insumos:[
           ['Depreciação de carretas no período', brl(RB?RB.deprecCarretaRS:null),
            'Soma da depreciação mensal de TODAS as carretas da unidade, pelos meses da janela. É custo de frota — nenhuma carreta é atribuída a uma rota específica.'],
@@ -15871,14 +15885,14 @@ function rclPainel(chaveCli, k3, semScroll){
      cpk.html leva 82% dessas despesas pelo RATEIO_ADM; aqui não entrava nada,
      e por isso os dois números nunca podiam bater.                          */
   add('Administrativo e demais C.O','administrativo',li.administrativo,
-      T&&T.admVg!=null?`${brl(RB?RB.coOutrosRS:null)} ÷ ${num(janVg('admVg'),0)} viagens`:'',
+      T&&T.admVg!=null?`${brl(RB?RB.coOutrosRS:null)} ÷ ${num(janVg('admVg'),0)} viagens próprias`:'',
       mem('Administrativo e demais C.O',{selo:selo('administrativo'),
         fonte:'Mapinha — lançamentos do grupo C.O que não caem em pneus, lubrificante, peças ou documentação. É onde mora o 09.01 (despesas administrativas) e todo centro de custo cujo nome o classificador não reconhece.',
-        formula:`Σ C.O não classificado da janela ÷ viagens da MESMA janela\n${brl(RB?RB.coOutrosRS:null)} ÷ ${num(janVg('admVg'),0)} = ${brl(T?T.admVg:null)}`,
+        formula:`Σ C.O não classificado da janela ÷ viagens de PLACA PRÓPRIA da MESMA janela\n${brl(RB?RB.coOutrosRS:null)} ÷ ${num(janVg('admVg'),0)} = ${brl(T?T.admVg:null)}`,
         insumos:[
           ['C.O não classificado no período', brl(RB?RB.coOutrosRS:null),
            'Soma dos lançamentos do grupo C.O da unidade que não foram reconhecidos como pneus, lubrificante, peças ou documentação. Abra o Mapinha e filtre por centro de custo para ver a composição.'],
-          ['Viagens no denominador', num(janVg('admVg'),0),
+          ['Viagens de placa própria no denominador', num(janVg('admVg'),0),
            'Viagens de placa própria amarradas a uma rota nos meses da janela desta linha.'],
           ['= R$ por viagem', brl(T?T.admVg:null),
            'O quociente. É a fatia de estrutura que cada viagem sustenta.']
