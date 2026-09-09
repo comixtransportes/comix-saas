@@ -10255,6 +10255,9 @@ function rtBlocoMemoria(r){
 
 Object.assign(RT_CFG,{
   dieselLitrosMin:50, dieselLitrosMax:1200,
+  /* Teto físico de um abastecimento, aplicado aos LITROS SOMADOS (não ao
+     preço). Ver rtPrecoMedio → litrosSanos. */
+  szcLitrosMax:2000,
   arlaLitrosMin:0,    arlaLitrosMax:0,        /* 0 = sem janela            */
   precoForaDaCurva:0.5,                       /* corte em 50% da média     */
   precoDesvioMax:0.20,                        /* banda ±20% (ver abaixo)   */
@@ -10336,13 +10339,59 @@ function rtSzcOp(row){
          rtSigla(row['Unidade']) || '';
 }
 
-/* tipo: 'diesel' | 'arla' · mes: 'AAAA-MM' · op: 'SC'|'PR'|'SP'|'' (todas) */
+/* ══ Frota própria na SZC ══════════════════════════════════════════════════
+   Decisão do comercial (set/2026): a SZC NÃO é a frota. No arquivo de
+   jan–jun/2026 são 92 proprietários e cerca de 60% dos litros de diesel são
+   de agregado — 80 placas de terceiro contra 48 próprias. Enquanto o litro
+   do agregado entrava no numerador de tudo (preço de bomba, preço efetivo,
+   fator de aderência) sem que o quilômetro dele pudesse entrar no
+   denominador — porque ninguém mede o rodado do agregado; o odômetro da SZC
+   vem preenchido em 1,8% das linhas —, os dois lados da conta falavam de
+   frotas diferentes. Custo de frota própria agora se apura contra rodagem de
+   frota própria, e ponto. A viabilidade do agregado é outra conta, com
+   outra régua, e vai ser feita à parte.
+
+   A cascata de identificação tem duas etapas, nesta ordem:
+     1. CADASTRO do Atlas (coleção veiculos) — é ele que define "própria" no
+        denominador das taxas, então é ele que tem de definir no numerador,
+        senão os dois lados voltam a divergir;
+     2. PROPRIETÁRIO da própria SZC, para a placa que não está cadastrada —
+        campo fiscal, sempre presente. Sem esta etapa, placa própria fora do
+        cadastro sumiria do numerador e o custo cairia sem motivo.
+   A divergência entre as duas (placa que a SZC diz COMIX e o cadastro diz
+   agregado, ou vice-versa) é contada e aparece no diagnóstico: ela é sintoma
+   de cadastro desatualizado, e é barata de arrumar quando se sabe que existe. */
+const RT_RE_PROPRIA = /COMIX/i;
+function rtSzcPropria(row){
+  const vmap = (typeof RCL!=='undefined' && RCL && RCL.veicMapa instanceof Map) ? RCL.veicMapa : null;
+  const pl = rclPlaca(row['Veiculo']||row['Veículo']||row['Placa']||'');
+  if(vmap && pl && vmap.has(pl)) return rclrPlacaProp(pl, vmap);
+  const dono = String(row['Nome Proprie']||row['Nome Proprietario']||row['Proprietario']||'');
+  return RT_RE_PROPRIA.test(dono);
+}
+/* Só para o diagnóstico: a placa que a SZC chama de COMIX e o cadastro do
+   Atlas chama de agregado (ou não conhece). Não muda cálculo nenhum. */
+function rtSzcDivergencia(row){
+  const vmap = (typeof RCL!=='undefined' && RCL && RCL.veicMapa instanceof Map) ? RCL.veicMapa : null;
+  if(!vmap) return null;
+  const pl = rclPlaca(row['Veiculo']||row['Veículo']||row['Placa']||'');
+  if(!pl) return null;
+  const fiscal = RT_RE_PROPRIA.test(String(row['Nome Proprie']||row['Nome Proprietario']||row['Proprietario']||''));
+  if(!vmap.has(pl)) return fiscal ? {placa:pl, tipo:'propria-sem-cadastro'} : null;
+  const cad = rclrPlacaProp(pl, vmap);
+  if(cad!==fiscal) return {placa:pl, tipo: cad ? 'cadastro-propria-szc-agregado' : 'cadastro-agregado-szc-propria'};
+  return null;
+}
+
+/* tipo: 'diesel' | 'arla' · mes: 'AAAA-MM' · op: 'SC'|'PR'|'SP'|'' (todas)
+   escopo: 'propria' (padrão da sub-aba Rota clientes) | 'todas' */
 /* soS10 (opcional): estreita a apuração ao diesel S-10. Fica DESLIGADO por
    padrão de propósito — é assim que o número bate, dígito a dígito, com o
    custo médio de diesel publicado pelo P&D, que não separa S-10 de S-500.
    Ver DIESEL_SO_S10, em renderDiesel, para a decisão e como invertê-la. */
-function rtPrecoMedio(tipo, mes, op, soS10){
-  const ck=tipo+'|'+mes+'|'+(op||'')+(soS10?'|s10':'');
+function rtPrecoMedio(tipo, mes, op, soS10, escopo){
+  const soPropria = escopo==='propria';
+  const ck=tipo+'|'+mes+'|'+(op||'')+(soS10?'|s10':'')+(soPropria?'|prop':'');
   if(RT.precoCache.has(ck)) return RT.precoCache.get(ck);
 
   const ehArla = tipo==='arla';
@@ -10350,11 +10399,18 @@ function rtPrecoMedio(tipo, mes, op, soS10){
   const lMax = ehArla?RT_CFG.arlaLitrosMax:RT_CFG.dieselLitrosMax;
 
   const base=[];
+  let nAgreg=0, lAgreg=0, nDiv=0;
+  const divs=new Map();
   for(let i=0;i<RT.szc.length;i++){
     const row=RT.szc[i];
     const iso=rtDataISO(row['Data Emissao']||row['Data Emissão']||row['Data']);
     if(!iso || iso.slice(0,7)!==mes) continue;
     if(op && rtSzcOp(row)!==op) continue;
+    if(soPropria){
+      const dv=rtSzcDivergencia(row);
+      if(dv && !divs.has(dv.placa)){ divs.set(dv.placa, dv.tipo); nDiv++; }
+      if(!rtSzcPropria(row)){ nAgreg++; lAgreg+=(rtNum(row['Qtd Litros'])||0); continue; }
+    }
     const comb=String(row['Combustivel']||row['Combustível']||'').trim();
     if(ehArla){ if(!/arla/i.test(comb)) continue; }
     else { if(!/diesel/i.test(comb) || /arla/i.test(comb)) continue;
@@ -10368,6 +10424,20 @@ function rtPrecoMedio(tipo, mes, op, soS10){
   const qtdBruta=base.length;
   const litrosTot=base.reduce((a,r)=>a+r.litros,0);
   const valorTot =base.reduce((a,r)=>a+r.valor,0);
+  /* ── Teto físico de UM abastecimento ──────────────────────────────────
+     Litros somados (não o preço) alimentam o fator de aderência e o preço
+     efetivo do Mapinha ÷ SZC. A janela de 50–1.200 l existe só para a
+     média de preço; os totais entravam crus, e é por isso que uma única
+     linha com a litragem trocada com outro campo — 38.604 l em SC/jun-26,
+     35.003 l na placa PRÓPRIA SXR-5B63 em PR/abr-26 — inflava o numerador
+     do fator em 3% a 5% da unidade inteira, sem aparecer em lugar nenhum.
+     O teto de 2.000 l é folgado: nenhum conjunto nosso tem tanque para
+     tanto, e nenhum abastecimento legítimo do arquivo chega perto dele.
+     Só descarta troca de campo, e por isso não precisa de banda relativa. */
+  const teto=RT_CFG.szcLitrosMax>0?RT_CFG.szcLitrosMax:Infinity;
+  const sanos=base.filter(r=>r.litros<=teto);
+  const litrosSanos=sanos.reduce((a,r)=>a+r.litros,0);
+  const valorSanos =sanos.reduce((a,r)=>a+r.valor,0);
 
   /* janela de litragem */
   const naJanela = (lMin>0||lMax>0)
@@ -10392,6 +10462,11 @@ function rtPrecoMedio(tipo, mes, op, soS10){
   const out={
     preco: lm>0 ? vm/lm : null,
     litros:litrosTot, valor:valorTot,
+    litrosSanos, valorSanos, foraDoTeto: base.length-sanos.length,
+    litrosForaDoTeto: litrosTot-litrosSanos,
+    escopo: soPropria?'propria':'todas',
+    agregDescartados:nAgreg, agregLitros:lAgreg,
+    divergentes:nDiv, divergentesDet:[...divs.entries()].map(([placa,tipo])=>({placa,tipo})),
     qtd:qtdBruta, qtdMedia:limpa.length,
     foraDaJanela: base.length-naJanela.length,
     foraDaCurva:  naJanela.length-semCurva.length,
@@ -10986,7 +11061,7 @@ const RCLMEM_GLOSS = [
   [/resultado/, 'Resultado', 'Receita líquida − custo total − comissão − estrutura. É o último degrau da cascata.'],
   [/diesel|litro|km\/l|consumo/, 'Diesel e consumo', 'Quatro camadas: premissa da frota → modelo físico da rota (massa, relevo da HERE, curvas) → calibração pelo diesel comprado, com os dois lados da razão na escala da frota → guarda de plausibilidade que impede um km/l fora do que a composição alcança. O preço vem da SZC (média ponderada por litros) ou do R$ do Mapinha ÷ litros da SZC, o que estiver dentro da banda sã.'],
   [/ped[áa]gio/, 'Pedágio', 'Aba Pedágios do Mapinha, por placa (Valor Cobrado + Vale Comix), com a rota da SZY como referência de praças. Rota sem pedágio identificado derruba a completude.'],
-  [/fator|ader[êe]ncia|calibra/, 'Fator de aderência', 'Litros comprados na SZC ÷ litros ESPERADOS DA FROTA, ambos do mês-base. Os esperados são os litros que o modelo pede para as viagens amarradas, divididos pela cobertura — sem essa correção de escala o diesel da unidade inteira era comparado com o modelo de apenas parte das viagens, e a razão media cobertura junto com consumo. Corrige o km/l de todas as rotas da operação de uma vez. Fora da banda sã não é aplicado — vira sintoma de base incompleta.'],
+  [/fator|ader[êe]ncia|calibra/, 'Fator de aderência', 'Litros de diesel comprados na SZC POR PLACA PRÓPRIA ÷ litros que o modelo pede para as viagens de placa própria, os dois do mês-base e os dois já na escala da frota (corrigidos pela cobertura). O agregado fica fora dos dois lados desde set/2026: ele é ~60% dos litros da SZC e ninguém mede o quilômetro dele, então cada litro dele que entrava virava consumo atribuído às nossas rotas. Corrige o km/l de todas as rotas da operação de uma vez. Fora da banda sã não é aplicado — vira sintoma de base incompleta.'],
   [/placa/, 'Placa', 'Campo Placa do CT-e. Sem placa não há como medir aproveitamento de retorno, e toda volta é cobrada como vazia (na dúvida, o custo maior).'],
   [/retorno|aproveit/, 'Aproveitamento de retorno', 'Fração das viagens em que a MESMA placa emitiu outro CT-e saindo de onde acabou de entregar, dentro da janela de dias das premissas. Nessas, a volta foi paga por outro frete e não é cobrada aqui.'],
   [/deprecia/, 'Depreciação', 'Custo de capital do conjunto. Quando a linha está marcada CPK, vem do cadastro de depreciação por placa do módulo CPK (coleção cpk_lancamentos/DEPRECIACAO), somado no período e dividido pelas viagens medidas no mês-base — placa sem cadastro entra sem custo de capital. Quando a linha está marcada MODELO, esse caminho foi recusado (taxa ausente ou fora da banda ¼–4×) e o valor vem do núcleo de custo: valor do equipamento ÷ vida útil ÷ 12 ÷ viagens do mês. O selo ao lado do nome da linha diz qual dos dois está valendo.'],
@@ -11529,8 +11604,16 @@ const RCL_PADRAO = {
   /* ── Receita ── */
   usarImpostos: true,
   aliqManual: null,              /* vazio = PIS/COFINS + ICMS das premissas */
-  /* ── Comissão ── */
-  regimeComissao: 'viagem',      /* nao · viagem                            */
+  /* ── Comissão ═══════════════════════════════════════════════════════════
+     Decisão do comercial (set/2026): a comissão SAI do resultado da Rota
+     clientes. A pergunta desta sub-aba é quanto custa rodar a rota e quanto
+     ela devolve — comissão é remuneração variável sobre a tarifa, definida
+     depois, e misturá-la aqui faz a mesma rota mudar de resultado sem que
+     nada tenha mudado na operação. Ela já ficava fora do CPK pelo mesmo
+     motivo; agora fica fora da cascata inteira.
+     A chave continua existindo: pôr 'viagem' aqui devolve a linha, o valor
+     e o efeito no resultado exatamente como eram.                          */
+  regimeComissao: 'nao',         /* nao · viagem                            */
   comissaoPct: null,             /* vazio = premissa comissao_pct (5%)      */
   /* ── Estrutura ── */
   overheadModo: 'nao',           /* nao · pct · km                          */
@@ -11648,7 +11731,21 @@ const RCL_PADRAO = {
   /* Pessoal do CPK: quais valores da Premissa (CPK) entram.
        'ambos'  → Custo Frota 35% + Custo Agregado 65% (= base final após AE)
        'frota'  → só o Custo Frota 35%, como o CPK faz hoje                 */
-  pessoalCpkBase:   'ambos',
+  /* ══ ESCOPO DA SZC ═════════════════════════════════════════════════════
+     Decisão do comercial (set/2026): a SZC entra FILTRADA por frota própria.
+     Vale para as três coisas que os litros da SZC alimentam — o preço médio
+     de bomba, o preço efetivo (R$ do Mapinha ÷ litros) e o fator de
+     aderência. O motivo está em rtSzcPropria: 60% dos litros são de placa de
+     terceiro cujo quilômetro ninguém mede, e não se apura custo dividindo o
+     abastecimento de uma frota pelo rodado de outra.
+       'propria' → só placa própria (padrão)
+       'todas'   → a SZC inteira, como era antes desta rodada             */
+  szcEscopo:        'propria',     /* propria · todas                       */
+  /* Só a fatia da frota (35%). O numerador é folha de frota própria porque
+     o denominador é viagem de placa própria — somar a parcela que sustenta
+     a operação de agregados aqui faria a rota própria pagar a folha do
+     terceiro. É também o que o cpk.html usa por placa. */
+  pessoalCpkBase:   'frota',
   arlaPct:          0.05,          /* regra dos 5% sobre os litros de diesel */
   /* ══ DISTÂNCIA ═════════════════════════════════════════════════════════
      Cidade a cidade a SZY manda (é o cadastro contratado); a HERE entra
@@ -11890,6 +11987,8 @@ async function rclCarregarPrem(){
   try{ const d=await fsGetDoc(COL.config,'rotas_cliente'); if(d&&d.data) RCL.prem=d.data; }catch(_){}
   rclMigrarEixosPadrao();
   rclMigrarArlaLitros();
+  rclMigrarComissaoFora();
+  rclMigrarFrotaOnly();
 }
 /* ══ MIGRAÇÃO ÚNICA — padrão de eixos 7 ida / 4 volta ═════════════════════
    Mudar o padrão no código só vale para quem nunca escolheu eixos: se o
@@ -11924,6 +12023,35 @@ function rclMigrarArlaLitros(){
   RCL.prem={...p, arlaBase:'preco', fonteArlaPreco:'posto', arlaLitrosV3:true};
   if(p.arlaBase==='diesel')
     console.info('[Rota clientes] Arla migrado para litros de diesel × % × R$/l do Arla da rota.');
+}
+/* ══ MIGRAÇÃO ÚNICA — comissão fora do resultado ══════════════════════════
+   Mesma armadilha das duas migrações acima: quem já abriu e salvou as
+   ⚙ Premissas do resultado tem regimeComissao:'viagem' persistido, e o
+   valor gravado venceria o padrão novo — a mudança não chegaria justamente
+   em quem mais mexe no módulo. Esta migração roda uma vez, tira a comissão
+   do resultado e carimba comissaoForaV1. Depois dela, religar a comissão na
+   tela volta a mandar, e a migração não roda de novo.                     */
+function rclMigrarComissaoFora(){
+  const p=RCL.prem||{};
+  if(p.comissaoForaV1===true) return;
+  RCL.prem={...p, regimeComissao:'nao', comissaoForaV1:true};
+  if(p.regimeComissao==='viagem')
+    console.info('[Rota clientes] comissão retirada do resultado (decisão do comercial, set/2026).');
+}
+/* ══ MIGRAÇÃO ÚNICA — frota própria dos dois lados ════════════════════════
+   A mais importante das quatro, e pelo mesmo motivo das outras: quem já
+   salvou as ⚙ Premissas tem `pessoalCpkBase:'ambos'` gravado e venceria o
+   padrão novo. Esta migração alinha os três interruptores que definem o
+   escopo — SZC própria, pessoal só na fatia da frota, denominador só de
+   placa própria — e carimba frotaOnlyV1. Depois dela, qualquer escolha
+   manual volta a mandar.                                                 */
+function rclMigrarFrotaOnly(){
+  const p=RCL.prem||{};
+  if(p.frotaOnlyV1===true) return;
+  RCL.prem={...p, szcEscopo:'propria', pessoalCpkBase:'frota',
+            denominadorProprio:true, frotaOnlyV1:true};
+  if(p.pessoalCpkBase==='ambos' || p.denominadorProprio===false)
+    console.info('[Rota clientes] escopo unificado em frota própria: SZC, folha e denominador (set/2026).');
 }
 async function rclGravarPrem(p){
   RCL.prem = p;
@@ -12023,19 +12151,31 @@ function rclNomeSA1(chave, fallback){
    Média ponderada por litros dos meses da janela, com a mesma apuração do
    pd.html (rtPrecoMedio: janela de litragem e descarte de preço fora da
    curva). Devolve também os LITROS, que são a base da calibração. */
-function rclSZCJanela(meses, op){
+function rclSZCJanela(meses, op, escopo){
   let lD=0, vD=0, qD=0, dD=0, lA=0, vA=0, qA=0;
+  let agD=0, agLD=0, foraTeto=0, lForaTeto=0, div=0;
+  const divDet=new Map();
   meses.forEach(m=>{
-    const d=rtPrecoMedio('diesel',m,op);
+    const d=rtPrecoMedio('diesel',m,op,false,escopo);
     if(d){ qD+=d.qtdMedia||0; dD+=d.descartados||0;
-           if(d.preco>0){ lD+=d.litros||0; vD+=(d.preco*(d.litros||0)); } }
-    const a=rtPrecoMedio('arla',m,op);
+           agD+=d.agregDescartados||0; agLD+=d.agregLitros||0;
+           foraTeto+=d.foraDoTeto||0; lForaTeto+=d.litrosForaDoTeto||0;
+           (d.divergentesDet||[]).forEach(x=>{ if(!divDet.has(x.placa)) divDet.set(x.placa,x.tipo); });
+           /* litrosSanos, não litros: o total que calibra não pode carregar
+              troca de campo. Ver o teto físico em rtPrecoMedio.          */
+           if(d.preco>0){ lD+=d.litrosSanos||0; vD+=(d.preco*(d.litrosSanos||0)); } }
+    const a=rtPrecoMedio('arla',m,op,false,escopo);
     if(a){ qA+=a.qtdMedia||0;
-           if(a.preco>0){ lA+=a.litros||0; vA+=(a.preco*(a.litros||0)); } }
+           if(a.preco>0){ lA+=a.litrosSanos||0; vA+=(a.preco*(a.litrosSanos||0)); } }
   });
+  div=divDet.size;
   return {
     precoDiesel: lD>0 ? vD/lD : null, litrosDiesel: lD, qtdDiesel: qD, descartados: dD,
     precoArla:   lA>0 ? vA/lA : null, litrosArla:   lA, qtdArla:   qA,
+    escopo: escopo==='propria'?'propria':'todas',
+    agregDescartados:agD, agregLitros:agLD,
+    foraDoTeto:foraTeto, litrosForaDoTeto:lForaTeto,
+    divergentes:div, divergentesDet:[...divDet.entries()].map(([placa,tipo])=>({placa,tipo})),
     op: op||'todas', meses: meses.length
   };
 }
@@ -12814,13 +12954,13 @@ function rclrSomaJanela(serie, k){
   const set=new Set(jan);
   const usados=serie.filter(x=>set.has(x.mes));
   const o={ meses:usados.map(x=>x.mes), n:usados.length, km:0, viagens:0, litros:0,
-            kmProp:0, viagensProp:0, viagensSemCad:0,
+            kmProp:0, viagensProp:0, litrosProp:0, viagensSemCad:0,
             kmAgreg:0, viagensAgreg:0, comAgreg:0,
             resolvidas:0, orfaos:0, ambiguos:0, bk:null };
   const acc=rclrBucket('janela');
   usados.forEach(x=>{
     o.km+=x.km||0; o.viagens+=x.viagens||0; o.litros+=x.litros||0;
-    o.kmProp+=x.kmProp||0; o.viagensProp+=x.viagensProp||0;
+    o.kmProp+=x.kmProp||0; o.viagensProp+=x.viagensProp||0; o.litrosProp+=x.litrosProp||0;
     o.kmAgreg+=x.kmAgreg||0; o.viagensAgreg+=x.viagensAgreg||0;
     o.comAgreg+=x.comAgreg||0;
     o.viagensSemCad+=x.viagensSemCad||0;
@@ -13997,7 +14137,7 @@ function rclCalcular(){
     const out={};                       /* mes → op → {km,viagens,litros}   */
     const toca=(m,op)=>{ if(!out[m]) out[m]={};
       if(!out[m][op]) out[m][op]={km:0, viagens:0, litros:0,
-                                  kmProp:0, viagensProp:0, viagensSemCad:0,
+                                  kmProp:0, viagensProp:0, litrosProp:0, viagensSemCad:0,
                                   kmAgreg:0, viagensAgreg:0, comAgreg:0};
       return out[m][op]; };
     bks.forEach(b=>{
@@ -14017,7 +14157,10 @@ function rclCalcular(){
       Object.keys(vmp).forEach(m=>{
         const n=vmp[m]||0; if(!(n>0)) return;
         [op,'_geral'].forEach(o=>{ const a=toca(m,o);
-          a.kmProp+=kmV*n; a.viagensProp+=n; });
+          /* litrosProp acompanha kmProp: é o modelado da fatia rodada por
+             placa própria, e é ele que passa a ser o denominador do fator
+             de aderência agora que o numerador é só a SZC própria. */
+          a.kmProp+=kmV*n; a.viagensProp+=n; a.litrosProp+=ltV*n; });
       });
       /* Mesma repartição para a fatia de agregado. O km por viagem é o
          mesmo — a rota não muda de tamanho por causa de quem a roda. */
@@ -14095,7 +14238,7 @@ function rclCalcular(){
         }
       }
       return { mes:m, bk, km:md.km||0, viagens:md.viagens||0, litros:md.litros||0,
-               kmProp:md.kmProp||0, viagensProp:md.viagensProp||0,
+               kmProp:md.kmProp||0, viagensProp:md.viagensProp||0, litrosProp:md.litrosProp||0,
                kmAgreg:md.kmAgreg||0, viagensAgreg:md.viagensAgreg||0,
                comAgreg:md.comAgreg||0,
                viagensSemCad:md.viagensSemCad||0,
@@ -14119,9 +14262,10 @@ function rclCalcular(){
 
   /* SZC — o preço médio de bomba, na janela de cada produto. */
   const precos={};
+  const szcEsc = (P.szcEscopo==='todas') ? 'todas' : 'propria';
   const szcDe=(op, nat)=>{
     const ms=rclUltimosMeses((op?mesesDaOp(op):mesesGeral).slice().sort(), rclJanelaDe(nat,P));
-    return rclSZCJanela(ms, op);
+    return rclSZCJanela(ms, op, szcEsc);
   };
   ops.forEach(op=>{
     precos[op]=szcDe(op,'diesel');
@@ -14140,7 +14284,20 @@ function rclCalcular(){
   const calc=(op)=>{
     const serie=series[op||'_geral']||[];
     const j=rclrSomaJanela(serie, rclJanelaDe('aderencia',P));
-    const mod  = j.litros||0;
+    /* ── Os dois lados na MESMA frota ─────────────────────────────────────
+       Antes: numerador = SZC inteira (frota + agregado), denominador =
+       modelado de TODAS as viagens amarradas. O escopo casava no papel, mas
+       não na prática: o agregado era modelado com o km/l da NOSSA premissa
+       (2,00/3,00) sobre 80 placas de terceiro cuja rodagem ninguém mede, e
+       qualquer diferença de consumo dele virava "fator" aplicado às NOSSAS
+       rotas. Com 60% dos litros vindos de agregado, o fator media mais o
+       terceiro do que a frota.
+       Agora os dois lados são de placa própria: SZC filtrada por
+       proprietário/cadastro ÷ litros modelados só das viagens de placa
+       própria. O que sobra da razão é consumo da frota — que é a única
+       coisa que ela deveria ter medido desde o começo.                    */
+    const soPropria = P.szcEscopo!=='todas';
+    const mod  = soPropria ? (j.litrosProp||0) : (j.litros||0);
     const szc  = (op?precos[op]:precos._geral)||{};
     const real = (szc._ader&&szc._ader.litrosDiesel) || 0;
     /* ── Escala: o modelado é só das viagens amarradas; o comprado é da
@@ -14157,7 +14314,11 @@ function rclCalcular(){
     const dentro = f!=null && f>=RCL_CFG.aderenciaMin && f<=RCL_CFG.aderenciaMax;
     const b = op ? (baseR.porOp&&baseR.porOp[op]) : null;
     return { op:op||'consolidado',
+             escopo: soPropria?'propria':'todas',
              modelado:mod, modeladoFrota:modFrota, realizado:real,
+             modeladoTodas:j.litros||0, litrosAgregDescartados:(szc._ader&&szc._ader.agregLitros)||0,
+             szcForaDoTeto:(szc._ader&&szc._ader.litrosForaDoTeto)||0,
+             szcDivergentes:(szc._ader&&szc._ader.divergentes)||0,
              cobertura: cobBruta!=null?cobBruta:1, corrigidoPorCobertura:usaCob,
              fatorBruto:fBruto, fator:f, dentro,
              janela:rclJanelaDe('aderencia',P), mesesUsados:j.meses.slice(),
@@ -14229,7 +14390,10 @@ function rclCalcular(){
             : (divergeBomba!=null ? 'szc — derivado divergiu '+pct(divergeBomba,0)+' do preço de bomba da SZC'
               : 'szc')));
       const aRS = Number(t.janArla && t.janArla.bk && t.janArla.bk.arlaRS)||0;
-      const litrosArlaMod = (t.janArla?t.janArla.litros:0)*(P.arlaPct>0?P.arlaPct:0.05);
+      /* Mesmo escopo do diesel: o R$ de Arla do Mapinha é de frota própria,
+         então os litros que o dividem também são. */
+      const litrosArlaBase = t.janArla ? (P.szcEscopo==='todas' ? t.janArla.litros : t.janArla.litrosProp) : 0;
+      const litrosArlaMod = (litrosArlaBase||0)*(P.arlaPct>0?P.arlaPct:0.05);
       const arlaSzc  = (aRS>0 && szcArla.litrosArla>0) ? aRS/szcArla.litrosArla : null;
       const arlaMod  = (aRS>0 && litrosArlaMod>0)      ? aRS/litrosArlaMod      : null;
       const arlaOk   = saoPreco(arlaSzc, 0.5, 20) || saoPreco(arlaMod, 0.5, 20);
@@ -14532,7 +14696,21 @@ function rclCalcular(){
   ops.concat(['_geral']).forEach(op=>{
     const a=ader[op]; if(!a || !a.corrigidoPorCobertura || a.fatorBruto==null) return;
     if(Math.abs(a.fatorBruto-a.fator)<0.02) return;
-    RCL.aviso.push(`${op==='_geral'?'Consolidado':op}: fator de aderência corrigido pela escala de cobertura — de ${num(a.fatorBruto,3)} para ${num(a.fator,3)}. O diesel comprado é da unidade inteira e os litros modelados vinham só das viagens amarradas a uma rota (${pct(a.cobertura,0)} dos CT-e); a razão media cobertura junto com consumo. Com a correção, o km/l adotado de todas as rotas desta operação sobe na mesma proporção.`);
+    RCL.aviso.push(`${op==='_geral'?'Consolidado':op}: fator de aderência corrigido pela escala de cobertura — de ${num(a.fatorBruto,3)} para ${num(a.fator,3)}. O diesel comprado é de toda a frota própria e os litros modelados vinham só das viagens de placa própria amarradas a uma rota (${pct(a.cobertura,0)} dos CT-e); a razão media cobertura junto com consumo. Com a correção, o km/l adotado de todas as rotas desta operação sobe na mesma proporção.`);
+  });
+  /* ── Escopo da SZC: o que saiu e o que isso mudou ─────────────────────
+     A troca de escopo mexe no consumo de TODAS as rotas. Ela não pode
+     acontecer sem que a tela diga o tamanho do que foi retirado. */
+  if(P.szcEscopo==='todas')
+    RCL.aviso.push('Escopo da SZC em "frota + agregado": o abastecimento de placa de terceiro está entrando no preço de bomba, no preço efetivo e no fator de aderência, sem que o quilômetro do agregado possa entrar em nenhum denominador. É o comportamento anterior a set/2026 e ele infla o fator na proporção do agregado no abastecimento. O padrão do módulo é "só frota própria".');
+  else ops.concat(['_geral']).forEach(op=>{
+    const a=ader[op]; if(!a) return;
+    if(a.litrosAgregDescartados>0 && a.realizado>0)
+      RCL.aviso.push(`${op==='_geral'?'Consolidado':op}: ${num(a.litrosAgregDescartados,0)} l de diesel de AGREGADO ficaram fora da calibração (${pct(a.litrosAgregDescartados/(a.litrosAgregDescartados+a.realizado),0)} do abastecimento da SZC no período). Sem isso, o consumo de 80 placas de terceiro entraria no km/l das nossas rotas — e o quilômetro delas não existe para entrar do outro lado.`);
+    if(a.szcForaDoTeto>0)
+      RCL.aviso.push(`${op==='_geral'?'Consolidado':op}: ${num(a.szcForaDoTeto,0)} l descartados por passarem do teto físico de ${num(RT_CFG.szcLitrosMax,0)} l num único abastecimento — litragem trocada com outro campo na SZC. Entravam inteiros no numerador do fator até esta rodada.`);
+    if(a.szcDivergentes>0 && op==='_geral')
+      RCL.aviso.push(`${num(a.szcDivergentes,0)} placa(s) em que a SZC e o cadastro de veículos do Atlas discordam sobre ser própria ou agregada. O cadastro venceu onde conhece a placa; onde não conhece, valeu o proprietário da SZC. Vale acertar o cadastro — é ele que define o denominador de todas as taxas.`);
   });
   /* Rotas em que a calibração teve de ser limitada pela banda física. */
   const travadas = buckets.filter(b=>b.custo && b.custo.kmlTravado).length;
@@ -14883,7 +15061,7 @@ function rclRenderKpis(lista){
          formula:`fator = litros comprados na SZC ÷ litros esperados da frota\n${num(ad?ad.realizado:0,0)} ÷ ${num(ad?ad.modeladoFrota:0,0)} = ${ad&&ad.fator!=null?num(ad.fator,4):'—'}\ndesvio = fator − 1 = ${adTxt}`,
          insumos:[
            ['Litros comprados (SZC)', num(ad?ad.realizado:0,0)+' l',
-            'Notas de abastecimento da competência-base, da unidade inteira. Dado de nota fiscal — é o lado duro da razão.'],
+            'Notas de abastecimento da competência-base, SÓ de placa própria. Dado de nota fiscal — é o lado duro da razão.'],
            ['Litros modelados (viagens amarradas)', num(ad?ad.modelado:0,0)+' l',
             'O que o modelo físico pede para as viagens que o módulo ligou a uma rota da SZY. É só um pedaço do rodado da frota.'],
            ['Cobertura da competência-base', ad?pct(ad.cobertura,0):'—',
@@ -15796,7 +15974,7 @@ function rclPainel(chaveCli, k3, semScroll){
       ['Normalização do modelo', num(cu?cu.norm:1,4),
        'Escala que garante que LIGAR o modelo não muda o total de litros da frota, só a repartição entre rotas. Sem ela o teto de variação e a assimetria de massa criariam um viés silencioso: a frota inteira passaria a consumir mais no papel.'],
       ['Fator de aderência aplicado', num(cu?cu.fator:1,4),
-       ad ? `Litros comprados na SZC (${num(ad.realizado,0)} l, unidade inteira) ÷ litros esperados da frota (${num(ad.modeladoFrota,0)} l). Os esperados saem do modelo (${num(ad.modelado,0)} l nas viagens amarradas) trazido para a escala da frota `+(ad.corrigidoPorCobertura?`pela cobertura de ${pct(ad.cobertura,0)}.`:'— nesta operação a cobertura não permitiu correção, e os dois números estão na mesma escala.')
+       ad ? `Litros comprados na SZC ${ad.escopo==='propria'?'por PLACA PRÓPRIA':'(frota + agregado)'} (${num(ad.realizado,0)} l) ÷ litros esperados da frota própria (${num(ad.modeladoFrota,0)} l). Os esperados saem do modelo (${num(ad.modelado,0)} l nas viagens de placa própria amarradas) trazido para a escala da frota `+(ad.corrigidoPorCobertura?`pela cobertura de ${pct(ad.cobertura,0)}.`:'— nesta operação a cobertura não permitiu correção, e os dois números estão na mesma escala.')+(ad.litrosAgregDescartados>0?` ${num(ad.litrosAgregDescartados,0)} l de agregado ficaram fora do numerador.`:'')
           : 'Razão entre o diesel comprado e o diesel que o modelo previu, na competência-base.'],
       ['= km/l adotado', num(r.kmlC,2)+' / '+num(r.kmlV,2)+' km/l',
        'O número que entra no cálculo dos litros de cada viagem — e, por consequência, na maior linha do custo.']
@@ -15829,7 +16007,7 @@ function rclPainel(chaveCli, k3, semScroll){
       cu?['Massa considerada', num((cu.tonViagem||0),1)+' t de carga',
        'Peso médio faturado por viagem, do CT-e. Entra na energia de subida e de curva — é o que faz a mesma serra pesar muito mais no sentido carregado.']:null
     ],
-    obs:'DEFINIDO na premissa (média da frota); CALCULADO pelo modelo físico (a rota com serra recebe menos km/l que a rota plana, contra a rota média da amostra); CALIBRADO pela nota fiscal do mês FECHADO, agora comparando frota com frota — antes o módulo dividia o diesel da unidade inteira pelos litros de apenas uma parte das viagens, e o excesso de escala aparecia como se fosse consumo. Por último, a GUARDA impede que qualquer resíduo dessa conta produza um km/l que nenhuma composição alcança.',
+    obs:'DEFINIDO na premissa (média da frota); CALCULADO pelo modelo físico (a rota com serra recebe menos km/l que a rota plana, contra a rota média da amostra); CALIBRADO pela nota fiscal do mês FECHADO, e desde set/2026 comparando FROTA PRÓPRIA com FROTA PRÓPRIA dos dois lados — o abastecimento de agregado saiu do numerador porque o quilômetro dele não existe em lugar nenhum para entrar no denominador. Por último, a GUARDA impede que qualquer resíduo dessa conta produza um km/l que nenhuma composição alcança.',
     alerta: (cu&&cu.kmlTravado)
         ? `A calibração levaria o km/l a ${num(kb?kb.brutoC:0,2)} carregado, fora da banda física ${num(kb?kb.pisoC:0,2)}–${num(kb?kb.tetoC:0,2)}. O valor foi limitado à banda. Isso é sintoma de base incompleta (SZC ou SZB) na competência-base, não de consumo real.`
         : (ad && ad.fator!=null && !ad.dentro)
@@ -15837,13 +16015,21 @@ function rclPainel(chaveCli, k3, semScroll){
         : (baseMesma?null:('Média apurada sobre '+baseTxt+', não sobre a janela analisada. '+baseMotivo))});
 
   const memCalib=mem('Calibração pelo realizado — o que isso significa',{selo:'ADERÊNCIA',
-    fonte:'É o fator de aderência aplicado a ESTA rota. Mesmo número do Consumo adotado, dito pelo desvio em vez do multiplicador.',
-    formula:`fator = litros comprados na SZC ÷ litros esperados da frota\n${ad?num(ad.realizado,0):'—'} ÷ ${ad?num(ad.modeladoFrota,0):'—'} = ${cu?num(cu.fator,4):'—'}   ·   desvio = fator − 1 = ${cu&&cu.fator!=null?pct(cu.fator-1,2):'—'}`,
+    fonte:'É o fator de aderência aplicado a ESTA rota. Mesmo número do Consumo adotado, dito pelo desvio em vez do multiplicador. Desde set/2026 os dois lados são de FROTA PRÓPRIA.',
+    formula:`fator = litros comprados na SZC (placa própria) ÷ litros esperados da frota própria\n${ad?num(ad.realizado,0):'—'} ÷ ${ad?num(ad.modeladoFrota,0):'—'} = ${cu?num(cu.fator,4):'—'}   ·   desvio = fator − 1 = ${cu&&cu.fator!=null?pct(cu.fator-1,2):'—'}`,
     insumos:[
       ['Litros comprados na SZC', ad?num(ad.realizado,0)+' l':'—',
-       'Soma dos litros de diesel das notas de abastecimento da competência-base, da unidade inteira. É o dado mais duro que existe nesta tela: veio de nota fiscal.'],
-      ['Litros modelados nas viagens amarradas', ad?num(ad.modelado,0)+' l':'—',
-       'O que o modelo físico pede para as viagens que o módulo conseguiu ligar a uma rota da SZY. É só um PEDAÇO do rodado da frota — e era com este número, fora de escala, que o diesel da frota inteira vinha sendo comparado.'],
+       (ad&&ad.escopo==='propria'?'Litros de diesel das notas de abastecimento da competência-base, SÓ DE PLACA PRÓPRIA — identificada pelo cadastro de veículos do Atlas e, para a placa não cadastrada, pelo proprietário da própria SZC. É o dado mais duro que existe nesta tela: veio de nota fiscal.':'Soma dos litros de diesel da competência-base, frota E agregado. Escopo antigo — vale conferir a premissa \u201cEscopo da SZC\u201d.')],
+      (ad&&ad.litrosAgregDescartados>0)?['Litros de agregado deixados de fora', num(ad.litrosAgregDescartados,0)+' l',
+       'Abastecimento de placa de terceiro na nossa SZC. Sai do numerador porque o quilômetro dele não entra em denominador nenhum — não existe hodômetro nem apontamento de rodagem de agregado.']:null,
+      (ad&&ad.szcForaDoTeto>0)?['Litros fora do teto físico', num(ad.szcForaDoTeto,0)+' l',
+       'Linhas acima de '+num(RT_CFG.szcLitrosMax,0)+' l num único abastecimento — litragem trocada com outro campo. Antes desta rodada entravam inteiras no numerador do fator.']:null,
+      (ad&&ad.szcDivergentes>0)?['Placas divergentes', num(ad.szcDivergentes,0),
+       'A SZC e o cadastro de veículos do Atlas discordam sobre se a placa é própria. Não trava nada — o cadastro vence quando conhece a placa —, mas é cadastro para arrumar.']:null,
+      ['Litros modelados nas viagens de placa própria', ad?num(ad.modelado,0)+' l':'—',
+       'O que o modelo físico pede para as viagens de PLACA PRÓPRIA que o módulo conseguiu ligar a uma rota da SZY. É só um PEDAÇO do rodado próprio — por isso a correção de cobertura abaixo.'],
+      (ad&&ad.modeladoTodas>ad.modelado)?['(referência) modelado de todas as viagens', num(ad.modeladoTodas,0)+' l',
+       'Incluindo as viagens rodadas por agregado. Fica aqui só como referência: não entra na razão.']:null,
       ad&&ad.corrigidoPorCobertura?['Cobertura da competência-base', pct(ad.cobertura,0),
        'Fração dos CT-e daquele mês que virou viagem medida. É o que converte o modelado do pedaço para o modelado da frota.']:null,
       ['Litros esperados da frota', ad?num(ad.modeladoFrota,0)+' l':'—',
@@ -15865,7 +16051,7 @@ function rclPainel(chaveCli, k3, semScroll){
       ['Base é a janela?', baseMesma?'sim — janela já fechada':'NÃO — a média veio do mês fechado',
        'Quando a janela analisada ainda está em rascunho no Mapinha, a calibração recua para o último mês fechado. Viagens, receita e km continuam sendo os da janela.']
     ],
-    obs:'Em uma frase: o modelo diz quanto de diesel DEVERIA ter sido queimado; a nota fiscal diz quanto foi COMPRADO; a razão entre os dois corrige o km/l de todas as rotas da operação de uma vez. O que mudou nesta rodada é que os dois lados da razão passaram a falar da mesma frota — antes o numerador era a unidade inteira e o denominador só as viagens amarradas, e a diferença de escala aparecia na tela como consumo pior do que o real.'});
+    obs:'Em uma frase: o modelo diz quanto de diesel DEVERIA ter sido queimado pela NOSSA frota; a nota fiscal diz quanto a NOSSA frota comprou; a razão entre os dois corrige o km/l de todas as rotas da operação de uma vez. O agregado saiu dos dois lados em set/2026: ele respondia por cerca de 60% dos litros da SZC e por zero quilômetro medido, então tudo o que ele consumia a mais ou a menos era debitado no consumo das nossas rotas.'});
 
   const memDist=mem('Distância adotada',{selo:cu?(cu.fonteDist||'').toUpperCase():'—',
     fonte: cu&&cu.fonteDist==='szy'
@@ -15967,7 +16153,7 @@ function rclPainel(chaveCli, k3, semScroll){
       <span style="color:var(--mu)">Impostos <b>${brl(r.impostos)}</b></span>
       <span style="color:var(--rd)">Custo variável <b>${brl(r.custoVar)}</b></span>
       <span style="color:var(--am)">Custo fixo <b>${brl(r.custoFixo)}</b></span>
-      <span style="color:var(--pu)">Comissão e estrutura <b>${brl(r.comissao+r.overhead)}</b></span>
+      <span style="color:var(--pu)">${P.regimeComissao==='nao'?'Estrutura':'Comissão e estrutura'} <b>${brl(r.comissao+r.overhead)}</b></span>
       <span style="color:${r.resultado>=0?'var(--gn)':'var(--rd)'}">Resultado <b>${brl(r.resultado)}</b></span>
     </div>
 
@@ -16036,12 +16222,13 @@ function rclPainel(chaveCli, k3, semScroll){
                         insLinha('Depreciação carreta','deprecCarreta'), insLinha('Alimentação','alimentacao'),
                         insLinha('Tempo parado','tempo'), insLinha('Administrativo e demais C.O','administrativo')],
                 obs:'"Rateado" porque o custo é da frota e do mês; o que chega à rota é a fatia proporcional às viagens que ela consumiu. Duas coisas mudam este bloco inteiro: o mês-base (de onde vem o R$) e a cobertura (quantas viagens dividem esse R$).'}))}
-          ${L('Comissão ('+pct(r.comisPct,1)+')', '− '+brl(r.comissao), undefined,
+          ${P.regimeComissao==='nao' ? '' : L('Comissão ('+pct(r.comisPct,1)+')', '− '+brl(r.comissao), undefined,
               mem('Comissão',{selo:'PREMISSAS',
                 fonte:'Percentual sobre a receita LÍQUIDA. Fica fora do CPK de propósito: comissão é função da tarifa, não do quilômetro.',
                 formula:`receita líquida × comissão\n${brl(r.receitaLiquida)} × ${pct(r.comisPct,2)} = ${brl(r.comissao)}`,
-                linhas:[['Regime', P.regimeComissao==='nao'?'sem comissão':'por viagem'],
-                        ['Percentual', pct(r.comisPct,2)]]}))}
+                linhas:[['Regime', 'por viagem'],
+                        ['Percentual', pct(r.comisPct,2)]],
+                obs:'Está ligada porque a premissa "Comissão" foi posta em "Por viagem". O padrão do módulo é sem comissão.'}))}
           ${L('Estrutura', '− '+brl(r.overhead), undefined,
               mem('Estrutura (overhead)',{selo:'PREMISSAS',
                 fonte:'Rateio da estrutura administrativa que a rota tem de sustentar.',
@@ -16051,7 +16238,9 @@ function rclPainel(chaveCli, k3, semScroll){
                 obs:'Nasce desligado. Ligar aqui e também somar a estrutura via pessoal do CPK contaria a mesma conta duas vezes — vale conferir antes de acionar.'}))}
           ${L('<b>Resultado</b>', `<b style="color:${r.resultado>=0?'var(--gn)':'var(--rd)'}">${brl(r.resultado)}</b>`, pct(r.margemPct,1),
               mem('Resultado da rota',{selo:'CASCATA',
-                formula:`receita líquida − custo total − comissão − estrutura\n${brl(r.receitaLiquida)} − ${brl(r.custoOp)} − ${brl(r.comissao)} − ${brl(r.overhead)} = ${brl(r.resultado)}`,
+                formula: (P.regimeComissao==='nao'
+                  ? `receita líquida − custo total − estrutura\n${brl(r.receitaLiquida)} − ${brl(r.custoOp)} − ${brl(r.overhead)} = ${brl(r.resultado)}`
+                  : `receita líquida − custo total − comissão − estrutura\n${brl(r.receitaLiquida)} − ${brl(r.custoOp)} − ${brl(r.comissao)} − ${brl(r.overhead)} = ${brl(r.resultado)}`),
                 linhas:[['Margem sobre a receita bruta', pct(r.margemPct,2)],
                         ['Resultado por viagem', brl(r.viagens>0?r.resultado/r.viagens:null)],
                         ['Resultado por tonelada', brl(r.ton>0?r.resultado/r.ton:null)]],
@@ -16498,7 +16687,7 @@ function rclRenderDiag(){
           linhas:[['Viagens amarradas', num(a.modelado,0)+' l','O que o modelo pede para o pedaço do rodado que o módulo enxerga.'],
                   ['Cobertura da base', pct(a.cobertura,0),'Fração dos CT-e da competência-base resolvidos para uma rota.'],
                   ['Esperado da frota', num(a.modeladoFrota,0)+' l','O modelado trazido para a escala em que o diesel comprado está medido.']],
-          obs:'É esta conversão de escala que faltava. Sem ela, o diesel da unidade inteira era dividido pelos litros de apenas parte das viagens, e o excesso aparecia na tela como consumo pior.'})}>${num(a.modelado,0)} l${a.corrigidoPorCobertura?`<br><span class="muted" style="font-size:9.5px">frota: ${num(a.modeladoFrota,0)} l</span>`:''}</td>
+          obs:'É esta conversão de escala que faltava. Sem ela, o diesel de toda a frota própria era dividido pelos litros de apenas parte das viagens, e o excesso aparecia na tela como consumo pior.'})}>${num(a.modelado,0)} l${a.corrigidoPorCobertura?`<br><span class="muted" style="font-size:9.5px">frota: ${num(a.modeladoFrota,0)} l</span>`:''}</td>
       <td class="num">${num(a.realizado,0)} l</td>
       <td class="num">${a.cobertura==null?'—':pct(a.cobertura,0)}${a.corrigidoPorCobertura?'':' <span class="muted" style="font-size:9.5px">n/c</span>'}</td>
       <td class="num">${a.fatorBruto==null?'—':num(a.fatorBruto,3)}</td>
@@ -16525,8 +16714,14 @@ function rclRenderDiag(){
       carga real diferente da faturada). Parte é quilômetro que simplesmente <b>não está em rota faturada</b> —
       transferência entre filiais, deslocamento para manutenção, reposicionamento sem carga. Esse diesel foi comprado
       e precisa aparecer em algum lugar; a aderência o distribui sobre as rotas que geraram receita.<br><br>
-      <b>A escala dos dois lados da razão.</b> O diesel comprado na SZC é da <b>unidade inteira</b> do mês; os litros
-      modelados só cobrem as viagens que o módulo conseguiu amarrar a uma rota da SZY. Enquanto a razão foi feita
+      <b>Quem entra na conta.</b> Desde set/2026 os dois lados são de <b>frota própria</b>. A SZC é o abastecimento
+      da bomba, não da frota: no arquivo de jan–jun/2026 são 92 proprietários e cerca de <b>60% dos litros são de
+      agregado</b>. Enquanto esses litros entravam no numerador, o consumo de 80 placas de terceiro era debitado no
+      km/l das nossas rotas — e não havia como compensar do outro lado, porque o quilômetro do agregado não é medido
+      em lugar nenhum (o odômetro da SZC vem preenchido em 1,8% das linhas). Placa própria é a do cadastro de
+      veículos do Atlas; para a placa não cadastrada, vale o proprietário da própria SZC.<br><br>
+      <b>A escala dos dois lados da razão.</b> O diesel comprado é de <b>toda a frota própria</b> do mês; os litros
+      modelados só cobrem as viagens de placa própria que o módulo conseguiu amarrar a uma rota da SZY. Enquanto a razão foi feita
       direto entre os dois, ela media <b>cobertura</b> junto com consumo: com 73% de cobertura o fator saía inflado
       em 1/0,73 ≈ 1,37 e derrubava o km/l de todas as rotas — 2,0 km/l de premissa chegavam à tela como 1,09.
       Agora o modelado é levado à escala da frota antes da divisão (<b>modelado ÷ cobertura</b>), e a coluna
@@ -16853,6 +17048,7 @@ function rclPremModal(){
       ${c('consumoModelo','Ajustar km/l pelo relevo da rota', P.consumoModelo, 'física: massa × ganho de altitude, curvas e descida')}
       ${n('consumoCarregado','km/l base carregado', P.consumoCarregado, '0.01', 'vazio = premissa de custo da rota')}
       ${n('consumoVazio','km/l base vazio', P.consumoVazio, '0.01', 'vazio = premissa de custo da rota')}
+      ${s('szcEscopo','Escopo da SZC', P.szcEscopo, [['propria','Só frota própria'],['todas','Frota + agregado']], 'vale para preço de bomba, preço efetivo e calibração')}
       ${c('aderencia','Calibrar pelo diesel comprado (SZC)', P.aderencia, 'faz o custo de diesel fechar com a nota fiscal')}
       ${s('aderenciaFonte','Base da calibração', P.aderenciaFonte, [['op','Por operação'],['geral','Consolidada']])}
     </div>
@@ -16920,7 +17116,7 @@ function rclPremModal(){
       ${s('fontePecas','Peças e serviços', P.fontePecas, [['realizado','Mapinha (R$/viagem)'],['modelo','Modelo']])}
       ${s('fonteDocSeguros','Documentação e seguros', P.fonteDocSeguros, [['realizado','Mapinha (R$/viagem)'],['modelo','Modelo']])}
       ${s('fontePessoal','Pessoal', P.fontePessoal, [['cpk','Premissa (CPK) do Mapinha'],['modelo','Modelo']])}
-      ${s('pessoalCpkBase','Pessoal — base do CPK', P.pessoalCpkBase, [['ambos','Frota 35% + Agregado 65%'],['frota','Só Custo Frota 35%']], 'ambos carrega a folha inteira da unidade')}
+      ${s('pessoalCpkBase','Pessoal — base do CPK', P.pessoalCpkBase, [['frota','Só Custo Frota 35%'],['ambos','Frota 35% + Agregado 65%']], 'o padrão é só a fatia da frota — o divisor é viagem própria')}
       ${s('fonteDeprec','Depreciações', P.fonteDeprec, [['cpk_novo','CPK — equipamento mais novo'],['cpk','CPK — rateio da frota'],['modelo','Modelo']], 'referência de reposição')}
       ${s('deprecRefCriterio','Qual é o "mais novo"', P.deprecRefCriterio, [['compra','Data de compra mais recente'],['inserido','Último registro inserido no CPK']], 'compra não se move ao corrigir cadastro antigo')}
       ${s('deprecRefParcela','Parcela do ativo de referência', P.deprecRefParcela, [['base','Parcela mensal do plano'],['vigente','Parcela da competência (contábil)']], 'a do plano não zera quando o plano acaba')}
@@ -17019,7 +17215,7 @@ function rclPremModal(){
       : `<button class="btn" onclick="mdFechar()">Fechar</button>`);
 
   const bp=$('rclPremPadrao');
-  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO, eixosPadraoV2:true, arlaLitrosV3:true}); mdFechar();
+  if(bp) bp.onclick=async()=>{ await rclGravarPrem({...RCL_PADRAO, eixosPadraoV2:true, arlaLitrosV3:true, comissaoForaV1:true, frotaOnlyV1:true}); mdFechar();
     RCL.real=null; RCL.base=null; await rclRecalcularAsync(); toast('Premissas do resultado no padrão.','ac'); };
   const bs=$('rclPremSalvar');
   if(bs) bs.onclick=async()=>{
@@ -17052,6 +17248,12 @@ function rclPremModal(){
          esta tela faria a migração rodar de novo no próximo boot e desfazer
          a escolha que acabou de ser salva. */
       arlaLitrosV3:true,
+      /* E o mesmo para a comissão: sem o carimbo aqui, salvar a tela faria a
+         migração rodar de novo no boot seguinte e apagar a escolha. */
+      comissaoForaV1:true,
+      /* E o mesmo para o escopo de frota própria. */
+      frotaOnlyV1:true,
+      szcEscopo:gS('szcEscopo'),
       fonteArlaPreco:gS('fonteArlaPreco'),
       fonteLubrificante:gS('fonteLubrificante'), fontePecas:gS('fontePecas'),
       fonteDocSeguros:gS('fonteDocSeguros'), fontePessoal:gS('fontePessoal'),
