@@ -585,6 +585,12 @@ tbody tr:last-child{border-bottom:none}
   .sp-photo-grid{grid-template-columns:1fr}
   .status-actions{margin-left:0;width:100%;justify-content:flex-end}
   .cl-item>div:nth-child(2){min-width:0;flex:1}
+  /* Abrir O.S em coluna única: a própria view volta a rolar e o card não
+     precisa mais de rolagem interna — o rodapé segue grudado no rodapé. */
+  #view-nova-os .view-body{overflow-y:auto!important;overflow-x:hidden!important}
+  #view-nova-os .g2{flex:0 0 auto;min-height:auto}
+  #view-nova-os .g2>div:first-child{overflow:visible}
+  #view-nova-os .g2>.card{overflow:visible}
 }
 
 /* ── Botões ícone — Painel Geral ── */
@@ -747,6 +753,16 @@ body.checklist-only .view-area{height:100%;}
 #view-nova-os .g2{flex:1;min-height:0;display:grid;grid-template-columns:.96fr 1.04fr;gap:8px;margin-bottom:0;align-items:stretch}
 #view-nova-os .g2>div{min-height:0}
 #view-nova-os .g2>div:first-child{display:flex;flex-direction:column;gap:8px;overflow:hidden}
+/* [ROLAGEM] A coluna direita (Serviços e envio) cresce conforme se anexam
+   arquivos. Antes ela estourava a altura da .g2 e, como a .view-body é
+   overflow:hidden, os botões de ação sumiam da tela. Agora o card rola por
+   dentro de si mesmo e o rodapé de ações fica sempre visível. */
+#view-nova-os .g2>.card{display:flex;flex-direction:column;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
+#view-nova-os .g2>.card::-webkit-scrollbar{width:5px}
+#view-nova-os .g2>.card::-webkit-scrollbar-thumb{background:var(--bd);border-radius:3px}
+#view-nova-os .os-acoes-rodape{position:sticky;bottom:0;z-index:30;display:flex;gap:6px;justify-content:flex-end;align-items:center;flex-wrap:wrap;margin:8px -11px 0;padding:8px 11px 3px;background:var(--wh);border-top:1px solid var(--bd2);box-shadow:0 -10px 16px -12px rgba(25,33,53,.45)}
+#view-nova-os .os-acoes-rodape .btn{white-space:nowrap}
+#view-nova-os .os-acoes-hint{margin-right:auto;font-size:10px;color:var(--mu)}
 #view-nova-os .card{padding:9px 11px;margin-bottom:0}
 #view-nova-os .card-hdr{margin-bottom:7px}
 #view-nova-os .fld{margin-bottom:6px}
@@ -776,7 +792,7 @@ body.checklist-only .view-area{height:100%;}
 #view-nova-os #os-fotos-preview{min-height:30px!important;padding:0 0 4px!important}
 #view-nova-os #os-fotos-preview .os-foto-thumb{width:34px;height:34px}
 #view-nova-os .view-body>.card:last-child label{padding:5px 9px!important;font-size:10.8px!important}
-@media(max-height:760px){#view-nova-os .view-body{padding:7px 10px 6px;gap:6px}#view-nova-os .card{padding:7px 9px}#view-nova-os .os-choice-grid.servico .os-choice-card{min-height:44px}#view-nova-os .os-choice-grid.local .os-choice-card{min-height:60px}#view-nova-os .dynamic-area{padding:5px;margin-bottom:5px}#view-nova-os .view-body>.card:last-child{display:none}}
+@media(max-height:760px){#view-nova-os .view-body{padding:7px 10px 6px;gap:6px}#view-nova-os .card{padding:7px 9px}#view-nova-os .os-acoes-rodape{margin:6px -9px 0;padding:7px 9px 3px}#view-nova-os .os-choice-grid.servico .os-choice-card{min-height:44px}#view-nova-os .os-choice-grid.local .os-choice-card{min-height:60px}#view-nova-os .dynamic-area{padding:5px;margin-bottom:5px}#view-nova-os .view-body>.card:last-child{display:none}}
 
 
 
@@ -1369,8 +1385,10 @@ body.checklist-only .view-area{height:100%;}
                 </div>
               </div>
 
-              <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px">
-                    <button class="btn">💾 Salvar rascunho</button>
+              <!-- Rodapé de ações — sticky: permanece visível por mais anexos que a O.S tenha -->
+              <div class="os-acoes-rodape">
+                <span class="os-acoes-hint" id="os-anexos-resumo"></span>
+                <button class="btn">💾 Salvar rascunho</button>
                 <button class="btn btn-ac" id="btn-criar-os" onclick="salvarOS()">📤 Criar e enviar</button>
               </div>
             </div>
@@ -5417,6 +5435,7 @@ function renderOsFotos() {
   if (count) count.textContent = _osFotos.length
     ? `${_osFotos.length} foto${_osFotos.length > 1 ? 's' : ''} adicionada${_osFotos.length > 1 ? 's' : ''}, com arquivo${_osFotos.length > 1 ? 's' : ''} anexado${_osFotos.length > 1 ? 's' : ''} ✓`
     : 'Nenhuma foto adicionada';
+  try { renderOsAnexosResumo(); } catch(_) {}
 }
 
 function removerOsFoto(idx) {
@@ -5460,6 +5479,7 @@ function renderOsDocs() {
   if (count) count.textContent = _osDocs.length
     ? _osDocs.length + ' documento(s) anexado(s) ✓'
     : 'Nenhum documento anexado';
+  try { renderOsAnexosResumo(); } catch(_) {}
 }
 
 function removerOsDoc(idx) {
@@ -5521,12 +5541,28 @@ function renderOsOrcamento() {
   if (nome) nome.textContent = _osOrcamentos.length
     ? _osOrcamentos.length + ' orçamento(s) anexado(s) ✓'
     : 'Nenhum orçamento anexado';
+  try { renderOsAnexosResumo(); } catch(_) {}
 }
 
 function removerOsOrcamento(idx) {
   if (idx === undefined || idx === null) _osOrcamentos = [];
   else _osOrcamentos.splice(idx, 1);
   renderOsOrcamento();
+}
+
+/* Resumo dos anexos exibido no rodapé fixo da Abrir O.S — dá visibilidade do
+   que já foi anexado sem precisar rolar a coluna de volta. */
+function renderOsAnexosResumo() {
+  const el = document.getElementById('os-anexos-resumo');
+  if (!el) return;
+  const partes = [];
+  const nOrc = (typeof _osOrcamentos !== 'undefined' && _osOrcamentos) ? _osOrcamentos.length : 0;
+  const nDoc = (typeof _osDocs !== 'undefined' && _osDocs) ? _osDocs.length : 0;
+  const nFot = (typeof _osFotos !== 'undefined' && _osFotos) ? _osFotos.length : 0;
+  if (nOrc) partes.push(nOrc + ' orçamento' + (nOrc > 1 ? 's' : ''));
+  if (nDoc) partes.push(nDoc + ' NF/recibo' + (nDoc > 1 ? 's' : ''));
+  if (nFot) partes.push(nFot + ' foto' + (nFot > 1 ? 's' : ''));
+  el.textContent = partes.length ? '📎 ' + partes.join(' · ') : '';
 }
 
 // ══ ANEXAR ORÇAMENTO NA EDIÇÃO DA OS (após abertura) — VÁRIOS ARQUIVOS ══
@@ -5648,10 +5684,17 @@ function renderAprovDetail(osId) {
     : `<span style="font-size:11px;color:var(--mu)">Sem fotos anexadas</span>`;
 
   const isFinalizar = d.statusAtual === 'finalizar';
+  /* [FIX NF-ABERTURA] NFs anexadas na abertura da O.S já valem para a
+     finalização — o botão nasce liberado quando elas existem. */
+  const nfsJaAnexadas = (typeof mntNFsComArquivo === 'function' && typeof OS_DB !== 'undefined')
+    ? mntNFsComArquivo(OS_DB[osId] || {}) : [];
+  const temNFPrevia = nfsJaAnexadas.length > 0;
 
   const acoesHtml = isFinalizar
     ? `<div style="background:var(--ac-bg);border:1px solid #bfdbfe;border-radius:var(--rs);padding:10px;margin-bottom:10px;font-size:11.5px;color:var(--ac)">
-        ✅ OS aprovada — anexe a nota fiscal para concluir, ou finalize sem NF (a O.S fica em NF Pendente até o anexo).
+        ${temNFPrevia
+          ? '✅ OS aprovada — ' + nfsJaAnexadas.length + ' nota(s) fiscal(is) já anexada(s) nesta O.S. Clique em <strong>Finalizar OS</strong> para concluir; anexar outra é opcional.'
+          : '✅ OS aprovada — anexe a nota fiscal para concluir, ou finalize sem NF (a O.S fica em NF Pendente até o anexo).'}
       </div>
       <div class="fld" style="margin-bottom:8px">
         <label>Nota fiscal <span style="font-size:10px;font-weight:400;color:var(--mu)">(opcional — sem ela a O.S fica em NF Pendente)</span></label>
@@ -5660,14 +5703,14 @@ function renderAprovDetail(osId) {
             📎 Anexar NF
             <input type="file" accept=".pdf,image/*" style="display:none" onchange="osAnexarNF('${osId}',this)">
           </label>
-          <span id="nf-status-${osId}" style="font-size:11px;color:var(--mu)">Nenhum arquivo anexado</span>
+          <span id="nf-status-${osId}" style="font-size:11px;color:var(--mu)">${temNFPrevia ? escapeHtml(nfsJaAnexadas.map(n => n.nome || 'Nota fiscal').join(' · ')) + ' ✓ (anexada na abertura)' : 'Nenhum arquivo anexado'}</span>
         </div>
       </div>
       <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
         <button class="btn btn-sm" style="background:var(--am-bg);color:#8b4909;border-color:var(--am-bd);font-weight:700" onclick="finalizarOS('${osId}', true)">
           🏁 Finalizar sem NF (NF Pendente)
         </button>
-        <button class="btn btn-gn" id="btn-finalizar-${osId}" onclick="finalizarOS('${osId}')" disabled style="opacity:.5;cursor:not-allowed">
+        <button class="btn btn-gn" id="btn-finalizar-${osId}" onclick="finalizarOS('${osId}')" ${temNFPrevia ? '' : 'disabled'} style="${temNFPrevia ? '' : 'opacity:.5;cursor:not-allowed'}">
           🏁 Finalizar OS
         </button>
       </div>`
@@ -5745,8 +5788,21 @@ function osAnexarNF(osId, input) {
 
 /* semNF = true  → finaliza a execução e deixa a O.S em NF Pendente.
    semNF = false → exige a NF anexada e conclui a O.S (comportamento original). */
+/* Primeiro slot nf1..nf3 livre na O.S. Devolve 0 quando os três estão ocupados
+   (aí a NF nova é acrescentada ao array nfsMeta). */
+function mntProximoSlotNF(os) {
+  const usados = new Set(mntColetarNFs(os || {}).map(n => n.slot).filter(Boolean));
+  for (const n of [1, 2, 3]) if (!usados.has(n) && !usados.has(String(n))) return n;
+  return 0;
+}
+
 async function finalizarOS(osId, semNF) {
-  if (!semNF && !APROV_DATA[osId]?.nfAnexada) { toast('Anexe a nota fiscal ou use "Finalizar sem NF".', 'am'); return; }
+  /* [FIX NF-ABERTURA] Antes exigia um upload feito nesta tela. NF anexada na
+     abertura da O.S (gravada em nfsMeta) agora também habilita a conclusão. */
+  const _nfsPrevias = mntNFsComArquivo(OS_DB[osId] || {});
+  if (!semNF && !APROV_DATA[osId]?.nfAnexada && !_nfsPrevias.length) {
+    toast('Anexe a nota fiscal ou use "Finalizar sem NF".', 'am'); return;
+  }
   const db = window._mntDB;
   const placaOS = OS_DB[osId]?.veiculo || OS_DB[osId]?.placa || null;
   const quem = ATLAS_CURRENT_USER.nome || ATLAS_CURRENT_USER.email || 'Admin';
@@ -5785,24 +5841,42 @@ async function finalizarOS(osId, semNF) {
 
     // Persiste finalização no Firestore
     if (db) {
-      if (!nfUrl) { toast('A nota fiscal não pôde ser enviada ao Storage. A OS não foi finalizada — tente novamente.', 'rd'); return; }
-      // Grava também no formato lido pelo painel Ver (nf1_*), senão a NF
-      // ficava salva apenas em `nfUrl` e não aparecia na visualização.
-      await atlasFsSetDoc('ordens_servico', osId, {
+      // Só é erro quando havia arquivo novo e o upload falhou.
+      if (file && !nfUrl) { toast('A nota fiscal não pôde ser enviada ao Storage. A OS não foi finalizada — tente novamente.', 'rd'); return; }
+      if (!nfUrl && !_nfsPrevias.length) { toast('Anexe a nota fiscal ou use "Finalizar sem NF".', 'am'); return; }
+
+      const agora = new Date();
+      const updates = {
         status: 'Concluída',
-        finalizadoEm: new Date().toISOString(),
+        finalizadoEm: agora.toISOString(),
         finalizadoPor: quem,
         nfPendente: false,
-        nfUrl,
-        nf1_url: nfUrl,
-        nf1_nome: file?.name || 'Nota Fiscal',
-        nf1_enviadoEm: new Date()
-      }, { merge: true });
-      if (OS_DB[osId]) OS_DB[osId].status = 'Concluída';
+        atualizadoEm: agora
+      };
+      /* Grava no formato lido pelo painel Ver, mas SEM sobrescrever a NF que já
+         estava lá: usa o próximo slot livre e, se os três estiverem ocupados,
+         acrescenta ao array nfsMeta. */
+      if (nfUrl) {
+        updates.nfUrl = nfUrl;
+        const slot = mntProximoSlotNF(OS_DB[osId] || {});
+        if (slot) {
+          updates['nf' + slot + '_url']       = nfUrl;
+          updates['nf' + slot + '_nome']      = file?.name || 'Nota Fiscal';
+          updates['nf' + slot + '_enviadoEm'] = agora;
+        } else {
+          const meta = Array.isArray(OS_DB[osId]?.nfsMeta) ? OS_DB[osId].nfsMeta.slice() : [];
+          meta.push({ url: nfUrl, nome: file?.name || 'Nota Fiscal', origem: 'finalizacao', enviadoEm: agora });
+          updates.nfsMeta = meta;
+        }
+      }
+      await atlasFsSetDoc('ordens_servico', osId, updates, { merge: true });
+      if (OS_DB[osId]) Object.assign(OS_DB[osId], updates);
     }
     // Verifica se placa ainda tem OS abertas; se não, remove da manutenção
     if (placaOS) await removeManutencaoPlacaSeNaoHaOSAberta(placaOS);
-    toast('OS-' + osId + ' finalizada com sucesso!', 'gn');
+    toast(nfUrl
+      ? 'OS-' + osId + ' finalizada com sucesso!'
+      : 'OS-' + osId + ' finalizada com a(s) nota(s) fiscal(is) já anexada(s) na abertura.', 'gn');
   } catch(err) {
     toast('OS finalizada com erro parcial: ' + err.message, 'am');
   }
@@ -7058,6 +7132,7 @@ async function salvarNFs() {
   const btn = document.getElementById('sp-nf-salvar');
   const rotulo = jaConcluida ? '💾 Salvar / anexar mais Notas Fiscais'
                : eraNFPendente ? '💾 Anexar NF e concluir OS'
+               : mntNFsComArquivo(os).length ? '🏁 Finalizar O.S (NF já anexada)'
                : '💾 Salvar Notas Fiscais e Finalizar OS';
   if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
   const agora  = new Date();
@@ -7088,7 +7163,12 @@ async function salvarNFs() {
         : 'Anexe ao menos uma nota fiscal para finalizar.', falhas.length ? 'rd' : 'am');
       return;
     }
-    if (!novos && !Object.keys(nfData).length) {
+    /* [FIX NF-ABERTURA] A O.S pode já ter nota fiscal anexada na abertura
+       (gravada em `nfsMeta`). Nesse caso não há arquivo novo para subir, mas a
+       finalização é legítima: a NF existe. Só barra quando não há nada novo E
+       também não há nada a concluir. */
+    const podeFinalizarComNFExistente = !jaConcluida && totalComArquivo > 0;
+    if (!novos && !Object.keys(nfData).length && !podeFinalizarComNFExistente) {
       toast('Nenhuma alteração para salvar nas notas fiscais.', 'am');
       return;
     }
@@ -7120,7 +7200,9 @@ async function salvarNFs() {
     } else if (finalizar) {
       toast(eraNFPendente
         ? 'OS ' + _currentOsId + ' concluída — nota fiscal anexada e pendência de NF regularizada.'
-        : 'OS ' + _currentOsId + ' finalizada. Notas fiscais anexadas e visíveis no painel.', 'gn');
+        : novos
+          ? 'OS ' + _currentOsId + ' finalizada. Notas fiscais anexadas e visíveis no painel.'
+          : 'OS ' + _currentOsId + ' finalizada com a(s) nota(s) fiscal(is) já anexada(s) na abertura.', 'gn');
     } else {
       toast('Notas fiscais atualizadas em ' + _currentOsId + '.', 'gn');
     }
@@ -7544,11 +7626,16 @@ function renderSecaoNFPainel(os) {
   if (podeAnexar) {
     if (nfLocked) nfLocked.style.display = 'none';
     if (nfFields) { nfFields.style.display = 'block'; preencherNFsExistentes(os); }
+    /* Se a NF já veio anexada da abertura, o botão deixa claro que basta
+       clicar para concluir — não é preciso reanexar nada. */
+    const jaTemNF = mntNFsComArquivo(os).length > 0;
     if (btnSalvar) btnSalvar.textContent = isConcluida
       ? '💾 Salvar / anexar mais Notas Fiscais'
       : isNFPendente
         ? '💾 Anexar NF e concluir OS'
-        : '💾 Salvar Notas Fiscais e Finalizar OS';
+        : jaTemNF
+          ? '🏁 Finalizar O.S (NF já anexada)'
+          : '💾 Salvar Notas Fiscais e Finalizar OS';
   } else {
     if (nfFields) nfFields.style.display = 'none';
     if (nfLocked) {
