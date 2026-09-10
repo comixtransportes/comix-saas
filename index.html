@@ -1615,8 +1615,14 @@ async function atlasReconcileBaseIncremental(id, newRowsFull){
   if(mode === 'window'){
     // Índice da base atual por chave (last-wins se já houver dup pré-existente).
     const map = new Map();
+    // [#FIX CHUNK-LAYOUT] origem de cada chave = posição da 1ª ocorrência na base
+    // atual (-1 = linha nova). Só alimenta o layout de chunks na gravação; NÃO
+    // altera conteúdo, ordem nem regra da reconciliação.
+    const orig = new Map();
     for(let i=0;i<existingSlim.length;i++){
-      map.set(atlasSZBRowKey(existingSlim[i]), existingSlim[i]);
+      const __k = atlasSZBRowKey(existingSlim[i]);
+      if(!orig.has(__k)) orig.set(__k, i);
+      map.set(__k, existingSlim[i]);
     }
 
     // Limites da janela de datas do ARQUIVO (Dt. Emissao). Sem datas legíveis →
@@ -1634,7 +1640,7 @@ async function atlasReconcileBaseIncremental(id, newRowsFull){
       const nr=newRows[i];
       const k=atlasSZBRowKey(nr); newKeys.add(k);
       const prev=map.get(k);
-      if(prev===undefined){ map.set(k,nr); added++; }
+      if(prev===undefined){ map.set(k,nr); orig.set(k,-1); added++; }
       else if(atlasSZBContentSig(prev)===atlasSZBContentSig(nr)){ dup++; /* idêntica → ignora */ }
       else { map.set(k,nr); updated++; } /* divergente → planilha mais recente vence */
     }
@@ -1653,6 +1659,9 @@ async function atlasReconcileBaseIncremental(id, newRowsFull){
     }
 
     const finalRows=[...map.values()];
+    const origin=new Int32Array(finalRows.length);
+    { let __i=0; for(const __k of map.keys()){ const o=orig.get(__k); origin[__i++]=(o===undefined?-1:o); } }
+    atlasSetChunkLayoutHint(id, finalRows, origin, existingSlim);
     return { finalRows, stats:{ rowsIn:newRows.length, existing:existingSlim.length, added, updated, dup, removed, finalCount:finalRows.length } };
   }
 
@@ -1669,6 +1678,7 @@ async function atlasReconcileBaseIncremental(id, newRowsFull){
   }
 
   const result=[];
+  const resultOrigin=[];    // [#FIX CHUNK-LAYOUT] índice na base atual (-1 = anexada)
   const reused=new Map();   // assinatura → quantas linhas existentes já reaproveitei
   let dup=0, removed=0, added=0;
 
@@ -1679,7 +1689,7 @@ async function atlasReconcileBaseIncremental(id, newRowsFull){
     const s=atlasSZBContentSig(e);
     const want=newCount.get(s)||0;
     const used=reused.get(s)||0;
-    if(used<want){ result.push(e); reused.set(s,used+1); dup++; }
+    if(used<want){ result.push(e); resultOrigin.push(i); reused.set(s,used+1); dup++; }
     else { removed++; } // não está no arquivo (ou já satisfez a multiplicidade)
   }
 
@@ -1691,9 +1701,10 @@ async function atlasReconcileBaseIncremental(id, newRowsFull){
     const s=atlasSZBContentSig(nr);
     const want=newCount.get(s)||0;
     const placed=(reused.get(s)||0)+(appended.get(s)||0);
-    if(placed<want){ result.push(nr); appended.set(s,(appended.get(s)||0)+1); added++; }
+    if(placed<want){ result.push(nr); resultOrigin.push(-1); appended.set(s,(appended.get(s)||0)+1); added++; }
   }
 
+  atlasSetChunkLayoutHint(id, result, Int32Array.from(resultOrigin), existingSlim);
   return { finalRows:result, stats:{ rowsIn:newRows.length, existing:existingSlim.length, added, updated:0, dup, removed, finalCount:result.length } };
 }
 
@@ -1724,6 +1735,105 @@ function atlasChunkRows(slimRows){
 }
 /* Alias compat. */
 function atlasChunkSZBRows(slimRows){ return atlasChunkRows(slimRows); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   [#FIX CHUNK-LAYOUT] LAYOUT DE CHUNKS PRESERVADO NA GRAVAÇÃO INCREMENTAL
+   ──────────────────────────────────────────────────────────────────────
+   Causa da lentidão pós-Atlas Sync: o diff por chunk compara "chunk N antigo"
+   com "chunk N novo". O fatiamento é por TAMANHO (atlasChunkRows, guloso desde
+   a 1ª linha), então remover/alterar UMA linha no chunk K desloca a fronteira
+   de TODOS os chunks seguintes → todos mudam de assinatura → regrava tudo.
+   Antes do Sync isso não doía: a base era montada por cargas diárias, então a
+   janela do arquivo (últimos dias) ficava sempre nos ÚLTIMOS chunks. Depois da
+   carga completa do Sync a base ficou na ordem do export (por filial), e as
+   linhas recentes de cada filial ficam espalhadas no MEIO da base (fil. 03 ≈
+   chunk 4 de 62) → cada carga manual regrava ~58 chunks (42MB, ~10 min).
+
+   Correção: na gravação que vem da reconciliação, cada linha já existente fica
+   no MESMO chunk em que estava na nuvem (as fronteiras antigas são
+   reconstruídas a partir das assinaturas do meta e conferidas byte a byte);
+   linhas novas vão para o fim, como já era. Só o chunk que teve linha
+   removida/alterada muda — os demais seguem byte-idênticos e são reaproveitados.
+   • Conteúdo e ORDEM das linhas: idênticos ao comportamento anterior (a leitura
+     concatena os chunks 0..N-1 — só as fronteiras mudam).
+   • Algoritmo de assinatura (ATLAS_CHUNK_HASH_V) e formato do meta: inalterados
+     → Atlas Sync e leitores (index/pd/módulos) seguem funcionando igual.
+   • Qualquer inconsistência (base local ≠ nuvem, meta sem assinaturas, ordem
+     inesperada) → volta para o fatiamento guloso de sempre (seguro).
+   ══════════════════════════════════════════════════════════════════════ */
+// Folga acima do alvo para um chunk PRESERVADO que cresceu com linha alterada
+// (evita re-fatiar e cascatear). 700KB + 48KB de JSON segue muito abaixo do
+// limite de 1MB/doc do Firestore. Chunks novos continuam com o alvo de 700KB.
+const ATLAS_CLOUD_CHUNK_TOL_BYTES = 48 * 1024;
+const __atlasChunkLayoutHint = {};
+/* [#FIX ECO] fingerprint da última gravação feita por ESTA sessão, por base.
+   Quando o onSnapshot confirma a própria carga, o conteúdo da nuvem é
+   idêntico ao que já está em memória → não baixa a base inteira de novo. */
+const __atlasOwnFp = {};
+
+/* Registrado pela reconciliação: linhas finais + origem (índice na base atual,
+   -1 = nova) + a base atual usada no merge. Consumido 1x por atlasSaveBaseToFirestore. */
+function atlasSetChunkLayoutHint(id, finalRows, origin, existingRows){
+  try{
+    if(!existingRows || !existingRows.length || !origin || origin.length !== finalRows.length){ delete __atlasChunkLayoutHint[id]; return; }
+    __atlasChunkLayoutHint[id] = { finalRef: finalRows, origin, existing: existingRows };
+  }catch(_){ delete __atlasChunkLayoutHint[id]; }
+}
+
+/* Reconstrói em qual chunk da nuvem estava cada linha da base atual, usando o
+   tamanho embutido em cada assinatura (prefixo "len_" de atlasChunkSig) e
+   CONFERINDO a assinatura completa de cada chunk. Devolve Int32Array
+   (linha → chunk) ou null se a base local não for exatamente a da nuvem. */
+function atlasReconstructChunkMap(rows, hashes){
+  if(!Array.isArray(rows) || !Array.isArray(hashes) || !hashes.length) return null;
+  const chunkOf = new Int32Array(rows.length);
+  let idx = 0;
+  for(let k=0;k<hashes.length;k++){
+    const L = parseInt(String(hashes[k]).split('_')[0], 10);
+    if(!(L >= 2)) return null;
+    const start = idx;
+    let size = 2;
+    while(size < L && idx < rows.length){
+      size += JSON.stringify(rows[idx]).length + (idx > start ? 1 : 0);
+      chunkOf[idx] = k;
+      idx++;
+    }
+    if(size !== L) return null;
+    if(atlasChunkSig(rows.slice(start, idx)) !== hashes[k]) return null;
+  }
+  if(idx !== rows.length) return null;
+  return chunkOf;
+}
+
+/* Fatiamento que PRESERVA as fronteiras antigas. Linha existente → mesmo chunk
+   de antes (dividido só se passar do teto com folga); linhas novas (origem -1,
+   sempre no fim) completam o último chunk e abrem chunks novos com o alvo
+   normal. Devolve null se a ordem não for a esperada (→ fatiamento guloso). */
+function atlasChunkRowsPreserving(slim, origin, chunkOf){
+  if(!origin || origin.length !== slim.length || !chunkOf) return null;
+  const hardMax = ATLAS_CLOUD_CHUNK_BYTES + ATLAS_CLOUD_CHUNK_TOL_BYTES;
+  const chunks = [];
+  let buf = [], bufSize = 2, curK = -1, inTail = false, total = 0;
+  const flush = () => { if(buf.length){ chunks.push(buf); total += buf.length; } buf = []; bufSize = 2; };
+  for(let i=0;i<slim.length;i++){
+    const o = origin[i];
+    const rowLen = JSON.stringify(slim[i]).length;
+    if(o >= 0){
+      if(inTail || o >= chunkOf.length) return null;
+      const k = chunkOf[o];
+      if(k < curK) return null;                                  // ordem inesperada
+      if(k !== curK){ flush(); curK = k; }
+      else if(buf.length && bufSize + rowLen + 1 > hardMax){ flush(); }
+    } else {
+      inTail = true;
+      if(buf.length && bufSize + rowLen + 1 > ATLAS_CLOUD_CHUNK_BYTES){ flush(); }
+    }
+    bufSize += rowLen + (buf.length ? 1 : 0);
+    buf.push(slim[i]);
+  }
+  flush();
+  return total === slim.length ? chunks : null;
+}
 
 /* Versão do algoritmo de assinatura por chunk. Se mudar a forma de chunkar
    ou de hashear, incremente: metas gravados com versão diferente são ignorados
@@ -1758,14 +1868,15 @@ async function atlasSaveBaseToFirestore(id, payload){
   // sem uma segunda passada de JSON.stringify por chunk.
   const fp = atlasBaseFingerprint(slim);
 
-  const chunks = atlasChunkRows(slim);
-  if(chunks.length > ATLAS_CLOUD_MAX_CHUNKS){
-    throw new Error(`${id.toUpperCase()} gerou ${chunks.length} chunks (limite ${ATLAS_CLOUD_MAX_CHUNKS}). Arquivo grande demais.`);
-  }
+  // [#FIX CHUNK-LAYOUT] dica de layout da reconciliação (vale só p/ ESTE payload).
+  const __hint = __atlasChunkLayoutHint[id];
+  delete __atlasChunkLayoutHint[id];
+
+  const __greedy = atlasChunkRows(slim);
+  let chunks = __greedy;
 
   const approxBytes = Number((fp.split('_')[1]) || 0); // soma dos bytes JSON das linhas
   const totalMB = approxBytes / 1024 / 1024;
-  dbLog(`☁ ${id.toUpperCase()} → Firestore: ${chunks.length} chunks, ${totalMB.toFixed(2)}MB...`,'info');
 
   const docRef = atlasCloudDocRef(id);
 
@@ -1773,18 +1884,56 @@ async function atlasSaveBaseToFirestore(id, payload){
   //    Se o fingerprint salvo é idêntico ao atual E o nº de chunks bate, o
   //    conteúdo é exatamente o mesmo → não regrava nada. Como o fp deriva do
   //    conteúdo slim exato, isso é seguro cross-device.
-  //    OBS: NÃO fazemos gravação parcial de "apenas chunks alterados": ao
-  //    adicionar/remover linhas as fronteiras dos chunks deslocam (rebalance),
-  //    então "chunk N" muda mesmo sem mudança lógica — diff por chunk geraria
-  //    risco de inconsistência cross-device. Por segurança, quando há QUALQUER
-  //    mudança, regravamos a base inteira (rápido) e o meta por último (commit).
+  //    OBS: quando há mudança, só os chunks com assinatura diferente são
+  //    regravados (passo 2) e o meta vai por último (commit). O layout preservado
+  //    [#FIX CHUNK-LAYOUT] evita que remover/alterar 1 linha desloque as
+  //    fronteiras de todos os chunks seguintes.
   let __oldMetaSnap = null;
+  try{ __oldMetaSnap = await docRef.get(); }catch(_){ __oldMetaSnap = null; }
+
+  // Assinaturas por chunk da versão atual na nuvem (mesma regra de antes: só
+  // vale se for da MESMA versão de algoritmo e uma por chunk).
+  let oldHashes = null;
+  if(__oldMetaSnap && __oldMetaSnap.exists){
+    const __om = __oldMetaSnap.data();
+    if(__om && __om.chunkHashV === ATLAS_CHUNK_HASH_V
+       && Array.isArray(__om.chunkHashes)
+       && __om.chunkHashes.length === (__om.numChunks||0)){
+      oldHashes = __om.chunkHashes;
+    }
+  }
+
+  // [#FIX CHUNK-LAYOUT] Mantém cada linha existente no chunk onde já estava.
+  let __layout = 'padrão';
+  if(__hint && __hint.finalRef === payload.rows && oldHashes && __hint.origin.length === slim.length){
+    try{
+      const __tL0 = performance.now();
+      const __map = atlasReconstructChunkMap(__hint.existing, oldHashes);
+      const __pres = __map ? atlasChunkRowsPreserving(slim, __hint.origin, __map) : null;
+      if(__pres){
+        // Compactação: se, com o tempo, remoções deixarem muitos chunks meio vazios,
+        // volta 1x ao fatiamento padrão (regrava tudo e reequilibra).
+        const __slack = Math.max(2, Math.ceil(__greedy.length * 0.2));
+        if(__pres.length <= __greedy.length + __slack){ chunks = __pres; __layout = 'preservado'; }
+        else { __layout = 'compactação'; dbLog(`🧹 ${id.toUpperCase()}: chunks fragmentados (${__pres.length} vs ${__greedy.length}) — reequilibrando a base nesta carga.`,'info'); }
+      } else {
+        console.info('[Atlas Save] layout preservado indisponível (base local ≠ nuvem ou ordem inesperada) — fatiamento padrão.');
+      }
+      console.log('[Atlas Save] layout ' + __layout + ' em ' + (performance.now()-__tL0).toFixed(0) + 'ms');
+    }catch(e){ console.warn('[Atlas Save] layout preservado falhou, usando padrão:', e && e.message); chunks = __greedy; __layout = 'padrão'; }
+  }
+
+  if(chunks.length > ATLAS_CLOUD_MAX_CHUNKS){
+    throw new Error(`${id.toUpperCase()} gerou ${chunks.length} chunks (limite ${ATLAS_CLOUD_MAX_CHUNKS}). Arquivo grande demais.`);
+  }
+  dbLog(`☁ ${id.toUpperCase()} → Firestore: ${chunks.length} chunks, ${totalMB.toFixed(2)}MB...`,'info');
+
   try{
-    __oldMetaSnap = await docRef.get();
-    if(__oldMetaSnap.exists){
+    if(__oldMetaSnap && __oldMetaSnap.exists){
       const om = __oldMetaSnap.data();
       if(om.fp && om.fp === fp && (om.numChunks||0) === chunks.length){
         dbLog(`✓ ${id.toUpperCase()} já estava atualizada na nuvem (fingerprint idêntico) — regravação ignorada.`,'ok');
+        __atlasOwnFp[id] = fp;
         return { chunks: chunks.length, mb: totalMB, skipped: true };
       }
     }
@@ -1833,17 +1982,7 @@ async function atlasSaveBaseToFirestore(id, payload){
   //    de dezenas de gravações para 1-2. A correção é sempre exata, pois qualquer
   //    chunk com assinatura diferente é regravado; só pulamos os byte-idênticos.
   const newHashes = chunks.map(atlasChunkSig);
-  let oldHashes = null;
-  if(__oldMetaSnap && __oldMetaSnap.exists){
-    const __om = __oldMetaSnap.data();
-    // Só confiamos nas assinaturas antigas se forem da MESMA versão de algoritmo
-    // e self-consistentes (uma por chunk). Caso contrário, regrava tudo 1x.
-    if(__om && __om.chunkHashV === ATLAS_CHUNK_HASH_V
-       && Array.isArray(__om.chunkHashes)
-       && __om.chunkHashes.length === (__om.numChunks||0)){
-      oldHashes = __om.chunkHashes;
-    }
-  }
+  // (oldHashes já validado acima — mesma regra de versão/consistência de antes.)
   // Índices a gravar: chunk novo OU assinatura divergente. Sem assinaturas antigas
   // válidas (1ª carga / meta legado / outro gravador) => regrava tudo uma vez para
   // popular as assinaturas; as próximas cargas serão rápidas.
@@ -1931,6 +2070,7 @@ async function atlasSaveBaseToFirestore(id, payload){
   //      de versões — imune a relógio desajustado no cliente).
   //    - ts: mantido como alias de clientTs para compatibilidade com código legado.
   const clientTs = payload.ts || new Date().toISOString();
+  __atlasOwnFp[id] = fp; // [#FIX ECO] a próxima notificação com este fp é a própria carga
   try {
     await docRef.set({
       ts: clientTs,
@@ -1948,11 +2088,13 @@ async function atlasSaveBaseToFirestore(id, payload){
     });
 
   } catch(e) {
+    if(__atlasOwnFp[id] === fp) delete __atlasOwnFp[id];
     console.error('[Atlas Save] ✗ FALHA AO GRAVAR META:', e.message, '(code=' + e.code + ')');
     throw e;
   }
   
-  dbLog(`✓ ${id.toUpperCase()} salvo no Firestore (${toWrite.length}/${chunks.length} chunks gravados${skippedChunks>0?`, ${skippedChunks} reaproveitados`:''}, ${totalMB.toFixed(2)}MB) — visível em qualquer navegador`,'ok');
+  const __mbWritten = toWrite.reduce((a,i)=>a + Number(String(newHashes[i]).split('_')[0]||0), 0) / 1024 / 1024;
+  dbLog(`✓ ${id.toUpperCase()} salvo no Firestore (${toWrite.length}/${chunks.length} chunks gravados${skippedChunks>0?`, ${skippedChunks} reaproveitados`:''}, ${__mbWritten.toFixed(2)}MB enviados de ${totalMB.toFixed(2)}MB · layout ${__layout}) — visível em qualquer navegador`,'ok');
   return { chunks: chunks.length, written: toWrite.length, reused: skippedChunks, mb: totalMB, skipped: false };
 }
 
@@ -2096,6 +2238,13 @@ function atlasWatchBase(id){
       __atlasWatchLastTs[id] = meta.ts;
       __atlasWatchLastTs[id+'__serverMs'] = newUpdatedAt;
       if(id === 'szb') window.__atlasSZBLastTs = meta.ts;
+      {
+        const __mem = window.ATLAS_DATA && window.ATLAS_DATA[id];
+        if(meta.fp && __atlasOwnFp[id] === meta.fp && __mem && Array.isArray(__mem.rows) && __mem.rows.length){
+          dbLog(`✓ ${id.toUpperCase()}: nuvem confirmou a carga desta sessão (conteúdo idêntico) — sem novo download.`,'ok');
+          return;
+        }
+      }
       dbLog(`☁ Nova versão de ${id.toUpperCase()} na nuvem (carga de ${meta.user||'—'})`,'info');
       try{
         const cloudPayload = await atlasLoadBaseFromFirestoreShared(id);
