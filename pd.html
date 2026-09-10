@@ -1230,17 +1230,32 @@ let PARAMS = {
 const PA_LABELS = { '17':'SC', '18':'PR', '03':'SP' };
 
 // Semestre-chave a partir do mês 'YYYY-MM' (jan–jun = S1, jul–dez = S2)
+// [FIX PA-BOOT] Sem mês informado, usa o semestre da data de HOJE (antes: '2026-S1' fixo).
 function getPASemestreKey(mes){
-  if(!mes) return '2026-S1';
+  if(!mes || !/^\d{4}-\d{2}/.test(mes)){
+    const d=new Date(); mes=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  }
   const [ano,mesNum]=mes.split('-').map(Number);
   return `${ano}-S${mesNum<=6?1:2}`;
 }
+// Ordinal do semestre (para comparar '2026-S2' < '2027-S1')
+function pdPAKeyOrd(k){ const m=/^(\d{4})-S([12])$/.exec(k||''); return m ? (+m[1])*2+(+m[2]-1) : -1; }
+function pdPASemLabel(k){ const m=/^(\d{4})-S([12])$/.exec(k||''); return m ? `${m[1]} - ${m[2]}º Semestre` : k; }
 
-// Retorna o objeto `pa` do semestre do mês; se não existir, cai no fallback PARAMS.pa
-function getPAByMes(mes){
+// [FIX PA-BOOT] Resolve o PA do mês. Se o semestre do mês não estiver cadastrado,
+// usa o semestre cadastrado MAIS RECENTE anterior a ele (antes caía sempre no
+// 2026-S1 via PARAMS.pa — em jan/2027 o PD mostraria o PA de jan/2026).
+function getPAInfo(mes){
   const key=getPASemestreKey(mes);
-  return (PARAMS.paSemestres && PARAMS.paSemestres[key] && PARAMS.paSemestres[key].pa) || PARAMS.pa;
+  const S=PARAMS.paSemestres||{};
+  if(S[key] && S[key].pa) return { pa:S[key].pa, key, usedKey:key };
+  const ord=pdPAKeyOrd(key);
+  const keys=Object.keys(S).filter(k=>S[k]&&S[k].pa&&pdPAKeyOrd(k)>=0).sort((a,b)=>pdPAKeyOrd(a)-pdPAKeyOrd(b));
+  const prev=keys.filter(k=>pdPAKeyOrd(k)<=ord).pop() || keys[0];
+  return prev ? { pa:S[prev].pa, key, usedKey:prev } : { pa:PARAMS.pa, key, usedKey:null };
 }
+// Retorna o objeto `pa` do semestre do mês (API usada por todo o dashboard)
+function getPAByMes(mes){ return getPAInfo(mes).pa; }
 
 // Clona um bloco `pa` garantindo as 3 filiais e seus labels
 function clonePA(src){
@@ -1277,6 +1292,87 @@ function ensurePASemestres(){
 
 // Normaliza já no boot (default local); a nuvem re-normaliza em loadParamsFromCloud
 ensurePASemestres();
+
+/* ════════════════════════════════════════════════════════════════════════
+   [FIX PA-BOOT] Origem dos parâmetros no boot.
+   CAUSA DO BUG: os parâmetros (PA semestral, feriados, diesel…) vinham SÓ do
+   Worker (/api/params) numa única tentativa silenciosa. Quando essa chamada
+   falhava ou estourava no boot (celular, rede oscilando, Worker frio, banda
+   disputada com o download dos ~53 chunks da SZB), apiGet devolvia null e o PD
+   seguia com o DEFAULT embutido no código — onde o 2º semestre é cópia do 1º.
+   Resultado: PA do semestre passado na tela até o próximo F5.
+   CORREÇÃO:
+     1) cópia local da última resposta boa da nuvem (LKG) aplicada no boot;
+     2) busca na nuvem com timeout + novas tentativas (backoff) + cache:no-store;
+     3) re-tenta ao voltar a conexão / ao voltar para a aba;
+     4) salvar parâmetros fica BLOQUEADO enquanto a nuvem não foi lida
+        (antes, salvar nesse estado sobrescreveria o PA oficial do S2 com o S1);
+     5) aviso visível quando o PD estiver rodando com o default do código.
+   ════════════════════════════════════════════════════════════════════════ */
+const PD_PARAMS_LKG_KEY = 'PD_PARAMS_LKG_v1';
+window.__PD_PARAMS_SRC = 'default';     // 'default' | 'cache' | 'cloud'
+window.__PD_PARAMS_LKG_JSON = null;
+
+// Aplica um payload de parâmetros (nuvem ou cache) sobre PARAMS
+function pdApplyParamsData(data){
+  if (!data || !(data.pa || data.paSemestres)) { ensurePASemestres(); return; }
+  PARAMS = { ...PARAMS, ...data };
+  if (data.paSemestres) {
+    PARAMS.paSemestres = data.paSemestres;           // formato semestral — usar como veio
+  } else if (data.pa) {
+    PARAMS.paSemestres = {                            // legado: migra para 2026-S1
+      '2026-S1': { label:'2026 - 1º Semestre', pa: clonePA(data.pa) }
+    };
+  }
+  ensurePASemestres();
+}
+function pdSaveParamsLKG(data, jsonPronto){
+  try {
+    const json = jsonPronto || JSON.stringify(data);   // json capturado ANTES da normalização (comparável com a próxima resposta)
+    localStorage.setItem(PD_PARAMS_LKG_KEY, JSON.stringify({ ts: Date.now(), data: JSON.parse(json) }));
+    window.__PD_PARAMS_LKG_JSON = json;
+  } catch(_) {}
+}
+// Hidrata do cache ANTES de qualquer render — o 1º desenho já sai com o PA certo
+(function pdHydrateParamsLKG(){
+  try {
+    const c = JSON.parse(localStorage.getItem(PD_PARAMS_LKG_KEY) || 'null');
+    if (c && c.data && (c.data.pa || c.data.paSemestres)) {
+      window.__PD_PARAMS_LKG_JSON = JSON.stringify(c.data);
+      pdApplyParamsData(c.data);
+      window.__PD_PARAMS_SRC = 'cache';
+    }
+  } catch(_) {}
+})();
+
+// Aviso discreto (pílula no rodapé) quando o PA exibido não é confiável
+function pdUpdateParamsBanner(mes){
+  try {
+    if (!document.body) return;
+    if (!mes) { const sm=document.getElementById('sm'); mes = sm ? sm.value : ''; }
+    let msg = '';
+    if (window.__PD_PARAMS_SRC === 'default') {
+      msg = '⚠ Parâmetros/PA ainda não carregados da nuvem — exibindo valores padrão. Tentando novamente…';
+    } else if (mes) {
+      const info = getPAInfo(mes);
+      if (info.usedKey && info.usedKey !== info.key) {
+        msg = '⚠ PA de ' + pdPASemLabel(info.key) + ' não cadastrado — usando ' + pdPASemLabel(info.usedKey) + '. Cadastre em ⚙ Parâmetros.';
+      }
+    }
+    let el = document.getElementById('pd-params-banner');
+    if (!msg) { if (el) el.style.display = 'none'; return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'pd-params-banner';
+      el.style.cssText = 'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9999;'+
+        'max-width:92vw;padding:8px 14px;border-radius:999px;background:#fff4e0;color:#8a5200;'+
+        'border:1px solid #f0c27a;font:600 11.5px/1.35 inherit;box-shadow:0 4px 14px rgba(0,0,0,.12);text-align:center;';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.style.display = 'block';
+  } catch(_) {}
+}
 
 
 let RAW=[], DATA=[];
@@ -2093,31 +2189,68 @@ async function loadSZYFromFirestore() {
 }
 
 // ── Carregar parâmetros da nuvem ──
-async function loadParamsFromCloud() {
-  const data = await apiGet('/api/params');
-  if (data && (data.pa || data.paSemestres)) {
-    PARAMS = { ...PARAMS, ...data };
-    if (data.paSemestres) {
-      // Nuvem já no formato semestral — usar como veio
-      PARAMS.paSemestres = data.paSemestres;
-    } else if (data.pa) {
-      // Dado legado (apenas PARAMS.pa): migrar para o 1º Semestre/2026
-      PARAMS.paSemestres = {
-        '2026-S1': { label:'2026 - 1º Semestre', pa: clonePA(data.pa) }
-      };
-    }
-  }
-  ensurePASemestres();   // garante S1/S2, labels das filiais e o fallback PARAMS.pa
-  ensureAnttParams();
-  // Última atualização
-  await loadLastUpdate();
-  // Se o dashboard já foi renderizado antes de o PA semestral chegar da nuvem, os
-  // cards de PA teriam sido montados com o default local (S2 = cópia do S1). Agora
-  // que o PA correto do semestre chegou, re-renderiza a aba visível — assim o mês
-  // atual (ex.: julho = S2) já mostra o PA certo no 1º login, sem precisar
-  // reselecionar a data.
-  if (DATA.length) recalc();
+// [FIX PA-BOOT] Timeout + no-store (sem resposta HTTP cacheada pelo navegador).
+// Diferencia "nuvem respondeu" (mesmo que vazia) de "falhou" — apiGet engolia os dois como null.
+async function pdFetchParams(){
+  const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  const t = ctrl ? setTimeout(()=>{ try{ ctrl.abort(); }catch(_){} }, 12000) : null;
+  try {
+    const r = await fetch(WORKER_URL + '/api/params', { cache:'no-store', signal: ctrl ? ctrl.signal : undefined });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally { if (t) clearTimeout(t); }
 }
+const PD_PARAMS_RETRY_MS = [2000, 4000, 8000, 15000, 30000, 60000];
+let __pdParamsInflight = null, __pdParamsRetryT = null, __pdParamsTent = 0, __pdLastUpdDone = false;
+
+function pdScheduleParamsRetry(){
+  if (__pdParamsRetryT || window.__PD_PARAMS_SRC === 'cloud') return;
+  const ms = PD_PARAMS_RETRY_MS[Math.min(__pdParamsTent, PD_PARAMS_RETRY_MS.length-1)];
+  __pdParamsTent++;
+  __pdParamsRetryT = setTimeout(()=>{ __pdParamsRetryT = null; loadParamsFromCloud().catch(()=>{}); }, ms);
+}
+
+async function loadParamsFromCloud() {
+  if (__pdParamsInflight) return __pdParamsInflight;      // dedup: uma busca por vez
+  __pdParamsInflight = (async ()=>{
+    let data, ok = false;
+    try { data = await pdFetchParams(); ok = true; }
+    catch(e) { console.warn('[PD] /api/params falhou (tentativa '+(__pdParamsTent+1)+'):', e && e.message); }
+
+    if (!ok) {
+      ensurePASemestres(); ensureAnttParams();
+      pdUpdateParamsBanner();
+      pdScheduleParamsRetry();
+      if (!__pdLastUpdDone) { __pdLastUpdDone = true; loadLastUpdate().catch(()=>{}); }
+      return false;
+    }
+
+    // Nuvem respondeu: a partir daqui ela é a fonte oficial
+    const prevSrc = window.__PD_PARAMS_SRC;
+    const json = (data && (data.pa || data.paSemestres)) ? JSON.stringify(data) : null;
+    const igualAoCache = prevSrc === 'cache' && json && json === window.__PD_PARAMS_LKG_JSON;
+    window.__PD_PARAMS_LAST_CHANGED = !!(json && !igualAoCache);
+    if (json && !igualAoCache) { pdSaveParamsLKG(null, json); pdApplyParamsData(data); }
+    ensurePASemestres(); ensureAnttParams();
+    window.__PD_PARAMS_SRC = 'cloud';
+    __pdParamsTent = 0;
+    if (__pdParamsRetryT) { clearTimeout(__pdParamsRetryT); __pdParamsRetryT = null; }
+    pdUpdateParamsBanner();
+    // Re-renderiza JÁ (antes de /api/lastupdate) se o PA mudou em relação ao que
+    // estava na tela. Se veio igual ao cache local, nada muda — evita um recalc
+    // extra no celular.
+    if (!igualAoCache && DATA.length) recalc();
+    __pdLastUpdDone = true;
+    loadLastUpdate().catch(()=>{});
+    return true;
+  })();
+  try { return await __pdParamsInflight; } finally { __pdParamsInflight = null; }
+}
+// Re-tenta assim que a conexão volta ou o usuário retorna à aba/app
+window.addEventListener('online', ()=>{ if (window.__PD_PARAMS_SRC !== 'cloud') loadParamsFromCloud().catch(()=>{}); });
+document.addEventListener('visibilitychange', ()=>{
+  if (document.visibilityState === 'visible' && window.__PD_PARAMS_SRC !== 'cloud') loadParamsFromCloud().catch(()=>{});
+});
 
 async function loadLastUpdate() {
   const data = await apiGet('/api/lastupdate');
@@ -2140,6 +2273,7 @@ async function saveParamsToCloud() {
   setSyncMsg('saving','Salvando na nuvem…');
   const res = await apiPost('/api/params', PARAMS);
   if (res && res.ok) {
+    pdSaveParamsLKG(PARAMS);          // [FIX PA-BOOT] cache local acompanha o que foi salvo
     setSyncMsg('ok','✓ Salvo na nuvem com sucesso');
   } else {
     setSyncMsg('err','✗ Erro ao salvar — verifique a conexão');
@@ -3471,6 +3605,7 @@ function recalc(){
   const uid=document.getElementById('su').value;
   const mes=document.getElementById('sm').value;
   if(!mes) return;
+  pdUpdateParamsBanner(mes); // [FIX PA-BOOT] avisa se o PA exibido é default/semestre não cadastrado
   // enrich() só roda se DATA ainda não estiver populado com os dados atuais de RAW.
   // fullRebuild() já chama enrich() antes de invocar recalc() — evita duplo processamento.
   if(!DATA.length) DATA=enrich(RAW);
@@ -5165,14 +5300,29 @@ function onPASemestreChange(){
   loadPAIntoInputs(key);
 }
 
-function openParams(){
+async function openParams(){
   if (!pdCanUseParams()) return;
+  // [FIX PA-BOOT] Nunca preenche o modal com o default do código: se a nuvem ainda
+  // não foi lida, busca agora (o modal abre na hora e mostra o status).
+  if (window.__PD_PARAMS_SRC !== 'cloud') {
+    document.getElementById('modal-bg').classList.add('open');
+    setSyncMsg('saving','Buscando parâmetros na nuvem…');
+    await loadParamsFromCloud().catch(()=>false);
+  }
   ensurePASemestres();
   // Abre no semestre correspondente ao mês atualmente selecionado no PD
   const mesSel=document.getElementById('sm').value;
   const key=getPASemestreKey(mesSel);
+  // [FIX PA-BOOT] Semestre ainda não cadastrado (ex.: 2027-S1): cria em memória como
+  // cópia do semestre vigente mais recente — ponto de partida editável; só persiste ao salvar.
+  if (!PARAMS.paSemestres[key]) {
+    PARAMS.paSemestres[key] = { label: pdPASemLabel(key), pa: clonePA(getPAInfo(mesSel).pa) };
+  }
+  // Seletor montado a partir dos semestres existentes (não mais fixo em 2026)
   const selEl=document.getElementById('pa-semestre');
-  selEl.value = [...selEl.options].some(o=>o.value===key) ? key : '2026-S1';
+  const keys=Object.keys(PARAMS.paSemestres).filter(k=>pdPAKeyOrd(k)>=0).sort((a,b)=>pdPAKeyOrd(a)-pdPAKeyOrd(b));
+  selEl.innerHTML = keys.map(k=>`<option value="${k}">${(PARAMS.paSemestres[k].label)||pdPASemLabel(k)}</option>`).join('');
+  selEl.value = key;
   __pdPASemAtual = selEl.value;
   loadPAIntoInputs(selEl.value);
   document.getElementById('p-diesel').value=PARAMS.diesel;
@@ -5188,13 +5338,33 @@ function openParams(){
   renderFeriados();
   renderAnttParams();
   calcFdu();
-  setSyncMsg('','Parâmetros carregados da nuvem');
+  if (window.__PD_PARAMS_SRC === 'cloud') setSyncMsg('','Parâmetros carregados da nuvem');
+  else setSyncMsg('err','⚠ Sem conexão com a nuvem — exibindo cópia '+(window.__PD_PARAMS_SRC==='cache'?'local':'padrão')+'. Salvar bloqueado até reconectar.');
   document.getElementById('modal-bg').classList.add('open');
 }
 
 function closeParams(){ document.getElementById('modal-bg').classList.remove('open'); }
 
 async function saveParams(){
+  // [FIX PA-BOOT] Se a nuvem nunca foi lida nesta sessão, o PARAMS em memória é o
+  // default do código (S2 = cópia do S1) ou uma cópia local — salvar agora
+  // SOBRESCREVERIA o PA oficial. Tenta ler a nuvem uma última vez; se falhar, bloqueia.
+  if (window.__PD_PARAMS_SRC !== 'cloud') {
+    setSyncMsg('saving','Confirmando parâmetros da nuvem antes de salvar…');
+    const okNuvem = await loadParamsFromCloud().catch(()=>false);
+    if (!okNuvem) {
+      setSyncMsg('err','✗ Nuvem indisponível — salvar foi bloqueado para não sobrescrever o PA oficial. Tente de novo em instantes.');
+      return;
+    }
+    if (window.__PD_PARAMS_LAST_CHANGED) {
+      // A nuvem tinha valores diferentes dos que estavam na tela: recarrega o modal
+      // com o oficial e pede revisão — nunca grava por cima sem o usuário ver.
+      await openParams();
+      setSyncMsg('err','⚠ Os parâmetros da nuvem eram diferentes dos exibidos e foram recarregados. Revise e clique em Salvar novamente.');
+      return;
+    }
+    // Nuvem igual ao que estava na tela: segue o salvamento normalmente
+  }
   // Grava o semestre exibido; os demais já estão preservados em memória (onPASemestreChange)
   const key=document.getElementById('pa-semestre').value || '2026-S1';
   collectPAFromInputs(key);
