@@ -505,6 +505,19 @@ input:focus,select:focus,textarea:focus{border-color:var(--purple)}
 .res-b{flex:1;min-width:0}
 .res-t{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .res-s{font-size:10px;color:var(--gray);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* ═══ STATUS MANUAL NA ABA DISPONIBILIDADE ═══ (10/09/2026)
+   A pastilha de status virou botão: clicar abre a troca manual. O selo
+   "manual" diz que aquele status foi carimbado à mão e vale só até a próxima
+   mudança automática da origem (Frota, Cadastros, compressores). */
+.res-stb{cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:4px;
+  transition:box-shadow .13s ease,filter .13s ease}
+.res-stb:hover{box-shadow:0 0 0 2px var(--purple-b)}
+.res-stb:focus-visible{outline:2px solid var(--purple);outline-offset:1px}
+.res-stb .cv{font-size:8px;opacity:.65;line-height:1}
+.res-man{font-size:9px;font-weight:600;color:var(--purple);border:1px dashed var(--purple-b);
+  border-radius:20px;padding:1px 6px;line-height:1.4;white-space:nowrap;flex:none;cursor:help}
+.disp-aviso{font-size:10.5px;color:var(--gray);margin-left:6px}
+.disp-aviso.err{color:var(--red)}
 
 /* ═══ SINAIS DE ALERTA NA LINHA ═══
    O aviso saiu da tarja embaixo do card e passou a morar no PRÓPRIO campo que
@@ -1165,6 +1178,7 @@ body.dnd-conj .gr-uni{outline:1px dashed var(--gray-l);outline-offset:2px}
         <option value="motorista">Motoristas</option>
       </select>
       <input type="text" id="fResBusca" placeholder="Placa, frota, motorista..." oninput="renderDisp()" style="min-width:200px">
+      <span class="disp-aviso" id="disp-aviso">Clique no status para alterar à mão · mudança automática da origem sempre prevalece</span>
       <span class="tot" id="tot-disp" style="margin-left:auto"></span>
     </div>
     <div class="panel"><div class="panel-bd" id="lista-disp"></div></div>
@@ -1351,6 +1365,18 @@ body.dnd-conj .gr-uni{outline:1px dashed var(--gray-l);outline-offset:2px}
   </div>
 </div>
 
+<!-- ═══ MODAL · STATUS DO RECURSO (aba Disponibilidade) ═══ -->
+<div class="ov" id="ovDisp">
+  <div class="modal" style="max-width:500px">
+    <div class="modal-hd"><span class="modal-ti" id="tiDisp">Status do recurso</span><button class="modal-x" onclick="fecharDisp()">&times;</button></div>
+    <div class="modal-bd" id="bdDisp"></div>
+    <div class="modal-ft">
+      <button class="btn" onclick="fecharDisp()">Cancelar</button>
+      <button class="btn btn-primary" id="btnSalvarDisp" onclick="salvarDisp()">Aplicar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══ MODAL · MOTORISTA DA VIAGEM ═══
      O motorista deixou de ser dado somente-leitura vindo da Frota: é clicável
      na faixa, como a placa, e pode ser trocado NESTA viagem específica. -->
@@ -1525,7 +1551,9 @@ const ST = {
      A grade é planejada em conjunto e trocar recurso entre filiais é rotina. */
   unidade: 'ALL',
   data: hojeISO(),
-  cad: { veiculos:[], alocacoes:{}, compressores:[], motoristas:[], rotas:[], loaded:false },
+  cad: { veiculos:[], alocacoes:{}, compressores:[], motoristas:[], rotas:[], loaded:false,
+         /* Status manual da aba Disponibilidade: chave "tipo__id" → registro. */
+         dispManual:{}, dispErro:null, dispEm:0 },
   os: { porVeiculo:{}, loaded:false },
   chk: { porVeiculo:{}, loaded:false },
   demandas: [],
@@ -1956,11 +1984,12 @@ async function boot(){
 async function carregarCadastros(){
   if(ST.cad.loaded) return;
   PERF.mark('prog:cad:start');
-  const [sv,sa,sc,sm]=await Promise.all([
+  const [sv,sa,sc,sm,sd]=await Promise.all([
     db.collection('veiculos').get(),
     db.collection('alocacao_frota').get(),
     db.collection('compressores').get().catch(()=>({docs:[]})),
-    db.collection('motoristas').get().catch(()=>({docs:[]}))
+    db.collection('motoristas').get().catch(()=>({docs:[]})),
+    db.collection('programacao_disponibilidade').get().catch(e=>({docs:[],_erro:e}))
   ]);
 
   ST.cad.veiculos = sv.docs.map(d=>{
@@ -1982,6 +2011,7 @@ async function carregarCadastros(){
 
   ST.cad.alocacoes={};
   sa.docs.forEach(d=>{ ST.cad.alocacoes[d.id]={cavalo_id:d.id,...d.data()}; });
+  lerDispManual(sd);
 
   /* ═══ CÓDIGO DO COMPRESSOR ═══
      A aba Compressores do módulo Frota grava o código em `identificacao`
@@ -2017,6 +2047,9 @@ async function carregarCadastros(){
   ST.os.loaded=true;
 
   ST.cad.loaded=true;
+  ST.cad.dispEm=Date.now();
+  /* Status manual cuja origem já mudou sozinha é baixado já na abertura. */
+  varrerDispManual().catch(()=>{});
   PERF.measure('prog:cad','prog:cad:start');
 }
 
@@ -2619,7 +2652,10 @@ function conjuntosDaUnidade(uni,opts){
     out.push({
       cavalo_id:cav.id, cavalo_placa:cav.placa, cavalo_frota:cav.frota,
       unidade_slug:slug,
-      disponibilidade:String(al.disponibilidade||'').toLowerCase(),
+      /* Status efetivo: o manual da aba Disponibilidade vale enquanto a origem
+         (alocacao_frota) não mudar; sem manual, fica o valor cru da Frota. */
+      disponibilidade:dispCavaloEfetiva(cav,al),
+      disp_manual:dispEfetiva('veiculo',cav.id,dispAutoVeiculo(cav)).manual,
       carreta1_id:al.carreta1_id||null, carreta1:c1,
       carreta2_id:al.carreta2_id||null, carreta2:c2,
       compressor_id:al.compressor_id||null, compressor:cp,
@@ -2751,11 +2787,37 @@ function validarViagem(v){
   if(compressorDoCaminhao(dem) && !v.compressor_id)
     B('Sem compressor para a descarga','A descarga neste cliente usa o compressor do caminhão e o conjunto não possui compressor alocado.','Aloque um compressor ao cavalo no módulo Frota, troque de conjunto, ou marque na demanda que o cliente tem compressor próprio.','comp');
 
-  /* 3 · Manutenção / indisponibilidade (fonte: alocacao_frota.disponibilidade) */
-  const disp=String(al.disponibilidade||'').toLowerCase();
-  if(disp==='manutencao')   B('Cavalo em manutenção','O cavalo está marcado como EM MANUTENÇÃO na Frota.','Escolha outro conjunto ou aguarde a liberação.','cav');
-  if(disp==='indisponivel') B('Cavalo indisponível','O cavalo está marcado como INDISPONÍVEL na Frota.','Escolha outro conjunto.','cav');
-  if(disp==='reserva')      A('Cavalo em reserva','O cavalo está em reserva na Frota.','Confirme com o responsável antes de liberar.','cav');
+  /* 3 · Manutenção / indisponibilidade (fonte: alocacao_frota.disponibilidade,
+     ou a marcação manual da aba Disponibilidade enquanto a Frota não mudar) */
+  const dCav = cav ? dispEfetiva('veiculo',cav.id,dispAutoVeiculo(cav)) : {st:String(al.disponibilidade||'').toLowerCase(),manual:false};
+  const disp=dCav.st;
+  const onde=dCav.manual?'na aba Disponibilidade (marcação manual)':'na Frota';
+  if(disp==='manutencao')   B('Cavalo em manutenção','O cavalo está marcado como EM MANUTENÇÃO '+onde+'.','Escolha outro conjunto ou aguarde a liberação.','cav');
+  if(disp==='indisponivel') B('Cavalo indisponível','O cavalo está marcado como INDISPONÍVEL '+onde+'.','Escolha outro conjunto.','cav');
+  if(disp==='reserva')      A('Cavalo em reserva','O cavalo está em reserva '+onde+'.','Confirme com o responsável antes de liberar.','cav');
+
+  /* 3a · Marcação manual dos DEMAIS recursos (aba Disponibilidade, 10/09/2026).
+     Carreta, compressor e motorista só têm status manual aqui — o automático
+     deles continua sendo tratado pelas regras 3b e 4. */
+  [[v.carreta1_id,'Carreta 1'],[v.carreta2_id,'Carreta 2']].forEach(([cid,rot])=>{
+    const cr=cid?veiculoPorId(cid):null; if(!cr) return;
+    const d=dispEfetiva('veiculo',cid,dispAutoVeiculo(cr));
+    if(d.manual && DISP_BLOQUEIA.indexOf(d.st)>=0)
+      B(rot+' '+dispLabel(d.st).toLowerCase(),'A '+rot.toLowerCase()+' está marcada como '+dispLabel(d.st).toUpperCase()+' na aba Disponibilidade (marcação manual).','Troque a carreta ou volte o status dela na aba Disponibilidade.','carr');
+  });
+  if(v.compressor_id){
+    const cpm=compressorPorId(v.compressor_id);
+    const d=cpm?dispEfetiva('compressor',cpm.id,statusCompressor(cpm)):null;
+    if(d && d.manual && DISP_BLOQUEIA.indexOf(d.st)>=0)
+      B('Compressor '+dispLabel(d.st).toLowerCase(),'O compressor do conjunto está marcado como '+dispLabel(d.st).toUpperCase()+' na aba Disponibilidade (marcação manual).','Troque o compressor ou volte o status dele na aba Disponibilidade.','comp');
+  }
+  {
+    const mt=v.motorista_id ? ST.cad.motoristas.find(m=>m.id===v.motorista_id)
+           : (v.motorista_nome ? ST.cad.motoristas.find(m=>norm(m.nome)===norm(v.motorista_nome)) : null);
+    const d=mt?dispEfetiva('motorista',mt.id,'disponivel'):null;
+    if(d && d.manual && d.st==='indisponivel')
+      B('Motorista indisponível','O motorista '+mt.nome+' está marcado como INDISPONÍVEL na aba Disponibilidade.','Troque o motorista desta viagem ou volte o status dele na aba Disponibilidade.','mot');
+  }
 
   /* 3b · Ciclo de vida do ativo (fonte: Cadastros › Veículos › status_ativo).
      Vale para a viagem que já estava programada quando o veículo foi baixado. */
@@ -3919,7 +3981,7 @@ function renderRecursos(){
   if(ST.conjSel && !conj.some(c=>c.cavalo_id===ST.conjSel)) ST.conjSel=null;
   /* "Conjuntos livres" era um KPI no topo da tela; agora é o subtítulo do
      painel que lista justamente esses conjuntos. */
-  const livres=conj.filter(c=>['operando','','reserva'].includes(c.disponibilidade)
+  const livres=conj.filter(c=>['operando','','reserva','disponivel'].includes(c.disponibilidade)
     && !ST.viagens.some(v=>v.status!=='cancelada'&&v.cavalo_id===c.cavalo_id)).length;
   const el=document.getElementById('lista-res');
   if(!el) return;
@@ -4126,34 +4188,320 @@ function renderDisp(){
   const uni=uniAtual();
   let linhas=[];
 
+  /* Cada linha sabe QUAL recurso é (tipo + id) — é isso que a troca manual de
+     status grava. Conjunto e cavalo apontam para o mesmo registro: o cavalo. */
+  const lin=(kind,id,t,sub,auto,rot)=>{
+    const d=dispEfetiva(kind,id,auto);
+    return {kind,id,t,s:sub,st:d.st,auto:d.auto,manual:d.manual,reg:d.reg,rot:rot||t,sobreposto:d.sobreposto};
+  };
+
   if(tipo==='conjunto'){
-    linhas=conjuntosDaUnidade(uni).map(c=>({
-      t:rotuloConjunto(c),
-      s:(c.motorista||'sem motorista')+' · '+[c.carreta1&&rotuloVeiculo(c.carreta1),c.carreta2&&rotuloVeiculo(c.carreta2),c.compressor&&(rotuloCompressor(c.compressor))].filter(Boolean).join(' + '),
-      st:c.disponibilidade||'operando'
-    }));
+    linhas=conjuntosDaUnidade(uni).map(c=>{
+      const cav=veiculoPorId(c.cavalo_id);
+      return lin('veiculo',c.cavalo_id,rotuloConjunto(c),
+        (c.motorista||'sem motorista')+' · '+[c.carreta1&&rotuloVeiculo(c.carreta1),c.carreta2&&rotuloVeiculo(c.carreta2),c.compressor&&(rotuloCompressor(c.compressor))].filter(Boolean).join(' + '),
+        dispAutoVeiculo(cav), cav?rotuloVeiculo(cav):rotuloConjunto(c));
+    });
   } else if(tipo==='compressor'){
     linhas=ST.cad.compressores.filter(c=>!uni||!c.unidade_slug||c.unidade_slug===uni)
-      .map(c=>({t:'Compressor '+rotuloCompressor(c),s:'unidade '+(c.unidade_slug||'—'),st:statusCompressor(c)}));
+      .map(c=>lin('compressor',c.id,'Compressor '+rotuloCompressor(c),'unidade '+(c.unidade_slug||'—'),statusCompressor(c)));
   } else if(tipo==='motorista'){
     linhas=ST.cad.motoristas.filter(m=>!uni||m.unidade_slug===uni)
-      .map(m=>({t:m.nome,s:'unidade '+(m.unidade_slug||'—'),st:'disponivel'}));
+      .map(m=>lin('motorista',m.id,m.nome,'unidade '+(m.unidade_slug||'—'),'disponivel'));
   } else {
     linhas=ST.cad.veiculos.filter(v=>v.categoria===tipo && veiculoAtivo(v))
       .filter(v=>{ const al=ST.cad.alocacoes[v.id]||{}; return !uni||(al.unidade_slug||v.unidade_slug)===uni; })
-      .map(v=>({t:rotuloVeiculo(v),s:(v.modelo||v.subtipo||'—'),st:(ST.cad.alocacoes[v.id]||{}).disponibilidade||'—'}));
+      .map(v=>lin('veiculo',v.id,rotuloVeiculo(v),(v.modelo||v.subtipo||'—'),dispAutoVeiculo(v)));
   }
-  if(bq) linhas=linhas.filter(l=>norm(l.t+' '+l.s).includes(bq));
-  const t=document.getElementById('tot-disp'); if(t) t.textContent=linhas.length+' registro(s)';
+  /* O status também entra na busca: dá para digitar "indisponível" ou "manual". */
+  if(bq) linhas=linhas.filter(l=>norm(l.t+' '+l.s+' '+dispLabel(l.st)+(l.manual?' manual':'')).includes(bq));
+  if(linhas.some(l=>l.sobreposto)) agendarVarreduraDisp();
+
+  const t=document.getElementById('tot-disp');
+  if(t){
+    const nm=linhas.filter(l=>l.manual).length;
+    t.textContent=linhas.length+' registro(s)'+(nm?' · '+nm+' manual':'');
+  }
+  const av=document.getElementById('disp-aviso');
+  if(av){
+    av.classList.toggle('err',!!ST.cad.dispErro);
+    av.textContent=ST.cad.dispErro
+      ? 'Status manual indisponível: '+ST.cad.dispErro
+      : 'Clique no status para alterar à mão · mudança automática da origem sempre prevalece';
+  }
   if(!linhas.length){ el.innerHTML='<div class="empty">Nenhum recurso encontrado.</div>'; return; }
+  DISP_VIS={};
   el.innerHTML=linhas.map(l=>{
-    const s=String(l.st).toLowerCase();
-    const cls = s.includes('manut')?'c-rd':s.includes('indispon')?'c-gy':s.includes('reserva')?'c-am':s.includes('estoque')?'c-bl':'c-gn';
+    const cls=dispClasse(l.st);
+    const k=dispChave(l.kind,l.id);
+    DISP_VIS[k]={kind:l.kind,id:l.id,rot:l.rot,auto:l.auto,tipoTela:tipo};
+    const tip=l.manual
+      ? 'Marcado à mão'+(l.reg&&l.reg.manual_por?' por '+l.reg.manual_por:'')+(l.reg&&l.reg.manual_em?' em '+dispQuando(l.reg.manual_em):'')
+        +'. Automático da origem: '+dispLabel(l.auto)+'. Vale até a próxima mudança automática.'
+      : 'Status automático (origem: '+dispOrigem(l.kind)+'). Clique para alterar.';
     return '<div class="res"><span class="res-d '+(cls==='c-gn'?'d-ok':cls==='c-rd'?'d-bad':cls==='c-am'?'d-warn':'d-off')+'"></span>'
       +'<div class="res-b"><div class="res-t">'+esc(l.t)+'</div><div class="res-s">'+esc(l.s)+'</div></div>'
-      +'<span class="chip '+cls+'">'+esc(l.st)+'</span></div>';
+      +(l.manual?'<span class="res-man" title="'+esc(tip)+'">manual</span>':'')
+      +'<button type="button" class="chip res-stb '+cls+'" title="'+esc(tip)+'" onclick="abrirDisp(\''+esc(k)+'\')">'
+        +esc(dispLabel(l.st))+'<span class="cv">▼</span></button></div>';
   }).join('');
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   STATUS MANUAL DA DISPONIBILIDADE   (10/09/2026)
+   O programador pode carimbar à mão o status de qualquer recurso — cavalo,
+   carreta, compressor ou motorista — escolhendo entre os status que já
+   existem para aquele tipo, mais "Indisponível".
+   Regra de precedência: a marcação manual guarda FOTO do status automático
+   do momento (`status_auto_ref`). Enquanto a origem continuar igual, vale o
+   manual. No instante em que a origem muda sozinha — Frota trocou a
+   disponibilidade, compressor foi alocado ou entrou em manutenção — o
+   automático entra por cima e a marcação manual é baixada no Firestore
+   (fica o histórico, sai o efeito).
+   Coleção: programacao_disponibilidade · doc "tipo__id"
+   ═══════════════════════════════════════════════════════════════ */
+const DISP_LB={operando:'Operando',disponivel:'Disponível',reserva:'Reserva',estoque:'Estoque',
+               manutencao:'Manutenção',indisponivel:'Indisponível'};
+/* Status que existem por tipo de recurso + o Indisponível. */
+const DISP_OPCOES={
+  veiculo:['operando','disponivel','reserva','manutencao','indisponivel'],
+  compressor:['operando','estoque','manutencao','indisponivel'],
+  motorista:['disponivel','indisponivel']
+};
+const DISP_BLOQUEIA=['manutencao','indisponivel'];
+let DISP_VIS={};
+let dispAlvo=null;
+
+function dispChave(kind,id){ return kind+'__'+id; }
+function dispLabel(st){
+  const k=String(st||'').toLowerCase();
+  if(DISP_LB[k]) return DISP_LB[k];
+  if(!k) return '—';
+  return k.charAt(0).toUpperCase()+k.slice(1).replace(/_/g,' ');
+}
+function dispClasse(st){
+  const s=String(st||'').toLowerCase();
+  return s.includes('manut')?'c-rd':s.includes('indispon')?'c-gy':s.includes('reserva')?'c-am':s.includes('estoque')?'c-bl':'c-gn';
+}
+function dispOrigem(kind){
+  return kind==='compressor'?'cadastro de compressores / alocação na Frota'
+       : kind==='motorista'?'cadastro de motoristas'
+       : 'módulo Frota (alocacao_frota)';
+}
+function dispQuando(iso){
+  const d=new Date(iso); if(isNaN(d)) return '';
+  return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')
+    +' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+/* Status AUTOMÁTICO do veículo, normalizado. Vazio no cavalo = operando (como
+   sempre foi lido). Na carreta sem status gravado vale a mesma regra do
+   módulo Frota: alocada num cavalo → operando; solta → disponível. */
+function dispAutoVeiculo(v){
+  if(!v) return '';
+  const al=ST.cad.alocacoes[v.id]||{};
+  const raw=String(al.disponibilidade||'').trim().toLowerCase();
+  if(raw) return raw;
+  if(v.categoria==='carreta') return cavaloDaCarreta(v.id)?'operando':'disponivel';
+  return 'operando';
+}
+/* Efetivo = manual, se a foto do automático ainda bate; senão, automático. */
+function dispEfetiva(kind,id,auto){
+  auto=String(auto||'');
+  const m=(ST.cad.dispManual||{})[dispChave(kind,id)];
+  if(m && m.status_manual && String(m.status_auto_ref||'')===auto)
+    return {st:String(m.status_manual),auto,manual:true,reg:m,sobreposto:false};
+  return {st:auto,auto,manual:false,reg:null,sobreposto:!!(m&&m.status_manual)};
+}
+/* Valor que o conjunto carrega em `disponibilidade`: sem manual, continua o
+   valor CRU da Frota (vazio inclusive) — nada muda para o resto da grade. */
+function dispCavaloEfetiva(cav,al){
+  const d=dispEfetiva('veiculo',cav.id,dispAutoVeiculo(cav));
+  return d.manual ? d.st : String((al||{}).disponibilidade||'').toLowerCase();
+}
+function lerDispManual(snap){
+  ST.cad.dispManual={};
+  ST.cad.dispErro = snap && snap._erro ? erroLeituraDisp(snap._erro) : null;
+  ((snap&&snap.docs)||[]).forEach(d=>{
+    const x=d.data()||{};
+    if(x.status_manual) ST.cad.dispManual[d.id]={id:d.id,...x};
+  });
+}
+function erroLeituraDisp(e){
+  const cod=String((e&&e.code)||''), msg=String((e&&e.message)||e||'');
+  if(cod.includes('permission-denied')||/permission|insufficient/i.test(msg))
+    return 'libere a coleção "programacao_disponibilidade" nas regras do Firestore.';
+  return 'falha ao ler "programacao_disponibilidade".';
+}
+/* Automático atual de um registro manual — ou null se o recurso sumiu. */
+function dispAutoAtual(kind,id){
+  if(kind==='veiculo'){ const v=veiculoPorId(id); return v?dispAutoVeiculo(v):null; }
+  if(kind==='compressor'){ const c=compressorPorId(id); return c?statusCompressor(c):null; }
+  if(kind==='motorista'){ return ST.cad.motoristas.some(m=>m.id===id)?'disponivel':null; }
+  return null;
+}
+/* Baixa as marcações manuais cuja origem mudou. Precisa gravar: se a Frota
+   voltar depois ao status antigo, o manual NÃO pode ressuscitar. */
+let _dispVarrendo=false, _dispVarrerTimer=null;
+async function varrerDispManual(){
+  if(_dispVarrendo || !ST.cad.loaded) return;
+  _dispVarrendo=true;
+  try{
+    const agora=new Date().toISOString();
+    const baixas=[];
+    Object.keys(ST.cad.dispManual||{}).forEach(k=>{
+      const m=ST.cad.dispManual[k];
+      const auto=dispAutoAtual(m.recurso_tipo,m.recurso_id);
+      if(auto==null) return;                               // recurso fora do cadastro: não mexe
+      if(String(m.status_auto_ref||'')!==String(auto)) baixas.push({k,m,auto});
+    });
+    if(!baixas.length) return;
+    baixas.forEach(b=>{ delete ST.cad.dispManual[b.k]; });
+    ST.dirty.disp=1; ST.dirty.grade=1; _valCache=new Map();
+    const a=abaAtiva(); if(a==='disp'||a==='grade') renderAba(a);
+    for(const b of baixas){
+      try{
+        await db.collection('programacao_disponibilidade').doc(b.k).set(paraFirestore({
+          status_manual:null, status_anterior_manual:b.m.status_manual,
+          sobreposto_em:agora, sobreposto_por_auto:b.auto,
+          atualizado_em:agora
+        }),paraFirestore({merge:true}));
+        await auditar('disponibilidade_auto_sobrepos',b.k,{recurso:b.m.rotulo||'',
+          manual:b.m.status_manual,auto_antes:b.m.status_auto_ref,auto_agora:b.auto},b.m.unidade_slug||'ALL');
+      }catch(e){ console.warn('Programação: baixa do status manual',b.k,e); }
+    }
+  } finally { _dispVarrendo=false; }
+}
+function agendarVarreduraDisp(){
+  if(_dispVarrerTimer) return;
+  _dispVarrerTimer=setTimeout(()=>{ _dispVarrerTimer=null; varrerDispManual().catch(()=>{}); },300);
+}
+/* Relê as ORIGENS (Frota + compressores) e as marcações manuais, para a aba
+   refletir mudança automática feita em outro módulo sem recarregar a página. */
+async function recarregarDisponibilidade(){
+  if(!ST.cad.loaded) return;
+  try{
+    const [sa,sc,sd]=await Promise.all([
+      db.collection('alocacao_frota').get(),
+      db.collection('compressores').get().catch(()=>null),
+      db.collection('programacao_disponibilidade').get().catch(e=>({docs:[],_erro:e}))
+    ]);
+    ST.cad.alocacoes={};
+    sa.docs.forEach(d=>{ ST.cad.alocacoes[d.id]={cavalo_id:d.id,...d.data()}; });
+    if(sc){
+      ST.cad.compressores = sc.docs.map(d=>{
+        const c={id:d.id,...d.data()};
+        const cod=String(c.identificacao||c.numero||c.codigo||c.frota||'').trim();
+        return { id:d.id, identificacao:cod, numero:cod, serie:String(c.serie||'').trim(),
+                 status:String(c.status||'').toLowerCase(),
+                 unidade_slug:slugUnidade(c.filial||c.unidade) };
+      });
+    }
+    lerDispManual(sd);
+    ST.cad.dispEm=Date.now();
+    _valCache=new Map();
+    ST.dirty.disp=1; ST.dirty.grade=1;
+    const a=abaAtiva(); if(a==='disp'||a==='grade') renderAba(a);
+    await varrerDispManual();
+  }catch(e){ console.warn('Programação: recarregar disponibilidade',e); }
+}
+
+window.abrirDisp=function(k){
+  const r=DISP_VIS[k]; if(!r) return;
+  dispAlvo=r;
+  const d=dispEfetiva(r.kind,r.id,r.auto);
+  const ops=(DISP_OPCOES[r.kind]||DISP_OPCOES.veiculo).slice();
+  /* Status automático fora da lista padrão (ex.: "em reforma" vindo da Frota)
+     também existe — entra como opção. */
+  if(r.auto && ops.indexOf(r.auto)<0) ops.unshift(r.auto);
+  const tipoTx={veiculo:(r.tipoTela==='carreta'?'Carreta':'Cavalo'),compressor:'Compressor',motorista:'Motorista'}[r.kind]||'Recurso';
+  document.getElementById('tiDisp').textContent='Status · '+tipoTx+' '+r.rot;
+  const linha=id=>{
+    const sel=id===d.st, ehAuto=id===r.auto;
+    return '<button type="button" class="st-op'+(sel?' on':'')+'" data-st="'+esc(id)+'" onclick="dispEscolher(\''+esc(id)+'\')">'
+      +'<span class="st-op-dot '+dispClasse(id)+'"></span>'
+      +'<span class="st-op-tx"><b>'+esc(dispLabel(id))+'</b>'
+        +'<i>'+(ehAuto?'automático · é o que a origem informa agora':'manual · vale até a próxima mudança automática')+'</i></span>'
+      +(sel?'<span class="st-op-ck">✓</span>':'')
+    +'</button>';
+  };
+  document.getElementById('bdDisp').innerHTML=
+    '<div class="st-now">'
+      +'<span class="chip '+dispClasse(d.st)+'">'+esc(dispLabel(d.st))+'</span>'
+      +'<span class="st-now-tx">'
+        +(d.manual
+          ? 'Carimbado à mão'+(d.reg.manual_por?' por <b>'+esc(d.reg.manual_por)+'</b>':'')+(d.reg.manual_em?' em '+esc(dispQuando(d.reg.manual_em)):'')
+            +'.<br>A origem informa <b>'+esc(dispLabel(r.auto))+'</b> — se ela mudar, o automático entra por cima.'
+            +(d.reg.obs?'<br>Obs.: '+esc(d.reg.obs):'')
+          : 'Status automático · origem: '+esc(dispOrigem(r.kind))+'.')
+      +'</span>'
+    +'</div>'
+    +'<div class="sec">Escolha o status</div>'
+    +'<div class="st-ops">'+ops.map(linha).join('')+'</div>'
+    +'<div class="val val-i" style="margin-top:10px"><span class="val-ti">Como a automação trata isto</span>'
+      +'A marcação manual vale enquanto a origem não mudar sozinha. Qualquer mudança automática de status '
+      +'('+esc(dispOrigem(r.kind))+') entra por cima e a marcação manual cai. '
+      +'Escolher o próprio status automático devolve o recurso à automação.'
+      +' Recurso marcado como Indisponível ou Manutenção bloqueia a viagem na Grade.'
+    +'</div>'
+    +'<div class="f full" style="margin-top:10px"><label>Observação (opcional)</label><textarea id="dispObs" rows="2"></textarea></div>'
+    +'<input type="hidden" id="dispNovo" value="'+esc(d.st)+'">';
+  document.getElementById('ovDisp').classList.add('active');
+};
+window.dispEscolher=function(id){
+  const h=document.getElementById('dispNovo'); if(h) h.value=id;
+  document.querySelectorAll('#bdDisp .st-op').forEach(b=>{
+    const on=b.dataset.st===id;
+    b.classList.toggle('on',on);
+    const ck=b.querySelector('.st-op-ck');
+    if(on && !ck){ const x=document.createElement('span'); x.className='st-op-ck'; x.textContent='✓'; b.appendChild(x); }
+    if(!on && ck) ck.remove();
+  });
+};
+window.fecharDisp=function(){
+  document.getElementById('ovDisp').classList.remove('active');
+  dispAlvo=null;
+};
+window.salvarDisp=async function(){
+  const r=dispAlvo; if(!r) return;
+  const novo=String((document.getElementById('dispNovo')||{}).value||'');
+  const obs=String((document.getElementById('dispObs')||{}).value||'').trim();
+  if(!novo) return;
+  const k=dispChave(r.kind,r.id);
+  const antes=dispEfetiva(r.kind,r.id,r.auto);
+  if(novo===antes.st && !obs){ fecharDisp(); return; }
+  const btn=document.getElementById('btnSalvarDisp'); btn.disabled=true;
+  const agora=new Date().toISOString();
+  const quem=(currentUser&&currentUser.email)||'';
+  const volta=(novo===r.auto);     // escolher o automático = devolver à automação
+  let uni='';
+  if(r.kind==='veiculo'){ const v=veiculoPorId(r.id); const al=ST.cad.alocacoes[r.id]||{}; uni=al.unidade_slug||(v&&v.unidade_slug)||''; }
+  else if(r.kind==='compressor'){ uni=(compressorPorId(r.id)||{}).unidade_slug||''; }
+  else { uni=(ST.cad.motoristas.find(m=>m.id===r.id)||{}).unidade_slug||''; }
+  const payload = volta
+    ? { recurso_tipo:r.kind, recurso_id:r.id, rotulo:r.rot, unidade_slug:uni,
+        status_manual:null, status_auto_ref:r.auto, devolvido_em:agora, devolvido_por:quem,
+        atualizado_em:agora, atualizado_por:quem }
+    : { recurso_tipo:r.kind, recurso_id:r.id, rotulo:r.rot, unidade_slug:uni,
+        status_manual:novo, status_auto_ref:r.auto, manual_em:agora, manual_por:quem, obs,
+        sobreposto_em:null, sobreposto_por_auto:null,
+        atualizado_em:agora, atualizado_por:quem };
+  try{
+    await db.collection('programacao_disponibilidade').doc(k).set(paraFirestore(payload),paraFirestore({merge:true}));
+    if(volta) delete ST.cad.dispManual[k];
+    else ST.cad.dispManual[k]={id:k,...payload};
+    await auditar('disponibilidade_status_manual',k,{recurso:r.rot,tipo:r.kind,de:antes.st,para:novo,
+      automatico:r.auto,origem:volta?'devolvido_automacao':'manual',obs},uni||'ALL');
+    fecharDisp();
+    _valCache=new Map();
+    ST.dirty={painel:1,grade:1,demandas:1,disp:1,grupos:1};
+    renderAba(abaAtiva());
+    toast(volta?('Status devolvido à automação: '+dispLabel(novo)):('Status manual: '+dispLabel(novo)),'ok');
+  }catch(e){
+    console.error('[Programação] salvarDisp',e);
+    toast(erroFirestore(e,'programacao_disponibilidade'),'err');
+  }
+  btn.disabled=false;
+};
 
 /* ═══════════════════════════════════════════════════════════════
    DRAG & DROP — demanda → grade
@@ -6089,7 +6437,7 @@ function pintarSyncTag(){
 const SYNC_INTERVALO=60*60*1000;
 function agendarSincronizacao(){
   if(ST_SYNC_TIMER) clearInterval(ST_SYNC_TIMER);
-  ST_SYNC_TIMER=setInterval(()=>{ sincronizarStatus({forcar:true}); }, SYNC_INTERVALO);
+  ST_SYNC_TIMER=setInterval(()=>{ sincronizarStatus({forcar:true}); recarregarDisponibilidade(); }, SYNC_INTERVALO);
   document.addEventListener('visibilitychange',()=>{
     if(document.hidden) return;
     if(Date.now()-(ST.sync.em||0) >= SYNC_INTERVALO) sincronizarStatus({forcar:true});
@@ -7891,11 +8239,14 @@ document.getElementById('tabs').addEventListener('click',e=>{
   /* Só desenha o que ficou sujo desde o último render — abrir uma aba já
      desenhada é troca de CSS, não trabalho novo. */
   if(ST.dirty[b.dataset.tab]!==0) renderAba(b.dataset.tab);
+  /* Disponibilidade: relê as origens ao abrir a aba (no máximo 1×/min) para a
+     mudança automática feita na Frota aparecer — e derrubar o manual — já. */
+  if(b.dataset.tab==='disp' && Date.now()-(ST.cad.dispEm||0)>60000) recarregarDisponibilidade();
 });
 
 /* O modal Nova Demanda NÃO fecha pelo fundo: somente Salvar ou Cancelar.
    O comportamento antigo permanece nos demais modais que já o utilizavam. */
-['ovConj','ovCopia'].forEach(id=>{
+['ovConj','ovCopia','ovDisp'].forEach(id=>{
   const el=document.getElementById(id);
   if(el) el.addEventListener('click',e=>{ if(e.target===el) el.classList.remove('active'); });
 });
