@@ -855,6 +855,8 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
         <strong>{DATA_ANTERIOR}</strong>, <strong>{DATA_ATUAL}</strong>, <strong>{UNIDADE}</strong>,
         <strong>{FROTAS_PLACAS}</strong>, <strong>{FROTA}</strong>, <strong>{PLACA}</strong>,
         <strong>{DIAS_SEM_CARREGAR}</strong> e <strong>{ULTIMO_CARREGAMENTO}</strong>.
+        Na <strong>Janela REPOM</strong>: {SAUDACAO}, {DATA_ATUAL}, {DATA_PAGAMENTO}, {DATAS_PAGAMENTO}, {TOTAL_GERAL}, {USUARIO}
+        e {CORPO_REPOM} (bloco com valores, cards laranja e tabelas, montado na aba REPOM).
       </div>
 
       <div class="cfg-notif-layout">
@@ -897,6 +899,17 @@ label{color:#334155;font-size:12px}.date-badge,.vstrip,.module-tabs,.success-scr
                 <input id="cfg_notif_assunto" placeholder="Atlas | PD Diário finalizado — {DATA_ANTERIOR}">
               </div>
             </div>
+            <div class="fr">
+              <div class="f">
+                <label>Para — e-mails avulsos</label>
+                <input id="cfg_notif_emails_para" placeholder="faturamento.sc@comixtransportes.com.br; lider.pr@...">
+              </div>
+              <div class="f">
+                <label>Cópia (Cc)</label>
+                <input id="cfg_notif_emails_cc" placeholder="financeiro@...; gd@gdnegocios.com.br">
+              </div>
+            </div>
+            <div class="cfg-item-sub" style="margin:-4px 0 10px">Os usuários marcados ao lado vão em <b>Para</b>. Use os campos acima para caixas de grupo ou contatos externos; separe por ponto e vírgula.</div>
             <div class="fr">
               <div class="f">
                 <label>Template (texto do e-mail)</label>
@@ -2560,7 +2573,42 @@ Atlas — Comix Transportes`,
   }
 }));
 
-const CFG_NOTIF_EVENTOS_PADRAO = [CFG_NOTIF_DEFAULTS, ...CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS];
+/* Janela REPOM: disparo MANUAL pelo botão "Enviar janela" da aba REPOM (financeiro.html).
+   Não participa do start do PD Diário — tipoEvento próprio e gatilho manual. */
+const CFG_NOTIF_REPOM_ID = "repom_janela";
+const CFG_NOTIF_REPOM_DEFAULTS = {
+  id: CFG_NOTIF_REPOM_ID,
+  nome: "Janela REPOM",
+  canal: "email",
+  ativo: true,
+  assunto: "Janela Repom {DATA_PAGAMENTO}",
+  templateText: `{SAUDACAO} a todos,
+
+{CORPO_REPOM}
+
+Att.
+{USUARIO}`,
+  destinatarios: [],
+  emailsPara: [],
+  emailsCc: [],
+  tipoEvento: "repom_janela",
+  regraDisparo: {
+    fonte: "REPOM",
+    gatilho: "envio_manual_aba_repom",
+    disparoManual: true,
+    executarAposPrimeiroCarregamentoDiaAtual: false,
+    enviarAoDetectarCteDiaAtual: false,
+    origem: "financeiro.html › REPOM › Enviar janela",
+    ...CFG_NOTIF_ENVIO_PADRAO
+  }
+};
+
+const CFG_NOTIF_EVENTOS_PADRAO = [CFG_NOTIF_DEFAULTS, ...CFG_NOTIF_FROTA_SEM_CARGA_DEFAULTS, CFG_NOTIF_REPOM_DEFAULTS];
+
+/* E-mails avulsos (caixas de grupo, externos) digitados no evento: aceita ; , espaço ou quebra de linha. */
+function cfgParseEmailList(value) {
+  return [...new Set(String(value || "").split(/[;,\s]+/).map(e => e.trim()).filter(Boolean).map(e => e.toLowerCase()))];
+}
 const CFG_NOTIF_PD_LEGACY_IDS = [
   "pd_diario_finalizado_pr",
   "pd_diario_finalizado_sc",
@@ -2622,6 +2670,8 @@ function cfgNormalizeNotifEvento(ev) {
     templateText: String(base.templateText || (isNewBlank ? "" : (padrao.templateText || ""))),
     templateHtml: String(base.templateHtml || ""),
     destinatarios: Array.isArray(base.destinatarios) ? base.destinatarios.map(String) : [],
+    emailsPara: Array.isArray(base.emailsPara) ? base.emailsPara.map(String).filter(Boolean) : [],
+    emailsCc: Array.isArray(base.emailsCc) ? base.emailsCc.map(String).filter(Boolean) : [],
     regraDisparo: cfgComEnvioPadrao({ ...regraBase, ...regraRaw })
   };
 }
@@ -2984,6 +3034,8 @@ function cfgRenderNotificacoesEmail() {
   const isNew = !ev.id;
   cfgSet("cfg_notif_assunto", ev.assunto || (isNew ? "" : CFG_NOTIF_DEFAULTS.assunto));
   cfgNotifSetEditor(ev.templateText || (isNew ? "" : CFG_NOTIF_DEFAULTS.templateText), ev.templateHtml || "");
+  cfgSet("cfg_notif_emails_para", (ev.emailsPara || []).join("; "));
+  cfgSet("cfg_notif_emails_cc", (ev.emailsCc || []).join("; "));
   const mode = document.getElementById("cfg_notif_form_mode");
   if (mode) mode.textContent = ev.id ? `Editando · ${ev.id}` : "Novo evento";
   cfgRenderNotifEventosList();
@@ -3034,7 +3086,7 @@ function cfgRenderNotifEventosList() {
           <button class="cfg-small cfg-danger" type="button" onclick="cfgDeleteEventoNotificacao(decodeURIComponent('${code}'))">Excluir</button>
         </div>
       </div>
-      <div class="cfg-notif-event-sub">${status} <span class="cfg-pill cfg-pill-admin">${users.length} usuário(s)</span></div>
+      <div class="cfg-notif-event-sub">${status} <span class="cfg-pill cfg-pill-admin">${users.length} usuário(s)</span>${(ev.emailsPara || []).length ? `<span class="cfg-pill cfg-pill-admin">${ev.emailsPara.length} Para avulso(s)</span>` : ""}${(ev.emailsCc || []).length ? `<span class="cfg-pill cfg-pill-admin">${ev.emailsCc.length} em Cc</span>` : ""}</div>
       <div class="cfg-notif-event-sub">${cfgEscape(ev.assunto || "Sem assunto")}</div>
       <div class="cfg-notif-selected-area">
         <div class="cfg-notif-mini">Usuários selecionados</div>
@@ -3117,7 +3169,7 @@ function cfgNovoEventoNotificacao() {
     destinatarios: []
   };
   cfgRenderNotificacoesEmail();
-  ["cfg_notif_evt_id", "cfg_notif_evt_key", "cfg_notif_nome", "cfg_notif_assunto", "cfg_notif_template"].forEach(id => cfgSet(id, ""));
+  ["cfg_notif_evt_id", "cfg_notif_evt_key", "cfg_notif_nome", "cfg_notif_assunto", "cfg_notif_template", "cfg_notif_emails_para", "cfg_notif_emails_cc"].forEach(id => cfgSet(id, ""));
   const editor = document.getElementById("cfg_notif_editor");
   if (editor) editor.innerHTML = "";
   cfgSet("cfg_notif_ativo", "true");
@@ -3233,6 +3285,13 @@ async function cfgSaveEventoEmail() {
   const templateText = cfgNotifGetTemplateText();
   const templateHtml = cfgNotifGetTemplateHtml();
   const destinatarios = [...new Set((atual.destinatarios || []).map(String).filter(Boolean))];
+  const emailsPara = cfgParseEmailList(cfgVal("cfg_notif_emails_para"));
+  const emailsCc = cfgParseEmailList(cfgVal("cfg_notif_emails_cc")).filter(e => !emailsPara.includes(e));
+  const emailsInvalidos = [...emailsPara, ...emailsCc].filter(e => !cfgIsEmailValido(e));
+  if (emailsInvalidos.length) {
+    showToast(`E-mail inválido: ${emailsInvalidos.join(", ")}`, "error");
+    return;
+  }
 
   const payload = {
     id,
@@ -3244,6 +3303,8 @@ async function cfgSaveEventoEmail() {
     templateText,
     templateHtml,
     destinatarios,
+    emailsPara,
+    emailsCc,
     updatedBy: (window._FB && typeof window._FB.getCurrentUser === "function" && window._FB.getCurrentUser()?.email) || "",
     regraDisparo: cfgComEnvioPadrao(atual.regraDisparo || {})
     /* updatedAt é adicionado automaticamente por adminSalvar */
@@ -3264,13 +3325,19 @@ async function cfgSaveEventoEmail() {
     payload.regraDisparo = cfgComEnvioPadrao({ ...frotaSemCargaDefault.regraDisparo });
   }
 
+  if (id === CFG_NOTIF_REPOM_ID) {
+    payload.tipoEvento = CFG_NOTIF_REPOM_DEFAULTS.tipoEvento;
+    payload.regraDisparo = cfgComEnvioPadrao({ ...CFG_NOTIF_REPOM_DEFAULTS.regraDisparo });
+  }
+
   try {
     await cfgSave("notificacoes_eventos", id, payload);
     cfgCache.notifEventoAtual = cfgNormalizeNotifEvento(payload);
     cfgCache.notifEventoPD = id === CFG_NOTIF_EVT_ID ? cfgCache.notifEventoAtual : cfgCache.notifEventoPD;
     cfgCache.notifEventos = await cfgLoadEventosNotificacoes();
     cfgRenderNotificacoesEmail();
-    showToast(`Evento salvo · ${destinatarios.length} destinatário(s).`, "success");
+    const avulsos = emailsPara.length + emailsCc.length;
+    showToast(`Evento salvo · ${destinatarios.length} usuário(s)${avulsos ? ` · ${avulsos} e-mail(s) avulso(s)` : ""}.`, "success");
   } catch (err) {
     showToast(err.message || "Erro ao salvar evento de e-mail.", "error");
   }
